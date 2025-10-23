@@ -1,0 +1,103 @@
+/* Meals DB Admin UI
+ * Author: Fishhorn Design
+ * Created as a work for hire for Meals and More
+ */
+
+/* -----------------------------
+   Table Styling
+------------------------------ */
+table.widefat td, table.widefat th {
+    vertical-align: top;
+    padding: 8px;
+}
+
+/* -----------------------------
+   Sync Table Conflict Highlighting
+------------------------------ */
+.mealsdb-a,
+.mealsdb-b {
+    padding: 6px 10px;
+    background-color: #f6f7f9;
+}
+
+.mealsdb-a:not(:empty):not(.mealsdb-b):not(.match),
+.mealsdb-b:not(:empty):not(.mealsdb-a):not(.match) {
+    font-weight: bold;
+    color: #b00020;
+}
+
+/* Highlight rows when selected for syncing */
+tr[data-field] {
+    transition: background 0.3s ease;
+}
+
+tr[data-field]:hover {
+    background-color: #f9f9f9;
+}
+
+/* Disabled sync buttons */
+button.sync-field:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* -----------------------------
+   Form Layouts
+------------------------------ */
+input[type="text"],
+input[type="email"],
+select {
+    max-width: 400px;
+}
+
+/* -----------------------------
+   Tab Bar Styling (if not default WP nav-tab used)
+------------------------------ */
+.nav-tab-wrapper {
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.nav-tab {
+    padding: 8px 20px;
+    font-size: 14px;
+}
+
+.nav-tab-active {
+    background: #0073aa;
+    color: #fff;
+}
+
+/* -----------------------------
+   Status Notices
+------------------------------ */
+.notice ul {
+    margin-top: 5px;
+}
+
+.notice-error li {
+    list-style: disc;
+    margin-left: 20px;
+}
+
+/* -----------------------------
+   Draft Table
+------------------------------ */
+#mealsdb-draft-table td {
+    vertical-align: middle;
+}
+
+/* -----------------------------
+   Ignored Conflict Styling
+------------------------------ */
+tr[data-ignored="true"] {
+    opacity: 0.5;
+    font-style: italic;
+}
+
+/* -----------------------------
+   Date Picker Fix
+------------------------------ */
+.ui-datepicker {
+    z-index: 9999 !important;
+}
