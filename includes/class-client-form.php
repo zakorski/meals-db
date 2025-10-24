@@ -124,18 +124,19 @@ class MealsDB_Client_Form {
             $errors[] = 'Invalid client email address.';
         }
 
-        // Required dropdowns
-        $required_dropdowns = [
-            'customer_type', 'address_city', 'address_province',
-            'service_center', 'service_zone', 'service_course',
-            'per_sdnb_req', 'rate', 'delivery_day',
-            'delivery_area_name', 'delivery_area_zone',
-            'ordering_frequency', 'ordering_contact_method', 'delivery_frequency'
+        // Required fields captured by the current admin form UI
+        $required_fields = [
+            'first_name'     => 'First name',
+            'last_name'      => 'Last name',
+            'client_email'   => 'Email address',
+            'phone_primary'  => 'Primary phone number',
+            'address_postal' => 'Postal code',
+            'customer_type'  => 'Customer type',
         ];
 
-        foreach ($required_dropdowns as $field) {
+        foreach ($required_fields as $field => $label) {
             if (empty($sanitized[$field])) {
-                $errors[] = "Field '{$field}' is required.";
+                $errors[] = sprintf('%s is required.', $label);
             }
         }
 
@@ -177,8 +178,6 @@ class MealsDB_Client_Form {
         $encrypted = $sanitized;
         self::ensure_index_columns_exist($conn);
 
-        $encrypted = $data;
-
         // Encrypt sensitive fields
         foreach (self::$encrypted_fields as $field) {
             if (!empty($encrypted[$field])) {
@@ -188,16 +187,21 @@ class MealsDB_Client_Form {
 
         // Store deterministic hashes for encrypted unique fields
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
-            if (!empty($data[$field])) {
-                $encrypted[$indexColumn] = self::deterministic_hash($data[$field]);
+            if (!empty($sanitized[$field])) {
+                $encrypted[$indexColumn] = self::deterministic_hash($sanitized[$field]);
             }
         }
 
         // Format date fields (assume already validated)
         $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_termination_date', 'recent_renewal_date'];
         foreach ($date_fields as $field) {
-            if (isset($encrypted[$field])) {
-                $encrypted[$field] = date('Y-m-d', strtotime($encrypted[$field]));
+            if (!empty($encrypted[$field])) {
+                $timestamp = strtotime($encrypted[$field]);
+                if ($timestamp) {
+                    $encrypted[$field] = date('Y-m-d', $timestamp);
+                }
+            } elseif (isset($encrypted[$field])) {
+                unset($encrypted[$field]);
             }
         }
 
@@ -214,7 +218,18 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $stmt->bind_param($types, ...$values);
+        $params = [$types];
+        foreach ($values as $index => $value) {
+            $params[] =& $values[$index];
+        }
+
+        $bound = call_user_func_array([$stmt, 'bind_param'], $params);
+        if ($bound === false) {
+            error_log('[MealsDB] Save failed: unable to bind parameters for client insert.');
+            $stmt->close();
+            return false;
+        }
+
         $stmt->execute();
         $stmt->close();
 
@@ -264,7 +279,17 @@ class MealsDB_Client_Form {
                 }
 
                 $stmt = $conn->prepare("SELECT id FROM meals_clients WHERE $column = ? LIMIT 1");
-                $stmt->bind_param("s", $value);
+                if (!$stmt) {
+                    error_log('[MealsDB] Duplicate check failed to prepare statement for column ' . $column . ': ' . ($conn->error ?? 'unknown error'));
+                    continue;
+                }
+
+                if (!$stmt->bind_param("s", $value)) {
+                    error_log('[MealsDB] Duplicate check failed to bind parameter for column ' . $column . '.');
+                    $stmt->close();
+                    continue;
+                }
+
                 $stmt->execute();
                 $stmt->store_result();
 
@@ -355,6 +380,9 @@ class MealsDB_Client_Form {
         }
 
         return $value;
+    }
+
+    /**
      * Ensure the deterministic index columns exist on the meals_clients table.
      *
      * @param mysqli $conn
