@@ -51,6 +51,8 @@ class MealsDB_Installer {
                 requisition_id VARCHAR(255) NULL,
                 vet_health_card VARCHAR(255) NULL,
                 delivery_initials VARCHAR(50) NULL,
+                individual_id_index CHAR(64) NULL,
+                requisition_id_index CHAR(64) NULL,
                 first_name VARCHAR(191) NOT NULL,
                 last_name VARCHAR(191) NOT NULL,
                 client_email VARCHAR(191) NOT NULL,
@@ -84,6 +86,8 @@ class MealsDB_Installer {
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 UNIQUE KEY unique_individual_id (individual_id),
                 UNIQUE KEY unique_requisition_id (requisition_id),
+                UNIQUE KEY unique_individual_id_index (individual_id_index),
+                UNIQUE KEY unique_requisition_id_index (requisition_id_index),
                 UNIQUE KEY unique_vet_health_card (vet_health_card),
                 KEY idx_status (status)
             ) ENGINE=InnoDB $charset_sql;",

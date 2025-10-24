@@ -249,8 +249,21 @@ class MealsDB_Client_Form {
         $user_id = get_current_user_id();
 
         $stmt = $conn->prepare("INSERT INTO meals_drafts (data, created_by) VALUES (?, ?)");
-        $stmt->bind_param("si", $json, $user_id);
-        $stmt->execute();
+        if (!$stmt) {
+            error_log('[MealsDB] Draft save failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+            return;
+        }
+
+        if (!$stmt->bind_param("si", $json, $user_id)) {
+            $stmt->close();
+            error_log('[MealsDB] Draft save failed to bind parameters.');
+            return;
+        }
+
+        if (!$stmt->execute()) {
+            error_log('[MealsDB] Draft save failed to execute: ' . ($stmt->error ?? 'unknown error'));
+        }
+
         $stmt->close();
     }
 
@@ -418,25 +431,72 @@ class MealsDB_Client_Form {
                 }
             }
 
-            $indexName = 'idx_' . $indexColumn;
+            $indexName = 'unique_' . $indexColumn;
             $escapedIndex = method_exists($conn, 'real_escape_string')
                 ? $conn->real_escape_string($indexName)
                 : $indexName;
 
+            $legacyIndexName = 'idx_' . $indexColumn;
+            $escapedLegacy = method_exists($conn, 'real_escape_string')
+                ? $conn->real_escape_string($legacyIndexName)
+                : $legacyIndexName;
+
+            $legacyIndexResult = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedLegacy}'");
+            $legacyIndexExists = false;
+            if ($legacyIndexResult instanceof mysqli_result) {
+                $legacyIndexExists = $legacyIndexResult->num_rows > 0;
+                $legacyIndexResult->free();
+            } elseif ($legacyIndexResult && isset($legacyIndexResult->num_rows)) {
+                $legacyIndexExists = $legacyIndexResult->num_rows > 0;
+                if (method_exists($legacyIndexResult, 'free')) {
+                    $legacyIndexResult->free();
+                }
+            }
+
+            if ($legacyIndexExists) {
+                if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$legacyIndexName}`") !== true) {
+                    $errno = $conn->errno ?? null;
+                    if ($errno !== 1091) {
+                        error_log('[MealsDB] Failed to drop legacy deterministic index: ' . ($conn->error ?? 'unknown error'));
+                    }
+                }
+            }
+
             $indexExists = false;
+            $indexIsUnique = false;
             $indexResult = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedIndex}'");
             if ($indexResult instanceof mysqli_result) {
-                $indexExists = $indexResult->num_rows > 0;
+                while ($row = $indexResult->fetch_assoc()) {
+                    $indexExists = true;
+                    if (isset($row['Non_unique']) && intval($row['Non_unique']) === 0) {
+                        $indexIsUnique = true;
+                        break;
+                    }
+                }
                 $indexResult->free();
             } elseif ($indexResult && isset($indexResult->num_rows)) {
                 $indexExists = $indexResult->num_rows > 0;
+                if ($indexExists && method_exists($indexResult, 'fetch_assoc')) {
+                    $row = $indexResult->fetch_assoc();
+                    if ($row && isset($row['Non_unique'])) {
+                        $indexIsUnique = intval($row['Non_unique']) === 0;
+                    }
+                }
                 if (method_exists($indexResult, 'free')) {
                     $indexResult->free();
                 }
             }
 
+            if ($indexExists && !$indexIsUnique) {
+                if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$indexName}`") !== true) {
+                    error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
+                } else {
+                    $indexExists = false;
+                }
+            }
+
             if (!$indexExists) {
-                $createIndexSql = "CREATE INDEX `{$indexName}` ON meals_clients (`{$indexColumn}`)";
+                $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON meals_clients (`{$indexColumn}`)";
                 if (!$conn->query($createIndexSql)) {
                     $errno = $conn->errno ?? null;
                     if ($errno !== 1061) { // ignore duplicate index error

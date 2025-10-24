@@ -70,14 +70,49 @@ class MealsDB_Logger {
 
         $sql = "SELECT * FROM meals_audit_log ORDER BY created_at DESC LIMIT ?";
         $stmt = $conn->prepare($sql);
-        $stmt->bind_param("i", $limit);
-        $stmt->execute();
+        if (!$stmt) {
+            error_log('[MealsDB Logger] Failed to prepare recent logs query: ' . ($conn->error ?? 'unknown error'));
+            return [];
+        }
+
+        if (!$stmt->bind_param("i", $limit)) {
+            $stmt->close();
+            error_log('[MealsDB Logger] Failed to bind limit parameter for recent logs.');
+            return [];
+        }
+
+        if (!$stmt->execute()) {
+            error_log('[MealsDB Logger] Failed to execute recent logs query: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return [];
+        }
 
         $result = $stmt->get_result();
         $logs = [];
 
-        while ($row = $result->fetch_assoc()) {
-            $logs[] = $row;
+        if ($result instanceof mysqli_result) {
+            while ($row = $result->fetch_assoc()) {
+                $logs[] = $row;
+            }
+        } else {
+            if (!$stmt->bind_result($id, $user_id, $action, $target_id, $field_changed, $old_value, $new_value, $source, $created_at)) {
+                error_log('[MealsDB Logger] Failed to bind results for recent logs.');
+                $stmt->close();
+                return $logs;
+            }
+            while ($stmt->fetch()) {
+                $logs[] = [
+                    'id' => $id,
+                    'user_id' => $user_id,
+                    'action' => $action,
+                    'target_id' => $target_id,
+                    'field_changed' => $field_changed,
+                    'old_value' => $old_value,
+                    'new_value' => $new_value,
+                    'source' => $source,
+                    'created_at' => $created_at,
+                ];
+            }
         }
 
         $stmt->close();
