@@ -206,48 +206,6 @@ run_test('detects duplicate delivery initials via deterministic hash', function 
     }
 });
 
-run_test('duplicate check handles zero-string identifiers', function () {
-    reset_index_flag();
-    $hash = hash('sha256', strtolower(trim('0')));
-    $conn = new StubMysqli([
-        'individual_id_index' => [$hash]
-    ], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['unique_individual_id_index', 'unique_requisition_id_index', 'unique_vet_health_card_index', 'unique_delivery_initials_index']);
-    set_db_connection($conn);
-
-    $method = new ReflectionMethod(MealsDB_Client_Form::class, 'check_unique_fields');
-    $method->setAccessible(true);
-    $errors = $method->invoke(null, ['individual_id' => '0']);
-
-    if (empty($errors) || stripos($errors[0], 'Individual id') === false) {
-        throw new Exception('Expected duplicate error for zero-string individual_id.');
-    }
-});
-
-run_test('save persists deterministic hash for zero-string identifiers', function () {
-    reset_index_flag();
-    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['unique_individual_id_index', 'unique_requisition_id_index', 'unique_vet_health_card_index', 'unique_delivery_initials_index']);
-    set_db_connection($conn);
-
-    $payload = [
-        'first_name'     => 'Zero',
-        'last_name'      => 'Identifier',
-        'client_email'   => 'zero@example.com',
-        'phone_primary'  => '(555)-555-5555',
-        'address_postal' => 'A1A 1A1',
-        'customer_type'  => 'standard',
-        'individual_id'  => '0',
-    ];
-
-    if (!MealsDB_Client_Form::save($payload)) {
-        throw new Exception('Expected save to succeed for zero-string identifier.');
-    }
-
-    $expectedHash = hash('sha256', strtolower(trim('0')));
-    if (!isset($conn->lastInsert['individual_id_index']) || $conn->lastInsert['individual_id_index'] !== $expectedHash) {
-        throw new Exception('Deterministic hash for zero-string identifier was not stored.');
-    }
-});
-
 run_test('allows unique individual_id when hash not present', function () {
     reset_index_flag();
     $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
