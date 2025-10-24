@@ -20,6 +20,55 @@ class MealsDB_Client_Form {
     ];
 
     /**
+     * Database columns that are allowed to be persisted from the client form.
+     */
+    private static $db_columns = [
+        'individual_id',
+        'requisition_id',
+        'first_name',
+        'last_name',
+        'client_email',
+        'phone_primary',
+        'address_postal',
+        'customer_type',
+        'birth_date',
+        'address_city',
+        'address_province',
+        'service_center',
+        'service_zone',
+        'service_course',
+        'per_sdnb_req',
+        'rate',
+        'delivery_day',
+        'delivery_area_name',
+        'delivery_area_zone',
+        'ordering_frequency',
+        'ordering_contact_method',
+        'delivery_frequency',
+        'open_date',
+        'required_start_date',
+        'service_commence_date',
+        'expected_termination_date',
+        'initial_termination_date',
+        'recent_renewal_date',
+        'vet_health_card',
+        'delivery_initials',
+        'diet_concerns',
+        'client_comments',
+    ];
+
+    /**
+     * Keys that should be stripped from transport (non-persisted) data.
+     */
+    private static $transport_only_keys = [
+        'mealsdb_nonce_field',
+        '_wp_http_referer',
+        'nonce',
+        'action',
+        'submit',
+    ];
+
+    /**
      * Fields that require AES-256 encryption.
      */
     private static $encrypted_fields = [
@@ -38,18 +87,25 @@ class MealsDB_Client_Form {
     public static function validate(array $data): array {
         $errors = [];
 
+        $unknown_keys = [];
+        $sanitized = self::sanitize_payload($data, $unknown_keys);
+
+        if (!empty($unknown_keys)) {
+            $errors[] = 'Unknown form fields detected: ' . implode(', ', $unknown_keys);
+        }
+
         // Postal Code
-        if (!preg_match('/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/i', $data['address_postal'] ?? '')) {
+        if (!preg_match('/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/i', $sanitized['address_postal'] ?? '')) {
             $errors[] = 'Postal code must be in A1A 1A1 format.';
         }
 
         // Phone
-        if (!preg_match('/^\(\d{3}\)-\d{3}-\d{4}$/', $data['phone_primary'] ?? '')) {
+        if (!preg_match('/^\(\d{3}\)-\d{3}-\d{4}$/', $sanitized['phone_primary'] ?? '')) {
             $errors[] = 'Phone number must be in (###)-###-#### format.';
         }
 
         // Email
-        if (!filter_var($data['client_email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+        if (!filter_var($sanitized['client_email'] ?? '', FILTER_VALIDATE_EMAIL)) {
             $errors[] = 'Invalid client email address.';
         }
 
@@ -63,13 +119,13 @@ class MealsDB_Client_Form {
         ];
 
         foreach ($required_dropdowns as $field) {
-            if (empty($data[$field])) {
+            if (empty($sanitized[$field])) {
                 $errors[] = "Field '{$field}' is required.";
             }
         }
 
         // Unique field checks
-        $conflicts = self::check_unique_fields($data);
+        $conflicts = self::check_unique_fields($sanitized);
         if (!empty($conflicts)) {
             $errors = array_merge($errors, $conflicts);
         }
@@ -90,7 +146,20 @@ class MealsDB_Client_Form {
         $conn = MealsDB_DB::get_connection();
         if (!$conn) return false;
 
-        $encrypted = $data;
+        $unknown_keys = [];
+        $sanitized = self::sanitize_payload($data, $unknown_keys);
+
+        if (!empty($unknown_keys)) {
+            error_log('[MealsDB] Save aborted due to unknown fields: ' . implode(', ', $unknown_keys));
+            return false;
+        }
+
+        if (empty($sanitized)) {
+            error_log('[MealsDB] Save aborted: no valid data provided.');
+            return false;
+        }
+
+        $encrypted = $sanitized;
 
         // Encrypt sensitive fields
         foreach (self::$encrypted_fields as $field) {
@@ -177,5 +246,83 @@ class MealsDB_Client_Form {
         }
 
         return $errors;
+    }
+
+    /**
+     * Remove transport-only keys, sanitize values, and filter to known DB columns.
+     *
+     * @param array $data
+     * @param array $unknown_keys
+     * @return array
+     */
+    private static function sanitize_payload(array $data, array &$unknown_keys = []): array {
+        if (function_exists('wp_unslash')) {
+            $data = wp_unslash($data);
+        }
+
+        foreach (self::$transport_only_keys as $transport_key) {
+            if (array_key_exists($transport_key, $data)) {
+                unset($data[$transport_key]);
+            }
+        }
+
+        $unknown_keys = array_values(array_diff(array_keys($data), self::$db_columns));
+
+        $sanitized = [];
+        foreach (self::$db_columns as $column) {
+            if (!array_key_exists($column, $data)) {
+                continue;
+            }
+
+            $sanitized[$column] = self::sanitize_value($column, $data[$column]);
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Sanitize a single value for storage.
+     *
+     * @param string $column
+     * @param mixed  $value
+     * @return string
+     */
+    private static function sanitize_value(string $column, $value): string {
+        if (is_array($value)) {
+            $value = implode(',', $value);
+        }
+
+        if (!is_scalar($value)) {
+            $value = '';
+        }
+
+        $value = (string) $value;
+
+        switch ($column) {
+            case 'client_email':
+                if (function_exists('sanitize_email')) {
+                    $value = sanitize_email($value);
+                } else {
+                    $value = trim(filter_var($value, FILTER_SANITIZE_EMAIL));
+                }
+                break;
+            case 'diet_concerns':
+            case 'client_comments':
+                if (function_exists('sanitize_textarea_field')) {
+                    $value = sanitize_textarea_field($value);
+                } else {
+                    $value = trim($value);
+                }
+                break;
+            default:
+                if (function_exists('sanitize_text_field')) {
+                    $value = sanitize_text_field($value);
+                } else {
+                    $value = trim($value);
+                }
+                break;
+        }
+
+        return $value;
     }
 }
