@@ -28,13 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <div class="wrap">
     <h2>Add New Client</h2>
 
-    <?php if ($success): ?>
-        <div class="notice notice-success"><p>Client saved successfully.</p></div>
-    <?php elseif (!empty($errors)): ?>
-        <div class="notice notice-error"><p><strong>Errors:</strong></p>
-            <ul><?php foreach ($errors as $e) echo "<li>" . esc_html($e) . "</li>"; ?></ul>
-        </div>
-    <?php endif; ?>
+    <?php include __DIR__ . '/partials/status-notice.php'; ?>
 
     <form method="post" id="mealsdb-client-form">
         <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
