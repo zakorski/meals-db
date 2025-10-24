@@ -12,11 +12,31 @@ if ($conn) {
             ORDER BY created_at DESC';
 
     if ($stmt = $conn->prepare($sql)) {
-        if ($stmt->execute() && ($res = $stmt->get_result())) {
-            while ($row = $res->fetch_assoc()) {
-                $ignored[] = $row;
+        if ($stmt->execute()) {
+            if (method_exists($stmt, 'get_result')) {
+                $res = $stmt->get_result();
+
+                if ($res instanceof mysqli_result) {
+                    while ($row = $res->fetch_assoc()) {
+                        $ignored[] = $row;
+                    }
+
+                    $res->free();
+                }
+            } elseif ($stmt->bind_result($id, $field, $source, $target, $ignored_by, $ignored_at)) {
+                while ($stmt->fetch()) {
+                    $ignored[] = [
+                        'id' => $id,
+                        'field_name' => $field,
+                        'source_value' => $source,
+                        'target_value' => $target,
+                        'ignored_by' => $ignored_by,
+                        'ignored_at' => $ignored_at,
+                    ];
+                }
             }
         }
+
         $stmt->close();
     }
 }
