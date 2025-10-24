@@ -83,35 +83,3 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </form>
 </div>
 
-<script>
-jQuery(document).ready(function($) {
-    // Mask phone and postal
-    $('.phone-mask').on('input', function() {
-        this.value = this.value.replace(/[^\d]/g, '')
-            .replace(/(\d{3})(\d{3})(\d{4})/, '($1)-$2-$3')
-            .substr(0, 14);
-    });
-
-    $('.postal-mask').on('input', function() {
-        this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/(.{3})(.{3})/, '$1 $2').substr(0, 7);
-    });
-
-    $('.mealsdb-datepicker').datepicker({ dateFormat: 'yy-mm-dd' });
-
-    $('#mealsdb-save-draft').on('click', function() {
-        let formData = $('#mealsdb-client-form').serialize();
-
-        $.post(ajaxurl, {
-            action: 'mealsdb_save_draft',
-            nonce: '<?php echo wp_create_nonce("mealsdb_nonce"); ?>',
-            form_data: formData
-        }, function(response) {
-            if (response.success) {
-                alert(response.data.message);
-            } else {
-                alert('Draft save failed.');
-            }
-        });
-    });
-});
-</script>

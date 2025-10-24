@@ -23,6 +23,8 @@ class MealsDB_Sync {
 
         $mismatches = [];
 
+        $ignored_keys = self::load_ignored_conflicts($conn);
+
         // Get all active clients from Meals DB
         $query = "SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal FROM meals_clients WHERE status = 'active'";
         $result = $conn->query($query);
@@ -60,17 +62,117 @@ class MealsDB_Sync {
 
                 $diffs = self::compare_fields($client, $woo_user);
 
-                if (!empty($diffs)) {
+                $filtered_diffs = [];
+
+                foreach ($diffs as $field => $values) {
+                    $field_key   = self::sanitize_ignore_value($field);
+                    $source_val  = self::sanitize_ignore_value($values['meals_db'] ?? '');
+                    $target_val  = self::sanitize_ignore_value($values['woocommerce'] ?? '');
+                    $ignore_key  = self::build_ignore_key($field_key, $source_val, $target_val);
+
+                    if (isset($ignored_keys[$ignore_key])) {
+                        continue;
+                    }
+
+                    $filtered_diffs[$field] = $values;
+                }
+
+                if (!empty($filtered_diffs)) {
                     $mismatches[] = [
                         'client_id' => $client['id'],
                         'woo_user_id' => $woo_user->ID,
-                        'fields' => $diffs
+                        'fields' => $filtered_diffs
                     ];
                 }
             }
         }
 
         return $mismatches;
+    }
+
+    /**
+     * Build a hash map of ignored mismatch combinations.
+     *
+     * @param \mysqli $conn
+     * @return array<string, bool>
+     */
+    private static function load_ignored_conflicts(\mysqli $conn): array {
+        $ignored = [];
+
+        $sql = 'SELECT field_name, source_value, target_value FROM meals_ignored_conflicts';
+        $stmt = $conn->prepare($sql);
+
+        if (!$stmt) {
+            error_log('[MealsDB Sync] Failed to prepare ignored conflicts query: ' . ($conn->error ?? 'unknown error'));
+            return $ignored;
+        }
+
+        if (!$stmt->execute()) {
+            error_log('[MealsDB Sync] Failed to execute ignored conflicts query: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return $ignored;
+        }
+
+        if (method_exists($stmt, 'get_result')) {
+            $result = $stmt->get_result();
+
+            if ($result instanceof \mysqli_result) {
+                while ($row = $result->fetch_assoc()) {
+                    $field  = self::sanitize_ignore_value($row['field_name'] ?? '');
+                    $source = self::sanitize_ignore_value($row['source_value'] ?? '');
+                    $target = self::sanitize_ignore_value($row['target_value'] ?? '');
+                    $ignored[self::build_ignore_key($field, $source, $target)] = true;
+                }
+
+                $result->free();
+            }
+        } else {
+            if ($stmt->bind_result($field, $source, $target)) {
+                while ($stmt->fetch()) {
+                    $ignored[self::build_ignore_key(
+                        self::sanitize_ignore_value($field ?? ''),
+                        self::sanitize_ignore_value($source ?? ''),
+                        self::sanitize_ignore_value($target ?? '')
+                    )] = true;
+                }
+            }
+        }
+
+        $stmt->close();
+
+        return $ignored;
+    }
+
+    /**
+     * Normalize ignore values before hashing.
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private static function sanitize_ignore_value($value): string {
+        if (!is_scalar($value)) {
+            $value = '';
+        }
+
+        $value = (string) $value;
+
+        if (function_exists('sanitize_text_field')) {
+            return sanitize_text_field($value);
+        }
+
+        return trim($value);
+    }
+
+    /**
+     * Build the lookup key used for ignored conflicts.
+     *
+     * @param string $field
+     * @param string $source
+     * @param string $target
+     * @return string
+     */
+    private static function build_ignore_key(string $field, string $source, string $target): string {
+        return md5($field . '|' . $source . '|' . $target);
     }
 
     /**
