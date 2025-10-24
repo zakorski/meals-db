@@ -177,8 +177,6 @@ class MealsDB_Client_Form {
         $encrypted = $sanitized;
         self::ensure_index_columns_exist($conn);
 
-        $encrypted = $data;
-
         // Encrypt sensitive fields
         foreach (self::$encrypted_fields as $field) {
             if (!empty($encrypted[$field])) {
@@ -188,16 +186,21 @@ class MealsDB_Client_Form {
 
         // Store deterministic hashes for encrypted unique fields
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
-            if (!empty($data[$field])) {
-                $encrypted[$indexColumn] = self::deterministic_hash($data[$field]);
+            if (!empty($sanitized[$field])) {
+                $encrypted[$indexColumn] = self::deterministic_hash($sanitized[$field]);
             }
         }
 
         // Format date fields (assume already validated)
         $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_termination_date', 'recent_renewal_date'];
         foreach ($date_fields as $field) {
-            if (isset($encrypted[$field])) {
-                $encrypted[$field] = date('Y-m-d', strtotime($encrypted[$field]));
+            if (!empty($encrypted[$field])) {
+                $timestamp = strtotime($encrypted[$field]);
+                if ($timestamp) {
+                    $encrypted[$field] = date('Y-m-d', $timestamp);
+                }
+            } elseif (isset($encrypted[$field])) {
+                unset($encrypted[$field]);
             }
         }
 
@@ -355,6 +358,9 @@ class MealsDB_Client_Form {
         }
 
         return $value;
+    }
+
+    /**
      * Ensure the deterministic index columns exist on the meals_clients table.
      *
      * @param mysqli $conn
