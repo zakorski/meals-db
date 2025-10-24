@@ -238,6 +238,7 @@ class MealsDB_Client_Form {
             return false;
         }
 
+        $stmt->execute();
         $stmt->close();
 
         return true;
