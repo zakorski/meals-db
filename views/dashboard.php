@@ -10,8 +10,6 @@ $field_labels = [
     'phone_primary' => 'Primary Phone',
     'address_postal'=> 'Postal Code',
 ];
-
-$nonce = wp_create_nonce('mealsdb_nonce');
 ?>
 
 <div class="wrap mealsdb-sync-dashboard">
@@ -135,10 +133,6 @@ $nonce = wp_create_nonce('mealsdb_nonce');
                 </table>
             </div>
         <?php endforeach; ?>
+    </form>
     <?php endif; ?>
 </div>
-
-<script type="text/javascript">
-    window.mealsdb = window.mealsdb || {};
-    window.mealsdb.nonce = '<?php echo esc_js($nonce); ?>';
-</script>

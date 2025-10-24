@@ -28,8 +28,9 @@ class StubStmt {
         $this->sql = $sql;
     }
 
-    public function bind_param($types, ...$vars): void {
+    public function bind_param($types, &...$vars): bool {
         $this->params = $vars;
+        return true;
     }
 
     public function execute(): bool {
@@ -113,8 +114,8 @@ class StubMysqli extends mysqli {
             return new StubResult(0);
         }
 
-        if (stripos($sql, 'CREATE INDEX') === 0) {
-            if (preg_match('/`(idx_[a-z_]+)`/', $sql, $matches)) {
+        if (stripos($sql, 'CREATE UNIQUE INDEX') === 0 || stripos($sql, 'CREATE INDEX') === 0) {
+            if (preg_match('/`([a-z_]+)`/', $sql, $matches)) {
                 $this->existingIndexes[] = $matches[1];
             }
             return true;
@@ -159,7 +160,7 @@ run_test('detects duplicate individual_id via deterministic hash', function () {
     $hash = hash('sha256', strtolower(trim('ABC123')));
     $conn = new StubMysqli([
         'individual_id_index' => [$hash]
-    ], ['individual_id_index', 'requisition_id_index'], ['idx_individual_id_index', 'idx_requisition_id_index']);
+    ], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
     set_db_connection($conn);
 
     $method = new ReflectionMethod(MealsDB_Client_Form::class, 'check_unique_fields');
@@ -171,9 +172,43 @@ run_test('detects duplicate individual_id via deterministic hash', function () {
     }
 });
 
+run_test('detects duplicate vet health card via deterministic hash', function () {
+    reset_index_flag();
+    $hash = hash('sha256', strtolower(trim('VH-999')));
+    $conn = new StubMysqli([
+        'vet_health_card_index' => [$hash]
+    ], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
+    set_db_connection($conn);
+
+    $method = new ReflectionMethod(MealsDB_Client_Form::class, 'check_unique_fields');
+    $method->setAccessible(true);
+    $errors = $method->invoke(null, ['vet_health_card' => 'VH-999']);
+
+    if (empty($errors) || stripos($errors[0], 'Vet health card') === false) {
+        throw new Exception('Expected duplicate error for vet_health_card.');
+    }
+});
+
+run_test('detects duplicate delivery initials via deterministic hash', function () {
+    reset_index_flag();
+    $hash = hash('sha256', strtolower(trim('AB')));
+    $conn = new StubMysqli([
+        'delivery_initials_index' => [$hash]
+    ], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
+    set_db_connection($conn);
+
+    $method = new ReflectionMethod(MealsDB_Client_Form::class, 'check_unique_fields');
+    $method->setAccessible(true);
+    $errors = $method->invoke(null, ['delivery_initials' => 'AB']);
+
+    if (empty($errors) || stripos($errors[0], 'Delivery initials') === false) {
+        throw new Exception('Expected duplicate error for delivery_initials.');
+    }
+});
+
 run_test('allows unique individual_id when hash not present', function () {
     reset_index_flag();
-    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index'], ['idx_individual_id_index', 'idx_requisition_id_index']);
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
     set_db_connection($conn);
 
     $method = new ReflectionMethod(MealsDB_Client_Form::class, 'check_unique_fields');
@@ -187,12 +222,14 @@ run_test('allows unique individual_id when hash not present', function () {
 
 run_test('save stores deterministic indexes for encrypted fields', function () {
     reset_index_flag();
-    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index'], ['idx_individual_id_index', 'idx_requisition_id_index']);
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
     set_db_connection($conn);
 
     $data = [
         'individual_id' => 'ID-001',
         'requisition_id' => 'REQ-002',
+        'vet_health_card' => 'VH-123',
+        'delivery_initials' => 'AB',
         'first_name' => 'Jane'
     ];
 
@@ -210,6 +247,16 @@ run_test('save stores deterministic indexes for encrypted fields', function () {
 
     if (($conn->lastInsert['requisition_id_index'] ?? null) !== $expectedRequisition) {
         throw new Exception('Missing deterministic hash for requisition_id.');
+    }
+
+    $expectedVetCard = hash('sha256', strtolower(trim('VH-123')));
+    if (($conn->lastInsert['vet_health_card_index'] ?? null) !== $expectedVetCard) {
+        throw new Exception('Missing deterministic hash for vet_health_card.');
+    }
+
+    $expectedInitials = hash('sha256', strtolower(trim('AB')));
+    if (($conn->lastInsert['delivery_initials_index'] ?? null) !== $expectedInitials) {
+        throw new Exception('Missing deterministic hash for delivery_initials.');
     }
 });
 

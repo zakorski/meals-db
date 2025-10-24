@@ -14,6 +14,22 @@
 
 defined('ABSPATH') || exit;
 
+if (!defined('MEALS_DB_PLUGIN_FILE')) {
+    define('MEALS_DB_PLUGIN_FILE', __FILE__);
+}
+
+if (!defined('MEALS_DB_PLUGIN_DIR')) {
+    define('MEALS_DB_PLUGIN_DIR', plugin_dir_path(__FILE__));
+}
+
+if (!defined('MEALS_DB_PLUGIN_URL')) {
+    define('MEALS_DB_PLUGIN_URL', plugin_dir_url(__FILE__));
+}
+
+if (!defined('MEALS_DB_VERSION')) {
+    define('MEALS_DB_VERSION', '1.0.0');
+}
+
 /**
  * Check minimum PHP and WordPress versions before allowing activation.
  */
