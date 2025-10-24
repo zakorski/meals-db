@@ -67,14 +67,37 @@ class MealsDB_Ajax {
         if ($set_ignored) {
             // Insert as ignored
             $stmt = $conn->prepare("INSERT INTO meals_ignored_conflicts (field_name, source_value, target_value, ignored_by) VALUES (?, ?, ?, ?)");
-            $stmt->bind_param("sssi", $field_name, $source, $target, $user_id);
+            if (!$stmt) {
+                error_log('[MealsDB AJAX] Failed to prepare insert for ignored conflict: ' . ($conn->error ?? 'unknown error'));
+                wp_send_json_error(['message' => 'Failed to update ignore status.']);
+            }
+
+            if (!$stmt->bind_param("sssi", $field_name, $source, $target, $user_id)) {
+                $stmt->close();
+                error_log('[MealsDB AJAX] Failed binding parameters for ignored conflict insert.');
+                wp_send_json_error(['message' => 'Failed to update ignore status.']);
+            }
         } else {
             // Remove from ignored
             $stmt = $conn->prepare("DELETE FROM meals_ignored_conflicts WHERE field_name = ? AND source_value = ? AND target_value = ?");
-            $stmt->bind_param("sss", $field_name, $source, $target);
+            if (!$stmt) {
+                error_log('[MealsDB AJAX] Failed to prepare delete for ignored conflict: ' . ($conn->error ?? 'unknown error'));
+                wp_send_json_error(['message' => 'Failed to update ignore status.']);
+            }
+
+            if (!$stmt->bind_param("sss", $field_name, $source, $target)) {
+                $stmt->close();
+                error_log('[MealsDB AJAX] Failed binding parameters for ignored conflict delete.');
+                wp_send_json_error(['message' => 'Failed to update ignore status.']);
+            }
         }
 
-        $stmt->execute();
+        if (!$stmt->execute()) {
+            $stmt->close();
+            error_log('[MealsDB AJAX] Failed executing ignore toggle statement: ' . ($stmt->error ?? 'unknown error'));
+            wp_send_json_error(['message' => 'Failed to update ignore status.']);
+        }
+
         $stmt->close();
 
         wp_send_json_success(['message' => $set_ignored ? 'Ignored' : 'Unignored']);
@@ -130,7 +153,10 @@ class MealsDB_Ajax {
             wp_send_json_error(['message' => 'Failed to prepare delete statement.']);
         }
 
-        $stmt->bind_param('i', $draft_id);
+        if (!$stmt->bind_param('i', $draft_id)) {
+            $stmt->close();
+            wp_send_json_error(['message' => 'Failed to bind delete parameters.']);
+        }
 
         if (!$stmt->execute()) {
             $stmt->close();
