@@ -7,9 +7,9 @@ $conn = MealsDB_DB::get_connection();
 $ignored = [];
 
 if ($conn) {
-    $sql = 'SELECT id, field_name, source_value, target_value, ignored_by, ignored_at
+    $sql = 'SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at
             FROM meals_ignored_conflicts
-            ORDER BY ignored_at DESC';
+            ORDER BY created_at DESC';
 
     if ($stmt = $conn->prepare($sql)) {
         if ($stmt->execute() && ($res = $stmt->get_result())) {
