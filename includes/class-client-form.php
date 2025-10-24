@@ -238,6 +238,7 @@ class MealsDB_Client_Form {
             return false;
         }
 
+        $stmt->execute();
         $stmt->close();
 
         return true;
@@ -319,6 +320,8 @@ class MealsDB_Client_Form {
                 if (method_exists($stmt, 'store_result')) {
                     $stmt->store_result();
                 }
+                $stmt->execute();
+                $stmt->store_result();
 
                 if ($stmt->num_rows > 0) {
                     $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' already exists in another client.';
@@ -525,6 +528,14 @@ class MealsDB_Client_Form {
                 if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$indexName}`") !== true) {
                     error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
                     $allEnsured = false;
+                } else {
+                    $indexExists = false;
+                }
+            }
+
+            if ($indexExists && !$indexIsUnique) {
+                if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$indexName}`") !== true) {
+                    error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
                 } else {
                     $indexExists = false;
                 }
