@@ -62,9 +62,11 @@ jQuery(document).ready(function($) {
         const selected = $row.find('input[type=radio]:checked').val();
         const field = $row.data('field');
         const woo_id = $row.data('woo');
+        const source = $row.find('.mealsdb-a');
+        const target = $row.find('.mealsdb-b');
         const value = (selected === 'meals_db')
-            ? $row.find('.mealsdb-a').text()
-            : $row.find('.mealsdb-b').text();
+            ? (source.data('value') ?? source.text())
+            : (target.data('value') ?? target.text());
 
         $.post(ajaxurl, {
             action: 'mealsdb_sync_field',
@@ -86,16 +88,18 @@ jQuery(document).ready(function($) {
     // 🔁 Sync All Selected Fields
     // -----------------------------
     $('#mealsdb-sync-all').on('click', function () {
-        $('tr').each(function () {
+        $('.mealsdb-mismatch-row').each(function () {
             const $row = $(this);
             const selected = $row.find('input[type=radio]:checked').val();
             if (!selected) return;
 
             const field = $row.data('field');
             const woo_id = $row.data('woo');
+            const source = $row.find('.mealsdb-a');
+            const target = $row.find('.mealsdb-b');
             const value = (selected === 'meals_db')
-                ? $row.find('.mealsdb-a').text()
-                : $row.find('.mealsdb-b').text();
+                ? (source.data('value') ?? source.text())
+                : (target.data('value') ?? target.text());
 
             $.post(ajaxurl, {
                 action: 'mealsdb_sync_field',
@@ -117,8 +121,8 @@ jQuery(document).ready(function($) {
     $('.mealsdb-ignore-toggle').on('change', function () {
         const $row = $(this).closest('tr');
         const field = $row.data('field');
-        const source = $row.find('.mealsdb-a').text();
-        const target = $row.find('.mealsdb-b').text();
+        const source = $row.find('.mealsdb-a').data('value') ?? $row.find('.mealsdb-a').text();
+        const target = $row.find('.mealsdb-b').data('value') ?? $row.find('.mealsdb-b').text();
         const ignored = $(this).is(':checked');
 
         $.post(ajaxurl, {
@@ -142,10 +146,12 @@ jQuery(document).ready(function($) {
     // -----------------------------
     $('#mealsdb-show-only-diffs').on('change', function () {
         const showOnly = $(this).is(':checked');
-        $('tr').each(function () {
+        $('.mealsdb-mismatch-row').each(function () {
             const $row = $(this);
-            const a = $row.find('.mealsdb-a').text().trim();
-            const b = $row.find('.mealsdb-b').text().trim();
+            const aEl = $row.find('.mealsdb-a');
+            const bEl = $row.find('.mealsdb-b');
+            const a = (aEl.data('value') ?? aEl.text()).toString().trim();
+            const b = (bEl.data('value') ?? bEl.text()).toString().trim();
             if (showOnly && a === b) {
                 $row.hide();
             } else {
