@@ -16,23 +16,26 @@ if ($preserve_data) {
     return;
 }
 
-// Load .env
+// Reuse the runtime environment and database helpers so uninstall stays in sync with
+// the plugin's connection settings. The .env file must define PLUGIN_DB_HOST,
+// PLUGIN_DB_USER, PLUGIN_DB_PASS, and PLUGIN_DB_NAME — the same variables consumed by
+// MealsDB_DB::get_connection().
+require_once plugin_dir_path(__FILE__) . 'includes/class-env.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-db.php';
+
+// Load .env values into getenv()/$_ENV.
 $env_path = plugin_dir_path(__FILE__) . '.env';
 if (!file_exists($env_path)) {
     error_log('Meals DB uninstall aborted: .env file not found.');
     return;
 }
 
-$dotenv = parse_ini_file($env_path);
-$db_host = $dotenv['MEALS_DB_HOST'] ?? '';
-$db_user = $dotenv['MEALS_DB_USER'] ?? '';
-$db_pass = $dotenv['MEALS_DB_PASS'] ?? '';
-$db_name = $dotenv['MEALS_DB_NAME'] ?? '';
+MealsDB_Env::load($env_path);
 
-// Connect to external Meals DB
-$conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
+// Connect to external Meals DB using the same logic as the runtime plugin.
+$conn = MealsDB_DB::get_connection();
 
-if ($conn->connect_error) {
+if (!$conn instanceof mysqli) {
     error_log('Meals DB uninstall: failed to connect to database.');
     return;
 }
@@ -52,7 +55,7 @@ foreach ($tables as $table) {
     }
 }
 
-$conn->close();
+MealsDB_DB::close_connection();
 
 // Optional: remove plugin options or transients
 // delete_option('mealsdb_plugin_version');
