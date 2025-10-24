@@ -6,9 +6,16 @@ $drafts = [];
 
 if ($conn) {
     $res = $conn->query("SELECT id, data, created_at FROM meals_drafts ORDER BY created_at DESC");
-    while ($row = $res->fetch_assoc()) {
-        $row['data'] = json_decode($row['data'], true);
-        $drafts[] = $row;
+
+    if ($res instanceof mysqli_result) {
+        while ($row = $res->fetch_assoc()) {
+            $row['data'] = json_decode($row['data'], true);
+            $drafts[] = $row;
+        }
+
+        $res->free();
+    } elseif ($res === false) {
+        error_log('[MealsDB] Failed to load draft list: ' . ($conn->error ?? 'unknown error'));
     }
 }
 ?>
