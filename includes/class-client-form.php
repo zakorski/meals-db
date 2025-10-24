@@ -182,7 +182,7 @@ class MealsDB_Client_Form {
 
         // Encrypt sensitive fields
         foreach (self::$encrypted_fields as $field) {
-            if (!empty($encrypted[$field])) {
+            if (array_key_exists($field, $encrypted) && $encrypted[$field] !== '') {
                 $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
             }
         }
@@ -290,7 +290,7 @@ class MealsDB_Client_Form {
         $errors = [];
 
         foreach (self::$unique_fields as $field) {
-            if (!empty($data[$field])) {
+            if (array_key_exists($field, $data) && $data[$field] !== '') {
                 $column = $field;
                 $value = $data[$field];
 
