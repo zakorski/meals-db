@@ -74,6 +74,9 @@ jQuery(document).ready(function($) {
         }, function(response) {
             if (response.success) {
                 row.fadeOut();
+                if (response.data && response.data.message) {
+                    alert(response.data.message);
+                }
             } else {
                 alert('Failed to delete draft.');
             }

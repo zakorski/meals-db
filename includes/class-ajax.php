@@ -16,6 +16,7 @@ class MealsDB_Ajax {
         add_action('wp_ajax_mealsdb_sync_field', [__CLASS__, 'sync_field']);
         add_action('wp_ajax_mealsdb_toggle_ignore', [__CLASS__, 'toggle_ignore']);
         add_action('wp_ajax_mealsdb_save_draft', [__CLASS__, 'save_draft']);
+        add_action('wp_ajax_mealsdb_delete_draft', [__CLASS__, 'delete_draft']);
     }
 
     /**
@@ -99,5 +100,45 @@ class MealsDB_Ajax {
         MealsDB_Client_Form::save_draft($form);
 
         wp_send_json_success(['message' => 'Saved to drafts.']);
+    }
+
+    /**
+     * Delete a saved draft.
+     */
+    public static function delete_draft() {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $draft_id = intval($_POST['id'] ?? 0);
+
+        if ($draft_id <= 0) {
+            wp_send_json_error(['message' => 'Invalid draft ID.']);
+        }
+
+        $conn = MealsDB_DB::get_connection();
+
+        if (!$conn) {
+            wp_send_json_error(['message' => 'Database connection failed.']);
+        }
+
+        $stmt = $conn->prepare('DELETE FROM meals_drafts WHERE id = ?');
+
+        if (!$stmt) {
+            wp_send_json_error(['message' => 'Failed to prepare delete statement.']);
+        }
+
+        $stmt->bind_param('i', $draft_id);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            wp_send_json_error(['message' => 'Failed to delete draft.']);
+        }
+
+        $stmt->close();
+
+        wp_send_json_success(['message' => 'Draft deleted.']);
     }
 }
