@@ -1,123 +1,144 @@
 <?php
 MealsDB_Permissions::enforce();
 
-// On submission, validate and save
-$errors = [];
-$success = false;
+$mismatches = MealsDB_Sync::get_mismatches();
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    check_admin_referer('mealsdb_nonce', 'mealsdb_nonce_field');
+$field_labels = [
+    'first_name'    => 'First Name',
+    'last_name'     => 'Last Name',
+    'client_email'  => 'Email Address',
+    'phone_primary' => 'Primary Phone',
+    'address_postal'=> 'Postal Code',
+];
 
-    $form_data = $_POST;
-    $validation = MealsDB_Client_Form::validate($form_data);
-
-    if ($validation['valid']) {
-        $saved = MealsDB_Client_Form::save($form_data);
-        if ($saved) {
-            $success = true;
-        } else {
-            $errors[] = 'Database error occurred.';
-        }
-    } else {
-        $errors = $validation['errors'];
-        MealsDB_Client_Form::save_draft($form_data); // fallback save
-    }
-}
+$nonce = wp_create_nonce('mealsdb_nonce');
 ?>
 
-<div class="wrap">
-    <h2>Add New Client</h2>
+<div class="wrap mealsdb-sync-dashboard">
+    <h2><?php esc_html_e('Sync Dashboard', 'meals-db'); ?></h2>
 
-    <?php if ($success): ?>
-        <div class="notice notice-success"><p>Client saved successfully.</p></div>
-    <?php elseif (!empty($errors)): ?>
-        <div class="notice notice-error"><p><strong>Errors:</strong></p>
-            <ul><?php foreach ($errors as $e) echo "<li>" . esc_html($e) . "</li>"; ?></ul>
+    <?php if (empty($mismatches)) : ?>
+        <div class="notice notice-success">
+            <p><?php esc_html_e('All client records are currently aligned between Meals DB and WooCommerce. No mismatches were found.', 'meals-db'); ?></p>
         </div>
-    <?php endif; ?>
+    <?php else : ?>
+        <p class="description">
+            <?php esc_html_e('Review each field below, choose which value to keep, and sync the selected data to WooCommerce. You can also ignore a mismatch when the difference is expected.', 'meals-db'); ?>
+        </p>
+    <?php include __DIR__ . '/partials/status-notice.php'; ?>
 
     <form method="post" id="mealsdb-client-form">
         <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
 
-        <table class="form-table">
-            <tr>
-                <th><label for="first_name">First Name *</label></th>
-                <td><input type="text" name="first_name" required class="regular-text" /></td>
-            </tr>
-            <tr>
-                <th><label for="last_name">Last Name *</label></th>
-                <td><input type="text" name="last_name" required class="regular-text" /></td>
-            </tr>
-            <tr>
-                <th><label for="client_email">Email *</label></th>
-                <td><input type="email" name="client_email" required class="regular-text" /></td>
-            </tr>
-            <tr>
-                <th><label for="phone_primary">Phone #1 *</label></th>
-                <td><input type="text" name="phone_primary" required placeholder="(555)-555-5555" class="regular-text phone-mask" /></td>
-            </tr>
-            <tr>
-                <th><label for="address_postal">Postal Code *</label></th>
-                <td><input type="text" name="address_postal" required placeholder="A1A1A1" class="regular-text postal-mask" /></td>
-            </tr>
+        <div class="mealsdb-sync-toolbar">
+            <label>
+                <input type="checkbox" id="mealsdb-show-only-diffs" checked="checked" />
+                <?php esc_html_e('Show only unresolved mismatches', 'meals-db'); ?>
+            </label>
+            <button type="button" class="button button-primary" id="mealsdb-sync-all"><?php esc_html_e('Sync selected rows', 'meals-db'); ?></button>
+        </div>
 
-            <tr>
-                <th><label for="customer_type">Customer Type *</label></th>
-                <td>
-                    <select name="customer_type" required>
-                        <option value="">Select...</option>
-                        <option value="SDNB">SDNB</option>
-                        <option value="Vet">Vet</option>
-                        <option value="Private">Private</option>
-                    </select>
-                </td>
-            </tr>
+        <?php foreach ($mismatches as $index => $mismatch) :
+            $fields       = $mismatch['fields'] ?? [];
+            $woo_user_id  = isset($mismatch['woo_user_id']) ? (int) $mismatch['woo_user_id'] : 0;
+            $client_id    = isset($mismatch['client_id']) ? (int) $mismatch['client_id'] : 0;
 
-            <tr>
-                <th><label for="birth_date">Date of Birth</label></th>
-                <td><input type="text" name="birth_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" /></td>
-            </tr>
+            $meals_first  = $fields['first_name']['meals_db'] ?? '';
+            $meals_last   = $fields['last_name']['meals_db'] ?? '';
+            $woo_first    = $fields['first_name']['woocommerce'] ?? '';
+            $woo_last     = $fields['last_name']['woocommerce'] ?? '';
+            $display_name = trim($meals_first . ' ' . $meals_last);
 
-            <!-- Additional required dropdowns can be added here similarly -->
+            if ($display_name === '') {
+                $display_name = trim($woo_first . ' ' . $woo_last);
+            }
 
-        </table>
+            if ($display_name === '') {
+                /* translators: %d: Meals DB client id */
+                $display_name = sprintf(__('Client #%d', 'meals-db'), $client_id);
+            }
 
-        <p class="submit">
-            <button type="submit" class="button-primary">Submit</button>
-            <button type="button" id="mealsdb-save-draft" class="button-secondary">Save to Draft</button>
-        </p>
-    </form>
+            $display_email = $fields['client_email']['meals_db'] ?? ($fields['client_email']['woocommerce'] ?? '');
+        ?>
+            <div class="mealsdb-client-block">
+                <h3>
+                    <?php echo esc_html($display_name); ?>
+                    <small>
+                        <?php
+                        printf(
+                            /* translators: 1: Meals DB ID, 2: WooCommerce user ID */
+                            esc_html__('Meals DB ID %1$d • WooCommerce User %2$d', 'meals-db'),
+                            $client_id,
+                            $woo_user_id
+                        );
+                        ?>
+                        <?php if (!empty($display_email)) : ?>
+                            &ndash; <?php echo esc_html($display_email); ?>
+                        <?php endif; ?>
+                    </small>
+                </h3>
+
+                <table class="widefat fixed striped mealsdb-mismatch-table">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e('Field', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Meals DB value', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('WooCommerce value', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Actions', 'meals-db'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($fields as $field_key => $values) :
+                            $row_id     = 'mealsdb-mismatch-' . $index . '-' . sanitize_key($field_key);
+                            $label      = $field_labels[$field_key] ?? ucwords(str_replace('_', ' ', $field_key));
+                            $meals_val  = $values['meals_db'] ?? '';
+                            $woo_val    = $values['woocommerce'] ?? '';
+                            $radio_name = $row_id . '-choice';
+                        ?>
+                            <tr
+                                class="mealsdb-mismatch-row"
+                                data-field="<?php echo esc_attr($field_key); ?>"
+                                data-woo="<?php echo esc_attr($woo_user_id); ?>"
+                                data-client="<?php echo esc_attr($client_id); ?>"
+                            >
+                                <td class="column-field">
+                                    <strong><?php echo esc_html($label); ?></strong>
+                                </td>
+                                <td class="column-meals">
+                                    <label>
+                                        <input type="radio" name="<?php echo esc_attr($radio_name); ?>" value="meals_db" checked="checked" />
+                                        <span class="mealsdb-a" data-value="<?php echo esc_attr($meals_val); ?>">
+                                            <?php echo $meals_val !== '' ? esc_html($meals_val) : esc_html__('(empty)', 'meals-db'); ?>
+                                        </span>
+                                    </label>
+                                </td>
+                                <td class="column-woo">
+                                    <label>
+                                        <input type="radio" name="<?php echo esc_attr($radio_name); ?>" value="woocommerce" />
+                                        <span class="mealsdb-b" data-value="<?php echo esc_attr($woo_val); ?>">
+                                            <?php echo $woo_val !== '' ? esc_html($woo_val) : esc_html__('(empty)', 'meals-db'); ?>
+                                        </span>
+                                    </label>
+                                </td>
+                                <td class="column-actions">
+                                    <button type="button" class="button button-secondary sync-field">
+                                        <?php esc_html_e('Sync selected value', 'meals-db'); ?>
+                                    </button>
+                                    <label class="mealsdb-ignore-option">
+                                        <input type="checkbox" class="mealsdb-ignore-toggle" />
+                                        <?php esc_html_e('Ignore mismatch', 'meals-db'); ?>
+                                    </label>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endforeach; ?>
+    <?php endif; ?>
 </div>
 
-<script>
-jQuery(document).ready(function($) {
-    // Mask phone and postal
-    $('.phone-mask').on('input', function() {
-        this.value = this.value.replace(/[^\d]/g, '')
-            .replace(/(\d{3})(\d{3})(\d{4})/, '($1)-$2-$3')
-            .substr(0, 14);
-    });
-
-    $('.postal-mask').on('input', function() {
-        this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/(.{3})(.{3})/, '$1 $2').substr(0, 7);
-    });
-
-    $('.mealsdb-datepicker').datepicker({ dateFormat: 'yy-mm-dd' });
-
-    $('#mealsdb-save-draft').on('click', function() {
-        let formData = $('#mealsdb-client-form').serialize();
-
-        $.post(ajaxurl, {
-            action: 'mealsdb_save_draft',
-            nonce: '<?php echo wp_create_nonce("mealsdb_nonce"); ?>',
-            form_data: formData
-        }, function(response) {
-            if (response.success) {
-                alert(response.data.message);
-            } else {
-                alert('Draft save failed.');
-            }
-        });
-    });
-});
+<script type="text/javascript">
+    window.mealsdb = window.mealsdb || {};
+    window.mealsdb.nonce = '<?php echo esc_js($nonce); ?>';
 </script>

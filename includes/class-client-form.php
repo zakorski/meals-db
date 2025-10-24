@@ -79,6 +79,21 @@ class MealsDB_Client_Form {
     ];
 
     /**
+     * Deterministic index columns used for uniqueness checks on encrypted data.
+     */
+    private static $deterministic_index_map = [
+        'individual_id' => 'individual_id_index',
+        'requisition_id' => 'requisition_id_index',
+    ];
+
+    /**
+     * Track whether we've attempted to ensure the deterministic index columns exist.
+     *
+     * @var bool
+     */
+    private static $indexes_ensured = false;
+
+    /**
      * Validate submitted form data.
      *
      * @param array $data
@@ -160,11 +175,21 @@ class MealsDB_Client_Form {
         }
 
         $encrypted = $sanitized;
+        self::ensure_index_columns_exist($conn);
+
+        $encrypted = $data;
 
         // Encrypt sensitive fields
         foreach (self::$encrypted_fields as $field) {
             if (!empty($encrypted[$field])) {
                 $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
+            }
+        }
+
+        // Store deterministic hashes for encrypted unique fields
+        foreach (self::$deterministic_index_map as $field => $indexColumn) {
+            if (!empty($data[$field])) {
+                $encrypted[$indexColumn] = self::deterministic_hash($data[$field]);
             }
         }
 
@@ -224,15 +249,21 @@ class MealsDB_Client_Form {
         $conn = MealsDB_DB::get_connection();
         if (!$conn) return [];
 
+        self::ensure_index_columns_exist($conn);
+
         $errors = [];
 
         foreach (self::$unique_fields as $field) {
             if (!empty($data[$field])) {
-                $value = $field === 'individual_id' || $field === 'requisition_id'
-                    ? MealsDB_Encryption::encrypt($data[$field]) // must encrypt to match DB
-                    : $data[$field];
+                $column = $field;
+                $value = $data[$field];
 
-                $stmt = $conn->prepare("SELECT id FROM meals_clients WHERE $field = ? LIMIT 1");
+                if (isset(self::$deterministic_index_map[$field])) {
+                    $column = self::$deterministic_index_map[$field];
+                    $value = self::deterministic_hash($data[$field]);
+                }
+
+                $stmt = $conn->prepare("SELECT id FROM meals_clients WHERE $column = ? LIMIT 1");
                 $stmt->bind_param("s", $value);
                 $stmt->execute();
                 $stmt->store_result();
@@ -324,5 +355,79 @@ class MealsDB_Client_Form {
         }
 
         return $value;
+     * Ensure the deterministic index columns exist on the meals_clients table.
+     *
+     * @param mysqli $conn
+     */
+    private static function ensure_index_columns_exist($conn): void {
+        if (self::$indexes_ensured || empty(self::$deterministic_index_map)) {
+            return;
+        }
+
+        foreach (self::$deterministic_index_map as $indexColumn) {
+            $escapedColumn = method_exists($conn, 'real_escape_string')
+                ? $conn->real_escape_string($indexColumn)
+                : $indexColumn;
+
+            $columnExists = false;
+            $result = $conn->query("SHOW COLUMNS FROM meals_clients LIKE '{$escapedColumn}'");
+            if ($result instanceof mysqli_result) {
+                $columnExists = $result->num_rows > 0;
+                $result->free();
+            } elseif ($result && isset($result->num_rows)) {
+                // Allow mock result sets in tests
+                $columnExists = $result->num_rows > 0;
+                if (method_exists($result, 'free')) {
+                    $result->free();
+                }
+            }
+
+            if (!$columnExists) {
+                $addColumnSql = "ALTER TABLE meals_clients ADD COLUMN `{$indexColumn}` CHAR(64) NULL";
+                if (!$conn->query($addColumnSql)) {
+                    error_log('[MealsDB] Failed to add deterministic index column: ' . ($conn->error ?? 'unknown error'));
+                    continue;
+                }
+            }
+
+            $indexName = 'idx_' . $indexColumn;
+            $escapedIndex = method_exists($conn, 'real_escape_string')
+                ? $conn->real_escape_string($indexName)
+                : $indexName;
+
+            $indexExists = false;
+            $indexResult = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedIndex}'");
+            if ($indexResult instanceof mysqli_result) {
+                $indexExists = $indexResult->num_rows > 0;
+                $indexResult->free();
+            } elseif ($indexResult && isset($indexResult->num_rows)) {
+                $indexExists = $indexResult->num_rows > 0;
+                if (method_exists($indexResult, 'free')) {
+                    $indexResult->free();
+                }
+            }
+
+            if (!$indexExists) {
+                $createIndexSql = "CREATE INDEX `{$indexName}` ON meals_clients (`{$indexColumn}`)";
+                if (!$conn->query($createIndexSql)) {
+                    $errno = $conn->errno ?? null;
+                    if ($errno !== 1061) { // ignore duplicate index error
+                        error_log('[MealsDB] Failed to create deterministic index: ' . ($conn->error ?? 'unknown error'));
+                    }
+                }
+            }
+        }
+
+        self::$indexes_ensured = true;
+    }
+
+    /**
+     * Generate a deterministic hash for comparison of encrypted fields.
+     *
+     * @param string $value
+     * @return string
+     */
+    private static function deterministic_hash(string $value): string {
+        return hash('sha256', strtolower(trim($value)));
     }
 }

@@ -33,10 +33,31 @@ class MealsDB_Sync {
         }
 
         while ($client = $result->fetch_assoc()) {
+            $individual_id = $client['individual_id'] ?? '';
+
+            if (!empty($individual_id)) {
+                try {
+                    $individual_id = MealsDB_Encryption::decrypt($individual_id);
+                } catch (Exception $e) {
+                    error_log('[MealsDB Sync] Failed to decrypt individual_id for client ID ' . $client['id'] . ': ' . $e->getMessage());
+                    $individual_id = '';
+                }
+            }
+
+            $client['individual_id'] = $individual_id;
+
             // Try to find matching WooCommerce user by email or individual ID
-            $woo_user = self::find_woocommerce_user($client['client_email'], $client['individual_id']);
+            $woo_user = self::find_woocommerce_user($client['client_email'], $individual_id);
 
             if ($woo_user) {
+                if (!empty($individual_id)) {
+                    $stored_identifier = get_user_meta($woo_user->ID, 'meals_individual_id', true);
+
+                    if ($stored_identifier !== $individual_id) {
+                        update_user_meta($woo_user->ID, 'meals_individual_id', $individual_id);
+                    }
+                }
+
                 $diffs = self::compare_fields($client, $woo_user);
 
                 if (!empty($diffs)) {
@@ -55,11 +76,11 @@ class MealsDB_Sync {
     /**
      * Find a WooCommerce user by email or custom meta matching individual_id.
      *
-     * @param string $email
-     * @param string $individual_id
+     * @param string|null $email
+     * @param string|null $individual_id
      * @return WP_User|null
      */
-    private static function find_woocommerce_user(string $email, string $individual_id): ?WP_User {
+    private static function find_woocommerce_user(?string $email, ?string $individual_id): ?WP_User {
         if ($email) {
             $user = get_user_by('email', $email);
             if ($user instanceof WP_User) {
@@ -67,13 +88,19 @@ class MealsDB_Sync {
             }
         }
 
-        $users = get_users([
-            'meta_key' => 'meals_individual_id',
-            'meta_value' => $individual_id,
-            'number' => 1
-        ]);
+        if (!empty($individual_id)) {
+            $users = get_users([
+                'meta_key' => 'meals_individual_id',
+                'meta_value' => $individual_id,
+                'number' => 1
+            ]);
 
-        return !empty($users) ? $users[0] : null;
+            if (!empty($users)) {
+                return $users[0];
+            }
+        }
+
+        return null;
     }
 
     /**
