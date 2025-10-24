@@ -20,7 +20,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } else {
         $errors = $validation['errors'];
-        MealsDB_Client_Form::save_draft($form_data); // fallback save
+        if (!MealsDB_Client_Form::save_draft($form_data)) { // fallback save
+            $errors[] = 'Unable to save draft copy. Please try again or contact an administrator.';
+        }
     }
 }
 ?>

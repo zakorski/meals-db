@@ -120,7 +120,11 @@ class MealsDB_Ajax {
             wp_send_json_error(['message' => 'Invalid form data.']);
         }
 
-        MealsDB_Client_Form::save_draft($form);
+        $saved = MealsDB_Client_Form::save_draft($form);
+
+        if (!$saved) {
+            wp_send_json_error(['message' => 'Failed to save draft.']);
+        }
 
         wp_send_json_success(['message' => 'Saved to drafts.']);
     }

@@ -185,6 +185,9 @@ class MealsDB_Client_Form {
             if (array_key_exists($field, $encrypted) && $encrypted[$field] !== '') {
                 $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
             }
+        } catch (Exception $e) {
+            error_log('[MealsDB] Save aborted during encryption: ' . $e->getMessage());
+            return false;
         }
 
         // Store deterministic hashes for encrypted unique fields
@@ -248,12 +251,21 @@ class MealsDB_Client_Form {
      * Save a draft of the form submission.
      *
      * @param array $data
+     * @return bool True on success, false on failure
      */
-    public static function save_draft(array $data): void {
+    public static function save_draft(array $data): bool {
         $conn = MealsDB_DB::get_connection();
-        if (!$conn) return;
+        if (!$conn) {
+            error_log('[MealsDB] Draft save aborted: database connection unavailable.');
+            return false;
+        }
 
         $json = json_encode($data);
+        if ($json === false) {
+            error_log('[MealsDB] Draft save failed: unable to encode payload.');
+            return false;
+        }
+
         $user_id = get_current_user_id();
 
         $stmt = $conn->prepare("INSERT INTO meals_drafts (data, created_by) VALUES (?, ?)");
@@ -273,6 +285,7 @@ class MealsDB_Client_Form {
         }
 
         $stmt->close();
+        return true;
     }
 
     /**
