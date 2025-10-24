@@ -153,7 +153,10 @@ class MealsDB_Ajax {
             wp_send_json_error(['message' => 'Failed to prepare delete statement.']);
         }
 
-        $stmt->bind_param('i', $draft_id);
+        if (!$stmt->bind_param('i', $draft_id)) {
+            $stmt->close();
+            wp_send_json_error(['message' => 'Failed to bind delete parameters.']);
+        }
 
         if (!$stmt->execute()) {
             $stmt->close();
