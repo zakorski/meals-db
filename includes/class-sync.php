@@ -11,14 +11,17 @@ class MealsDB_Sync {
 
     /**
      * Get a list of mismatched fields between Meals DB and WooCommerce.
-     * 
-     * @return array
+     *
+     * @return array|WP_Error
      */
-    public static function get_mismatches(): array {
+    public static function get_mismatches() {
         $conn = MealsDB_DB::get_connection();
 
         if (!$conn) {
-            return [];
+            return new WP_Error(
+                'mealsdb_db_connection_failed',
+                __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db')
+            );
         }
 
         $mismatches = [];
@@ -29,9 +32,18 @@ class MealsDB_Sync {
         $query = "SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal FROM meals_clients WHERE status = 'active'";
         $result = $conn->query($query);
 
-        if (!$result) {
-            error_log('[MealsDB Sync] Failed to fetch Meals DB records: ' . $conn->error);
-            return [];
+        if (!($result instanceof \mysqli_result)) {
+            $message = $conn->error ?: __('Unknown database error.', 'meals-db');
+            error_log('[MealsDB Sync] Failed to fetch Meals DB records: ' . $message);
+
+            return new WP_Error(
+                'mealsdb_query_failed',
+                sprintf(
+                    /* translators: %s: database error message */
+                    __('Failed to retrieve Meals DB records: %s', 'meals-db'),
+                    $message
+                )
+            );
         }
 
         while ($client = $result->fetch_assoc()) {
@@ -78,6 +90,7 @@ class MealsDB_Sync {
                 }
             }
         }
+        $result->free();
 
         return $mismatches;
     }

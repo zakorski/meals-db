@@ -3,6 +3,7 @@ MealsDB_Permissions::enforce();
 
 $conn = MealsDB_DB::get_connection();
 $drafts = [];
+$draft_error = null;
 
 if ($conn) {
     $res = $conn->query("SELECT id, data, created_at FROM meals_drafts ORDER BY created_at DESC");
@@ -21,15 +22,27 @@ if ($conn) {
 
         $res->free();
     } elseif ($res === false) {
-        error_log('[MealsDB] Failed to load draft list: ' . ($conn->error ?? 'unknown error'));
+        $message = $conn->error ?? __('unknown error', 'meals-db');
+        error_log('[MealsDB] Failed to load draft list: ' . $message);
+        $draft_error = sprintf(
+            /* translators: %s: database error message */
+            __('Unable to load client drafts: %s', 'meals-db'),
+            $message
+        );
     }
+} else {
+    $draft_error = __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db');
 }
 ?>
 
 <div class="wrap">
     <h2>Client Drafts</h2>
 
-    <?php if (empty($drafts)): ?>
+    <?php if ($draft_error): ?>
+        <div class="notice notice-error">
+            <p><?= esc_html($draft_error) ?></p>
+        </div>
+    <?php elseif (empty($drafts)): ?>
         <p>No drafts found.</p>
     <?php else: ?>
         <table class="widefat striped">
