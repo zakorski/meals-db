@@ -23,7 +23,11 @@ $field_labels = [
         <p class="description">
             <?php esc_html_e('Review each field below, choose which value to keep, and sync the selected data to WooCommerce. You can also ignore a mismatch when the difference is expected.', 'meals-db'); ?>
         </p>
-    <?php include __DIR__ . '/partials/status-notice.php'; ?>
+    <?php
+        $success = $success ?? null;
+        $errors = $errors ?? [];
+        include __DIR__ . '/partials/status-notice.php';
+    ?>
 
     <form method="post" id="mealsdb-client-form">
         <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>

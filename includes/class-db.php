@@ -29,12 +29,26 @@ class MealsDB_DB {
         $pass = getenv('PLUGIN_DB_PASS');
         $name = getenv('PLUGIN_DB_NAME');
 
-        self::$connection = new mysqli($host, $user, $pass, $name);
+        $previousReportMode = null;
+        if (function_exists('mysqli_report')) {
+            $previousReportMode = mysqli_report(MYSQLI_REPORT_OFF);
+        }
 
-        if (self::$connection->connect_error) {
+        try {
+            self::$connection = @new mysqli($host, $user, $pass, $name);
+        } catch (Throwable $e) {
+            error_log('[MealsDB] Database connection exception: ' . $e->getMessage());
+            self::$connection = null;
+        } finally {
+            if (function_exists('mysqli_report') && $previousReportMode !== null) {
+                mysqli_report($previousReportMode);
+            }
+        }
+
+        if (self::$connection instanceof mysqli && self::$connection->connect_error) {
             error_log('[MealsDB] Database connection failed: ' . self::$connection->connect_error);
             self::$connection = null;
-        } else {
+        } elseif (self::$connection instanceof mysqli) {
             self::$connection->set_charset('utf8mb4');
         }
 
