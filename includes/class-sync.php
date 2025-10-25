@@ -37,7 +37,7 @@ class MealsDB_Sync {
         while ($client = $result->fetch_assoc()) {
             $individual_id = $client['individual_id'] ?? '';
 
-            if (!empty($individual_id)) {
+            if ($individual_id !== '') {
                 try {
                     $individual_id = MealsDB_Encryption::decrypt($individual_id);
                 } catch (Exception $e) {
@@ -52,14 +52,6 @@ class MealsDB_Sync {
             $woo_user = self::find_woocommerce_user($client['client_email'], $individual_id);
 
             if ($woo_user) {
-                if (!empty($individual_id)) {
-                    $stored_identifier = get_user_meta($woo_user->ID, 'meals_individual_id', true);
-
-                    if ($stored_identifier !== $individual_id) {
-                        update_user_meta($woo_user->ID, 'meals_individual_id', $individual_id);
-                    }
-                }
-
                 $diffs = self::compare_fields($client, $woo_user);
 
                 $filtered_diffs = [];
@@ -190,7 +182,7 @@ class MealsDB_Sync {
             }
         }
 
-        if (!empty($individual_id)) {
+        if ($individual_id !== null && $individual_id !== '') {
             $users = get_users([
                 'meta_key' => 'meals_individual_id',
                 'meta_value' => $individual_id,
@@ -246,36 +238,65 @@ class MealsDB_Sync {
      * @param string $new_value
      */
     public static function push_to_woocommerce(int $woo_user_id, string $field, string $new_value): void {
+        $user = get_userdata($woo_user_id);
+        $old_value = null;
+        $update_success = false;
+
         switch ($field) {
             case 'first_name':
             case 'last_name':
-                wp_update_user([
+                if ($user instanceof WP_User) {
+                    $old_value = $field === 'first_name' ? $user->first_name : $user->last_name;
+                }
+                $result = wp_update_user([
                     'ID' => $woo_user_id,
                     $field => $new_value
                 ]);
+                if (!is_wp_error($result)) {
+                    $update_success = true;
+                } else {
+                    error_log('[MealsDB Sync] Failed to sync ' . $field . ' for user ' . $woo_user_id . ': ' . $result->get_error_message());
+                }
                 break;
             case 'client_email':
-                wp_update_user([
+                if ($user instanceof WP_User) {
+                    $old_value = $user->user_email;
+                }
+                $result = wp_update_user([
                     'ID' => $woo_user_id,
                     'user_email' => $new_value
                 ]);
+                if (!is_wp_error($result)) {
+                    $update_success = true;
+                } else {
+                    error_log('[MealsDB Sync] Failed to sync email for user ' . $woo_user_id . ': ' . $result->get_error_message());
+                }
                 break;
             case 'phone_primary':
-                update_user_meta($woo_user_id, 'billing_phone', $new_value);
+                $old_value = get_user_meta($woo_user_id, 'billing_phone', true);
+                $update_success = update_user_meta($woo_user_id, 'billing_phone', $new_value) !== false;
+                if (!$update_success) {
+                    error_log('[MealsDB Sync] Failed to sync phone for user ' . $woo_user_id . '.');
+                }
                 break;
             case 'address_postal':
-                update_user_meta($woo_user_id, 'billing_postcode', $new_value);
+                $old_value = get_user_meta($woo_user_id, 'billing_postcode', true);
+                $update_success = update_user_meta($woo_user_id, 'billing_postcode', $new_value) !== false;
+                if (!$update_success) {
+                    error_log('[MealsDB Sync] Failed to sync postal code for user ' . $woo_user_id . '.');
+                }
                 break;
         }
 
-        // Log it
-        MealsDB_Logger::log(
-            'sync_override',
-            $woo_user_id,
-            $field,
-            '[Woo old]',
-            $new_value,
-            'mealsdb'
-        );
+        if ($update_success) {
+            MealsDB_Logger::log(
+                'sync_override',
+                $woo_user_id,
+                $field,
+                is_scalar($old_value) ? (string) $old_value : null,
+                $new_value,
+                'mealsdb'
+            );
+        }
     }
 }
