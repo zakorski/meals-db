@@ -31,8 +31,7 @@ class MealsDB_DB {
 
         $previousReportMode = null;
         if (function_exists('mysqli_report')) {
-            $previousReportMode = ini_get('mysqli.report_mode');
-            mysqli_report(MYSQLI_REPORT_OFF);
+            $previousReportMode = mysqli_report(MYSQLI_REPORT_OFF);
         }
 
         try {
@@ -41,15 +40,8 @@ class MealsDB_DB {
             error_log('[MealsDB] Database connection exception: ' . $e->getMessage());
             self::$connection = null;
         } finally {
-            if (function_exists('mysqli_report')) {
-                if ($previousReportMode !== null && $previousReportMode !== false && function_exists('ini_set')) {
-                    $restored = ini_set('mysqli.report_mode', (string) $previousReportMode);
-                    if ($restored === false) {
-                        mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-                    }
-                } else {
-                    mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-                }
+            if (function_exists('mysqli_report') && $previousReportMode !== null) {
+                mysqli_report($previousReportMode);
             }
         }
 

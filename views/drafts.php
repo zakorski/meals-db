@@ -70,34 +70,14 @@ if ($conn) {
                         <td><?= esc_html(date('Y-m-d H:i', strtotime($draft['created_at']))) ?></td>
                         <td>
                             <form method="post" action="<?php echo admin_url('admin.php?page=meals-db&tab=add'); ?>">
-                                <?php
-                                if (!function_exists('mealsdb_render_draft_inputs')) {
-                                    function mealsdb_render_draft_inputs(string $name, $value): void {
-                                        if (is_array($value)) {
-                                            foreach ($value as $key => $item) {
-                                                $child_name = is_int($key)
-                                                    ? $name . '[]'
-                                                    : $name . '[' . $key . ']';
-                                                mealsdb_render_draft_inputs($child_name, $item);
-                                            }
-
-                                            return;
-                                        }
-
-                                        if (!is_scalar($value)) {
-                                            $value = '';
-                                        }
-
-                                        ?>
-                                        <input type="hidden" name="<?= esc_attr($name) ?>" value="<?= esc_attr((string) $value) ?>" />
-                                        <?php
-                                    }
-                                }
-
-                                foreach ($data as $key => $value) {
-                                    mealsdb_render_draft_inputs((string) $key, $value);
-                                }
-                                ?>
+                                <?php foreach ($data as $key => $value): ?>
+                                    <?php
+                                    $serialized_value = is_scalar($value)
+                                        ? $value
+                                        : (function_exists('wp_json_encode') ? wp_json_encode($value) : json_encode($value));
+                                    ?>
+                                    <input type="hidden" name="<?= esc_attr($key) ?>" value="<?= esc_attr($serialized_value ?? '') ?>" />
+                                <?php endforeach; ?>
                                 <input type="hidden" name="resume_draft" value="1" />
                                 <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
                                 <button type="submit" class="button button-primary">Resume</button>

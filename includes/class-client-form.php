@@ -164,7 +164,7 @@ class MealsDB_Client_Form {
     public static function prepare_form_defaults(array $data): array {
         $unknown_keys = [];
 
-        return self::sanitize_payload($data, $unknown_keys, true);
+        return self::sanitize_payload($data, $unknown_keys);
     }
 
     /**
