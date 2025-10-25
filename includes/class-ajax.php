@@ -120,7 +120,17 @@ class MealsDB_Ajax {
             wp_send_json_error(['message' => 'Invalid form data.']);
         }
 
-        $saved = MealsDB_Client_Form::save_draft($form);
+        $draft_id = isset($form['draft_id']) ? intval($form['draft_id']) : null;
+
+        if ($draft_id !== null) {
+            unset($form['draft_id']);
+        }
+
+        if (isset($form['resume_draft'])) {
+            unset($form['resume_draft']);
+        }
+
+        $saved = MealsDB_Client_Form::save_draft($form, $draft_id);
 
         if (!$saved) {
             wp_send_json_error(['message' => 'Failed to save draft.']);
@@ -145,29 +155,9 @@ class MealsDB_Ajax {
             wp_send_json_error(['message' => 'Invalid draft ID.']);
         }
 
-        $conn = MealsDB_DB::get_connection();
-
-        if (!$conn) {
-            wp_send_json_error(['message' => 'Database connection failed.']);
-        }
-
-        $stmt = $conn->prepare('DELETE FROM meals_drafts WHERE id = ?');
-
-        if (!$stmt) {
-            wp_send_json_error(['message' => 'Failed to prepare delete statement.']);
-        }
-
-        if (!$stmt->bind_param('i', $draft_id)) {
-            $stmt->close();
-            wp_send_json_error(['message' => 'Failed to bind delete parameters.']);
-        }
-
-        if (!$stmt->execute()) {
-            $stmt->close();
+        if (!MealsDB_Client_Form::delete_draft($draft_id)) {
             wp_send_json_error(['message' => 'Failed to delete draft.']);
         }
-
-        $stmt->close();
 
         wp_send_json_success(['message' => 'Draft deleted.']);
     }

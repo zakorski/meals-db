@@ -9,6 +9,8 @@
 
 class MealsDB_Permissions {
 
+    private const REQUIRED_CAPABILITY = 'manage_woocommerce';
+
     /**
      * Checks if the current user can access Meals DB plugin features.
      *
@@ -19,21 +21,28 @@ class MealsDB_Permissions {
             return false;
         }
 
-        $user = wp_get_current_user();
+        $capability = apply_filters('mealsdb_required_capability', self::REQUIRED_CAPABILITY);
 
-        if (empty($user->roles)) {
-            return false;
+        if (!is_string($capability) || $capability === '') {
+            $capability = self::REQUIRED_CAPABILITY;
         }
 
-        $allowed_roles = ['administrator', 'shop_manager'];
+        return current_user_can($capability);
+    }
 
-        foreach ($allowed_roles as $role) {
-            if (in_array($role, (array) $user->roles, true)) {
-                return true;
-            }
+    /**
+     * Retrieve the capability required to access the plugin UI.
+     *
+     * @return string
+     */
+    public static function required_capability(): string {
+        $capability = apply_filters('mealsdb_required_capability', self::REQUIRED_CAPABILITY);
+
+        if (!is_string($capability) || $capability === '') {
+            return self::REQUIRED_CAPABILITY;
         }
 
-        return false;
+        return $capability;
     }
 
     /**

@@ -1,7 +1,13 @@
 <?php
 MealsDB_Permissions::enforce();
 
+$sync_error = null;
 $mismatches = MealsDB_Sync::get_mismatches();
+
+if (is_wp_error($mismatches)) {
+    $sync_error = $mismatches;
+    $mismatches = [];
+}
 
 $field_labels = [
     'first_name'    => 'First Name',
@@ -15,7 +21,11 @@ $field_labels = [
 <div class="wrap mealsdb-sync-dashboard">
     <h2><?php esc_html_e('Sync Dashboard', 'meals-db'); ?></h2>
 
-    <?php if (empty($mismatches)) : ?>
+    <?php if ($sync_error instanceof WP_Error) : ?>
+        <div class="notice notice-error">
+            <p><?php echo esc_html($sync_error->get_error_message()); ?></p>
+        </div>
+    <?php elseif (empty($mismatches)) : ?>
         <div class="notice notice-success">
             <p><?php esc_html_e('All client records are currently aligned between Meals DB and WooCommerce. No mismatches were found.', 'meals-db'); ?></p>
         </div>
@@ -23,7 +33,11 @@ $field_labels = [
         <p class="description">
             <?php esc_html_e('Review each field below, choose which value to keep, and sync the selected data to WooCommerce. You can also ignore a mismatch when the difference is expected.', 'meals-db'); ?>
         </p>
-    <?php include __DIR__ . '/partials/status-notice.php'; ?>
+    <?php
+        $success = $success ?? null;
+        $errors = $errors ?? [];
+        include __DIR__ . '/partials/status-notice.php';
+    ?>
 
     <form method="post" id="mealsdb-client-form">
         <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
