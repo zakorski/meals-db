@@ -28,7 +28,7 @@ class MealsDB_Admin_UI {
         add_menu_page(
             'Meals DB',
             'Meals DB',
-            'manage_woocommerce', // matches shop_manager/admin
+            MealsDB_Permissions::required_capability(),
             'meals-db',
             [__CLASS__, 'render_main_page'],
             'dashicons-clipboard',
