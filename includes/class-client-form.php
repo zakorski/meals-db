@@ -99,7 +99,7 @@ class MealsDB_Client_Form {
      * Validate submitted form data.
      *
      * @param array $data
-     * @return array ['valid' => bool, 'errors' => array]
+     * @return array ['valid' => bool, 'errors' => array, 'sanitized' => array]
      */
     public static function validate(array $data): array {
         $errors = [];
@@ -150,8 +150,21 @@ class MealsDB_Client_Form {
 
         return [
             'valid' => empty($errors),
-            'errors' => $errors
+            'errors' => $errors,
+            'sanitized' => $sanitized,
         ];
+    }
+
+    /**
+     * Prepare sanitized defaults for re-populating the admin form.
+     *
+     * @param array $data
+     * @return array
+     */
+    public static function prepare_form_defaults(array $data): array {
+        $unknown_keys = [];
+
+        return self::sanitize_payload($data, $unknown_keys);
     }
 
     /**
@@ -562,9 +575,107 @@ class MealsDB_Client_Form {
             }
         }
 
-        if ($allEnsured) {
+        if ($allEnsured && self::backfill_deterministic_indexes($conn)) {
             self::$indexes_ensured = true;
         }
+    }
+
+    /**
+     * Backfill deterministic hash columns for legacy records lacking values.
+     *
+     * @param mysqli $conn
+     * @return bool
+     */
+    private static function backfill_deterministic_indexes($conn): bool {
+        if (empty(self::$deterministic_index_map)) {
+            return true;
+        }
+
+        $allSuccessful = true;
+
+        foreach (self::$deterministic_index_map as $field => $indexColumn) {
+            $selectSql = "SELECT id, `{$field}` FROM meals_clients WHERE (`{$indexColumn}` IS NULL OR `{$indexColumn}` = '') AND `{$field}` IS NOT NULL AND `{$field}` <> ''";
+            $result = $conn->query($selectSql);
+
+            if ($result === false) {
+                error_log('[MealsDB] Failed to query legacy deterministic values for ' . $field . ': ' . ($conn->error ?? 'unknown error'));
+                $allSuccessful = false;
+                continue;
+            }
+
+            if (!($result instanceof mysqli_result)) {
+                // Nothing to backfill or using a mock result set without rows.
+                continue;
+            }
+
+            $updateSql = "UPDATE meals_clients SET `{$indexColumn}` = ? WHERE id = ?";
+            $stmt = $conn->prepare($updateSql);
+
+            if (!$stmt) {
+                error_log('[MealsDB] Failed to prepare deterministic backfill statement for ' . $indexColumn . ': ' . ($conn->error ?? 'unknown error'));
+                if (method_exists($result, 'free')) {
+                    $result->free();
+                }
+                $allSuccessful = false;
+                continue;
+            }
+
+            $hashValue = null;
+            $idValue = null;
+
+            if (!$stmt->bind_param('si', $hashValue, $idValue)) {
+                error_log('[MealsDB] Failed to bind deterministic backfill parameters for ' . $indexColumn . '.');
+                $stmt->close();
+                if (method_exists($result, 'free')) {
+                    $result->free();
+                }
+                $allSuccessful = false;
+                continue;
+            }
+
+            while ($row = $result->fetch_assoc()) {
+                $rawValue = $row[$field] ?? '';
+
+                if ($rawValue === null || $rawValue === '') {
+                    continue;
+                }
+
+                if (in_array($field, self::$encrypted_fields, true)) {
+                    try {
+                        $rawValue = MealsDB_Encryption::decrypt($rawValue);
+                    } catch (Exception $e) {
+                        error_log('[MealsDB] Failed to decrypt ' . $field . ' while backfilling deterministic index for client ID ' . ($row['id'] ?? 'unknown') . ': ' . $e->getMessage());
+                        $allSuccessful = false;
+                        continue;
+                    }
+                }
+
+                if ($rawValue === '') {
+                    continue;
+                }
+
+                $hashValue = self::deterministic_hash($rawValue);
+                $idValue = isset($row['id']) ? intval($row['id']) : 0;
+
+                if ($idValue <= 0) {
+                    $allSuccessful = false;
+                    continue;
+                }
+
+                if (!$stmt->execute()) {
+                    error_log('[MealsDB] Failed to backfill deterministic index for client ID ' . $idValue . ': ' . ($stmt->error ?? 'unknown error'));
+                    $allSuccessful = false;
+                }
+            }
+
+            $stmt->close();
+
+            if (method_exists($result, 'free')) {
+                $result->free();
+            }
+        }
+
+        return $allSuccessful;
     }
 
     /**
