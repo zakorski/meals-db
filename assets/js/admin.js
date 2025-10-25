@@ -4,11 +4,14 @@ jQuery(document).ready(function($) {
     // 📅 Date Picker
     // -----------------------------
     if ($.fn.datepicker) {
+        const currentYear = new Date().getFullYear();
+        const maxYear = currentYear + 5;
+
         $('.mealsdb-datepicker').datepicker({
             dateFormat: 'yy-mm-dd',
             changeMonth: true,
             changeYear: true,
-            yearRange: "1900:2025"
+            yearRange: `1900:${maxYear}`
         });
     }
 

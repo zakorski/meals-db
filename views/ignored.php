@@ -5,6 +5,7 @@ global $wpdb;
 
 $conn = MealsDB_DB::get_connection();
 $ignored = [];
+$ignored_error = null;
 
 if ($conn) {
     $sql = 'SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at
@@ -35,10 +36,28 @@ if ($conn) {
                     ];
                 }
             }
+        } else {
+            $message = $stmt->error ?? __('unknown error', 'meals-db');
+            error_log('[MealsDB] Failed to execute ignored conflicts query: ' . $message);
+            $ignored_error = sprintf(
+                /* translators: %s: database error message */
+                __('Unable to load ignored mismatches: %s', 'meals-db'),
+                $message
+            );
         }
 
         $stmt->close();
+    } else {
+        $message = $conn->error ?? __('unknown error', 'meals-db');
+        error_log('[MealsDB] Failed to prepare ignored conflicts query: ' . $message);
+        $ignored_error = sprintf(
+            /* translators: %s: database error message */
+            __('Unable to prepare ignored mismatches query: %s', 'meals-db'),
+            $message
+        );
     }
+} else {
+    $ignored_error = __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db');
 }
 
 if (!empty($ignored) && isset($wpdb) && $wpdb instanceof wpdb) {
@@ -77,7 +96,11 @@ unset($item);
 <div class="wrap">
     <h2>Ignored Conflicts</h2>
 
-    <?php if (empty($ignored)): ?>
+    <?php if ($ignored_error): ?>
+        <div class="notice notice-error">
+            <p><?= esc_html($ignored_error) ?></p>
+        </div>
+    <?php elseif (empty($ignored)): ?>
         <p>No ignored mismatches found.</p>
     <?php else: ?>
         <table class="widefat striped">
