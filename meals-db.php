@@ -44,8 +44,15 @@ function meals_db_check_requirements() {
     if (version_compare(PHP_VERSION, $required_php_version, '<')) {
         deactivate_plugins(plugin_basename(__FILE__));
         wp_die(
-            'Meals DB requires PHP version ' . $required_php_version . ' or higher. Your current version is: ' . PHP_VERSION,
-            'Plugin Activation Error',
+            sprintf(
+                esc_html__(
+                    'Meals DB requires PHP version %1$s or higher. Your current version is: %2$s.',
+                    'meals-db'
+                ),
+                $required_php_version,
+                PHP_VERSION
+            ),
+            esc_html__('Plugin Activation Error', 'meals-db'),
             ['back_link' => true]
         );
     }
@@ -53,8 +60,15 @@ function meals_db_check_requirements() {
     if (version_compare($wp_version, $required_wp_version, '<')) {
         deactivate_plugins(plugin_basename(__FILE__));
         wp_die(
-            'Meals DB requires WordPress version ' . $required_wp_version . ' or higher. Your current version is: ' . $wp_version,
-            'Plugin Activation Error',
+            sprintf(
+                esc_html__(
+                    'Meals DB requires WordPress version %1$s or higher. Your current version is: %2$s.',
+                    'meals-db'
+                ),
+                $required_wp_version,
+                $wp_version
+            ),
+            esc_html__('Plugin Activation Error', 'meals-db'),
             ['back_link' => true]
         );
     }
