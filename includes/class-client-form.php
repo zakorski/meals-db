@@ -367,7 +367,7 @@ class MealsDB_Client_Form {
      * @param array $unknown_keys
      * @return array
      */
-    private static function sanitize_payload(array $data, array &$unknown_keys = []): array {
+    private static function sanitize_payload(array $data, array &$unknown_keys = [], bool $preserveArrays = false): array {
         if (function_exists('wp_unslash')) {
             $data = wp_unslash($data);
         }
@@ -386,7 +386,7 @@ class MealsDB_Client_Form {
                 continue;
             }
 
-            $sanitized[$column] = self::sanitize_value($column, $data[$column]);
+            $sanitized[$column] = self::sanitize_value($column, $data[$column], $preserveArrays);
         }
 
         return $sanitized;
@@ -397,13 +397,39 @@ class MealsDB_Client_Form {
      *
      * @param string $column
      * @param mixed  $value
-     * @return string
+     * @param bool   $preserveArrays Whether to keep array structures for transport data.
+     * @return mixed
      */
-    private static function sanitize_value(string $column, $value): string {
+    private static function sanitize_value(string $column, $value, bool $preserveArrays = false) {
         if (is_array($value)) {
-            $value = implode(',', $value);
+            if ($preserveArrays) {
+                $sanitized = [];
+                foreach ($value as $key => $item) {
+                    $sanitized[$key] = self::sanitize_value($column, $item, true);
+                }
+
+                return $sanitized;
+            }
+
+            $flattened = [];
+            foreach ($value as $item) {
+                $flattened[] = self::sanitize_scalar_value($column, $item);
+            }
+
+            return implode(',', $flattened);
         }
 
+        return self::sanitize_scalar_value($column, $value);
+    }
+
+    /**
+     * Sanitize a scalar value for storage.
+     *
+     * @param string $column
+     * @param mixed  $value
+     * @return string
+     */
+    private static function sanitize_scalar_value(string $column, $value): string {
         if (!is_scalar($value)) {
             $value = '';
         }
