@@ -194,7 +194,7 @@ class MealsDB_Client_Form {
 
         // Store deterministic hashes for encrypted unique fields
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
-            if (!empty($sanitized[$field])) {
+            if (array_key_exists($field, $sanitized) && $sanitized[$field] !== '') {
                 $encrypted[$indexColumn] = self::deterministic_hash($sanitized[$field]);
             }
         }

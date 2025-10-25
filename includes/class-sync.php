@@ -37,7 +37,7 @@ class MealsDB_Sync {
         while ($client = $result->fetch_assoc()) {
             $individual_id = $client['individual_id'] ?? '';
 
-            if (!empty($individual_id)) {
+            if ($individual_id !== '') {
                 try {
                     $individual_id = MealsDB_Encryption::decrypt($individual_id);
                 } catch (Exception $e) {
@@ -182,7 +182,7 @@ class MealsDB_Sync {
             }
         }
 
-        if (!empty($individual_id)) {
+        if ($individual_id !== null && $individual_id !== '') {
             $users = get_users([
                 'meta_key' => 'meals_individual_id',
                 'meta_value' => $individual_id,
