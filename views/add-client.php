@@ -6,18 +6,6 @@ $errors = [];
 $success = false;
 $form_values = [];
 
-if (isset($_GET['mealsdb_success'])) {
-    $raw_success = $_GET['mealsdb_success'];
-    if (function_exists('wp_unslash')) {
-        $raw_success = wp_unslash($raw_success);
-    }
-    if (function_exists('sanitize_text_field')) {
-        $raw_success = sanitize_text_field($raw_success);
-    }
-
-    $success = ($raw_success === '' || $raw_success === '1') ? true : $raw_success;
-}
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     check_admin_referer('mealsdb_nonce', 'mealsdb_nonce_field');
 
@@ -27,21 +15,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$is_resume) {
         $validation = MealsDB_Client_Form::validate($_POST);
+        $form_values = $validation['sanitized'] ?? $form_values;
 
         if ($validation['valid']) {
             $saved = MealsDB_Client_Form::save($_POST);
             if ($saved) {
-                $redirect_url = add_query_arg(
-                    [
-                        'page' => 'meals-db',
-                        'tab' => 'add',
-                        'mealsdb_success' => '1',
-                    ],
-                    admin_url('admin.php')
-                );
-
-                wp_safe_redirect($redirect_url);
-                exit;
+                $success = true;
+                $form_values = [];
             } else {
                 $errors[] = 'Database error occurred.';
             }
