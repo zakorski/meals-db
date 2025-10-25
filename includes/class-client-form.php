@@ -181,9 +181,11 @@ class MealsDB_Client_Form {
         self::ensure_index_columns_exist($conn);
 
         // Encrypt sensitive fields
-        foreach (self::$encrypted_fields as $field) {
-            if (array_key_exists($field, $encrypted) && $encrypted[$field] !== '') {
-                $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
+        try {
+            foreach (self::$encrypted_fields as $field) {
+                if (array_key_exists($field, $encrypted) && $encrypted[$field] !== '') {
+                    $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
+                }
             }
         } catch (Exception $e) {
             error_log('[MealsDB] Save aborted during encryption: ' . $e->getMessage());
@@ -240,8 +242,6 @@ class MealsDB_Client_Form {
             $stmt->close();
             return false;
         }
-
-        $stmt->execute();
         $stmt->close();
 
         return true;
@@ -271,21 +271,23 @@ class MealsDB_Client_Form {
         $stmt = $conn->prepare("INSERT INTO meals_drafts (data, created_by) VALUES (?, ?)");
         if (!$stmt) {
             error_log('[MealsDB] Draft save failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
-            return;
+            return false;
         }
 
         if (!$stmt->bind_param("si", $json, $user_id)) {
             $stmt->close();
             error_log('[MealsDB] Draft save failed to bind parameters.');
-            return;
+            return false;
         }
 
-        if (!$stmt->execute()) {
+        $executed = $stmt->execute();
+        if (!$executed) {
             error_log('[MealsDB] Draft save failed to execute: ' . ($stmt->error ?? 'unknown error'));
         }
 
         $stmt->close();
-        return true;
+
+        return $executed;
     }
 
     /**
@@ -333,8 +335,6 @@ class MealsDB_Client_Form {
                 if (method_exists($stmt, 'store_result')) {
                     $stmt->store_result();
                 }
-                $stmt->execute();
-                $stmt->store_result();
 
                 if ($stmt->num_rows > 0) {
                     $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' already exists in another client.';
@@ -541,14 +541,6 @@ class MealsDB_Client_Form {
                 if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$indexName}`") !== true) {
                     error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
                     $allEnsured = false;
-                } else {
-                    $indexExists = false;
-                }
-            }
-
-            if ($indexExists && !$indexIsUnique) {
-                if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$indexName}`") !== true) {
-                    error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
                 } else {
                     $indexExists = false;
                 }
