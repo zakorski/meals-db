@@ -43,6 +43,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <form method="post" id="mealsdb-client-form">
         <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
 
+        <?php if ($resumed_draft_id > 0) : ?>
+            <input type="hidden" name="draft_id" value="<?php echo esc_attr($resumed_draft_id); ?>" />
+        <?php endif; ?>
+
         <table class="form-table">
             <tr>
                 <th><label for="first_name">First Name *</label></th>

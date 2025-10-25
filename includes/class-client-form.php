@@ -66,6 +66,8 @@ class MealsDB_Client_Form {
         'nonce',
         'action',
         'submit',
+        'resume_draft',
+        'draft_id',
     ];
 
     /**
@@ -263,15 +265,22 @@ class MealsDB_Client_Form {
     /**
      * Save a draft of the form submission.
      *
-     * @param array $data
+     * @param array    $data
+     * @param int|null $draft_id Existing draft ID to update, or null to insert a new draft
      * @return bool True on success, false on failure
      */
-    public static function save_draft(array $data): bool {
+    public static function save_draft(array $data, ?int $draft_id = null): bool {
         $conn = MealsDB_DB::get_connection();
         if (!$conn) {
             error_log('[MealsDB] Draft save aborted: database connection unavailable.');
             return false;
         }
+
+        if ($draft_id === null && isset($data['draft_id'])) {
+            $draft_id = intval($data['draft_id']);
+        }
+
+        unset($data['draft_id'], $data['resume_draft']);
 
         $json = json_encode($data);
         if ($json === false) {
@@ -280,6 +289,29 @@ class MealsDB_Client_Form {
         }
 
         $user_id = get_current_user_id();
+
+        if ($draft_id && $draft_id > 0) {
+            $stmt = $conn->prepare('UPDATE meals_drafts SET data = ? WHERE id = ?');
+            if (!$stmt) {
+                error_log('[MealsDB] Draft update failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+                return false;
+            }
+
+            if (!$stmt->bind_param('si', $json, $draft_id)) {
+                $stmt->close();
+                error_log('[MealsDB] Draft update failed to bind parameters.');
+                return false;
+            }
+
+            $executed = $stmt->execute();
+            if (!$executed) {
+                error_log('[MealsDB] Draft update failed to execute: ' . ($stmt->error ?? 'unknown error'));
+            }
+
+            $stmt->close();
+
+            return $executed;
+        }
 
         $stmt = $conn->prepare("INSERT INTO meals_drafts (data, created_by) VALUES (?, ?)");
         if (!$stmt) {
