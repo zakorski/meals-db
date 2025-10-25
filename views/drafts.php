@@ -9,7 +9,13 @@ if ($conn) {
 
     if ($res instanceof mysqli_result) {
         while ($row = $res->fetch_assoc()) {
-            $row['data'] = json_decode($row['data'], true);
+            $decoded = json_decode($row['data'], true);
+            if (!is_array($decoded)) {
+                error_log('[MealsDB] Skipping corrupted draft payload for draft ID ' . ($row['id'] ?? 'unknown') . '.');
+                continue;
+            }
+
+            $row['data'] = $decoded;
             $drafts[] = $row;
         }
 
@@ -51,9 +57,35 @@ if ($conn) {
                         <td><?= esc_html(date('Y-m-d H:i', strtotime($draft['created_at']))) ?></td>
                         <td>
                             <form method="post" action="<?php echo admin_url('admin.php?page=meals-db&tab=add'); ?>">
-                                <?php foreach ($data as $key => $value): ?>
-                                    <input type="hidden" name="<?= esc_attr($key) ?>" value="<?= esc_attr($value) ?>" />
-                                <?php endforeach; ?>
+                                <?php
+                                if (!function_exists('mealsdb_render_draft_inputs')) {
+                                    function mealsdb_render_draft_inputs(string $name, $value): void {
+                                        if (is_array($value)) {
+                                            foreach ($value as $key => $item) {
+                                                $child_name = is_int($key)
+                                                    ? $name . '[]'
+                                                    : $name . '[' . $key . ']';
+                                                mealsdb_render_draft_inputs($child_name, $item);
+                                            }
+
+                                            return;
+                                        }
+
+                                        if (!is_scalar($value)) {
+                                            $value = '';
+                                        }
+
+                                        ?>
+                                        <input type="hidden" name="<?= esc_attr($name) ?>" value="<?= esc_attr((string) $value) ?>" />
+                                        <?php
+                                    }
+                                }
+
+                                foreach ($data as $key => $value) {
+                                    mealsdb_render_draft_inputs((string) $key, $value);
+                                }
+                                ?>
+                                <input type="hidden" name="resume_draft" value="1" />
                                 <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
                                 <button type="submit" class="button button-primary">Resume</button>
                             </form>

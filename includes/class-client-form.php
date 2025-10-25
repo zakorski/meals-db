@@ -99,7 +99,7 @@ class MealsDB_Client_Form {
      * Validate submitted form data.
      *
      * @param array $data
-     * @return array ['valid' => bool, 'errors' => array]
+     * @return array ['valid' => bool, 'errors' => array, 'sanitized' => array]
      */
     public static function validate(array $data): array {
         $errors = [];
@@ -150,8 +150,21 @@ class MealsDB_Client_Form {
 
         return [
             'valid' => empty($errors),
-            'errors' => $errors
+            'errors' => $errors,
+            'sanitized' => $sanitized,
         ];
+    }
+
+    /**
+     * Prepare sanitized defaults for re-populating the admin form.
+     *
+     * @param array $data
+     * @return array
+     */
+    public static function prepare_form_defaults(array $data): array {
+        $unknown_keys = [];
+
+        return self::sanitize_payload($data, $unknown_keys, true);
     }
 
     /**
@@ -181,9 +194,11 @@ class MealsDB_Client_Form {
         self::ensure_index_columns_exist($conn);
 
         // Encrypt sensitive fields
-        foreach (self::$encrypted_fields as $field) {
-            if (array_key_exists($field, $encrypted) && $encrypted[$field] !== '') {
-                $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
+        try {
+            foreach (self::$encrypted_fields as $field) {
+                if (array_key_exists($field, $encrypted) && $encrypted[$field] !== '') {
+                    $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
+                }
             }
         } catch (Exception $e) {
             error_log('[MealsDB] Save aborted during encryption: ' . $e->getMessage());
@@ -192,7 +207,7 @@ class MealsDB_Client_Form {
 
         // Store deterministic hashes for encrypted unique fields
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
-            if (!empty($sanitized[$field])) {
+            if (array_key_exists($field, $sanitized) && $sanitized[$field] !== '') {
                 $encrypted[$indexColumn] = self::deterministic_hash($sanitized[$field]);
             }
         }
@@ -240,8 +255,6 @@ class MealsDB_Client_Form {
             $stmt->close();
             return false;
         }
-
-        $stmt->execute();
         $stmt->close();
 
         return true;
@@ -271,21 +284,23 @@ class MealsDB_Client_Form {
         $stmt = $conn->prepare("INSERT INTO meals_drafts (data, created_by) VALUES (?, ?)");
         if (!$stmt) {
             error_log('[MealsDB] Draft save failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
-            return;
+            return false;
         }
 
         if (!$stmt->bind_param("si", $json, $user_id)) {
             $stmt->close();
             error_log('[MealsDB] Draft save failed to bind parameters.');
-            return;
+            return false;
         }
 
-        if (!$stmt->execute()) {
+        $executed = $stmt->execute();
+        if (!$executed) {
             error_log('[MealsDB] Draft save failed to execute: ' . ($stmt->error ?? 'unknown error'));
         }
 
         $stmt->close();
-        return true;
+
+        return $executed;
     }
 
     /**
@@ -333,8 +348,6 @@ class MealsDB_Client_Form {
                 if (method_exists($stmt, 'store_result')) {
                     $stmt->store_result();
                 }
-                $stmt->execute();
-                $stmt->store_result();
 
                 if ($stmt->num_rows > 0) {
                     $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' already exists in another client.';
@@ -354,7 +367,7 @@ class MealsDB_Client_Form {
      * @param array $unknown_keys
      * @return array
      */
-    private static function sanitize_payload(array $data, array &$unknown_keys = []): array {
+    private static function sanitize_payload(array $data, array &$unknown_keys = [], bool $preserveArrays = false): array {
         if (function_exists('wp_unslash')) {
             $data = wp_unslash($data);
         }
@@ -373,7 +386,7 @@ class MealsDB_Client_Form {
                 continue;
             }
 
-            $sanitized[$column] = self::sanitize_value($column, $data[$column]);
+            $sanitized[$column] = self::sanitize_value($column, $data[$column], $preserveArrays);
         }
 
         return $sanitized;
@@ -384,13 +397,39 @@ class MealsDB_Client_Form {
      *
      * @param string $column
      * @param mixed  $value
-     * @return string
+     * @param bool   $preserveArrays Whether to keep array structures for transport data.
+     * @return mixed
      */
-    private static function sanitize_value(string $column, $value): string {
+    private static function sanitize_value(string $column, $value, bool $preserveArrays = false) {
         if (is_array($value)) {
-            $value = implode(',', $value);
+            if ($preserveArrays) {
+                $sanitized = [];
+                foreach ($value as $key => $item) {
+                    $sanitized[$key] = self::sanitize_value($column, $item, true);
+                }
+
+                return $sanitized;
+            }
+
+            $flattened = [];
+            foreach ($value as $item) {
+                $flattened[] = self::sanitize_scalar_value($column, $item);
+            }
+
+            return implode(',', $flattened);
         }
 
+        return self::sanitize_scalar_value($column, $value);
+    }
+
+    /**
+     * Sanitize a scalar value for storage.
+     *
+     * @param string $column
+     * @param mixed  $value
+     * @return string
+     */
+    private static function sanitize_scalar_value(string $column, $value): string {
         if (!is_scalar($value)) {
             $value = '';
         }
@@ -546,14 +585,6 @@ class MealsDB_Client_Form {
                 }
             }
 
-            if ($indexExists && !$indexIsUnique) {
-                if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$indexName}`") !== true) {
-                    error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
-                } else {
-                    $indexExists = false;
-                }
-            }
-
             if (!$indexExists) {
                 $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON meals_clients (`{$indexColumn}`)";
                 if (!$conn->query($createIndexSql)) {
@@ -570,9 +601,107 @@ class MealsDB_Client_Form {
             }
         }
 
-        if ($allEnsured) {
+        if ($allEnsured && self::backfill_deterministic_indexes($conn)) {
             self::$indexes_ensured = true;
         }
+    }
+
+    /**
+     * Backfill deterministic hash columns for legacy records lacking values.
+     *
+     * @param mysqli $conn
+     * @return bool
+     */
+    private static function backfill_deterministic_indexes($conn): bool {
+        if (empty(self::$deterministic_index_map)) {
+            return true;
+        }
+
+        $allSuccessful = true;
+
+        foreach (self::$deterministic_index_map as $field => $indexColumn) {
+            $selectSql = "SELECT id, `{$field}` FROM meals_clients WHERE (`{$indexColumn}` IS NULL OR `{$indexColumn}` = '') AND `{$field}` IS NOT NULL AND `{$field}` <> ''";
+            $result = $conn->query($selectSql);
+
+            if ($result === false) {
+                error_log('[MealsDB] Failed to query legacy deterministic values for ' . $field . ': ' . ($conn->error ?? 'unknown error'));
+                $allSuccessful = false;
+                continue;
+            }
+
+            if (!($result instanceof mysqli_result)) {
+                // Nothing to backfill or using a mock result set without rows.
+                continue;
+            }
+
+            $updateSql = "UPDATE meals_clients SET `{$indexColumn}` = ? WHERE id = ?";
+            $stmt = $conn->prepare($updateSql);
+
+            if (!$stmt) {
+                error_log('[MealsDB] Failed to prepare deterministic backfill statement for ' . $indexColumn . ': ' . ($conn->error ?? 'unknown error'));
+                if (method_exists($result, 'free')) {
+                    $result->free();
+                }
+                $allSuccessful = false;
+                continue;
+            }
+
+            $hashValue = null;
+            $idValue = null;
+
+            if (!$stmt->bind_param('si', $hashValue, $idValue)) {
+                error_log('[MealsDB] Failed to bind deterministic backfill parameters for ' . $indexColumn . '.');
+                $stmt->close();
+                if (method_exists($result, 'free')) {
+                    $result->free();
+                }
+                $allSuccessful = false;
+                continue;
+            }
+
+            while ($row = $result->fetch_assoc()) {
+                $rawValue = $row[$field] ?? '';
+
+                if ($rawValue === null || $rawValue === '') {
+                    continue;
+                }
+
+                if (in_array($field, self::$encrypted_fields, true)) {
+                    try {
+                        $rawValue = MealsDB_Encryption::decrypt($rawValue);
+                    } catch (Exception $e) {
+                        error_log('[MealsDB] Failed to decrypt ' . $field . ' while backfilling deterministic index for client ID ' . ($row['id'] ?? 'unknown') . ': ' . $e->getMessage());
+                        $allSuccessful = false;
+                        continue;
+                    }
+                }
+
+                if ($rawValue === '') {
+                    continue;
+                }
+
+                $hashValue = self::deterministic_hash($rawValue);
+                $idValue = isset($row['id']) ? intval($row['id']) : 0;
+
+                if ($idValue <= 0) {
+                    $allSuccessful = false;
+                    continue;
+                }
+
+                if (!$stmt->execute()) {
+                    error_log('[MealsDB] Failed to backfill deterministic index for client ID ' . $idValue . ': ' . ($stmt->error ?? 'unknown error'));
+                    $allSuccessful = false;
+                }
+            }
+
+            $stmt->close();
+
+            if (method_exists($result, 'free')) {
+                $result->free();
+            }
+        }
+
+        return $allSuccessful;
     }
 
     /**
