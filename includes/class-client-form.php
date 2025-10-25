@@ -166,7 +166,7 @@ class MealsDB_Client_Form {
     public static function prepare_form_defaults(array $data): array {
         $unknown_keys = [];
 
-        return self::sanitize_payload($data, $unknown_keys, true);
+        return self::sanitize_payload($data, $unknown_keys);
     }
 
     /**
@@ -328,48 +328,6 @@ class MealsDB_Client_Form {
         $executed = $stmt->execute();
         if (!$executed) {
             error_log('[MealsDB] Draft save failed to execute: ' . ($stmt->error ?? 'unknown error'));
-        }
-
-        $stmt->close();
-
-        return $executed;
-    }
-
-    /**
-     * Delete a saved draft by ID.
-     *
-     * @param int $draft_id
-     * @return bool
-     */
-    public static function delete_draft(int $draft_id): bool {
-        if ($draft_id <= 0) {
-            return false;
-        }
-
-        $conn = MealsDB_DB::get_connection();
-
-        if (!$conn) {
-            error_log('[MealsDB] Draft delete aborted: database connection unavailable.');
-            return false;
-        }
-
-        $stmt = $conn->prepare('DELETE FROM meals_drafts WHERE id = ?');
-
-        if (!$stmt) {
-            error_log('[MealsDB] Draft delete failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
-            return false;
-        }
-
-        if (!$stmt->bind_param('i', $draft_id)) {
-            $stmt->close();
-            error_log('[MealsDB] Draft delete failed to bind parameters.');
-            return false;
-        }
-
-        $executed = $stmt->execute();
-
-        if (!$executed) {
-            error_log('[MealsDB] Draft delete failed to execute: ' . ($stmt->error ?? 'unknown error'));
         }
 
         $stmt->close();
