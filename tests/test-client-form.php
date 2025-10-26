@@ -87,21 +87,27 @@ class StubStmt {
         if (stripos($sql, 'UPDATE meals_drafts SET') === 0) {
             $json = $this->params[0] ?? '';
             $id = (int) ($this->params[1] ?? 0);
-            $result = $this->conn->updateDraft($id, $json);
-            $this->affected_rows = $result['exists'] && $result['changed'] ? 1 : 0;
+            $user = (int) ($this->params[2] ?? 0);
+            $updated = $this->conn->updateDraft($id, $json, $user);
+            $this->affected_rows = $updated ? 1 : 0;
             return true;
         }
 
         if (stripos($sql, 'DELETE FROM meals_drafts') === 0) {
             $id = (int) ($this->params[0] ?? 0);
-            $deleted = $this->conn->deleteDraft($id);
+            $user = (int) ($this->params[1] ?? 0);
+            $deleted = $this->conn->deleteDraft($id, $user);
             $this->affected_rows = $deleted ? 1 : 0;
             return true;
         }
 
         if (stripos($sql, 'SELECT id FROM meals_drafts') === 0) {
             $id = (int) ($this->params[0] ?? 0);
-            $this->num_rows = $this->conn->hasDraft($id) ? 1 : 0;
+            $owner = null;
+            if (stripos($sql, 'created_by') !== false) {
+                $owner = (int) ($this->params[1] ?? 0);
+            }
+            $this->num_rows = $this->conn->hasDraft($id, $owner) ? 1 : 0;
             return true;
         }
 
@@ -171,18 +177,27 @@ class StubMysqli extends mysqli {
         return $id;
     }
 
-    public function updateDraft(int $id, string $json): array {
+    public function updateDraft(int $id, string $json, int $user): bool {
         if (!isset($this->drafts[$id])) {
-            return ['exists' => false, 'changed' => false];
+            return false;
+        }
+
+        if ($this->drafts[$id]['created_by'] !== $user) {
+            return false;
         }
 
         $changed = $this->drafts[$id]['data'] !== $json;
         $this->drafts[$id]['data'] = $json;
-        return ['exists' => true, 'changed' => $changed];
+
+        return $changed;
     }
 
-    public function deleteDraft(int $id): bool {
+    public function deleteDraft(int $id, int $user): bool {
         if (!isset($this->drafts[$id])) {
+            return false;
+        }
+
+        if ($this->drafts[$id]['created_by'] !== $user) {
             return false;
         }
 
@@ -190,8 +205,16 @@ class StubMysqli extends mysqli {
         return true;
     }
 
-    public function hasDraft(int $id): bool {
-        return isset($this->drafts[$id]);
+    public function hasDraft(int $id, ?int $user = null): bool {
+        if (!isset($this->drafts[$id])) {
+            return false;
+        }
+
+        if ($user !== null && $this->drafts[$id]['created_by'] !== $user) {
+            return false;
+        }
+
+        return true;
     }
 
     public function draftData(int $id): ?string {
@@ -221,7 +244,15 @@ class StubMysqli extends mysqli {
             if (preg_match("/Key_name = '([^']+)'/i", $sql, $matches)) {
                 $index = stripslashes($matches[1]);
                 $exists = in_array($index, $this->existingIndexes, true);
-                return new StubResult($exists ? 1 : 0);
+                $rows = [];
+                if ($exists) {
+                    $rows[] = [
+                        'Key_name'   => $index,
+                        'Non_unique' => stripos($index, 'unique_') === 0 ? 0 : 1,
+                    ];
+                }
+
+                return new StubResult($exists ? 1 : 0, $rows);
             }
             return new StubResult(0);
         }
@@ -372,11 +403,41 @@ run_test('save stores deterministic indexes for encrypted fields', function () {
     }
 });
 
+run_test('save aborts when deterministic indexes cannot be created', function () {
+    reset_index_flag();
+    $conn = new class([], [], [], []) extends StubMysqli {
+        public function __construct() {
+            parent::__construct([], [], [], []);
+        }
+
+        public function query(string $sql, int $result_mode = MYSQLI_STORE_RESULT) {
+            if (stripos($sql, 'ALTER TABLE') === 0) {
+                return false;
+            }
+
+            return parent::query($sql, $result_mode);
+        }
+    };
+
+    set_db_connection($conn);
+
+    $data = [
+        'individual_id' => 'ID-001',
+        'first_name' => 'Jane'
+    ];
+
+    $result = MealsDB_Client_Form::save($data);
+
+    if ($result !== false) {
+        throw new Exception('Save should fail when deterministic indexes cannot be ensured.');
+    }
+});
+
 run_test('save_draft updates existing record when id provided', function () {
     $existingId = 5;
     $original = json_encode(['first_name' => 'Original']);
     $conn = new StubMysqli([], [], [], [
-        ['id' => $existingId, 'data' => $original, 'created_by' => 321],
+        ['id' => $existingId, 'data' => $original, 'created_by' => 1234],
     ]);
     set_db_connection($conn);
 
@@ -392,10 +453,30 @@ run_test('save_draft updates existing record when id provided', function () {
     }
 });
 
+run_test('save_draft prevents updating drafts owned by other users', function () {
+    $existingId = 8;
+    $original = json_encode(['first_name' => 'Owner']);
+    $conn = new StubMysqli([], [], [], [
+        ['id' => $existingId, 'data' => $original, 'created_by' => 4321],
+    ]);
+    set_db_connection($conn);
+
+    $result = MealsDB_Client_Form::save_draft(['first_name' => 'Intruder'], $existingId);
+
+    if ($result !== false) {
+        throw new Exception('Expected save_draft to fail for drafts owned by another user.');
+    }
+
+    $stored = $conn->draftData($existingId);
+    if ($stored !== $original) {
+        throw new Exception('Draft content should remain unchanged when update is rejected.');
+    }
+});
+
 run_test('delete_draft removes stored draft and reports missing ids', function () {
     $existingId = 7;
     $conn = new StubMysqli([], [], [], [
-        ['id' => $existingId, 'data' => json_encode(['note' => 'keep me'])],
+        ['id' => $existingId, 'data' => json_encode(['note' => 'keep me']), 'created_by' => 1234],
     ]);
     set_db_connection($conn);
 
@@ -405,6 +486,22 @@ run_test('delete_draft removes stored draft and reports missing ids', function (
 
     if (MealsDB_Client_Form::delete_draft(999) !== false) {
         throw new Exception('Expected delete_draft to fail for missing record.');
+    }
+});
+
+run_test('delete_draft prevents removing drafts owned by other users', function () {
+    $existingId = 11;
+    $conn = new StubMysqli([], [], [], [
+        ['id' => $existingId, 'data' => json_encode(['note' => 'secure']), 'created_by' => 5555],
+    ]);
+    set_db_connection($conn);
+
+    if (MealsDB_Client_Form::delete_draft($existingId) !== false) {
+        throw new Exception('Expected delete_draft to fail for drafts owned by another user.');
+    }
+
+    if (!$conn->hasDraft($existingId)) {
+        throw new Exception('Draft owned by another user should not be removed.');
     }
 });
 

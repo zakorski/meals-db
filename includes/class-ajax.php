@@ -37,7 +37,16 @@ class MealsDB_Ajax {
             wp_send_json_error(['message' => 'Missing data.']);
         }
 
-        MealsDB_Sync::push_to_woocommerce($woo_user_id, $field, $value);
+        $result = MealsDB_Sync::push_to_woocommerce($woo_user_id, $field, $value);
+
+        if (is_wp_error($result)) {
+            $message = $result->get_error_message();
+            if (empty($message)) {
+                $message = 'Failed to sync field.';
+            }
+
+            wp_send_json_error(['message' => $message]);
+        }
 
         wp_send_json_success(['message' => 'Synced successfully.']);
     }
