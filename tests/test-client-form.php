@@ -7,9 +7,20 @@ putenv('PLUGIN_AES_KEY=base64:' . base64_encode(str_repeat('k', 32)));
 
 class StubResult {
     public $num_rows;
+    private $rows;
+    private $position = 0;
 
-    public function __construct(int $num_rows) {
+    public function __construct(int $num_rows, array $rows = []) {
         $this->num_rows = $num_rows;
+        $this->rows = array_values($rows);
+    }
+
+    public function fetch_assoc(): ?array {
+        if ($this->position >= count($this->rows)) {
+            return null;
+        }
+
+        return $this->rows[$this->position++];
     }
 
     public function free(): void {
@@ -121,7 +132,7 @@ class StubMysqli extends mysqli {
             return true;
         }
 
-        return false;
+        return new StubResult(0);
     }
 
     #[\ReturnTypeWillChange]
