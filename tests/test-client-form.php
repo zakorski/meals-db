@@ -5,6 +5,12 @@ require_once __DIR__ . '/../includes/class-client-form.php';
 
 putenv('PLUGIN_AES_KEY=base64:' . base64_encode(str_repeat('k', 32)));
 
+if (!function_exists('get_current_user_id')) {
+    function get_current_user_id(): int {
+        return 1234;
+    }
+}
+
 class StubResult {
     public $num_rows;
     private $rows;
@@ -33,6 +39,7 @@ class StubStmt {
     private $sql;
     private $params = [];
     public $num_rows = 0;
+    public int|string $affected_rows = 0;
 
     public function __construct(StubMysqli $conn, string $sql) {
         $this->conn = $conn;
@@ -45,24 +52,57 @@ class StubStmt {
     }
 
     public function execute(): bool {
-        if (stripos($this->sql, 'SELECT id FROM meals_clients') === 0) {
-            if (preg_match('/WHERE\s+`?([a-z_]+)`?\s*=\s*\?/i', $this->sql, $matches)) {
+        $sql = $this->sql;
+
+        if (stripos($sql, 'SELECT id FROM meals_clients') === 0) {
+            if (preg_match('/WHERE\s+`?([a-z_]+)`?\s*=\s*\?/i', $sql, $matches)) {
                 $column = $matches[1];
                 $value = $this->params[0] ?? null;
-                if ($value !== null && $this->conn->hasValue($column, $value)) {
-                    $this->num_rows = 1;
-                } else {
-                    $this->num_rows = 0;
-                }
+                $this->num_rows = ($value !== null && $this->conn->hasValue($column, $value)) ? 1 : 0;
             }
-        } elseif (stripos($this->sql, 'INSERT INTO meals_clients') === 0) {
-            if (preg_match('/\(([^\)]+)\)\s*VALUES/i', $this->sql, $matches)) {
+
+            return true;
+        }
+
+        if (stripos($sql, 'INSERT INTO meals_clients') === 0) {
+            if (preg_match('/\(([^\)]+)\)\s*VALUES/i', $sql, $matches)) {
                 $columns = array_map('trim', explode(',', $matches[1]));
                 $columns = array_map(static function ($col) {
                     return trim($col, "` ");
                 }, $columns);
                 $this->conn->lastInsert = array_combine($columns, $this->params);
             }
+
+            return true;
+        }
+
+        if (stripos($sql, 'INSERT INTO meals_drafts') === 0) {
+            $json = $this->params[0] ?? '';
+            $user = $this->params[1] ?? 0;
+            $this->conn->createDraft($json, (int) $user);
+            $this->affected_rows = 1;
+            return true;
+        }
+
+        if (stripos($sql, 'UPDATE meals_drafts SET') === 0) {
+            $json = $this->params[0] ?? '';
+            $id = (int) ($this->params[1] ?? 0);
+            $result = $this->conn->updateDraft($id, $json);
+            $this->affected_rows = $result['exists'] && $result['changed'] ? 1 : 0;
+            return true;
+        }
+
+        if (stripos($sql, 'DELETE FROM meals_drafts') === 0) {
+            $id = (int) ($this->params[0] ?? 0);
+            $deleted = $this->conn->deleteDraft($id);
+            $this->affected_rows = $deleted ? 1 : 0;
+            return true;
+        }
+
+        if (stripos($sql, 'SELECT id FROM meals_drafts') === 0) {
+            $id = (int) ($this->params[0] ?? 0);
+            $this->num_rows = $this->conn->hasDraft($id) ? 1 : 0;
+            return true;
         }
 
         return true;
@@ -81,12 +121,35 @@ class StubMysqli extends mysqli {
     private $existingValues;
     private $existingColumns;
     private $existingIndexes;
+    private $drafts = [];
+    private $nextDraftId = 1;
     public $lastInsert = [];
+    public int|string $affected_rows = 0;
+    public int|string $insert_id = 0;
 
-    public function __construct(array $existingValues = [], array $existingColumns = [], array $existingIndexes = []) {
+    public function __construct(
+        array $existingValues = [],
+        array $existingColumns = [],
+        array $existingIndexes = [],
+        array $drafts = []
+    ) {
         $this->existingValues = $existingValues;
         $this->existingColumns = $existingColumns;
         $this->existingIndexes = $existingIndexes;
+
+        foreach ($drafts as $draft) {
+            $id = (int) ($draft['id'] ?? 0);
+            if ($id <= 0) {
+                $id = $this->nextDraftId++;
+            } else {
+                $this->nextDraftId = max($this->nextDraftId, $id + 1);
+            }
+
+            $this->drafts[$id] = [
+                'data' => (string) ($draft['data'] ?? ''),
+                'created_by' => (int) ($draft['created_by'] ?? 0),
+            ];
+        }
     }
 
     public function hasValue(string $column, string $value): bool {
@@ -95,6 +158,44 @@ class StubMysqli extends mysqli {
 
     public function real_escape_string(string $value): string {
         return addslashes($value);
+    }
+
+    public function createDraft(string $json, int $user): int {
+        $id = $this->nextDraftId++;
+        $this->drafts[$id] = [
+            'data' => $json,
+            'created_by' => $user,
+        ];
+        $this->affected_rows = 1;
+
+        return $id;
+    }
+
+    public function updateDraft(int $id, string $json): array {
+        if (!isset($this->drafts[$id])) {
+            return ['exists' => false, 'changed' => false];
+        }
+
+        $changed = $this->drafts[$id]['data'] !== $json;
+        $this->drafts[$id]['data'] = $json;
+        return ['exists' => true, 'changed' => $changed];
+    }
+
+    public function deleteDraft(int $id): bool {
+        if (!isset($this->drafts[$id])) {
+            return false;
+        }
+
+        unset($this->drafts[$id]);
+        return true;
+    }
+
+    public function hasDraft(int $id): bool {
+        return isset($this->drafts[$id]);
+    }
+
+    public function draftData(int $id): ?string {
+        return $this->drafts[$id]['data'] ?? null;
     }
 
     #[\ReturnTypeWillChange]
@@ -268,6 +369,42 @@ run_test('save stores deterministic indexes for encrypted fields', function () {
     $expectedInitials = hash('sha256', strtolower(trim('AB')));
     if (($conn->lastInsert['delivery_initials_index'] ?? null) !== $expectedInitials) {
         throw new Exception('Missing deterministic hash for delivery_initials.');
+    }
+});
+
+run_test('save_draft updates existing record when id provided', function () {
+    $existingId = 5;
+    $original = json_encode(['first_name' => 'Original']);
+    $conn = new StubMysqli([], [], [], [
+        ['id' => $existingId, 'data' => $original, 'created_by' => 321],
+    ]);
+    set_db_connection($conn);
+
+    $updatedId = MealsDB_Client_Form::save_draft(['last_name' => 'Updated'], $existingId);
+
+    if ($updatedId !== $existingId) {
+        throw new Exception('Draft update did not return same id.');
+    }
+
+    $decoded = json_decode($conn->draftData($existingId), true);
+    if (!isset($decoded['last_name']) || $decoded['last_name'] !== 'Updated') {
+        throw new Exception('Draft update did not persist new payload.');
+    }
+});
+
+run_test('delete_draft removes stored draft and reports missing ids', function () {
+    $existingId = 7;
+    $conn = new StubMysqli([], [], [], [
+        ['id' => $existingId, 'data' => json_encode(['note' => 'keep me'])],
+    ]);
+    set_db_connection($conn);
+
+    if (!MealsDB_Client_Form::delete_draft($existingId)) {
+        throw new Exception('Expected delete_draft to return true for existing record.');
+    }
+
+    if (MealsDB_Client_Form::delete_draft(999) !== false) {
+        throw new Exception('Expected delete_draft to fail for missing record.');
     }
 });
 
