@@ -78,6 +78,7 @@ if ($conn) {
                                     ?>
                                     <input type="hidden" name="<?= esc_attr($key) ?>" value="<?= esc_attr($serialized_value ?? '') ?>" />
                                 <?php endforeach; ?>
+                                <input type="hidden" name="draft_id" value="<?= esc_attr($id) ?>" />
                                 <input type="hidden" name="resume_draft" value="1" />
                                 <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
                                 <button type="submit" class="button button-primary">Resume</button>

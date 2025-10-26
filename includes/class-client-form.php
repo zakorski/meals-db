@@ -267,9 +267,9 @@ class MealsDB_Client_Form {
      *
      * @param array    $data
      * @param int|null $draft_id Existing draft ID to update, or null to insert a new draft
-     * @return bool True on success, false on failure
+     * @return int|false Draft identifier on success, false on failure
      */
-    public static function save_draft(array $data, ?int $draft_id = null): bool {
+    public static function save_draft(array $data, ?int $draft_id = null) {
         $conn = MealsDB_DB::get_connection();
         if (!$conn) {
             error_log('[MealsDB] Draft save aborted: database connection unavailable.');
@@ -306,11 +306,19 @@ class MealsDB_Client_Form {
             $executed = $stmt->execute();
             if (!$executed) {
                 error_log('[MealsDB] Draft update failed to execute: ' . ($stmt->error ?? 'unknown error'));
+                $stmt->close();
+                return false;
             }
 
+            $affected = $stmt->affected_rows ?? 0;
             $stmt->close();
 
-            return $executed;
+            if ($affected === 0 && !self::draft_exists($conn, $draft_id)) {
+                error_log('[MealsDB] Draft update failed: draft ID ' . $draft_id . ' not found.');
+                return false;
+            }
+
+            return $draft_id;
         }
 
         $stmt = $conn->prepare("INSERT INTO meals_drafts (data, created_by) VALUES (?, ?)");
@@ -328,11 +336,106 @@ class MealsDB_Client_Form {
         $executed = $stmt->execute();
         if (!$executed) {
             error_log('[MealsDB] Draft save failed to execute: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return false;
         }
 
+        $new_id = intval($conn->insert_id ?? 0);
         $stmt->close();
 
-        return $executed;
+        if ($new_id <= 0) {
+            error_log('[MealsDB] Draft save failed: unable to determine inserted ID.');
+            return false;
+        }
+
+        return $new_id;
+    }
+
+    /**
+     * Delete a draft from storage.
+     *
+     * @param int $draft_id
+     * @return bool
+     */
+    public static function delete_draft(int $draft_id): bool {
+        if ($draft_id <= 0) {
+            return false;
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!$conn) {
+            error_log('[MealsDB] Draft delete aborted: database connection unavailable.');
+            return false;
+        }
+
+        $stmt = $conn->prepare('DELETE FROM meals_drafts WHERE id = ?');
+        if (!$stmt) {
+            error_log('[MealsDB] Draft delete failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+            return false;
+        }
+
+        if (!$stmt->bind_param('i', $draft_id)) {
+            $stmt->close();
+            error_log('[MealsDB] Draft delete failed to bind parameters.');
+            return false;
+        }
+
+        $executed = $stmt->execute();
+        if (!$executed) {
+            error_log('[MealsDB] Draft delete failed to execute: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return false;
+        }
+
+        $affected = $stmt->affected_rows ?? 0;
+        $stmt->close();
+
+        if ($affected <= 0) {
+            error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' not found.');
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Determine whether a draft exists.
+     *
+     * @param \mysqli $conn
+     * @param int    $draft_id
+     * @return bool
+     */
+    private static function draft_exists($conn, int $draft_id): bool {
+        if (!($conn instanceof \mysqli)) {
+            return false;
+        }
+
+        $stmt = $conn->prepare('SELECT id FROM meals_drafts WHERE id = ? LIMIT 1');
+        if (!$stmt) {
+            error_log('[MealsDB] Draft existence check failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+            return false;
+        }
+
+        if (!$stmt->bind_param('i', $draft_id)) {
+            $stmt->close();
+            error_log('[MealsDB] Draft existence check failed to bind parameters.');
+            return false;
+        }
+
+        if (!$stmt->execute()) {
+            error_log('[MealsDB] Draft existence check failed to execute: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return false;
+        }
+
+        if (method_exists($stmt, 'store_result')) {
+            $stmt->store_result();
+        }
+
+        $exists = $stmt->num_rows > 0;
+        $stmt->close();
+
+        return $exists;
     }
 
     /**

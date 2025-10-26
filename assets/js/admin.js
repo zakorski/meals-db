@@ -43,16 +43,29 @@ jQuery(document).ready(function($) {
     // 💾 Save to Draft
     // -----------------------------
     $('#mealsdb-save-draft').on('click', function () {
-        const formData = $('#mealsdb-client-form').serialize();
+        const $form = $('#mealsdb-client-form');
+        const formData = $form.serialize();
         $.post(ajaxurl, {
             action: 'mealsdb_save_draft',
             nonce: mealsdb.nonce,
             form_data: formData
         }, function (res) {
             if (res.success) {
-                alert('Draft saved!');
+                const draftIdRaw = res.data && res.data.draft_id;
+                const draftId = draftIdRaw !== undefined ? parseInt(draftIdRaw, 10) : NaN;
+                if (!Number.isNaN(draftId) && draftId > 0) {
+                    let $draftInput = $form.find('input[name="draft_id"]');
+                    if ($draftInput.length === 0) {
+                        $draftInput = $('<input>', { type: 'hidden', name: 'draft_id' }).appendTo($form);
+                    }
+                    $draftInput.val(draftId);
+                }
+
+                const message = res.data && res.data.message ? res.data.message : 'Draft saved!';
+                alert(message);
             } else {
-                alert('Failed to save draft.');
+                const error = res.data && res.data.message ? res.data.message : 'Failed to save draft.';
+                alert(error);
             }
         });
     });

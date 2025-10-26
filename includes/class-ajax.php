@@ -130,13 +130,16 @@ class MealsDB_Ajax {
             unset($form['resume_draft']);
         }
 
-        $saved = MealsDB_Client_Form::save_draft($form, $draft_id);
+        $saved_id = MealsDB_Client_Form::save_draft($form, $draft_id);
 
-        if (!$saved) {
+        if ($saved_id === false) {
             wp_send_json_error(['message' => 'Failed to save draft.']);
         }
 
-        wp_send_json_success(['message' => 'Saved to drafts.']);
+        wp_send_json_success([
+            'message'   => 'Saved to drafts.',
+            'draft_id'  => intval($saved_id),
+        ]);
     }
 
     /**
