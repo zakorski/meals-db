@@ -3,27 +3,46 @@ MealsDB_Permissions::enforce();
 
 $conn = MealsDB_DB::get_connection();
 $drafts = [];
+$draft_error = null;
 
 if ($conn) {
     $res = $conn->query("SELECT id, data, created_at FROM meals_drafts ORDER BY created_at DESC");
 
     if ($res instanceof mysqli_result) {
         while ($row = $res->fetch_assoc()) {
-            $row['data'] = json_decode($row['data'], true);
+            $decoded = json_decode($row['data'], true);
+            if (!is_array($decoded)) {
+                error_log('[MealsDB] Skipping corrupted draft payload for draft ID ' . ($row['id'] ?? 'unknown') . '.');
+                continue;
+            }
+
+            $row['data'] = $decoded;
             $drafts[] = $row;
         }
 
         $res->free();
     } elseif ($res === false) {
-        error_log('[MealsDB] Failed to load draft list: ' . ($conn->error ?? 'unknown error'));
+        $message = $conn->error ?? __('unknown error', 'meals-db');
+        error_log('[MealsDB] Failed to load draft list: ' . $message);
+        $draft_error = sprintf(
+            /* translators: %s: database error message */
+            __('Unable to load client drafts: %s', 'meals-db'),
+            $message
+        );
     }
+} else {
+    $draft_error = __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db');
 }
 ?>
 
 <div class="wrap">
     <h2>Client Drafts</h2>
 
-    <?php if (empty($drafts)): ?>
+    <?php if ($draft_error): ?>
+        <div class="notice notice-error">
+            <p><?= esc_html($draft_error) ?></p>
+        </div>
+    <?php elseif (empty($drafts)): ?>
         <p>No drafts found.</p>
     <?php else: ?>
         <table class="widefat striped">
@@ -51,9 +70,36 @@ if ($conn) {
                         <td><?= esc_html(date('Y-m-d H:i', strtotime($draft['created_at']))) ?></td>
                         <td>
                             <form method="post" action="<?php echo admin_url('admin.php?page=meals-db&tab=add'); ?>">
-                                <?php foreach ($data as $key => $value): ?>
-                                    <input type="hidden" name="<?= esc_attr($key) ?>" value="<?= esc_attr($value) ?>" />
-                                <?php endforeach; ?>
+                                <?php
+                                if (!function_exists('mealsdb_render_draft_inputs')) {
+                                    function mealsdb_render_draft_inputs(string $name, $value): void {
+                                        if (is_array($value)) {
+                                            foreach ($value as $key => $item) {
+                                                $child_name = is_int($key)
+                                                    ? $name . '[]'
+                                                    : $name . '[' . $key . ']';
+                                                mealsdb_render_draft_inputs($child_name, $item);
+                                            }
+
+                                            return;
+                                        }
+
+                                        if (!is_scalar($value)) {
+                                            $value = '';
+                                        }
+
+                                        ?>
+                                        <input type="hidden" name="<?= esc_attr($name) ?>" value="<?= esc_attr((string) $value) ?>" />
+                                        <?php
+                                    }
+                                }
+
+                                foreach ($data as $key => $value) {
+                                    mealsdb_render_draft_inputs((string) $key, $value);
+                                }
+                                ?>
+                                <input type="hidden" name="draft_id" value="<?= esc_attr($id) ?>" />
+                                <input type="hidden" name="resume_draft" value="1" />
                                 <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
                                 <button type="submit" class="button button-primary">Resume</button>
                             </form>
