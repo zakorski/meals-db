@@ -249,18 +249,26 @@ class MealsDB_Sync {
      * @param int $woo_user_id
      * @param string $field
      * @param string $new_value
+     *
+     * @return true|WP_Error Whether the field was synced successfully.
      */
-    public static function push_to_woocommerce(int $woo_user_id, string $field, string $new_value): void {
+    public static function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
         $user = get_userdata($woo_user_id);
+
+        if (!$user instanceof WP_User) {
+            $message = __('Unable to locate the WooCommerce customer for this override.', 'meals-db');
+            return new WP_Error('mealsdb_sync_user_missing', $message);
+        }
+
         $old_value = null;
         $update_success = false;
+        $error_code = 'mealsdb_sync_failed';
+        $error_message = '';
 
         switch ($field) {
             case 'first_name':
             case 'last_name':
-                if ($user instanceof WP_User) {
-                    $old_value = $field === 'first_name' ? $user->first_name : $user->last_name;
-                }
+                $old_value = $field === 'first_name' ? $user->first_name : $user->last_name;
                 $result = wp_update_user([
                     'ID' => $woo_user_id,
                     $field => $new_value
@@ -268,13 +276,12 @@ class MealsDB_Sync {
                 if (!is_wp_error($result)) {
                     $update_success = true;
                 } else {
-                    error_log('[MealsDB Sync] Failed to sync ' . $field . ' for user ' . $woo_user_id . ': ' . $result->get_error_message());
+                    $error_message = $result->get_error_message();
+                    error_log('[MealsDB Sync] Failed to sync ' . $field . ' for user ' . $woo_user_id . ': ' . $error_message);
                 }
                 break;
             case 'client_email':
-                if ($user instanceof WP_User) {
-                    $old_value = $user->user_email;
-                }
+                $old_value = $user->user_email;
                 $result = wp_update_user([
                     'ID' => $woo_user_id,
                     'user_email' => $new_value
@@ -282,13 +289,15 @@ class MealsDB_Sync {
                 if (!is_wp_error($result)) {
                     $update_success = true;
                 } else {
-                    error_log('[MealsDB Sync] Failed to sync email for user ' . $woo_user_id . ': ' . $result->get_error_message());
+                    $error_message = $result->get_error_message();
+                    error_log('[MealsDB Sync] Failed to sync email for user ' . $woo_user_id . ': ' . $error_message);
                 }
                 break;
             case 'phone_primary':
                 $old_value = get_user_meta($woo_user_id, 'billing_phone', true);
                 $update_success = update_user_meta($woo_user_id, 'billing_phone', $new_value) !== false;
                 if (!$update_success) {
+                    $error_message = __('Unable to update the customer phone number.', 'meals-db');
                     error_log('[MealsDB Sync] Failed to sync phone for user ' . $woo_user_id . '.');
                 }
                 break;
@@ -296,20 +305,33 @@ class MealsDB_Sync {
                 $old_value = get_user_meta($woo_user_id, 'billing_postcode', true);
                 $update_success = update_user_meta($woo_user_id, 'billing_postcode', $new_value) !== false;
                 if (!$update_success) {
+                    $error_message = __('Unable to update the customer postal code.', 'meals-db');
                     error_log('[MealsDB Sync] Failed to sync postal code for user ' . $woo_user_id . '.');
                 }
                 break;
+            default:
+                $error_code = 'mealsdb_sync_unsupported_field';
+                $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
+                break;
         }
 
-        if ($update_success) {
-            MealsDB_Logger::log(
-                'sync_override',
-                $woo_user_id,
-                $field,
-                is_scalar($old_value) ? (string) $old_value : null,
-                $new_value,
-                'mealsdb'
-            );
+        if (!$update_success) {
+            if ($error_message === '') {
+                $error_message = __('An unexpected error prevented the override from completing.', 'meals-db');
+            }
+
+            return new WP_Error($error_code, $error_message);
         }
+
+        MealsDB_Logger::log(
+            'sync_override',
+            $woo_user_id,
+            $field,
+            is_scalar($old_value) ? (string) $old_value : null,
+            $new_value,
+            'mealsdb'
+        );
+
+        return true;
     }
 }

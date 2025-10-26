@@ -193,7 +193,10 @@ class MealsDB_Client_Form {
         }
 
         $encrypted = $sanitized;
-        self::ensure_index_columns_exist($conn);
+        if (!self::ensure_index_columns_exist($conn)) {
+            error_log('[MealsDB] Save aborted: deterministic index columns are unavailable.');
+            return false;
+        }
 
         // Encrypt sensitive fields
         try {
@@ -291,13 +294,23 @@ class MealsDB_Client_Form {
         $user_id = get_current_user_id();
 
         if ($draft_id && $draft_id > 0) {
-            $stmt = $conn->prepare('UPDATE meals_drafts SET data = ? WHERE id = ?');
+            if (!self::draft_exists($conn, $draft_id)) {
+                error_log('[MealsDB] Draft update failed: draft ID ' . $draft_id . ' not found.');
+                return false;
+            }
+
+            if (!self::draft_exists($conn, $draft_id, $user_id)) {
+                error_log('[MealsDB] Draft update failed: user ' . $user_id . ' does not own draft ID ' . $draft_id . '.');
+                return false;
+            }
+
+            $stmt = $conn->prepare('UPDATE meals_drafts SET data = ? WHERE id = ? AND created_by = ?');
             if (!$stmt) {
                 error_log('[MealsDB] Draft update failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
                 return false;
             }
 
-            if (!$stmt->bind_param('si', $json, $draft_id)) {
+            if (!$stmt->bind_param('sii', $json, $draft_id, $user_id)) {
                 $stmt->close();
                 error_log('[MealsDB] Draft update failed to bind parameters.');
                 return false;
@@ -310,13 +323,7 @@ class MealsDB_Client_Form {
                 return false;
             }
 
-            $affected = $stmt->affected_rows ?? 0;
             $stmt->close();
-
-            if ($affected === 0 && !self::draft_exists($conn, $draft_id)) {
-                error_log('[MealsDB] Draft update failed: draft ID ' . $draft_id . ' not found.');
-                return false;
-            }
 
             return $draft_id;
         }
@@ -368,13 +375,25 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $stmt = $conn->prepare('DELETE FROM meals_drafts WHERE id = ?');
+        if (!self::draft_exists($conn, $draft_id)) {
+            error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' not found.');
+            return false;
+        }
+
+        $user_id = get_current_user_id();
+
+        if (!self::draft_exists($conn, $draft_id, $user_id)) {
+            error_log('[MealsDB] Draft delete failed: user ' . $user_id . ' does not own draft ID ' . $draft_id . '.');
+            return false;
+        }
+
+        $stmt = $conn->prepare('DELETE FROM meals_drafts WHERE id = ? AND created_by = ?');
         if (!$stmt) {
             error_log('[MealsDB] Draft delete failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
             return false;
         }
 
-        if (!$stmt->bind_param('i', $draft_id)) {
+        if (!$stmt->bind_param('ii', $draft_id, $user_id)) {
             $stmt->close();
             error_log('[MealsDB] Draft delete failed to bind parameters.');
             return false;
@@ -391,7 +410,7 @@ class MealsDB_Client_Form {
         $stmt->close();
 
         if ($affected <= 0) {
-            error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' not found.');
+            error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' could not be removed.');
             return false;
         }
 
@@ -401,25 +420,40 @@ class MealsDB_Client_Form {
     /**
      * Determine whether a draft exists.
      *
-     * @param \mysqli $conn
-     * @param int    $draft_id
+     * @param \mysqli   $conn
+     * @param int       $draft_id
+     * @param int|null  $owner_id Restrict check to a specific owner when provided.
      * @return bool
      */
-    private static function draft_exists($conn, int $draft_id): bool {
+    private static function draft_exists($conn, int $draft_id, ?int $owner_id = null): bool {
         if (!($conn instanceof \mysqli)) {
             return false;
         }
 
-        $stmt = $conn->prepare('SELECT id FROM meals_drafts WHERE id = ? LIMIT 1');
+        $sql = 'SELECT id FROM meals_drafts WHERE id = ?';
+        if ($owner_id !== null) {
+            $sql .= ' AND created_by = ?';
+        }
+        $sql .= ' LIMIT 1';
+
+        $stmt = $conn->prepare($sql);
         if (!$stmt) {
             error_log('[MealsDB] Draft existence check failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
             return false;
         }
 
-        if (!$stmt->bind_param('i', $draft_id)) {
-            $stmt->close();
-            error_log('[MealsDB] Draft existence check failed to bind parameters.');
-            return false;
+        if ($owner_id !== null) {
+            if (!$stmt->bind_param('ii', $draft_id, $owner_id)) {
+                $stmt->close();
+                error_log('[MealsDB] Draft existence check failed to bind parameters.');
+                return false;
+            }
+        } else {
+            if (!$stmt->bind_param('i', $draft_id)) {
+                $stmt->close();
+                error_log('[MealsDB] Draft existence check failed to bind parameters.');
+                return false;
+            }
         }
 
         if (!$stmt->execute()) {
@@ -448,7 +482,10 @@ class MealsDB_Client_Form {
         $conn = MealsDB_DB::get_connection();
         if (!$conn) return [];
 
-        self::ensure_index_columns_exist($conn);
+        $indexes_ready = self::ensure_index_columns_exist($conn);
+        if (!$indexes_ready) {
+            error_log('[MealsDB] Duplicate check skipped: deterministic index columns are unavailable.');
+        }
 
         $errors = [];
 
@@ -458,6 +495,9 @@ class MealsDB_Client_Form {
                 $value = $data[$field];
 
                 if (isset(self::$deterministic_index_map[$field])) {
+                    if (!$indexes_ready) {
+                        continue;
+                    }
                     $column = self::$deterministic_index_map[$field];
                     $value = self::deterministic_hash($data[$field]);
                 }
@@ -603,10 +643,16 @@ class MealsDB_Client_Form {
      * Ensure the deterministic index columns exist on the meals_clients table.
      *
      * @param mysqli $conn
+     * @return bool
      */
-    private static function ensure_index_columns_exist($conn): void {
-        if (self::$indexes_ensured || empty(self::$deterministic_index_map)) {
-            return;
+    private static function ensure_index_columns_exist($conn): bool {
+        if (empty(self::$deterministic_index_map)) {
+            self::$indexes_ensured = true;
+            return true;
+        }
+
+        if (self::$indexes_ensured) {
+            return true;
         }
 
         $allEnsured = true;
@@ -738,7 +784,10 @@ class MealsDB_Client_Form {
 
         if ($allEnsured && self::backfill_deterministic_indexes($conn)) {
             self::$indexes_ensured = true;
+            return true;
         }
+
+        return false;
     }
 
     /**
