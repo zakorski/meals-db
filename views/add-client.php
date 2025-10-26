@@ -5,6 +5,7 @@ MealsDB_Permissions::enforce();
 $errors = [];
 $success = false;
 $form_values = [];
+$resumed_draft_id = isset($_POST['draft_id']) ? intval($_POST['draft_id']) : 0;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     check_admin_referer('mealsdb_nonce', 'mealsdb_nonce_field');
@@ -22,12 +23,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($saved) {
                 $success = true;
                 $form_values = [];
+                $resumed_draft_id = 0;
             } else {
                 $errors[] = 'Database error occurred.';
             }
         } else {
             $errors = $validation['errors'];
-            if (!MealsDB_Client_Form::save_draft($form_values)) { // fallback save
+            if (!MealsDB_Client_Form::save_draft($form_values, $resumed_draft_id ?: null)) { // fallback save
                 $errors[] = 'Unable to save draft copy. Please try again or contact an administrator.';
             }
         }
