@@ -64,18 +64,6 @@ class MealsDB_Sync {
             $woo_user = self::find_woocommerce_user($client['client_email'], $individual_id);
 
             if ($woo_user) {
-                if ($individual_id !== '') {
-                    $stored_id = get_user_meta($woo_user->ID, 'meals_individual_id', true);
-
-                    if ((string) $stored_id !== (string) $individual_id) {
-                        $updated = update_user_meta($woo_user->ID, 'meals_individual_id', $individual_id);
-
-                        if ($updated === false) {
-                            error_log('[MealsDB Sync] Failed to update meals_individual_id meta for user ' . $woo_user->ID . '.');
-                        }
-                    }
-                }
-
                 $diffs = self::compare_fields($client, $woo_user);
 
                 $filtered_diffs = [];

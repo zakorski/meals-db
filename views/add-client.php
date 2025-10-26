@@ -5,19 +5,6 @@ MealsDB_Permissions::enforce();
 $errors = [];
 $success = false;
 $form_values = [];
-$resumed_draft_id = isset($_POST['draft_id']) ? intval($_POST['draft_id']) : 0;
-
-if (isset($_GET['mealsdb_success'])) {
-    $raw_success = $_GET['mealsdb_success'];
-    if (function_exists('wp_unslash')) {
-        $raw_success = wp_unslash($raw_success);
-    }
-    if (function_exists('sanitize_text_field')) {
-        $raw_success = sanitize_text_field($raw_success);
-    }
-
-    $success = ($raw_success === '' || $raw_success === '1') ? true : $raw_success;
-}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     check_admin_referer('mealsdb_nonce', 'mealsdb_nonce_field');
@@ -28,32 +15,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$is_resume) {
         $validation = MealsDB_Client_Form::validate($_POST);
+        $form_values = $validation['sanitized'] ?? $form_values;
 
         if ($validation['valid']) {
             $saved = MealsDB_Client_Form::save($_POST);
             if ($saved) {
-                if ($resumed_draft_id > 0 && !MealsDB_Client_Form::delete_draft($resumed_draft_id)) {
-                    error_log('[MealsDB] Failed to remove resumed draft ID ' . $resumed_draft_id . ' after successful save.');
-                }
-
-                $redirect_url = add_query_arg(
-                    [
-                        'page' => 'meals-db',
-                        'tab' => 'add',
-                        'mealsdb_success' => '1',
-                    ],
-                    admin_url('admin.php')
-                );
-
-                wp_safe_redirect($redirect_url);
-                exit;
+                $success = true;
+                $form_values = [];
             } else {
                 $errors[] = 'Database error occurred.';
             }
         } else {
             $errors = $validation['errors'];
-            $draft_id_for_save = $resumed_draft_id > 0 ? $resumed_draft_id : null;
-            if (!MealsDB_Client_Form::save_draft($form_values, $draft_id_for_save)) { // fallback save
+            if (!MealsDB_Client_Form::save_draft($form_values)) { // fallback save
                 $errors[] = 'Unable to save draft copy. Please try again or contact an administrator.';
             }
         }
