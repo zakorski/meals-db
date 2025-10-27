@@ -234,9 +234,24 @@ class StubMysqli extends mysqli {
         }
 
         if (stripos($sql, 'ALTER TABLE') === 0) {
-            if (preg_match('/`([a-z_]+)` CHAR/', $sql, $matches)) {
-                $this->existingColumns[] = $matches[1];
+            if (preg_match('/ADD COLUMN `([a-z_]+)`/i', $sql, $matches)) {
+                $column = $matches[1];
+                if (!in_array($column, $this->existingColumns, true)) {
+                    $this->existingColumns[] = $column;
+                }
             }
+
+            if (preg_match('/CHANGE COLUMN `([a-z_]+)` `([a-z_]+)`/i', $sql, $matches)) {
+                $old = $matches[1];
+                $new = $matches[2];
+                $index = array_search($old, $this->existingColumns, true);
+                if ($index !== false) {
+                    $this->existingColumns[$index] = $new;
+                } elseif (!in_array($new, $this->existingColumns, true)) {
+                    $this->existingColumns[] = $new;
+                }
+            }
+
             return true;
         }
 
