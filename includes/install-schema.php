@@ -57,32 +57,61 @@ class MealsDB_Installer {
                 delivery_initials_index CHAR(64) NULL,
                 first_name VARCHAR(191) NOT NULL,
                 last_name VARCHAR(191) NOT NULL,
+                customer_type VARCHAR(100) NOT NULL,
+                open_date DATE NULL,
+                assigned_social_worker VARCHAR(191) NULL,
+                social_worker_email VARCHAR(191) NULL,
                 client_email VARCHAR(191) NOT NULL,
                 phone_primary VARCHAR(25) NOT NULL,
-                address_postal VARCHAR(20) NOT NULL,
-                customer_type VARCHAR(100) NOT NULL,
+                phone_secondary VARCHAR(25) NULL,
+                do_not_call_client_phone TINYINT(1) NOT NULL DEFAULT 0,
+                alt_contact_name VARCHAR(191) NULL,
+                alt_contact_phone_primary VARCHAR(25) NULL,
+                alt_contact_phone_secondary VARCHAR(25) NULL,
+                alt_contact_email VARCHAR(191) NULL,
+                address_street_number VARCHAR(50) NULL,
+                address_street_name VARCHAR(191) NULL,
+                address_unit VARCHAR(50) NULL,
                 address_city VARCHAR(191) NULL,
                 address_province VARCHAR(191) NULL,
+                address_postal VARCHAR(20) NOT NULL,
+                delivery_address_street_number VARCHAR(50) NULL,
+                delivery_address_street_name VARCHAR(191) NULL,
+                delivery_address_unit VARCHAR(50) NULL,
+                delivery_address_city VARCHAR(191) NULL,
+                delivery_address_province VARCHAR(191) NULL,
+                delivery_address_postal VARCHAR(20) NULL,
+                gender VARCHAR(50) NULL,
+                birth_date DATE NULL,
                 service_center VARCHAR(191) NULL,
+                service_center_charged VARCHAR(191) NULL,
+                vendor_number VARCHAR(191) NULL,
+                service_id VARCHAR(191) NULL,
                 service_zone VARCHAR(191) NULL,
                 service_course VARCHAR(191) NULL,
                 per_sdnb_req VARCHAR(191) NULL,
+                payment_method VARCHAR(191) NULL,
                 rate VARCHAR(191) NULL,
+                client_contribution VARCHAR(191) NULL,
+                delivery_fee VARCHAR(191) NULL,
                 delivery_day VARCHAR(191) NULL,
                 delivery_area_name VARCHAR(191) NULL,
                 delivery_area_zone VARCHAR(191) NULL,
                 ordering_frequency VARCHAR(191) NULL,
                 ordering_contact_method VARCHAR(191) NULL,
                 delivery_frequency VARCHAR(191) NULL,
+                freezer_capacity VARCHAR(191) NULL,
+                meal_type VARCHAR(191) NULL,
+                requisition_period VARCHAR(191) NULL,
+                service_commence_date DATE NULL,
+                required_start_date DATE NULL,
+                expected_termination_date DATE NULL,
+                initial_renewal_date DATE NULL,
+                termination_date DATE NULL,
+                most_recent_renewal_date DATE NULL,
+                units TINYINT UNSIGNED NULL,
                 diet_concerns TEXT NULL,
                 client_comments TEXT NULL,
-                birth_date DATE NULL,
-                open_date DATE NULL,
-                required_start_date DATE NULL,
-                service_commence_date DATE NULL,
-                expected_termination_date DATE NULL,
-                initial_termination_date DATE NULL,
-                recent_renewal_date DATE NULL,
                 status VARCHAR(50) NOT NULL DEFAULT 'active',
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -131,6 +160,115 @@ class MealsDB_Installer {
         foreach ($tables as $table => $sql) {
             if (!$conn->query($sql)) {
                 error_log(sprintf('[MealsDB Installer] Failed creating %s: %s', $table, $conn->error));
+            }
+        }
+
+        self::rename_legacy_columns($conn);
+        self::ensure_meals_clients_columns($conn);
+    }
+
+    /**
+     * Rename legacy meals_clients columns to their new equivalents when possible.
+     */
+    private static function rename_legacy_columns(mysqli $conn): void {
+        $table = 'meals_clients';
+        $renames = [
+            'initial_termination_date' => ['initial_renewal_date', 'DATE NULL'],
+            'recent_renewal_date'      => ['most_recent_renewal_date', 'DATE NULL'],
+        ];
+
+        foreach ($renames as $oldColumn => $renameData) {
+            [$newColumn, $definition] = $renameData;
+
+            $oldEscaped = $conn->real_escape_string($oldColumn);
+            $newEscaped = $conn->real_escape_string($newColumn);
+
+            $oldResult = $conn->query(sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table, $oldEscaped));
+            $newResult = $conn->query(sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table, $newEscaped));
+
+            $oldExists = ($oldResult && property_exists($oldResult, 'num_rows') && $oldResult->num_rows > 0);
+            $newExists = ($newResult && property_exists($newResult, 'num_rows') && $newResult->num_rows > 0);
+
+            if ($oldResult && method_exists($oldResult, 'free')) {
+                $oldResult->free();
+            }
+            if ($newResult && method_exists($newResult, 'free')) {
+                $newResult->free();
+            }
+
+            if (!$oldExists || $newExists) {
+                continue;
+            }
+
+            $sql = sprintf(
+                "ALTER TABLE `%s` CHANGE COLUMN `%s` `%s` %s",
+                $table,
+                $oldColumn,
+                $newColumn,
+                $definition
+            );
+
+            if ($conn->query($sql) !== true) {
+                error_log(sprintf('[MealsDB Installer] Failed renaming column %s to %s: %s', $oldColumn, $newColumn, $conn->error));
+            }
+        }
+    }
+
+    /**
+     * Ensure new meals_clients columns exist for upgraded installations.
+     */
+    private static function ensure_meals_clients_columns(mysqli $conn): void {
+        $table = 'meals_clients';
+        $columns = [
+            'assigned_social_worker'       => 'VARCHAR(191) NULL',
+            'social_worker_email'          => 'VARCHAR(191) NULL',
+            'phone_secondary'              => 'VARCHAR(25) NULL',
+            'do_not_call_client_phone'     => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'alt_contact_name'             => 'VARCHAR(191) NULL',
+            'alt_contact_phone_primary'    => 'VARCHAR(25) NULL',
+            'alt_contact_phone_secondary'  => 'VARCHAR(25) NULL',
+            'alt_contact_email'            => 'VARCHAR(191) NULL',
+            'address_street_number'        => 'VARCHAR(50) NULL',
+            'address_street_name'          => 'VARCHAR(191) NULL',
+            'address_unit'                 => 'VARCHAR(50) NULL',
+            'delivery_address_street_number' => 'VARCHAR(50) NULL',
+            'delivery_address_street_name' => 'VARCHAR(191) NULL',
+            'delivery_address_unit'        => 'VARCHAR(50) NULL',
+            'delivery_address_city'        => 'VARCHAR(191) NULL',
+            'delivery_address_province'    => 'VARCHAR(191) NULL',
+            'delivery_address_postal'      => 'VARCHAR(20) NULL',
+            'gender'                       => 'VARCHAR(50) NULL',
+            'service_center_charged'       => 'VARCHAR(191) NULL',
+            'vendor_number'                => 'VARCHAR(191) NULL',
+            'service_id'                   => 'VARCHAR(191) NULL',
+            'payment_method'               => 'VARCHAR(191) NULL',
+            'client_contribution'          => 'VARCHAR(191) NULL',
+            'delivery_fee'                 => 'VARCHAR(191) NULL',
+            'freezer_capacity'             => 'VARCHAR(191) NULL',
+            'meal_type'                    => 'VARCHAR(191) NULL',
+            'requisition_period'           => 'VARCHAR(191) NULL',
+            'initial_renewal_date'         => 'DATE NULL',
+            'termination_date'             => 'DATE NULL',
+            'most_recent_renewal_date'     => 'DATE NULL',
+            'units'                        => 'TINYINT UNSIGNED NULL',
+        ];
+
+        foreach ($columns as $column => $definition) {
+            $escaped = $conn->real_escape_string($column);
+            $result = $conn->query(sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table, $escaped));
+            $exists = ($result && property_exists($result, 'num_rows') && $result->num_rows > 0);
+
+            if ($result && method_exists($result, 'free')) {
+                $result->free();
+            }
+
+            if ($exists) {
+                continue;
+            }
+
+            $sql = sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s", $table, $column, $definition);
+            if ($conn->query($sql) !== true) {
+                error_log(sprintf('[MealsDB Installer] Failed adding column %s: %s', $column, $conn->error));
             }
         }
     }
