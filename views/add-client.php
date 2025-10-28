@@ -64,12 +64,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <tr>
                 <th><label for="customer_type">Customer Type *</label></th>
                 <td>
-                    <select name="customer_type" required>
-                        <?php $selected_type = $form_values['customer_type'] ?? ''; ?>
-                        <option value="" <?php selected($selected_type, ''); ?>>Select...</option>
-                        <option value="SDNB" <?php selected($selected_type, 'SDNB'); ?>>SDNB</option>
-                        <option value="Vet" <?php selected($selected_type, 'Vet'); ?>>Vet</option>
-                        <option value="Private" <?php selected($selected_type, 'Private'); ?>>Private</option>
+                    <?php $service_zone = $form_values['service_zone'] ?? ''; ?>
+                    <select name="service_zone">
+                        <option value="" <?php selected($service_zone, ''); ?>>Select…</option>
+                        <option value="A" <?php selected($service_zone, 'A'); ?>>A</option>
+                        <option value="B" <?php selected($service_zone, 'B'); ?>>B</option>
                     </select>
                 </td>
             </tr>
@@ -78,8 +77,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <td><input type="text" name="open_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['open_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="birth_date">Date of Birth</label></th>
-                <td><input type="text" name="birth_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['birth_date'] ?? ''); ?>" /></td>
+                <th><label for="service_course">Service Name Course (1 or 2)</label></th>
+                <td>
+                    <?php $service_course = $form_values['service_course'] ?? ''; ?>
+                    <select name="service_course">
+                        <option value="" <?php selected($service_course, ''); ?>>Select…</option>
+                        <option value="1" <?php selected($service_course, '1'); ?>>1</option>
+                        <option value="2" <?php selected($service_course, '2'); ?>>2</option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="payment_method">Payment Method</label></th>
+                <td><input type="text" name="payment_method" class="regular-text" value="<?php echo esc_attr($form_values['payment_method'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="required_start_date">Required Start Date</label></th>
+                <td><input type="date" name="required_start_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['required_start_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="service_commence_date">Service Commence Date</label></th>
+                <td><input type="date" name="service_commence_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['service_commence_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="expected_termination_date">Expected Termination Date</label></th>
+                <td><input type="date" name="expected_termination_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['expected_termination_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="initial_renewal_date">Initial Renewal</label></th>
+                <td><input type="date" name="initial_renewal_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['initial_renewal_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="termination_date">Termination Date</label></th>
+                <td><input type="date" name="termination_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['termination_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="most_recent_renewal_date">Most Recent Renewal</label></th>
+                <td><input type="date" name="most_recent_renewal_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['most_recent_renewal_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="units"># of units (1 - 31)</label></th>
+                <td><input type="text" name="units" class="small-text" value="<?php echo esc_attr($form_values['units'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="meal_type">Meal Type</label></th>
+                <td>
+                    <?php $meal_type = $form_values['meal_type'] ?? ''; ?>
+                    <select name="meal_type">
+                        <option value="" <?php selected($meal_type, ''); ?>>Select…</option>
+                        <option value="1" <?php selected($meal_type, '1'); ?>>1</option>
+                        <option value="2" <?php selected($meal_type, '2'); ?>>2</option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="requisition_period">Requisition Time Period</label></th>
+                <td>
+                    <?php $requisition_period = $form_values['requisition_period'] ?? ''; ?>
+                    <select name="requisition_period">
+                        <option value="" <?php selected($requisition_period, ''); ?>>Select…</option>
+                        <option value="Day" <?php selected($requisition_period, 'Day'); ?>>Day</option>
+                        <option value="Week" <?php selected($requisition_period, 'Week'); ?>>Week</option>
+                        <option value="Month" <?php selected($requisition_period, 'Month'); ?>>Month</option>
+                    </select>
+                </td>
             </tr>
             <tr>
                 <th><label for="gender">Gender</label></th>

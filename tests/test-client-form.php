@@ -330,6 +330,113 @@ run_test('detects duplicate individual_id via deterministic hash', function () {
     }
 });
 
+run_test('validation rejects invalid enumerated and numeric inputs', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'first_name' => 'Jamie',
+        'last_name' => 'Client',
+        'customer_type' => 'Type A',
+        'client_email' => 'jamie@example.com',
+        'phone_primary' => '(123)-456-7890',
+        'address_postal' => 'A1A1A1',
+        'gender' => 'Unknown',
+        'service_zone' => 'Z',
+        'service_course' => '9',
+        'meal_type' => '4',
+        'requisition_period' => 'Yearly',
+        'delivery_day' => 'Monday',
+        'ordering_contact_method' => 'Text',
+        'ordering_frequency' => 'often',
+        'delivery_frequency' => 'frequently',
+        'freezer_capacity' => 'large',
+        'delivery_fee' => 'ten dollars',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected validation to fail for invalid enumerated inputs.');
+    }
+
+    $expected_messages = [
+        'Gender must be Male, Female, or Other.',
+        'Service zone must be either A or B.',
+        'Service course must be either 1 or 2.',
+        'Meal type must be either 1 or 2.',
+        'Requisition period must be Day, Week, or Month.',
+        'Delivery day must match one of the scheduled options.',
+        'Ordering contact method must be a supported option.',
+        'Ordering frequency must be a number.',
+        'Delivery frequency must be a number.',
+        'Freezer capacity must be a number.',
+        'Delivery fee must be a number.',
+    ];
+
+    foreach ($expected_messages as $message) {
+        if (!in_array($message, $result['errors'], true)) {
+            throw new Exception('Missing expected validation message: ' . $message);
+        }
+    }
+
+    set_db_connection(null);
+});
+
+run_test('validation accepts enumerated selections', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'first_name' => 'Morgan',
+        'last_name' => 'Valid',
+        'customer_type' => 'Type B',
+        'client_email' => 'morgan@example.com',
+        'phone_primary' => '(555)-123-4567',
+        'address_postal' => 'B2B2B2',
+        'gender' => 'Female',
+        'service_zone' => 'A',
+        'service_course' => '2',
+        'meal_type' => '1',
+        'requisition_period' => 'Week',
+        'delivery_day' => 'Friday PM',
+        'ordering_contact_method' => 'Client Email',
+        'ordering_frequency' => '4',
+        'delivery_frequency' => '2',
+        'freezer_capacity' => '3',
+        'delivery_fee' => '5.25',
+        'units' => '5',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if (!$result['valid']) {
+        throw new Exception('Validation should succeed for supported enumerated selections.');
+    }
+
+    $sanitized = $result['sanitized'];
+    $assertions = [
+        'gender' => 'Female',
+        'service_zone' => 'A',
+        'service_course' => '2',
+        'meal_type' => '1',
+        'requisition_period' => 'Week',
+        'delivery_day' => 'Friday PM',
+        'ordering_contact_method' => 'Client Email',
+        'ordering_frequency' => '4',
+        'delivery_frequency' => '2',
+        'freezer_capacity' => '3',
+        'delivery_fee' => '5.25',
+        'units' => '5',
+    ];
+
+    foreach ($assertions as $field => $expected) {
+        if (($sanitized[$field] ?? null) !== $expected) {
+            throw new Exception(sprintf('Expected sanitized %s to equal %s', $field, $expected));
+        }
+    }
+
+    set_db_connection(null);
+});
+
 run_test('detects duplicate vet health card via deterministic hash', function () {
     reset_index_flag();
     $hash = hash('sha256', strtolower(trim('VH-999')));
