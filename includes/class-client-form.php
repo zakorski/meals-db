@@ -143,8 +143,12 @@ class MealsDB_Client_Form {
         }
 
         // Postal Code
-        if (!preg_match('/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/i', $sanitized['address_postal'] ?? '')) {
-            $errors[] = 'Postal code must be in A1A 1A1 format.';
+        if (!preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/i', $sanitized['address_postal'] ?? '')) {
+            $errors[] = 'Postal code must be in A1A1A1 format.';
+        }
+
+        if (!empty($sanitized['delivery_address_postal']) && !preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/i', $sanitized['delivery_address_postal'])) {
+            $errors[] = 'Delivery postal code must be in A1A1A1 format.';
         }
 
         if (!empty($sanitized['delivery_address_postal']) && !preg_match('/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/i', $sanitized['delivery_address_postal'])) {
@@ -170,7 +174,7 @@ class MealsDB_Client_Form {
         }
 
         // Email
-        if (!filter_var($sanitized['client_email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+        if (!empty($sanitized['client_email']) && !filter_var($sanitized['client_email'], FILTER_VALIDATE_EMAIL)) {
             $errors[] = 'Invalid client email address.';
         }
 
@@ -184,12 +188,25 @@ class MealsDB_Client_Form {
 
         // Required fields captured by the current admin form UI
         $required_fields = [
-            'first_name'     => 'First name',
-            'last_name'      => 'Last name',
-            'client_email'   => 'Email address',
-            'phone_primary'  => 'Primary phone number',
-            'address_postal' => 'Postal code',
-            'customer_type'  => 'Customer type',
+            'last_name'                => 'Last Name',
+            'first_name'               => 'First Name',
+            'customer_type'            => 'Customer Type',
+            'open_date'                => 'Open Date',
+            'address_street_number'    => 'Street #',
+            'address_street_name'      => 'Street Name',
+            'address_unit'             => 'Apt #',
+            'address_city'             => 'City',
+            'address_province'         => 'Province',
+            'address_postal'           => 'Postal Code',
+            'phone_primary'            => 'Client Phone #1',
+            'payment_method'           => 'Payment Method',
+            'rate'                     => 'Rate',
+            'delivery_initials'        => 'Initials for delivery',
+            'delivery_day'             => 'Delivery Day',
+            'delivery_area_name'       => 'Delivery Area',
+            'ordering_frequency'       => 'Ordering Frequency',
+            'ordering_contact_method'  => 'Ordering Contact Method',
+            'delivery_frequency'       => 'Delivery Frequency',
         ];
 
         foreach ($required_fields as $field => $label) {

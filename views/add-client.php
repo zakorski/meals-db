@@ -208,7 +208,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </tr>
             <tr>
                 <th><label for="address_postal">Postal Code *</label></th>
-                <td><input type="text" name="address_postal" required placeholder="A1A1A1" class="regular-text postal-mask" value="<?php echo esc_attr($form_values['address_postal'] ?? ''); ?>" /></td>
+                <td><input type="text" name="address_postal" required placeholder="A1A1A1" maxlength="6" pattern="[A-Za-z][0-9][A-Za-z][0-9][A-Za-z][0-9]" class="regular-text postal-mask" value="<?php echo esc_attr($form_values['address_postal'] ?? ''); ?>" /></td>
             </tr>
         </table>
 
