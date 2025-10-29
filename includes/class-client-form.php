@@ -151,6 +151,10 @@ class MealsDB_Client_Form {
             $errors[] = 'Delivery postal code must be in A1A1A1 format.';
         }
 
+        if (!empty($sanitized['delivery_address_postal']) && !preg_match('/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/i', $sanitized['delivery_address_postal'])) {
+            $errors[] = 'Delivery postal code must be in A1A 1A1 format.';
+        }
+
         // Phone
         $phonePattern = '/^\(\d{3}\)-\d{3}-\d{4}$/';
         if (!preg_match($phonePattern, $sanitized['phone_primary'] ?? '')) {
@@ -180,51 +184,6 @@ class MealsDB_Client_Form {
 
         if (!empty($sanitized['alt_contact_email']) && !filter_var($sanitized['alt_contact_email'], FILTER_VALIDATE_EMAIL)) {
             $errors[] = 'Invalid alternate contact email address.';
-        }
-
-        // Enumerated fields
-        $enum_constraints = [
-            'customer_type' => ['options' => ['SDNB', 'Veteran', 'Private'], 'message' => 'Customer type must be SDNB, Veteran, or Private.'],
-            'gender' => ['options' => ['Male', 'Female', 'Other'], 'message' => 'Gender must be Male, Female, or Other.'],
-            'payment_method' => ['options' => ['Invoice', 'E-Transfer', 'Cash'], 'message' => 'Payment method must be Invoice, E-Transfer, or Cash.'],
-            'service_zone' => ['options' => ['A', 'B'], 'message' => 'Service zone must be either A or B.'],
-            'service_course' => ['options' => ['1', '2'], 'message' => 'Service course must be either 1 or 2.'],
-            'meal_type' => ['options' => ['1', '2'], 'message' => 'Meal type must be Main or Main & Side.'],
-            'requisition_period' => ['options' => ['Day', 'Week', 'Month'], 'message' => 'Requisition time period must be day, week, or month.'],
-            'delivery_day' => ['options' => ['Wednesday AM', 'Wednesday PM', 'Thursday AM', 'Thursday PM', 'Friday AM', 'Friday PM'], 'message' => 'Delivery day must match one of the scheduled options.'],
-            'ordering_contact_method' => ['options' => ['Phone', 'Bulk Email', 'Auto-Renew', 'Client Email', 'Client Call'], 'message' => 'Ordering contact method must be Phone, Bulk Email, Auto-Renew, Client Email, or Client Call.'],
-        ];
-
-        foreach ($enum_constraints as $field => $constraint) {
-            $raw_value = isset($data[$field]) ? trim((string) $data[$field]) : '';
-            if ($raw_value === '') {
-                continue;
-            }
-
-            $value = $sanitized[$field] ?? '';
-            if ($value === '' || !in_array($value, $constraint['options'], true)) {
-                $errors[] = $constraint['message'];
-            }
-        }
-
-        // Numeric fields
-        $numeric_constraints = [
-            'ordering_frequency' => 'Ordering frequency must be a number.',
-            'delivery_frequency' => 'Delivery frequency must be a number.',
-            'freezer_capacity'   => 'Freezer capacity must be a number.',
-            'delivery_fee'       => 'Delivery fee must be a number.',
-        ];
-
-        foreach ($numeric_constraints as $field => $message) {
-            $raw_value = isset($data[$field]) ? trim((string) $data[$field]) : '';
-            if ($raw_value === '') {
-                continue;
-            }
-
-            $value = $sanitized[$field] ?? '';
-            if ($value === '') {
-                $errors[] = $message;
-            }
         }
 
         // Required fields captured by the current admin form UI
@@ -755,108 +714,6 @@ class MealsDB_Client_Form {
             case 'do_not_call_client_phone':
                 $normalized = strtolower(trim($value));
                 $value = in_array($normalized, ['1', 'true', 'yes', 'y', 'on'], true) ? '1' : '0';
-                break;
-            case 'customer_type':
-                $normalized = strtolower(trim($value));
-                $map = [
-                    'sdnb'    => 'SDNB',
-                    'veteran' => 'Veteran',
-                    'private' => 'Private',
-                ];
-                $value = $map[$normalized] ?? '';
-                break;
-            case 'gender':
-                $normalized = ucfirst(strtolower(trim($value)));
-                $value = in_array($normalized, ['Male', 'Female', 'Other'], true) ? $normalized : '';
-                break;
-            case 'service_zone':
-                $normalized = strtoupper(trim($value));
-                $value = in_array($normalized, ['A', 'B'], true) ? $normalized : '';
-                break;
-            case 'service_course':
-                $normalized = trim($value);
-                $value = in_array($normalized, ['1', '2'], true) ? $normalized : '';
-                break;
-            case 'meal_type':
-                $normalized = trim($value);
-                $value = in_array($normalized, ['1', '2'], true) ? $normalized : '';
-                break;
-            case 'payment_method':
-                $normalized = strtolower(trim($value));
-                $map = [
-                    'invoice'    => 'Invoice',
-                    'e-transfer' => 'E-Transfer',
-                    'etransfer'  => 'E-Transfer',
-                    'cash'       => 'Cash',
-                ];
-                $value = $map[$normalized] ?? '';
-                break;
-            case 'requisition_period':
-                $normalized = strtolower(trim($value));
-                $map = [
-                    'day' => 'Day',
-                    'week' => 'Week',
-                    'month' => 'Month',
-                ];
-                $value = $map[$normalized] ?? '';
-                break;
-            case 'delivery_day':
-                $normalized = strtolower(trim($value));
-                $options = [
-                    'wednesday am' => 'Wednesday AM',
-                    'wednesday pm' => 'Wednesday PM',
-                    'thursday am'  => 'Thursday AM',
-                    'thursday pm'  => 'Thursday PM',
-                    'friday am'    => 'Friday AM',
-                    'friday pm'    => 'Friday PM',
-                ];
-                $value = $options[$normalized] ?? '';
-                break;
-            case 'ordering_contact_method':
-                $normalized = strtolower(trim($value));
-                $options = [
-                    'phone'        => 'Phone',
-                    'bulk email'   => 'Bulk Email',
-                    'auto-renew'   => 'Auto-Renew',
-                    'client email' => 'Client Email',
-                    'client call'  => 'Client Call',
-                ];
-                if (isset($options[$normalized])) {
-                    $value = $options[$normalized];
-                } else {
-                    $value = '';
-                }
-                break;
-            case 'ordering_frequency':
-            case 'delivery_frequency':
-            case 'freezer_capacity':
-                $value = trim($value);
-                if ($value === '') {
-                    $value = '';
-                    break;
-                }
-
-                if (!is_numeric($value)) {
-                    $value = '';
-                    break;
-                }
-
-                $value = (string) max(0, (int) round((float) $value));
-                break;
-            case 'delivery_fee':
-                $value = trim($value);
-                if ($value === '') {
-                    $value = '';
-                    break;
-                }
-
-                $normalized = filter_var($value, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-                if ($normalized === '' || !is_numeric($normalized)) {
-                    $value = '';
-                    break;
-                }
-
-                $value = number_format((float) $normalized, 2, '.', '');
                 break;
             case 'units':
                 $value = trim($value);

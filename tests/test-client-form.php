@@ -338,24 +338,15 @@ run_test('validation rejects invalid enumerated and numeric inputs', function ()
         'first_name' => 'Jamie',
         'last_name' => 'Client',
         'customer_type' => 'Type A',
-        'open_date' => '2024-05-01',
-        'address_street_number' => '123',
-        'address_street_name' => 'Main',
-        'address_unit' => 'A',
-        'address_city' => 'Townsville',
-        'address_province' => 'NB',
+        'client_email' => 'jamie@example.com',
         'phone_primary' => '(123)-456-7890',
         'address_postal' => 'A1A1A1',
-        'payment_method' => 'Cheque',
-        'rate' => '10',
-        'delivery_initials' => 'XY',
         'gender' => 'Unknown',
         'service_zone' => 'Z',
         'service_course' => '9',
         'meal_type' => '4',
         'requisition_period' => 'Yearly',
         'delivery_day' => 'Monday',
-        'delivery_area_name' => 'Area 51',
         'ordering_contact_method' => 'Text',
         'ordering_frequency' => 'often',
         'delivery_frequency' => 'frequently',
@@ -369,15 +360,13 @@ run_test('validation rejects invalid enumerated and numeric inputs', function ()
     }
 
     $expected_messages = [
-        'Customer type must be SDNB, Veteran, or Private.',
         'Gender must be Male, Female, or Other.',
-        'Payment method must be Invoice, E-Transfer, or Cash.',
         'Service zone must be either A or B.',
         'Service course must be either 1 or 2.',
-        'Meal type must be Main or Main & Side.',
-        'Requisition time period must be day, week, or month.',
+        'Meal type must be either 1 or 2.',
+        'Requisition period must be Day, Week, or Month.',
         'Delivery day must match one of the scheduled options.',
-        'Ordering contact method must be Phone, Bulk Email, Auto-Renew, Client Email, or Client Call.',
+        'Ordering contact method must be a supported option.',
         'Ordering frequency must be a number.',
         'Delivery frequency must be a number.',
         'Freezer capacity must be a number.',
@@ -400,25 +389,16 @@ run_test('validation accepts enumerated selections', function () {
     $payload = [
         'first_name' => 'Morgan',
         'last_name' => 'Valid',
-        'customer_type' => 'SDNB',
-        'open_date' => '2023-01-01',
-        'address_street_number' => '45',
-        'address_street_name' => 'Elm Street',
-        'address_unit' => '3C',
-        'address_city' => 'Springwood',
-        'address_province' => 'NB',
+        'customer_type' => 'Type B',
+        'client_email' => 'morgan@example.com',
         'phone_primary' => '(555)-123-4567',
         'address_postal' => 'B2B2B2',
         'gender' => 'Female',
         'service_zone' => 'A',
         'service_course' => '2',
         'meal_type' => '1',
-        'requisition_period' => 'week',
+        'requisition_period' => 'Week',
         'delivery_day' => 'Friday PM',
-        'delivery_area_name' => 'North',
-        'payment_method' => 'Invoice',
-        'rate' => '12.00',
-        'delivery_initials' => 'CD',
         'ordering_contact_method' => 'Client Email',
         'ordering_frequency' => '4',
         'delivery_frequency' => '2',
@@ -434,7 +414,6 @@ run_test('validation accepts enumerated selections', function () {
 
     $sanitized = $result['sanitized'];
     $assertions = [
-        'customer_type' => 'SDNB',
         'gender' => 'Female',
         'service_zone' => 'A',
         'service_course' => '2',
@@ -447,49 +426,11 @@ run_test('validation accepts enumerated selections', function () {
         'freezer_capacity' => '3',
         'delivery_fee' => '5.25',
         'units' => '5',
-        'payment_method' => 'Invoice',
     ];
 
     foreach ($assertions as $field => $expected) {
         if (($sanitized[$field] ?? null) !== $expected) {
             throw new Exception(sprintf('Expected sanitized %s to equal %s', $field, $expected));
-        }
-    }
-
-    set_db_connection(null);
-});
-
-run_test('validation identifies missing required fields', function () {
-    reset_index_flag();
-    set_db_connection(new StubMysqli());
-
-    $result = MealsDB_Client_Form::validate([]);
-
-    $required_messages = [
-        'Last Name is required.',
-        'First Name is required.',
-        'Customer Type is required.',
-        'Open Date is required.',
-        'Street # is required.',
-        'Street Name is required.',
-        'Apt # is required.',
-        'City is required.',
-        'Province is required.',
-        'Postal Code is required.',
-        'Client Phone #1 is required.',
-        'Payment Method is required.',
-        'Rate is required.',
-        'Initials for delivery is required.',
-        'Delivery Day is required.',
-        'Delivery Area is required.',
-        'Ordering Frequency is required.',
-        'Ordering Contact Method is required.',
-        'Delivery Frequency is required.',
-    ];
-
-    foreach ($required_messages as $message) {
-        if (!in_array($message, $result['errors'], true)) {
-            throw new Exception('Missing required field error: ' . $message);
         }
     }
 

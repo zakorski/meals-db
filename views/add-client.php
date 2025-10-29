@@ -64,35 +64,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <tr>
                 <th><label for="customer_type">Customer Type *</label></th>
                 <td>
-                    <?php $customer_type = $form_values['customer_type'] ?? ''; ?>
-                    <select name="customer_type" required>
-                        <option value="" <?php selected($customer_type, ''); ?>>Select…</option>
-                        <option value="SDNB" <?php selected($customer_type, 'SDNB'); ?>>SDNB</option>
-                        <option value="Veteran" <?php selected($customer_type, 'Veteran'); ?>>Veteran</option>
-                        <option value="Private" <?php selected($customer_type, 'Private'); ?>>Private</option>
+                    <?php $service_zone = $form_values['service_zone'] ?? ''; ?>
+                    <select name="service_zone">
+                        <option value="" <?php selected($service_zone, ''); ?>>Select…</option>
+                        <option value="A" <?php selected($service_zone, 'A'); ?>>A</option>
+                        <option value="B" <?php selected($service_zone, 'B'); ?>>B</option>
                     </select>
                 </td>
             </tr>
             <tr>
-                <th><label for="open_date">Open Date *</label></th>
-                <td><input type="text" name="open_date" required class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['open_date'] ?? ''); ?>" /></td>
+                <th><label for="open_date">Open Date</label></th>
+                <td><input type="text" name="open_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['open_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="birth_date">Date of Birth</label></th>
-                <td><input type="text" name="birth_date" class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['birth_date'] ?? ''); ?>" /></td>
-            </tr>
-            <tr>
-                <th><label for="gender">Gender</label></th>
+                <th><label for="service_course">Service Name Course (1 or 2)</label></th>
                 <td>
-                    <?php $selected_gender = $form_values['gender'] ?? ''; ?>
-                    <label><input type="radio" name="gender" value="Male" <?php checked($selected_gender, 'Male'); ?> /> Male</label>
-                    <label><input type="radio" name="gender" value="Female" <?php checked($selected_gender, 'Female'); ?> /> Female</label>
-                    <label><input type="radio" name="gender" value="Other" <?php checked($selected_gender, 'Other'); ?> /> Other</label>
+                    <?php $service_course = $form_values['service_course'] ?? ''; ?>
+                    <select name="service_course">
+                        <option value="" <?php selected($service_course, ''); ?>>Select…</option>
+                        <option value="1" <?php selected($service_course, '1'); ?>>1</option>
+                        <option value="2" <?php selected($service_course, '2'); ?>>2</option>
+                    </select>
                 </td>
             </tr>
             <tr>
-                <th><label for="client_email">Client Email Address</label></th>
-                <td><input type="text" name="client_email" class="regular-text" value="<?php echo esc_attr($form_values['client_email'] ?? ''); ?>" /></td>
+                <th><label for="payment_method">Payment Method</label></th>
+                <td><input type="text" name="payment_method" class="regular-text" value="<?php echo esc_attr($form_values['payment_method'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="required_start_date">Required Start Date</label></th>
+                <td><input type="date" name="required_start_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['required_start_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="service_commence_date">Service Commence Date</label></th>
+                <td><input type="date" name="service_commence_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['service_commence_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="expected_termination_date">Expected Termination Date</label></th>
+                <td><input type="date" name="expected_termination_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['expected_termination_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="initial_renewal_date">Initial Renewal</label></th>
+                <td><input type="date" name="initial_renewal_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['initial_renewal_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="termination_date">Termination Date</label></th>
+                <td><input type="date" name="termination_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['termination_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="most_recent_renewal_date">Most Recent Renewal</label></th>
+                <td><input type="date" name="most_recent_renewal_date" class="mealsdb-datepicker" value="<?php echo esc_attr($form_values['most_recent_renewal_date'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="units"># of units (1 - 31)</label></th>
+                <td><input type="text" name="units" class="small-text" value="<?php echo esc_attr($form_values['units'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="meal_type">Meal Type</label></th>
+                <td>
+                    <?php $meal_type = $form_values['meal_type'] ?? ''; ?>
+                    <select name="meal_type">
+                        <option value="" <?php selected($meal_type, ''); ?>>Select…</option>
+                        <option value="1" <?php selected($meal_type, '1'); ?>>1</option>
+                        <option value="2" <?php selected($meal_type, '2'); ?>>2</option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="requisition_period">Requisition Time Period</label></th>
+                <td>
+                    <?php $requisition_period = $form_values['requisition_period'] ?? ''; ?>
+                    <select name="requisition_period">
+                        <option value="" <?php selected($requisition_period, ''); ?>>Select…</option>
+                        <option value="Day" <?php selected($requisition_period, 'Day'); ?>>Day</option>
+                        <option value="Week" <?php selected($requisition_period, 'Week'); ?>>Week</option>
+                        <option value="Month" <?php selected($requisition_period, 'Month'); ?>>Month</option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="gender">Gender</label></th>
+                <td><input type="text" name="gender" class="regular-text" value="<?php echo esc_attr($form_values['gender'] ?? ''); ?>" /></td>
+            </tr>
+            <tr>
+                <th><label for="client_email">Client Email Address *</label></th>
+                <td><input type="email" name="client_email" required class="regular-text" value="<?php echo esc_attr($form_values['client_email'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="phone_primary">Client Phone #1 *</label></th>
@@ -104,11 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </tr>
             <tr>
                 <th><label for="do_not_call_client_phone">Do Not Call Client's Phone (call alt.)</label></th>
-                <td>
-                    <?php $do_not_call = $form_values['do_not_call_client_phone'] ?? '1'; ?>
-                    <label><input type="radio" name="do_not_call_client_phone" value="1" <?php checked($do_not_call, '1'); ?> /> Yes</label>
-                    <label><input type="radio" name="do_not_call_client_phone" value="0" <?php checked($do_not_call, '0'); ?> /> No</label>
-                </td>
+                <td><label><input type="checkbox" name="do_not_call_client_phone" value="1" <?php checked($form_values['do_not_call_client_phone'] ?? '0', '1'); ?> /> Enable</label></td>
             </tr>
             <tr>
                 <th><label for="assigned_social_worker">Assigned Social Worker</label></th>
@@ -116,7 +168,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </tr>
             <tr>
                 <th><label for="social_worker_email">Social Worker Email</label></th>
-                <td><input type="text" name="social_worker_email" class="regular-text" value="<?php echo esc_attr($form_values['social_worker_email'] ?? ''); ?>" /></td>
+                <td><input type="email" name="social_worker_email" class="regular-text" value="<?php echo esc_attr($form_values['social_worker_email'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="individual_id">Individual ID</label></th>
@@ -135,24 +187,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <h3>Primary Address</h3>
         <table class="form-table">
             <tr>
-                <th><label for="address_street_number">Street # *</label></th>
-                <td><input type="text" name="address_street_number" required class="regular-text" value="<?php echo esc_attr($form_values['address_street_number'] ?? ''); ?>" /></td>
+                <th><label for="address_street_number">Street #</label></th>
+                <td><input type="text" name="address_street_number" class="regular-text" value="<?php echo esc_attr($form_values['address_street_number'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="address_street_name">Street Name *</label></th>
-                <td><input type="text" name="address_street_name" required class="regular-text" value="<?php echo esc_attr($form_values['address_street_name'] ?? ''); ?>" /></td>
+                <th><label for="address_street_name">Street Name</label></th>
+                <td><input type="text" name="address_street_name" class="regular-text" value="<?php echo esc_attr($form_values['address_street_name'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="address_unit">Apt # *</label></th>
-                <td><input type="text" name="address_unit" required class="regular-text" value="<?php echo esc_attr($form_values['address_unit'] ?? ''); ?>" /></td>
+                <th><label for="address_unit">Apt #</label></th>
+                <td><input type="text" name="address_unit" class="regular-text" value="<?php echo esc_attr($form_values['address_unit'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="address_city">City *</label></th>
-                <td><input type="text" name="address_city" required class="regular-text" value="<?php echo esc_attr($form_values['address_city'] ?? ''); ?>" /></td>
+                <th><label for="address_city">City</label></th>
+                <td><input type="text" name="address_city" class="regular-text" value="<?php echo esc_attr($form_values['address_city'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="address_province">Province *</label></th>
-                <td><input type="text" name="address_province" required class="regular-text" value="<?php echo esc_attr($form_values['address_province'] ?? ''); ?>" /></td>
+                <th><label for="address_province">Province</label></th>
+                <td><input type="text" name="address_province" class="regular-text" value="<?php echo esc_attr($form_values['address_province'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="address_postal">Postal Code *</label></th>
@@ -184,7 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </tr>
             <tr>
                 <th><label for="delivery_address_postal">Postal Code</label></th>
-                <td><input type="text" name="delivery_address_postal" placeholder="A1A1A1" maxlength="6" pattern="[A-Za-z][0-9][A-Za-z][0-9][A-Za-z][0-9]" class="regular-text postal-mask" value="<?php echo esc_attr($form_values['delivery_address_postal'] ?? ''); ?>" /></td>
+                <td><input type="text" name="delivery_address_postal" placeholder="A1A1A1" class="regular-text postal-mask" value="<?php echo esc_attr($form_values['delivery_address_postal'] ?? ''); ?>" /></td>
             </tr>
         </table>
 
@@ -204,7 +256,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </tr>
             <tr>
                 <th><label for="alt_contact_email">Alternate Contact Email</label></th>
-                <td><input type="text" name="alt_contact_email" class="regular-text" value="<?php echo esc_attr($form_values['alt_contact_email'] ?? ''); ?>" /></td>
+                <td><input type="email" name="alt_contact_email" class="regular-text" value="<?php echo esc_attr($form_values['alt_contact_email'] ?? ''); ?>" /></td>
             </tr>
         </table>
 
@@ -228,86 +280,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </tr>
             <tr>
                 <th><label for="service_zone">Service Name Zone (A or B)</label></th>
-                <td>
-                    <?php $service_zone = $form_values['service_zone'] ?? ''; ?>
-                    <label><input type="radio" name="service_zone" value="A" <?php checked($service_zone, 'A'); ?> /> A</label>
-                    <label><input type="radio" name="service_zone" value="B" <?php checked($service_zone, 'B'); ?> /> B</label>
-                </td>
+                <td><input type="text" name="service_zone" class="regular-text" value="<?php echo esc_attr($form_values['service_zone'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="service_course">Service Name Course (1 or 2)</label></th>
-                <td>
-                    <?php $service_course = $form_values['service_course'] ?? ''; ?>
-                    <label><input type="radio" name="service_course" value="1" <?php checked($service_course, '1'); ?> /> 1</label>
-                    <label><input type="radio" name="service_course" value="2" <?php checked($service_course, '2'); ?> /> 2</label>
-                </td>
+                <td><input type="text" name="service_course" class="regular-text" value="<?php echo esc_attr($form_values['service_course'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="payment_method">Payment Method *</label></th>
-                <td>
-                    <?php $payment_method = $form_values['payment_method'] ?? ''; ?>
-                    <select name="payment_method" required>
-                        <option value="" <?php selected($payment_method, ''); ?>>Select…</option>
-                        <option value="Invoice" <?php selected($payment_method, 'Invoice'); ?>>Invoice</option>
-                        <option value="E-Transfer" <?php selected($payment_method, 'E-Transfer'); ?>>E-Transfer</option>
-                        <option value="Cash" <?php selected($payment_method, 'Cash'); ?>>Cash</option>
-                    </select>
-                </td>
+                <th><label for="payment_method">Payment Method</label></th>
+                <td><input type="text" name="payment_method" class="regular-text" value="<?php echo esc_attr($form_values['payment_method'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="required_start_date">Required Start Date</label></th>
-                <td><input type="text" name="required_start_date" class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['required_start_date'] ?? ''); ?>" /></td>
+                <td><input type="text" name="required_start_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['required_start_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="service_commence_date">Service Commence Date</label></th>
-                <td><input type="text" name="service_commence_date" class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['service_commence_date'] ?? ''); ?>" /></td>
+                <td><input type="text" name="service_commence_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['service_commence_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="expected_termination_date">Expected Termination Date</label></th>
-                <td><input type="text" name="expected_termination_date" class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['expected_termination_date'] ?? ''); ?>" /></td>
+                <td><input type="text" name="expected_termination_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['expected_termination_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="initial_renewal_date">Initial Renewal</label></th>
-                <td><input type="text" name="initial_renewal_date" class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['initial_renewal_date'] ?? ''); ?>" /></td>
+                <td><input type="text" name="initial_renewal_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['initial_renewal_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="termination_date">Termination Date</label></th>
-                <td><input type="text" name="termination_date" class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['termination_date'] ?? ''); ?>" /></td>
+                <td><input type="text" name="termination_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['termination_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="most_recent_renewal_date">Most Recent Renewal</label></th>
-                <td><input type="text" name="most_recent_renewal_date" class="regular-text mealsdb-datepicker" value="<?php echo esc_attr($form_values['most_recent_renewal_date'] ?? ''); ?>" /></td>
+                <td><input type="text" name="most_recent_renewal_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['most_recent_renewal_date'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="units"># of units (1 - 31)</label></th>
-                <td><input type="text" name="units" class="small-text" value="<?php echo esc_attr($form_values['units'] ?? ''); ?>" /></td>
+                <td><input type="number" name="units" min="1" max="31" step="1" class="small-text" value="<?php echo esc_attr($form_values['units'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="meal_type">Meal Type</label></th>
-                <td>
-                    <?php $meal_type = $form_values['meal_type'] ?? ''; ?>
-                    <select name="meal_type">
-                        <option value="" <?php selected($meal_type, ''); ?>>Select…</option>
-                        <option value="1" <?php selected($meal_type, '1'); ?>>Main</option>
-                        <option value="2" <?php selected($meal_type, '2'); ?>>Main &amp; Side</option>
-                    </select>
-                </td>
+                <td><input type="text" name="meal_type" class="regular-text" value="<?php echo esc_attr($form_values['meal_type'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="requisition_period">Requisition Time Period</label></th>
-                <td>
-                    <?php $requisition_period = $form_values['requisition_period'] ?? ''; ?>
-                    <select name="requisition_period">
-                        <option value="" <?php selected($requisition_period, ''); ?>>Select…</option>
-                        <option value="day" <?php selected(strtolower($requisition_period), 'day'); ?>>Day</option>
-                        <option value="week" <?php selected(strtolower($requisition_period), 'week'); ?>>Week</option>
-                        <option value="month" <?php selected(strtolower($requisition_period), 'month'); ?>>Month</option>
-                    </select>
-                </td>
+                <th><label for="requisition_period">Requisition Period</label></th>
+                <td><input type="text" name="requisition_period" class="regular-text" value="<?php echo esc_attr($form_values['requisition_period'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="rate">Rate *</label></th>
-                <td><input type="text" name="rate" required class="regular-text" value="<?php echo esc_attr($form_values['rate'] ?? ''); ?>" /></td>
+                <th><label for="rate">Rate</label></th>
+                <td><input type="text" name="rate" class="regular-text" value="<?php echo esc_attr($form_values['rate'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="client_contribution">Client Contribution</label></th>
@@ -326,53 +347,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <h3>Delivery Preferences</h3>
         <table class="form-table">
             <tr>
-                <th><label for="delivery_day">Delivery Day *</label></th>
-                <td>
-                    <?php $delivery_day = $form_values['delivery_day'] ?? ''; ?>
-                    <select name="delivery_day" required>
-                        <option value="" <?php selected($delivery_day, ''); ?>>Select…</option>
-                        <option value="Wednesday AM" <?php selected($delivery_day, 'Wednesday AM'); ?>>Wednesday AM</option>
-                        <option value="Wednesday PM" <?php selected($delivery_day, 'Wednesday PM'); ?>>Wednesday PM</option>
-                        <option value="Thursday AM" <?php selected($delivery_day, 'Thursday AM'); ?>>Thursday AM</option>
-                        <option value="Thursday PM" <?php selected($delivery_day, 'Thursday PM'); ?>>Thursday PM</option>
-                        <option value="Friday AM" <?php selected($delivery_day, 'Friday AM'); ?>>Friday AM</option>
-                        <option value="Friday PM" <?php selected($delivery_day, 'Friday PM'); ?>>Friday PM</option>
-                    </select>
-                </td>
+                <th><label for="delivery_day">Delivery Day</label></th>
+                <td><input type="text" name="delivery_day" class="regular-text" value="<?php echo esc_attr($form_values['delivery_day'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="delivery_initials">Initials for delivery *</label></th>
-                <td><input type="text" name="delivery_initials" required class="regular-text" value="<?php echo esc_attr($form_values['delivery_initials'] ?? ''); ?>" /></td>
+                <th><label for="delivery_initials">Initials for delivery</label></th>
+                <td><input type="text" name="delivery_initials" class="regular-text" value="<?php echo esc_attr($form_values['delivery_initials'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="delivery_area_name">Delivery Area *</label></th>
-                <td><input type="text" name="delivery_area_name" required class="regular-text" value="<?php echo esc_attr($form_values['delivery_area_name'] ?? ''); ?>" /></td>
+                <th><label for="delivery_area_name">Delivery Area</label></th>
+                <td><input type="text" name="delivery_area_name" class="regular-text" value="<?php echo esc_attr($form_values['delivery_area_name'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="delivery_area_zone">Delivery Area Zone</label></th>
                 <td><input type="text" name="delivery_area_zone" class="regular-text" value="<?php echo esc_attr($form_values['delivery_area_zone'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="ordering_frequency">Ordering Frequency *</label></th>
-                <td><input type="text" name="ordering_frequency" required class="regular-text" value="<?php echo esc_attr($form_values['ordering_frequency'] ?? ''); ?>" /></td>
+                <th><label for="ordering_frequency">Ordering Frequency</label></th>
+                <td><input type="text" name="ordering_frequency" class="regular-text" value="<?php echo esc_attr($form_values['ordering_frequency'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="ordering_contact_method">Ordering Contact Method *</label></th>
-                <td>
-                    <?php $ordering_contact_method = $form_values['ordering_contact_method'] ?? ''; ?>
-                    <select name="ordering_contact_method" required>
-                        <option value="" <?php selected($ordering_contact_method, ''); ?>>Select…</option>
-                        <option value="Phone" <?php selected($ordering_contact_method, 'Phone'); ?>>Phone</option>
-                        <option value="Bulk Email" <?php selected($ordering_contact_method, 'Bulk Email'); ?>>Bulk Email</option>
-                        <option value="Auto-Renew" <?php selected($ordering_contact_method, 'Auto-Renew'); ?>>Auto-Renew</option>
-                        <option value="Client Email" <?php selected($ordering_contact_method, 'Client Email'); ?>>Client Email</option>
-                        <option value="Client Call" <?php selected($ordering_contact_method, 'Client Call'); ?>>Client Call</option>
-                    </select>
-                </td>
+                <th><label for="ordering_contact_method">Ordering Contact Method</label></th>
+                <td><input type="text" name="ordering_contact_method" class="regular-text" value="<?php echo esc_attr($form_values['ordering_contact_method'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="delivery_frequency">Delivery Frequency *</label></th>
-                <td><input type="text" name="delivery_frequency" required class="regular-text" value="<?php echo esc_attr($form_values['delivery_frequency'] ?? ''); ?>" /></td>
+                <th><label for="delivery_frequency">Delivery Frequency</label></th>
+                <td><input type="text" name="delivery_frequency" class="regular-text" value="<?php echo esc_attr($form_values['delivery_frequency'] ?? ''); ?>" /></td>
             </tr>
         </table>
 
