@@ -234,9 +234,24 @@ class StubMysqli extends mysqli {
         }
 
         if (stripos($sql, 'ALTER TABLE') === 0) {
-            if (preg_match('/`([a-z_]+)` CHAR/', $sql, $matches)) {
-                $this->existingColumns[] = $matches[1];
+            if (preg_match('/ADD COLUMN `([a-z_]+)`/i', $sql, $matches)) {
+                $column = $matches[1];
+                if (!in_array($column, $this->existingColumns, true)) {
+                    $this->existingColumns[] = $column;
+                }
             }
+
+            if (preg_match('/CHANGE COLUMN `([a-z_]+)` `([a-z_]+)`/i', $sql, $matches)) {
+                $old = $matches[1];
+                $new = $matches[2];
+                $index = array_search($old, $this->existingColumns, true);
+                if ($index !== false) {
+                    $this->existingColumns[$index] = $new;
+                } elseif (!in_array($new, $this->existingColumns, true)) {
+                    $this->existingColumns[] = $new;
+                }
+            }
+
             return true;
         }
 
@@ -313,6 +328,172 @@ run_test('detects duplicate individual_id via deterministic hash', function () {
     if (empty($errors) || stripos($errors[0], 'Individual id') === false) {
         throw new Exception('Expected duplicate error for individual_id.');
     }
+});
+
+run_test('validation rejects invalid enumerated and numeric inputs', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'first_name' => 'Jamie',
+        'last_name' => 'Client',
+        'customer_type' => 'Type A',
+        'open_date' => '2024-05-01',
+        'address_street_number' => '123',
+        'address_street_name' => 'Main',
+        'address_unit' => 'A',
+        'address_city' => 'Townsville',
+        'address_province' => 'NB',
+        'phone_primary' => '(123)-456-7890',
+        'address_postal' => 'A1A1A1',
+        'payment_method' => 'Cheque',
+        'rate' => '10',
+        'delivery_initials' => 'XY',
+        'gender' => 'Unknown',
+        'service_zone' => 'Z',
+        'service_course' => '9',
+        'meal_type' => '4',
+        'requisition_period' => 'Yearly',
+        'delivery_day' => 'Monday',
+        'delivery_area_name' => 'Area 51',
+        'ordering_contact_method' => 'Text',
+        'ordering_frequency' => 'often',
+        'delivery_frequency' => 'frequently',
+        'freezer_capacity' => 'large',
+        'delivery_fee' => 'ten dollars',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected validation to fail for invalid enumerated inputs.');
+    }
+
+    $expected_messages = [
+        'Customer type must be SDNB, Veteran, or Private.',
+        'Gender must be Male, Female, or Other.',
+        'Payment method must be Invoice, E-Transfer, or Cash.',
+        'Service zone must be either A or B.',
+        'Service course must be either 1 or 2.',
+        'Meal type must be Main or Main & Side.',
+        'Requisition time period must be day, week, or month.',
+        'Delivery day must match one of the scheduled options.',
+        'Ordering contact method must be Phone, Bulk Email, Auto-Renew, Client Email, or Client Call.',
+        'Ordering frequency must be a number.',
+        'Delivery frequency must be a number.',
+        'Freezer capacity must be a number.',
+        'Delivery fee must be a number.',
+    ];
+
+    foreach ($expected_messages as $message) {
+        if (!in_array($message, $result['errors'], true)) {
+            throw new Exception('Missing expected validation message: ' . $message);
+        }
+    }
+
+    set_db_connection(null);
+});
+
+run_test('validation accepts enumerated selections', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'first_name' => 'Morgan',
+        'last_name' => 'Valid',
+        'customer_type' => 'SDNB',
+        'open_date' => '2023-01-01',
+        'address_street_number' => '45',
+        'address_street_name' => 'Elm Street',
+        'address_unit' => '3C',
+        'address_city' => 'Springwood',
+        'address_province' => 'NB',
+        'phone_primary' => '(555)-123-4567',
+        'address_postal' => 'B2B2B2',
+        'gender' => 'Female',
+        'service_zone' => 'A',
+        'service_course' => '2',
+        'meal_type' => '1',
+        'requisition_period' => 'week',
+        'delivery_day' => 'Friday PM',
+        'delivery_area_name' => 'North',
+        'payment_method' => 'Invoice',
+        'rate' => '12.00',
+        'delivery_initials' => 'CD',
+        'ordering_contact_method' => 'Client Email',
+        'ordering_frequency' => '4',
+        'delivery_frequency' => '2',
+        'freezer_capacity' => '3',
+        'delivery_fee' => '5.25',
+        'units' => '5',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if (!$result['valid']) {
+        throw new Exception('Validation should succeed for supported enumerated selections.');
+    }
+
+    $sanitized = $result['sanitized'];
+    $assertions = [
+        'customer_type' => 'SDNB',
+        'gender' => 'Female',
+        'service_zone' => 'A',
+        'service_course' => '2',
+        'meal_type' => '1',
+        'requisition_period' => 'Week',
+        'delivery_day' => 'Friday PM',
+        'ordering_contact_method' => 'Client Email',
+        'ordering_frequency' => '4',
+        'delivery_frequency' => '2',
+        'freezer_capacity' => '3',
+        'delivery_fee' => '5.25',
+        'units' => '5',
+        'payment_method' => 'Invoice',
+    ];
+
+    foreach ($assertions as $field => $expected) {
+        if (($sanitized[$field] ?? null) !== $expected) {
+            throw new Exception(sprintf('Expected sanitized %s to equal %s', $field, $expected));
+        }
+    }
+
+    set_db_connection(null);
+});
+
+run_test('validation identifies missing required fields', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $result = MealsDB_Client_Form::validate([]);
+
+    $required_messages = [
+        'Last Name is required.',
+        'First Name is required.',
+        'Customer Type is required.',
+        'Open Date is required.',
+        'Street # is required.',
+        'Street Name is required.',
+        'Apt # is required.',
+        'City is required.',
+        'Province is required.',
+        'Postal Code is required.',
+        'Client Phone #1 is required.',
+        'Payment Method is required.',
+        'Rate is required.',
+        'Initials for delivery is required.',
+        'Delivery Day is required.',
+        'Delivery Area is required.',
+        'Ordering Frequency is required.',
+        'Ordering Contact Method is required.',
+        'Delivery Frequency is required.',
+    ];
+
+    foreach ($required_messages as $message) {
+        if (!in_array($message, $result['errors'], true)) {
+            throw new Exception('Missing required field error: ' . $message);
+        }
+    }
+
+    set_db_connection(null);
 });
 
 run_test('detects duplicate vet health card via deterministic hash', function () {
