@@ -67,25 +67,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <?php $service_zone = $form_values['service_zone'] ?? ''; ?>
                     <select name="service_zone">
                         <option value="" <?php selected($service_zone, ''); ?>>Select…</option>
-                        <option value="A" <?php selected($service_zone, 'A'); ?>>A</option>
-                        <option value="B" <?php selected($service_zone, 'B'); ?>>B</option>
+                        <option value="SDNB" <?php selected($service_zone, 'SDNB'); ?>>SDNB</option>
+                        <option value="Veteran" <?php selected($service_zone, 'Veteran'); ?>>Veteran</option>
+                        <option value="Private" <?php selected($service_zone, 'Private'); ?>>Private</option>
                     </select>
                 </td>
             </tr>
             <tr>
                 <th><label for="open_date">Open Date</label></th>
                 <td><input type="text" name="open_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['open_date'] ?? ''); ?>" /></td>
-            </tr>
-            <tr>
-                <th><label for="service_course">Service Name Course (1 or 2)</label></th>
-                <td>
-                    <?php $service_course = $form_values['service_course'] ?? ''; ?>
-                    <select name="service_course">
-                        <option value="" <?php selected($service_course, ''); ?>>Select…</option>
-                        <option value="1" <?php selected($service_course, '1'); ?>>1</option>
-                        <option value="2" <?php selected($service_course, '2'); ?>>2</option>
-                    </select>
-                </td>
             </tr>
             <tr>
                 <th><label for="payment_method">Payment Method</label></th>
@@ -125,8 +115,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <?php $meal_type = $form_values['meal_type'] ?? ''; ?>
                     <select name="meal_type">
                         <option value="" <?php selected($meal_type, ''); ?>>Select…</option>
-                        <option value="1" <?php selected($meal_type, '1'); ?>>1</option>
-                        <option value="2" <?php selected($meal_type, '2'); ?>>2</option>
+                        <option value="1" <?php selected($meal_type, '1'); ?>>1 Course</option>
+                        <option value="2" <?php selected($meal_type, '2'); ?>>2 Course</option>
                     </select>
                 </td>
             </tr>
@@ -144,7 +134,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </tr>
             <tr>
                 <th><label for="gender">Gender</label></th>
-                <td><input type="text" name="gender" class="regular-text" value="<?php echo esc_attr($form_values['gender'] ?? ''); ?>" /></td>
+                <td>
+                    <?php $gender = $form_values['gender'] ?? ''; ?>
+                    <label><input type="radio" name="gender" value="Male" <?php checked($gender, 'Male'); ?> /> Male</label>
+                    <label><input type="radio" name="gender" value="Female" <?php checked($gender, 'Female'); ?> /> Female</label>
+                    <label><input type="radio" name="gender" value="Other" <?php checked($gender, 'Other'); ?> /> Other</label>
+                </td>
             </tr>
             <tr>
                 <th><label for="client_email">Client Email Address *</label></th>
@@ -283,10 +278,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <td><input type="text" name="service_zone" class="regular-text" value="<?php echo esc_attr($form_values['service_zone'] ?? ''); ?>" /></td>
             </tr>
             <tr>
-                <th><label for="service_course">Service Name Course (1 or 2)</label></th>
-                <td><input type="text" name="service_course" class="regular-text" value="<?php echo esc_attr($form_values['service_course'] ?? ''); ?>" /></td>
-            </tr>
-            <tr>
                 <th><label for="payment_method">Payment Method</label></th>
                 <td><input type="text" name="payment_method" class="regular-text" value="<?php echo esc_attr($form_values['payment_method'] ?? ''); ?>" /></td>
             </tr>
@@ -313,18 +304,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <tr>
                 <th><label for="most_recent_renewal_date">Most Recent Renewal</label></th>
                 <td><input type="text" name="most_recent_renewal_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?php echo esc_attr($form_values['most_recent_renewal_date'] ?? ''); ?>" /></td>
-            </tr>
-            <tr>
-                <th><label for="units"># of units (1 - 31)</label></th>
-                <td><input type="number" name="units" min="1" max="31" step="1" class="small-text" value="<?php echo esc_attr($form_values['units'] ?? ''); ?>" /></td>
-            </tr>
-            <tr>
-                <th><label for="meal_type">Meal Type</label></th>
-                <td><input type="text" name="meal_type" class="regular-text" value="<?php echo esc_attr($form_values['meal_type'] ?? ''); ?>" /></td>
-            </tr>
-            <tr>
-                <th><label for="requisition_period">Requisition Period</label></th>
-                <td><input type="text" name="requisition_period" class="regular-text" value="<?php echo esc_attr($form_values['requisition_period'] ?? ''); ?>" /></td>
             </tr>
             <tr>
                 <th><label for="rate">Rate</label></th>
