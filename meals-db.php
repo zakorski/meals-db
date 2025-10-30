@@ -5,11 +5,11 @@
  * Version: 1.0.0
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
- * License: Proprietary - Work for hire for Meals and More
+ * License: GPL-3.0-or-later
  * Requires PHP: 7.4
  * Requires at least: 5.8
  *
- * This plugin was developed by Fishhorn Design as a work for hire for Meals and More.
+ * This plugin is licensed under the GNU General Public License v3.0 or later.
  */
 
 defined('ABSPATH') || exit;
