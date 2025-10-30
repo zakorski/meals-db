@@ -4,7 +4,7 @@
  * 
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
- * Created as a work for hire for Meals and More.
+ * Licensed under the GNU General Public License v3.0 or later.
  */
 
 class MealsDB_DB {
