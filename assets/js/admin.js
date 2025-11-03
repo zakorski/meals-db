@@ -40,6 +40,172 @@ jQuery(document).ready(function($) {
     });
 
     // -----------------------------
+    // 🪜 Multi-Step Client Form
+    // -----------------------------
+    const $clientForm = $('#mealsdb-client-form');
+    if ($clientForm.length) {
+        const $steps = $clientForm.find('.mealsdb-step');
+        const $indicatorItems = $clientForm.find('.mealsdb-step-indicator li');
+        const $initialTypeSelect = $('#mealsdb-client-type-initial');
+        const $customerTypeSelect = $('#customer_type');
+        const $step1Next = $clientForm.find('.mealsdb-step[data-step="1"] .mealsdb-next-step');
+        let currentStep = parseInt($clientForm.data('initialStep'), 10) || 1;
+
+        const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
+
+        const updateStepIndicator = (step) => {
+            $indicatorItems.each(function () {
+                const $item = $(this);
+                const itemStep = parseInt($item.data('step'), 10);
+                const isActive = itemStep === step;
+                $item.toggleClass('is-active', isActive);
+                $item.toggleClass('is-complete', itemStep < step);
+            });
+        };
+
+        const showStep = (step) => {
+            const safeStep = Math.min(Math.max(step, 1), $steps.length);
+            currentStep = safeStep;
+            $steps.removeClass('is-active').attr('aria-hidden', 'true');
+            const $target = $steps.filter(`[data-step="${safeStep}"]`);
+            $target.addClass('is-active').attr('aria-hidden', 'false');
+            updateStepIndicator(safeStep);
+        };
+
+        const toggleClientTypeSections = (typeValue) => {
+            const normalized = normalizeType(typeValue);
+
+            $clientForm.find('[data-client-type]').each(function () {
+                const $row = $(this);
+                const allowedRaw = ($row.data('clientType') || '').toString().toLowerCase();
+                if (!allowedRaw) {
+                    $row.show();
+                    return;
+                }
+
+                const allowedTypes = allowedRaw.split(',').map((item) => item.trim()).filter(Boolean);
+                const shouldShow = allowedTypes.includes('all') || allowedTypes.includes(normalized);
+                if (shouldShow) {
+                    $row.show();
+                } else {
+                    $row.hide();
+                }
+            });
+
+            $clientForm.find('[data-required-for]').each(function () {
+                const $row = $(this);
+                const allowedRaw = ($row.data('requiredFor') || '').toString().toLowerCase();
+                const allowedTypes = allowedRaw.split(',').map((item) => item.trim()).filter(Boolean);
+                const shouldRequire = allowedTypes.includes(normalized);
+
+                $row.toggleClass('mealsdb-required-disabled', !shouldRequire);
+                $row.find('[data-base-required]').each(function () {
+                    const $input = $(this);
+                    if (shouldRequire) {
+                        $input.prop('required', true).attr('aria-required', 'true');
+                    } else {
+                        $input.prop('required', false).removeAttr('aria-required');
+                    }
+                });
+            });
+        };
+
+        const syncAltContactName = () => {
+            const first = ($('#alt_contact_first_name').val() || '').trim();
+            const last = ($('#alt_contact_last_name').val() || '').trim();
+            const combined = [first, last].filter(Boolean).join(' ');
+            $('#alt_contact_name').val(combined);
+        };
+
+        const ensureStep1ButtonState = () => {
+            const value = $initialTypeSelect.val();
+            const hasSelection = value && value.length > 0;
+            $step1Next.prop('disabled', !hasSelection);
+        };
+
+        // Navigation controls
+        $clientForm.on('click', '.mealsdb-next-step', function (event) {
+            event.preventDefault();
+            const target = parseInt($(this).data('stepTarget'), 10);
+            const nextStep = Number.isNaN(target) ? currentStep + 1 : target;
+            if (nextStep > 1 && !$customerTypeSelect.val()) {
+                showStep(1);
+                return;
+            }
+            showStep(nextStep);
+        });
+
+        $clientForm.on('click', '.mealsdb-prev-step', function (event) {
+            event.preventDefault();
+            const target = parseInt($(this).data('stepTarget'), 10);
+            const prevStep = Number.isNaN(target) ? currentStep - 1 : target;
+            showStep(prevStep);
+        });
+
+        // Client type syncing
+        $initialTypeSelect.on('change', function () {
+            const value = $(this).val();
+            $customerTypeSelect.val(value).trigger('change');
+            ensureStep1ButtonState();
+        });
+
+        $customerTypeSelect.on('change', function () {
+            const value = $(this).val();
+            if ($initialTypeSelect.val() !== value) {
+                $initialTypeSelect.val(value);
+            }
+            ensureStep1ButtonState();
+            toggleClientTypeSections(value);
+        });
+
+        // Delivery address toggle
+        $('#delivery-address-toggle').on('change', function () {
+            const show = $(this).is(':checked');
+            const $container = $('#delivery-address-fields');
+            if (show) {
+                $container.slideDown();
+            } else {
+                $container.slideUp();
+            }
+        });
+
+        // Alternate contact toggle
+        $('#alternate-contact-toggle').on('change', function () {
+            const show = $(this).is(':checked');
+            const $container = $('#alternate-contact-fields');
+            if (show) {
+                $container.slideDown();
+            } else {
+                $container.slideUp();
+                $container.find('input[type="text"], input[type="email"]').val('');
+                $('#alt_contact_name').val('');
+            }
+        });
+
+        $('#alt_contact_first_name, #alt_contact_last_name').on('input', syncAltContactName);
+
+        // Step indicator click (optional direct navigation)
+        $indicatorItems.on('click', function () {
+            const step = parseInt($(this).data('step'), 10);
+            if (!step) return;
+            if (step > 1 && !$customerTypeSelect.val()) {
+                showStep(1);
+                return;
+            }
+            showStep(step);
+        });
+
+        // Initialise state
+        syncAltContactName();
+        if (!$initialTypeSelect.val() && $customerTypeSelect.val()) {
+            $initialTypeSelect.val($customerTypeSelect.val());
+        }
+        toggleClientTypeSections($customerTypeSelect.val());
+        ensureStep1ButtonState();
+        showStep(currentStep);
+    }
+
+    // -----------------------------
     // 💾 Save to Draft
     // -----------------------------
     $('#mealsdb-save-draft').on('click', function () {

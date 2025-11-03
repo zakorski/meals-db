@@ -103,3 +103,61 @@ tr[data-ignored="true"] {
     background: #ffffff;
     border: 1px solid #c3c4c7;
 }
+
+/* -----------------------------
+   Multi-Step Client Form
+------------------------------ */
+.mealsdb-step-indicator {
+    list-style: none;
+    margin: 20px 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.mealsdb-step-indicator li {
+    background: #f0f0f1;
+    border-radius: 3px;
+    padding: 6px 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+}
+
+.mealsdb-step-indicator li.is-active {
+    background: #0073aa;
+    color: #fff;
+}
+
+.mealsdb-step-indicator li.is-complete {
+    background: #d1e7dd;
+    color: #0f5132;
+}
+
+.mealsdb-step {
+    display: none;
+    margin-top: 20px;
+}
+
+.mealsdb-step.is-active {
+    display: block;
+}
+
+.mealsdb-step-controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.mealsdb-collapsible {
+    margin: 10px 0 0 0;
+    padding: 10px 15px;
+    background: #f9f9f9;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+}
+
+tr.mealsdb-required-disabled {
+    opacity: 0.6;
+}
