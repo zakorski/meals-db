@@ -449,14 +449,32 @@ jQuery(document).ready(function($) {
                     const data = res.data || {};
                     showNotice('success', data.message || 'Check complete.');
 
-                    const summary = [
-                        data.branch ? `Branch: ${data.branch}` : '',
-                        data.current_commit ? `Current commit: ${data.current_commit}` : '',
-                        data.remote_commit ? `Remote commit: ${data.remote_commit}` : ''
-                    ].filter(Boolean).join('\n');
-                    setLog(summary);
+                    const summaryParts = [];
+                    if (data.branch) {
+                        summaryParts.push(`Branch: ${data.branch}`);
+                    }
+                    if (data.current_commit) {
+                        summaryParts.push(`Current commit: ${data.current_commit}`);
+                    }
+                    if (data.remote_commit) {
+                        summaryParts.push(`Remote commit: ${data.remote_commit}`);
+                    }
+                    if (data.current_version) {
+                        summaryParts.push(`Installed version: ${data.current_version}`);
+                    }
+                    if (data.latest_version) {
+                        summaryParts.push(`Latest version: ${data.latest_version}`);
+                    }
+                    if (data.release_url) {
+                        summaryParts.push(`Latest release: ${data.release_url}`);
+                    }
+                    if (data.repository_url) {
+                        summaryParts.push(`Repository: ${data.repository_url}`);
+                    }
 
-                    if (data.has_updates) {
+                    setLog(summaryParts.join('\n'));
+
+                    if (data.has_updates && data.can_auto_update) {
                         $pullButton.show();
                         if (data.is_dirty) {
                             showNotice('warning', 'Updates are available, but local changes must be committed or stashed first.');
@@ -464,6 +482,8 @@ jQuery(document).ready(function($) {
                         } else {
                             $pullButton.prop('disabled', false);
                         }
+                    } else {
+                        $pullButton.hide();
                     }
                 } else {
                     handleErrorResponse(res);
