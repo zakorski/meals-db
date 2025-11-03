@@ -17,6 +17,9 @@ class MealsDB_Ajax {
         add_action('wp_ajax_mealsdb_toggle_ignore', [__CLASS__, 'toggle_ignore']);
         add_action('wp_ajax_mealsdb_save_draft', [__CLASS__, 'save_draft']);
         add_action('wp_ajax_mealsdb_delete_draft', [__CLASS__, 'delete_draft']);
+        add_action('wp_ajax_mealsdb_check_updates', [__CLASS__, 'check_updates']);
+        add_action('wp_ajax_mealsdb_run_update', [__CLASS__, 'run_update']);
+        add_action('wp_ajax_mealsdb_update_database', [__CLASS__, 'update_database']);
     }
 
     /**
@@ -172,5 +175,66 @@ class MealsDB_Ajax {
         }
 
         wp_send_json_success(['message' => 'Draft deleted.']);
+    }
+
+    /**
+     * Check Git repository for available updates.
+     */
+    public static function check_updates() {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $result = MealsDB_Updates::check_for_updates();
+
+        if (is_wp_error($result)) {
+            $data = $result->get_error_data();
+            wp_send_json_error([
+                'message' => $result->get_error_message(),
+                'stderr'  => is_array($data) && isset($data['stderr']) ? $data['stderr'] : '',
+            ]);
+        }
+
+        wp_send_json_success($result);
+    }
+
+    /**
+     * Pull the latest changes from the Git repository.
+     */
+    public static function run_update() {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $result = MealsDB_Updates::pull_updates();
+
+        if (is_wp_error($result)) {
+            $data = $result->get_error_data();
+            wp_send_json_error([
+                'message' => $result->get_error_message(),
+                'stderr'  => is_array($data) && isset($data['stderr']) ? $data['stderr'] : '',
+            ]);
+        }
+
+        wp_send_json_success($result);
+    }
+
+    /**
+     * Run database maintenance to ensure the schema matches the latest version.
+     */
+    public static function update_database() {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $result = MealsDB_Updates::run_database_maintenance();
+
+        wp_send_json_success($result);
     }
 }
