@@ -191,7 +191,6 @@ class MealsDB_Client_Form {
             'last_name'                => 'Last Name',
             'first_name'               => 'First Name',
             'customer_type'            => 'Customer Type',
-            'open_date'                => 'Open Date',
             'address_street_number'    => 'Street #',
             'address_street_name'      => 'Street Name',
             'address_unit'             => 'Apt #',
@@ -200,14 +199,26 @@ class MealsDB_Client_Form {
             'address_postal'           => 'Postal Code',
             'phone_primary'            => 'Client Phone #1',
             'payment_method'           => 'Payment Method',
+            'required_start_date'      => 'Required Start Date',
             'rate'                     => 'Rate',
             'delivery_initials'        => 'Initials for delivery',
             'delivery_day'             => 'Delivery Day',
-            'delivery_area_name'       => 'Delivery Area',
+            'delivery_area_name'       => 'Delivery Area Name',
+            'delivery_area_zone'       => 'Delivery Area Zone',
             'ordering_frequency'       => 'Ordering Frequency',
             'ordering_contact_method'  => 'Ordering Contact Method',
             'delivery_frequency'       => 'Delivery Frequency',
         ];
+
+        $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
+        if (in_array($client_type, ['SDNB', 'VETERAN'], true)) {
+            $required_fields['open_date'] = 'Open Date';
+            $required_fields['units'] = '# of Units';
+        }
+
+        if ($client_type === 'VETERAN') {
+            $required_fields['vet_health_card'] = 'Veteran Health Identification Card #';
+        }
 
         foreach ($required_fields as $field => $label) {
             if (empty($sanitized[$field])) {
