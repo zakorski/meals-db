@@ -199,7 +199,7 @@ class MealsDB_Client_Form {
      * @param array $data
      * @return array ['valid' => bool, 'errors' => array, 'sanitized' => array]
      */
-    public static function validate(array $data): array {
+    public static function validate(array $data, ?int $ignore_client_id = null): array {
         $errors = [];
         $error_details = [
             'missing_required' => [],
@@ -455,7 +455,7 @@ class MealsDB_Client_Form {
         }
 
         // Unique field checks
-        $conflicts = self::check_unique_fields($sanitized);
+        $conflicts = self::check_unique_fields($sanitized, $ignore_client_id);
         if (!empty($conflicts)) {
             $error_details['duplicates'] = $conflicts;
             $errors = array_merge($errors, $conflicts);
@@ -646,6 +646,190 @@ class MealsDB_Client_Form {
         $stmt->close();
 
         return true;
+    }
+
+    /**
+     * Update an existing client record.
+     *
+     * @param int   $client_id
+     * @param array $data
+     * @return bool
+     */
+    public static function update(int $client_id, array $data): bool {
+        if ($client_id <= 0) {
+            return false;
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!$conn) {
+            return false;
+        }
+
+        $unknown_keys = [];
+        $sanitized = self::sanitize_payload($data, $unknown_keys);
+
+        if (!empty($unknown_keys)) {
+            error_log('[MealsDB] Update aborted due to unknown fields: ' . implode(', ', $unknown_keys));
+            return false;
+        }
+
+        if (empty($sanitized)) {
+            error_log('[MealsDB] Update aborted: no valid data provided.');
+            return false;
+        }
+
+        $encrypted = $sanitized;
+        if (!self::ensure_index_columns_exist($conn)) {
+            error_log('[MealsDB] Update aborted: deterministic index columns are unavailable.');
+            return false;
+        }
+
+        try {
+            foreach (self::$encrypted_fields as $field) {
+                if (array_key_exists($field, $encrypted)) {
+                    if ($encrypted[$field] === '') {
+                        $encrypted[$field] = null;
+                    } elseif ($encrypted[$field] !== null) {
+                        $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
+                    }
+                }
+            }
+        } catch (Exception $e) {
+            error_log('[MealsDB] Update aborted during encryption: ' . $e->getMessage());
+            return false;
+        }
+
+        foreach (self::$deterministic_index_map as $field => $indexColumn) {
+            if (array_key_exists($field, $sanitized)) {
+                if ($sanitized[$field] !== '') {
+                    $encrypted[$indexColumn] = self::deterministic_hash($sanitized[$field]);
+                } else {
+                    $encrypted[$indexColumn] = null;
+                }
+            }
+        }
+
+        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_date', 'termination_date', 'most_recent_renewal_date'];
+        foreach ($date_fields as $field) {
+            if (array_key_exists($field, $encrypted)) {
+                if (!empty($encrypted[$field])) {
+                    $timestamp = strtotime((string) $encrypted[$field]);
+                    if ($timestamp) {
+                        $encrypted[$field] = date('Y-m-d', $timestamp);
+                    }
+                } elseif ($encrypted[$field] === '' || $encrypted[$field] === null) {
+                    $encrypted[$field] = null;
+                }
+            }
+        }
+
+        if (array_key_exists('units', $encrypted) && $encrypted['units'] === '') {
+            $encrypted['units'] = null;
+        }
+
+        $columns = array_keys($encrypted);
+        if (empty($columns)) {
+            return false;
+        }
+
+        $set_clause = [];
+        foreach ($columns as $column) {
+            $set_clause[] = '`' . $column . '` = ?';
+        }
+
+        $sql = 'UPDATE meals_clients SET ' . implode(', ', $set_clause) . ' WHERE id = ? LIMIT 1';
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            error_log('[MealsDB] Update failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+            return false;
+        }
+
+        $values = array_values($encrypted);
+        $values[] = $client_id;
+        $types = str_repeat('s', count($columns)) . 'i';
+
+        $params = [$types];
+        foreach ($values as $index => $value) {
+            $params[] =& $values[$index];
+        }
+
+        if (call_user_func_array([$stmt, 'bind_param'], $params) === false) {
+            error_log('[MealsDB] Update failed: unable to bind parameters for client update.');
+            $stmt->close();
+            return false;
+        }
+
+        if (!$stmt->execute()) {
+            error_log('[MealsDB] Update failed to execute: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return false;
+        }
+
+        $stmt->close();
+
+        return true;
+    }
+
+    /**
+     * Load an existing client record for editing.
+     *
+     * @param int $client_id
+     * @return array|null
+     */
+    public static function load_client(int $client_id): ?array {
+        if ($client_id <= 0) {
+            return null;
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!$conn) {
+            return null;
+        }
+
+        $stmt = $conn->prepare('SELECT * FROM meals_clients WHERE id = ? LIMIT 1');
+        if (!$stmt) {
+            error_log('[MealsDB] Load client failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+            return null;
+        }
+
+        if (!$stmt->bind_param('i', $client_id)) {
+            error_log('[MealsDB] Load client failed to bind parameters.');
+            $stmt->close();
+            return null;
+        }
+
+        if (!$stmt->execute()) {
+            error_log('[MealsDB] Load client failed to execute: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return null;
+        }
+
+        $result = $stmt->get_result();
+        $record = $result instanceof mysqli_result ? $result->fetch_assoc() : null;
+        $stmt->close();
+
+        if (empty($record)) {
+            return null;
+        }
+
+        foreach (self::$encrypted_fields as $field) {
+            if (!empty($record[$field])) {
+                try {
+                    $record[$field] = MealsDB_Encryption::decrypt($record[$field]);
+                } catch (Exception $e) {
+                    error_log('[MealsDB] Failed to decrypt ' . $field . ' for client ID ' . $client_id . ': ' . $e->getMessage());
+                    $record[$field] = '';
+                }
+            }
+        }
+
+        foreach (self::$deterministic_index_map as $indexColumn) {
+            if (array_key_exists($indexColumn, $record)) {
+                unset($record[$indexColumn]);
+            }
+        }
+
+        return $record;
     }
 
     /**
@@ -861,7 +1045,7 @@ class MealsDB_Client_Form {
      * @param array $data
      * @return array List of friendly error messages
      */
-    private static function check_unique_fields(array $data): array {
+    private static function check_unique_fields(array $data, ?int $exclude_id = null): array {
         $conn = MealsDB_DB::get_connection();
         if (!$conn) return [];
 
@@ -885,13 +1069,25 @@ class MealsDB_Client_Form {
                     $value = self::deterministic_hash($data[$field]);
                 }
 
-                $stmt = $conn->prepare("SELECT id FROM meals_clients WHERE $column = ? LIMIT 1");
+                $sql = "SELECT id FROM meals_clients WHERE $column = ?";
+                if ($exclude_id !== null) {
+                    $sql .= ' AND id <> ?';
+                }
+                $sql .= ' LIMIT 1';
+
+                $stmt = $conn->prepare($sql);
                 if (!$stmt) {
                     error_log('[MealsDB] Duplicate check failed to prepare statement for column ' . $column . ': ' . ($conn->error ?? 'unknown error'));
                     continue;
                 }
 
-                if (!$stmt->bind_param("s", $value)) {
+                if ($exclude_id !== null) {
+                    if (!$stmt->bind_param('si', $value, $exclude_id)) {
+                        error_log('[MealsDB] Duplicate check failed to bind parameters for column ' . $column . '.');
+                        $stmt->close();
+                        continue;
+                    }
+                } elseif (!$stmt->bind_param('s', $value)) {
                     error_log('[MealsDB] Duplicate check failed to bind parameter for column ' . $column . '.');
                     $stmt->close();
                     continue;
