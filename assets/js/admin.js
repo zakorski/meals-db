@@ -341,4 +341,169 @@ jQuery(document).ready(function($) {
             }
         });
     });
+
+    // -----------------------------
+    // ⬆️ Updates tab (Git + DB)
+    // -----------------------------
+    const $updatesScreen = $('#mealsdb-updates');
+    if ($updatesScreen.length) {
+        const $status = $('#mealsdb-updates-status');
+        const $log = $('#mealsdb-updates-log');
+        const $checkButton = $('#mealsdb-check-updates');
+        const $pullButton = $('#mealsdb-run-update');
+        const $dbButton = $('#mealsdb-update-database');
+
+        const showNotice = (level, message) => {
+            const classes = ['notice-info', 'notice-success', 'notice-error', 'notice-warning'];
+            $status.removeClass(classes.join(' '));
+            let className = 'notice-info';
+            switch (level) {
+                case 'success':
+                    className = 'notice-success';
+                    break;
+                case 'error':
+                    className = 'notice-error';
+                    break;
+                case 'warning':
+                    className = 'notice-warning';
+                    break;
+                default:
+                    className = 'notice-info';
+            }
+            $status.addClass(className).text(message).show();
+        };
+
+        const setLog = (content) => {
+            if (content && content.length) {
+                $log.text(content).show();
+            } else {
+                $log.hide().text('');
+            }
+        };
+
+        const toggleLoading = ($button, isLoading) => {
+            if (!$button || !$button.length) {
+                return;
+            }
+
+            if (isLoading) {
+                if (!$button.data('original-text')) {
+                    $button.data('original-text', $button.text());
+                }
+                $button.prop('disabled', true).addClass('mealsdb-is-loading');
+            } else {
+                const original = $button.data('original-text');
+                if (original) {
+                    $button.text(original);
+                }
+                $button.prop('disabled', false).removeClass('mealsdb-is-loading');
+            }
+        };
+
+        const handleErrorResponse = (res) => {
+            const errorMessage = res && res.data && res.data.message
+                ? res.data.message
+                : 'An unexpected error occurred.';
+            showNotice('error', errorMessage);
+            if (res && res.data && res.data.stderr) {
+                setLog(res.data.stderr);
+            }
+        };
+
+        const runPull = () => {
+            toggleLoading($pullButton, true);
+            showNotice('info', 'Pulling latest changes...');
+            setLog('');
+
+            $.post(ajaxurl, {
+                action: 'mealsdb_run_update',
+                nonce: mealsdb.nonce
+            }).done((res) => {
+                if (res.success) {
+                    const data = res.data || {};
+                    showNotice('success', data.message || 'Plugin updated successfully.');
+                    setLog(data.output || '');
+                    $pullButton.hide();
+                } else {
+                    handleErrorResponse(res);
+                }
+            }).fail(() => {
+                showNotice('error', 'Failed to communicate with the server.');
+            }).always(() => {
+                toggleLoading($pullButton, false);
+            });
+        };
+
+        $checkButton.on('click', function (event) {
+            event.preventDefault();
+            toggleLoading($checkButton, true);
+            showNotice('info', 'Checking for updates...');
+            setLog('');
+            $pullButton.hide();
+
+            $.post(ajaxurl, {
+                action: 'mealsdb_check_updates',
+                nonce: mealsdb.nonce
+            }).done((res) => {
+                if (res.success) {
+                    const data = res.data || {};
+                    showNotice('success', data.message || 'Check complete.');
+
+                    const summary = [
+                        data.branch ? `Branch: ${data.branch}` : '',
+                        data.current_commit ? `Current commit: ${data.current_commit}` : '',
+                        data.remote_commit ? `Remote commit: ${data.remote_commit}` : ''
+                    ].filter(Boolean).join('\n');
+                    setLog(summary);
+
+                    if (data.has_updates) {
+                        $pullButton.show();
+                        if (data.is_dirty) {
+                            showNotice('warning', 'Updates are available, but local changes must be committed or stashed first.');
+                            $pullButton.prop('disabled', true);
+                        } else {
+                            $pullButton.prop('disabled', false);
+                        }
+                    }
+                } else {
+                    handleErrorResponse(res);
+                }
+            }).fail(() => {
+                showNotice('error', 'Failed to communicate with the server.');
+            }).always(() => {
+                toggleLoading($checkButton, false);
+            });
+        });
+
+        $pullButton.on('click', function (event) {
+            event.preventDefault();
+            if ($pullButton.prop('disabled')) {
+                return;
+            }
+            runPull();
+        });
+
+        $dbButton.on('click', function (event) {
+            event.preventDefault();
+            toggleLoading($dbButton, true);
+            showNotice('info', 'Running database maintenance...');
+            setLog('');
+
+            $.post(ajaxurl, {
+                action: 'mealsdb_update_database',
+                nonce: mealsdb.nonce
+            }).done((res) => {
+                if (res.success) {
+                    const data = res.data || {};
+                    showNotice('success', data.message || 'Database updated.');
+                } else {
+                    handleErrorResponse(res);
+                }
+            }).fail(() => {
+                showNotice('error', 'Failed to communicate with the server.');
+            }).always(() => {
+                toggleLoading($dbButton, false);
+            });
+        });
+    }
 });
