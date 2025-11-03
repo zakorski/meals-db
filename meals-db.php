@@ -92,6 +92,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-encryption.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-logger.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-sync.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-client-form.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-clients.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-admin-ui.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-ajax.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-permissions.php';

@@ -94,6 +94,23 @@ class MealsDB_Admin_UI {
                 include plugin_dir_path(__FILE__) . '/../views/add-client.php';
                 break;
 
+            case 'clients':
+                $action = $_GET['action'] ?? '';
+                if (function_exists('wp_unslash')) {
+                    $action = wp_unslash($action);
+                }
+                if (function_exists('sanitize_key')) {
+                    $action = sanitize_key($action);
+                } else {
+                    $action = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $action));
+                }
+                if ($action === 'edit') {
+                    include plugin_dir_path(__FILE__) . '/../views/edit-client.php';
+                } else {
+                    include plugin_dir_path(__FILE__) . '/../views/view-clients.php';
+                }
+                break;
+
             case 'drafts':
                 include plugin_dir_path(__FILE__) . '/../views/drafts.php';
                 break;
@@ -123,6 +140,7 @@ class MealsDB_Admin_UI {
         $tabs = [
             'sync'    => __('Sync Dashboard', 'meals-db'),
             'add'     => __('Add New Client', 'meals-db'),
+            'clients' => __('View Clients', 'meals-db'),
             'drafts'  => __('Drafts', 'meals-db'),
             'ignored' => __('Ignored Conflicts', 'meals-db'),
             'updates' => __('Updates', 'meals-db'),

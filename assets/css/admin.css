@@ -11,6 +11,24 @@ table.widefat td, table.widefat th {
     padding: 8px;
 }
 
+.mealsdb-client-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.mealsdb-client-filters select,
+.mealsdb-client-filters input[type="search"] {
+    min-width: 200px;
+}
+
+.mealsdb-client-actions-column {
+    width: 140px;
+    text-align: right;
+}
+
 /* -----------------------------
    Sync Table Conflict Highlighting
 ------------------------------ */
