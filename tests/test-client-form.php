@@ -393,6 +393,11 @@ run_test('validation accepts enumerated selections', function () {
         'client_email' => 'morgan@example.com',
         'phone_primary' => '(555)-123-4567',
         'address_postal' => 'B2B2B2',
+        'address_street_number' => '123',
+        'address_street_name' => 'Main',
+        'address_unit' => '1A',
+        'address_city' => 'City',
+        'address_province' => 'NB',
         'gender' => 'Female',
         'service_zone' => 'A',
         'service_course' => '2',
@@ -405,6 +410,12 @@ run_test('validation accepts enumerated selections', function () {
         'freezer_capacity' => '3',
         'delivery_fee' => '5.25',
         'units' => '5',
+        'payment_method' => 'Cheque',
+        'required_start_date' => '2024-01-01',
+        'rate' => '20',
+        'delivery_initials' => 'AB',
+        'delivery_area_name' => 'Area 1',
+        'delivery_area_zone' => 'A',
     ];
 
     $result = MealsDB_Client_Form::validate($payload);
@@ -432,6 +443,69 @@ run_test('validation accepts enumerated selections', function () {
         if (($sanitized[$field] ?? null) !== $expected) {
             throw new Exception(sprintf('Expected sanitized %s to equal %s', $field, $expected));
         }
+    }
+
+    set_db_connection(null);
+});
+
+run_test('builds a helpful summary for missing and invalid fields', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Private',
+        'first_name' => '',
+        'last_name' => 'Tester',
+        'address_street_number' => '123',
+        'address_street_name' => 'Main Street',
+        'address_unit' => '1A',
+        'address_city' => 'Moncton',
+        'address_province' => 'NB',
+        'address_postal' => 'E2E2E2',
+        'phone_primary' => '123',
+        'payment_method' => 'Cheque',
+        'required_start_date' => '2024-01-01',
+        'rate' => '20',
+        'delivery_initials' => 'AB',
+        'delivery_day' => 'Monday',
+        'delivery_area_name' => 'Zone 1',
+        'delivery_area_zone' => 'A',
+        'ordering_frequency' => '2',
+        'ordering_contact_method' => 'Client Email',
+        'delivery_frequency' => '1',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+
+    if ($result['valid']) {
+        throw new Exception('Expected validation to fail when required and formatted fields are incorrect.');
+    }
+
+    $summary = $result['error_summary'] ?? '';
+    if (strpos($summary, 'Missing required fields:') === false) {
+        throw new Exception('Summary should describe missing required fields.');
+    }
+
+    if (strpos($summary, 'Formatting issues detected in:') === false) {
+        throw new Exception('Summary should describe formatting issues.');
+    }
+
+    $missing = $result['error_details']['missing_required'] ?? [];
+    if (!isset($missing['first_name'])) {
+        throw new Exception('Missing required field details for first_name.');
+    }
+
+    $formatIssues = $result['error_details']['invalid_format']['phone_primary']['messages'] ?? [];
+    if (!in_array('Phone number must be in (###)-###-#### format.', $formatIssues, true)) {
+        throw new Exception('Expected phone format error to be captured in error details.');
+    }
+
+    if (!in_array('First Name is required.', $result['errors'], true)) {
+        throw new Exception('Expected detailed error message for missing first name.');
+    }
+
+    if (!in_array('Phone number must be in (###)-###-#### format.', $result['errors'], true)) {
+        throw new Exception('Expected detailed error message for phone number format.');
     }
 
     set_db_connection(null);
