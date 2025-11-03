@@ -102,6 +102,10 @@ class MealsDB_Admin_UI {
                 include plugin_dir_path(__FILE__) . '/../views/ignored.php';
                 break;
 
+            case 'updates':
+                include plugin_dir_path(__FILE__) . '/../views/updates.php';
+                break;
+
             default:
                 echo '<p>Invalid tab selected.</p>';
         }
@@ -116,6 +120,14 @@ class MealsDB_Admin_UI {
      */
     private static function render_tabs(string $active = 'sync') {
         $active_tab = $active;
+        $tabs = [
+            'sync'    => __('Sync Dashboard', 'meals-db'),
+            'add'     => __('Add New Client', 'meals-db'),
+            'drafts'  => __('Drafts', 'meals-db'),
+            'ignored' => __('Ignored Conflicts', 'meals-db'),
+            'updates' => __('Updates', 'meals-db'),
+        ];
+
         include MEALS_DB_PLUGIN_DIR . 'views/partials/tabs.php';
     }
 }

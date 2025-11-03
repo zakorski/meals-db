@@ -95,6 +95,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-client-form.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-admin-ui.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-ajax.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-permissions.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-updates.php';
 
 /**
  * Initialize plugin functionality after all plugins are loaded.
