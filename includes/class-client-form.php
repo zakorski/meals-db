@@ -120,6 +120,73 @@ class MealsDB_Client_Form {
     ];
 
     /**
+     * Human-readable labels for common form fields.
+     */
+    private static $field_labels = [
+        'individual_id'                  => 'Individual ID',
+        'requisition_id'                 => 'Requisition ID',
+        'vet_health_card'                => 'Veteran Health Identification Card #',
+        'delivery_initials'              => 'Initials for delivery',
+        'first_name'                     => 'First Name',
+        'last_name'                      => 'Last Name',
+        'customer_type'                  => 'Customer Type',
+        'open_date'                      => 'Open Date',
+        'assigned_social_worker'         => 'Social Worker Name',
+        'social_worker_email'            => 'Social Worker Email Address',
+        'client_email'                   => 'Client Email',
+        'phone_primary'                  => 'Client Phone #1',
+        'phone_secondary'                => 'Client Phone #2',
+        'do_not_call_client_phone'       => "Do Not Call Client's Phone",
+        'alt_contact_name'               => 'Alternate Contact Name',
+        'alt_contact_phone_primary'      => 'Alternate Contact Phone #1',
+        'alt_contact_phone_secondary'    => 'Alternate Contact Phone #2',
+        'alt_contact_email'              => 'Alternate Contact Email',
+        'address_street_number'          => 'Street #',
+        'address_street_name'            => 'Street Name',
+        'address_unit'                   => 'Apt #',
+        'address_city'                   => 'City',
+        'address_province'               => 'Province',
+        'address_postal'                 => 'Postal Code',
+        'delivery_address_street_number' => 'Delivery Street #',
+        'delivery_address_street_name'   => 'Delivery Street Name',
+        'delivery_address_unit'          => 'Delivery Apt #',
+        'delivery_address_city'          => 'Delivery City',
+        'delivery_address_province'      => 'Delivery Province',
+        'delivery_address_postal'        => 'Delivery Postal Code',
+        'gender'                         => 'Gender',
+        'birth_date'                     => 'Date of Birth',
+        'service_center'                 => 'Service Centre',
+        'service_center_charged'         => 'Service Centre Charged',
+        'vendor_number'                  => 'Vendor Number',
+        'service_id'                     => 'Service ID',
+        'service_zone'                   => 'Service Zone',
+        'service_course'                 => 'Service Course',
+        'per_sdnb_req'                   => 'Per SDNB Requirement',
+        'payment_method'                 => 'Payment Method',
+        'rate'                           => 'Rate',
+        'client_contribution'            => 'Client Contributions',
+        'delivery_fee'                   => 'Delivery Fee',
+        'delivery_day'                   => 'Delivery Day',
+        'delivery_area_name'             => 'Delivery Area Name',
+        'delivery_area_zone'             => 'Delivery Area Zone',
+        'ordering_frequency'             => 'Ordering Frequency',
+        'ordering_contact_method'        => 'Ordering Contact Method',
+        'delivery_frequency'             => 'Delivery Frequency',
+        'freezer_capacity'               => 'Freezer Capacity',
+        'meal_type'                      => 'Meal Type',
+        'requisition_period'             => 'Requisition Period',
+        'required_start_date'            => 'Required Start Date',
+        'service_commence_date'          => 'Service Commence Date',
+        'expected_termination_date'      => 'Expected Termination Date',
+        'initial_renewal_date'           => 'Initial Renewal Date',
+        'termination_date'               => 'Termination Date',
+        'most_recent_renewal_date'       => 'Most Recent Renewal Date',
+        'units'                          => '# of Units',
+        'diet_concerns'                  => 'Diet Concerns',
+        'client_comments'                => 'Client Comments',
+    ];
+
+    /**
      * Track whether we've attempted to ensure the deterministic index columns exist.
      *
      * @var bool
@@ -134,116 +201,339 @@ class MealsDB_Client_Form {
      */
     public static function validate(array $data): array {
         $errors = [];
+        $error_details = [
+            'missing_required' => [],
+            'invalid_format'   => [],
+            'unknown_fields'   => [],
+            'duplicates'       => [],
+        ];
 
         $unknown_keys = [];
         $sanitized = self::sanitize_payload($data, $unknown_keys);
 
         if (!empty($unknown_keys)) {
-            $errors[] = 'Unknown form fields detected: ' . implode(', ', $unknown_keys);
+            $message = 'Unknown form fields detected: ' . implode(', ', $unknown_keys);
+            $errors[] = $message;
+            $error_details['unknown_fields'][] = $message;
         }
 
+        $record_format_error = function (string $field, string $message) use (&$errors, &$error_details): void {
+            $errors[] = $message;
+            $label = self::get_field_label($field);
+            if (!isset($error_details['invalid_format'][$field])) {
+                $error_details['invalid_format'][$field] = [
+                    'label'    => $label,
+                    'messages' => [],
+                ];
+            }
+            if (!in_array($message, $error_details['invalid_format'][$field]['messages'], true)) {
+                $error_details['invalid_format'][$field]['messages'][] = $message;
+            }
+        };
+
+        $record_required_error = function (string $field) use (&$errors, &$error_details): void {
+            if (isset($error_details['missing_required'][$field])) {
+                return;
+            }
+
+            $label = self::get_field_label($field);
+            $message = sprintf('%s is required.', $label);
+            $errors[] = $message;
+            $error_details['missing_required'][$field] = $label;
+        };
+
         // Postal Code
-        if (!preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/i', $sanitized['address_postal'] ?? '')) {
-            $errors[] = 'Postal code must be in A1A1A1 format.';
+        $postal_code = $sanitized['address_postal'] ?? '';
+        if ($postal_code !== '' && !preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/i', $postal_code)) {
+            $record_format_error('address_postal', 'Postal code must be in A1A1A1 format.');
         }
 
         if (!empty($sanitized['delivery_address_postal']) && !preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/i', $sanitized['delivery_address_postal'])) {
-            $errors[] = 'Delivery postal code must be in A1A1A1 format.';
+            $record_format_error('delivery_address_postal', 'Delivery postal code must be in A1A1A1 format.');
         }
 
         if (!empty($sanitized['delivery_address_postal']) && !preg_match('/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/i', $sanitized['delivery_address_postal'])) {
-            $errors[] = 'Delivery postal code must be in A1A 1A1 format.';
+            $record_format_error('delivery_address_postal', 'Delivery postal code must be in A1A 1A1 format.');
         }
 
         // Phone
         $phonePattern = '/^\(\d{3}\)-\d{3}-\d{4}$/';
-        if (!preg_match($phonePattern, $sanitized['phone_primary'] ?? '')) {
-            $errors[] = 'Phone number must be in (###)-###-#### format.';
+        if (!empty($sanitized['phone_primary']) && !preg_match($phonePattern, $sanitized['phone_primary'])) {
+            $record_format_error('phone_primary', 'Phone number must be in (###)-###-#### format.');
         }
 
         if (!empty($sanitized['phone_secondary']) && !preg_match($phonePattern, $sanitized['phone_secondary'])) {
-            $errors[] = 'Client phone #2 must be in (###)-###-#### format.';
+            $record_format_error('phone_secondary', 'Client phone #2 must be in (###)-###-#### format.');
         }
 
         if (!empty($sanitized['alt_contact_phone_primary']) && !preg_match($phonePattern, $sanitized['alt_contact_phone_primary'])) {
-            $errors[] = 'Alternate contact phone #1 must be in (###)-###-#### format.';
+            $record_format_error('alt_contact_phone_primary', 'Alternate contact phone #1 must be in (###)-###-#### format.');
         }
 
         if (!empty($sanitized['alt_contact_phone_secondary']) && !preg_match($phonePattern, $sanitized['alt_contact_phone_secondary'])) {
-            $errors[] = 'Alternate contact phone #2 must be in (###)-###-#### format.';
+            $record_format_error('alt_contact_phone_secondary', 'Alternate contact phone #2 must be in (###)-###-#### format.');
         }
 
         // Email
         if (!empty($sanitized['client_email']) && !filter_var($sanitized['client_email'], FILTER_VALIDATE_EMAIL)) {
-            $errors[] = 'Invalid client email address.';
+            $record_format_error('client_email', 'Invalid client email address.');
         }
 
         if (!empty($sanitized['social_worker_email']) && !filter_var($sanitized['social_worker_email'], FILTER_VALIDATE_EMAIL)) {
-            $errors[] = 'Invalid social worker email address.';
+            $record_format_error('social_worker_email', 'Invalid social worker email address.');
         }
 
         if (!empty($sanitized['alt_contact_email']) && !filter_var($sanitized['alt_contact_email'], FILTER_VALIDATE_EMAIL)) {
-            $errors[] = 'Invalid alternate contact email address.';
+            $record_format_error('alt_contact_email', 'Invalid alternate contact email address.');
         }
 
         // Required fields captured by the current admin form UI
         $required_fields = [
-            'last_name'                => 'Last Name',
-            'first_name'               => 'First Name',
-            'customer_type'            => 'Customer Type',
-            'address_street_number'    => 'Street #',
-            'address_street_name'      => 'Street Name',
-            'address_unit'             => 'Apt #',
-            'address_city'             => 'City',
-            'address_province'         => 'Province',
-            'address_postal'           => 'Postal Code',
-            'phone_primary'            => 'Client Phone #1',
-            'payment_method'           => 'Payment Method',
-            'required_start_date'      => 'Required Start Date',
-            'rate'                     => 'Rate',
-            'delivery_initials'        => 'Initials for delivery',
-            'delivery_day'             => 'Delivery Day',
-            'delivery_area_name'       => 'Delivery Area Name',
-            'delivery_area_zone'       => 'Delivery Area Zone',
-            'ordering_frequency'       => 'Ordering Frequency',
-            'ordering_contact_method'  => 'Ordering Contact Method',
-            'delivery_frequency'       => 'Delivery Frequency',
+            'last_name',
+            'first_name',
+            'customer_type',
+            'address_street_number',
+            'address_street_name',
+            'address_unit',
+            'address_city',
+            'address_province',
+            'address_postal',
+            'phone_primary',
+            'payment_method',
+            'required_start_date',
+            'rate',
+            'delivery_initials',
+            'delivery_day',
+            'delivery_area_name',
+            'delivery_area_zone',
+            'ordering_frequency',
+            'ordering_contact_method',
+            'delivery_frequency',
         ];
 
         $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
         if (in_array($client_type, ['SDNB', 'VETERAN'], true)) {
-            $required_fields['open_date'] = 'Open Date';
-            $required_fields['units'] = '# of Units';
+            $required_fields[] = 'open_date';
+            $required_fields[] = 'units';
         }
 
         if ($client_type === 'VETERAN') {
-            $required_fields['vet_health_card'] = 'Veteran Health Identification Card #';
+            $required_fields[] = 'vet_health_card';
         }
 
-        foreach ($required_fields as $field => $label) {
-            if (empty($sanitized[$field])) {
-                $errors[] = sprintf('%s is required.', $label);
+        foreach (array_unique($required_fields) as $field) {
+            if (empty($sanitized[$field] ?? '')) {
+                $record_required_error($field);
             }
         }
 
         if (isset($sanitized['units']) && $sanitized['units'] !== '') {
             $units = (int) $sanitized['units'];
             if ($units < 1 || $units > 31) {
-                $errors[] = '# of units must be between 1 and 31.';
+                $record_format_error('units', '# of units must be between 1 and 31.');
+            }
+        }
+
+        $delivery_day_allowed = [];
+        $week_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        foreach ($week_days as $dayName) {
+            $delivery_day_allowed[] = strtoupper($dayName . ' AM');
+            $delivery_day_allowed[] = strtoupper($dayName . ' PM');
+        }
+
+        if (function_exists('apply_filters')) {
+            $filtered_days = apply_filters('mealsdb_allowed_delivery_days', $delivery_day_allowed);
+            if (is_array($filtered_days) && !empty($filtered_days)) {
+                $delivery_day_allowed = $filtered_days;
+            }
+        }
+
+        $delivery_day_allowed = array_values(array_filter(array_map(static function ($value) {
+            return strtoupper(trim((string) $value));
+        }, $delivery_day_allowed)));
+
+        $contact_method_allowed = [
+            'CLIENT EMAIL',
+            'CLIENT PHONE',
+            'ALTERNATE CONTACT EMAIL',
+            'ALTERNATE CONTACT PHONE',
+            'SOCIAL WORKER EMAIL',
+            'SOCIAL WORKER PHONE',
+        ];
+
+        if (function_exists('apply_filters')) {
+            $filtered_methods = apply_filters('mealsdb_allowed_contact_methods', $contact_method_allowed);
+            if (is_array($filtered_methods) && !empty($filtered_methods)) {
+                $contact_method_allowed = $filtered_methods;
+            }
+        }
+
+        $contact_method_allowed = array_values(array_filter(array_map(static function ($value) {
+            return strtoupper(trim((string) $value));
+        }, $contact_method_allowed)));
+
+        $enum_validations = [
+            'gender' => [
+                'allowed'   => ['MALE', 'FEMALE', 'OTHER'],
+                'normalize' => 'upper',
+                'message'   => 'Gender must be Male, Female, or Other.',
+            ],
+            'service_zone' => [
+                'allowed'   => ['A', 'B'],
+                'normalize' => 'upper',
+                'message'   => 'Service zone must be either A or B.',
+            ],
+            'service_course' => [
+                'allowed'   => ['1', '2'],
+                'normalize' => 'upper',
+                'message'   => 'Service course must be either 1 or 2.',
+            ],
+            'meal_type' => [
+                'allowed'   => ['1', '2'],
+                'normalize' => 'upper',
+                'message'   => 'Meal type must be either 1 or 2.',
+            ],
+            'requisition_period' => [
+                'allowed'   => ['DAY', 'WEEK', 'MONTH'],
+                'normalize' => 'upper',
+                'message'   => 'Requisition period must be Day, Week, or Month.',
+            ],
+            'delivery_day' => [
+                'allowed'   => $delivery_day_allowed,
+                'normalize' => 'upper',
+                'message'   => 'Delivery day must match one of the scheduled options.',
+            ],
+            'ordering_contact_method' => [
+                'allowed'   => $contact_method_allowed,
+                'normalize' => 'upper',
+                'message'   => 'Ordering contact method must be a supported option.',
+            ],
+        ];
+
+        foreach ($enum_validations as $field => $rules) {
+            if (!array_key_exists($field, $sanitized)) {
+                continue;
+            }
+
+            $value = $sanitized[$field];
+            if ($value === '' || empty($rules['allowed'])) {
+                continue;
+            }
+
+            $normalized = $value;
+            if (($rules['normalize'] ?? '') === 'upper') {
+                $normalized = strtoupper($value);
+            } elseif (($rules['normalize'] ?? '') === 'lower') {
+                $normalized = strtolower($value);
+            }
+
+            if (!in_array($normalized, $rules['allowed'], true)) {
+                $record_format_error($field, $rules['message']);
+            }
+        }
+
+        $numeric_fields = [
+            'ordering_frequency' => 'Ordering frequency must be a number.',
+            'delivery_frequency' => 'Delivery frequency must be a number.',
+            'freezer_capacity'   => 'Freezer capacity must be a number.',
+            'delivery_fee'       => 'Delivery fee must be a number.',
+        ];
+
+        foreach ($numeric_fields as $field => $message) {
+            if (!array_key_exists($field, $sanitized)) {
+                continue;
+            }
+
+            $value = $sanitized[$field];
+            if ($value === '') {
+                continue;
+            }
+
+            if (!is_numeric($value)) {
+                $record_format_error($field, $message);
             }
         }
 
         // Unique field checks
         $conflicts = self::check_unique_fields($sanitized);
         if (!empty($conflicts)) {
+            $error_details['duplicates'] = $conflicts;
             $errors = array_merge($errors, $conflicts);
         }
+
+        $summary_parts = [];
+        if (!empty($error_details['missing_required'])) {
+            $summary_parts[] = sprintf(
+                'Missing required fields: %s.',
+                self::human_join(array_values($error_details['missing_required']))
+            );
+        }
+
+        if (!empty($error_details['invalid_format'])) {
+            $labels = array_map(static function ($detail) {
+                return $detail['label'] ?? '';
+            }, $error_details['invalid_format']);
+            $labels = array_filter(array_unique($labels));
+            if (!empty($labels)) {
+                $summary_parts[] = sprintf(
+                    'Formatting issues detected in: %s.',
+                    self::human_join(array_values($labels))
+                );
+            }
+        }
+
+        $error_summary = trim(implode(' ', array_filter($summary_parts)));
 
         return [
             'valid' => empty($errors),
             'errors' => $errors,
             'sanitized' => $sanitized,
+            'error_summary' => $error_summary,
+            'error_details' => $error_details,
         ];
+    }
+
+    /**
+     * Retrieve a human-readable label for a field.
+     */
+    private static function get_field_label(string $field, ?string $fallback = null): string {
+        if (isset(self::$field_labels[$field])) {
+            return self::$field_labels[$field];
+        }
+
+        if ($fallback !== null) {
+            return $fallback;
+        }
+
+        $normalized = str_replace('_', ' ', $field);
+
+        return ucwords($normalized);
+    }
+
+    /**
+     * Produce a grammatically correct list (with commas and "and").
+     */
+    private static function human_join(array $items): string {
+        $items = array_values(array_filter($items, static function ($value) {
+            return $value !== null && $value !== '';
+        }));
+
+        $count = count($items);
+        if ($count === 0) {
+            return '';
+        }
+
+        if ($count === 1) {
+            return (string) $items[0];
+        }
+
+        if ($count === 2) {
+            return $items[0] . ' and ' . $items[1];
+        }
+
+        $last = array_pop($items);
+
+        return implode(', ', $items) . ', and ' . $last;
     }
 
     /**
