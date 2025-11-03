@@ -9,17 +9,45 @@
 
 class MealsDB_Updates {
 
+    private const REPOSITORY_OWNER = 'zakorski';
+    private const REPOSITORY_NAME = 'meals-db';
+
     /**
      * Return diagnostic details about the current Git repository state.
      *
      * @return array|WP_Error
      */
     public static function check_for_updates() {
+        $currentVersion = defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : '';
+
         if (!self::is_git_repository()) {
-            return new WP_Error(
-                'mealsdb_git_missing',
-                __('This plugin directory is not a Git repository. Updates cannot be checked.', 'meals-db')
-            );
+            $latestRelease = self::get_remote_release_information();
+            if (is_wp_error($latestRelease)) {
+                return $latestRelease;
+            }
+
+            $latestVersion = $latestRelease['version'];
+            $hasUpdates = $latestVersion !== ''
+                && $currentVersion !== ''
+                && version_compare(self::normalize_version($latestVersion), self::normalize_version($currentVersion), '>');
+
+            $message = $hasUpdates
+                ? sprintf(
+                    /* translators: %s: Meals DB latest version number */
+                    __('A new version of Meals DB (%s) is available on GitHub. Download the latest release to update.', 'meals-db'),
+                    $latestVersion
+                )
+                : __('Meals DB is up to date.', 'meals-db');
+
+            return [
+                'current_version' => $currentVersion,
+                'latest_version'  => $latestVersion,
+                'has_updates'     => $hasUpdates,
+                'message'         => $message,
+                'repository_url'  => self::get_repository_url(),
+                'release_url'     => $latestRelease['url'],
+                'can_auto_update' => false,
+            ];
         }
 
         $branch = self::get_current_branch();
@@ -61,6 +89,9 @@ class MealsDB_Updates {
             'has_updates'     => $hasUpdates,
             'is_dirty'        => $isDirty,
             'message'         => $message,
+            'repository_url'  => self::get_repository_url(),
+            'current_version' => $currentVersion,
+            'can_auto_update' => true,
         ];
     }
 
@@ -130,6 +161,13 @@ class MealsDB_Updates {
      */
     private static function is_git_repository(): bool {
         return is_dir(self::get_plugin_dir() . '.git');
+    }
+
+    /**
+     * Retrieve the GitHub repository URL.
+     */
+    private static function get_repository_url(): string {
+        return sprintf('https://github.com/%s/%s', self::REPOSITORY_OWNER, self::REPOSITORY_NAME);
     }
 
     /**
@@ -219,5 +257,136 @@ class MealsDB_Updates {
         }
 
         return trim($stdout);
+    }
+
+    /**
+     * Fetch metadata about the latest release or tag from GitHub.
+     *
+     * @return array|WP_Error
+     */
+    private static function get_remote_release_information() {
+        $releaseUrl = sprintf('%s/releases/latest', self::get_repository_api_base());
+        $response = wp_remote_get($releaseUrl, self::get_github_request_args());
+
+        if (is_wp_error($response)) {
+            return new WP_Error(
+                'mealsdb_github_request',
+                __('Unable to contact the Meals DB GitHub repository.', 'meals-db'),
+                ['error' => $response->get_error_message()]
+            );
+        }
+
+        $status = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+
+        if ($status === 404) {
+            return self::get_remote_latest_tag();
+        }
+
+        if ($status !== 200) {
+            return new WP_Error(
+                'mealsdb_github_http',
+                __('GitHub responded with an unexpected status when checking for updates.', 'meals-db'),
+                ['status' => $status, 'body' => $body]
+            );
+        }
+
+        $data = json_decode($body, true);
+        if (!is_array($data)) {
+            return new WP_Error(
+                'mealsdb_github_json',
+                __('Received invalid data from GitHub when checking for updates.', 'meals-db')
+            );
+        }
+
+        if (empty($data['tag_name'])) {
+            return self::get_remote_latest_tag();
+        }
+
+        return [
+            'version' => self::normalize_version($data['tag_name']),
+            'url'     => !empty($data['html_url']) ? $data['html_url'] : self::get_repository_url(),
+        ];
+    }
+
+    /**
+     * Retrieve the latest tag information from GitHub.
+     *
+     * @return array|WP_Error
+     */
+    private static function get_remote_latest_tag() {
+        $tagsUrl = sprintf('%s/tags?per_page=1', self::get_repository_api_base());
+        $response = wp_remote_get($tagsUrl, self::get_github_request_args());
+
+        if (is_wp_error($response)) {
+            return new WP_Error(
+                'mealsdb_github_request',
+                __('Unable to contact the Meals DB GitHub repository.', 'meals-db'),
+                ['error' => $response->get_error_message()]
+            );
+        }
+
+        $status = wp_remote_retrieve_response_code($response);
+        if ($status !== 200) {
+            return new WP_Error(
+                'mealsdb_github_http',
+                __('GitHub responded with an unexpected status when checking for updates.', 'meals-db'),
+                ['status' => $status]
+            );
+        }
+
+        $data = json_decode(wp_remote_retrieve_body($response), true);
+        if (!is_array($data) || empty($data[0]['name'])) {
+            return new WP_Error(
+                'mealsdb_github_json',
+                __('GitHub did not return any release or tag data.', 'meals-db')
+            );
+        }
+
+        $tag = $data[0];
+
+        $tagName = is_string($tag['name']) ? $tag['name'] : '';
+
+        return [
+            'version' => self::normalize_version($tagName),
+            'url'     => sprintf('%s/releases/tag/%s', self::get_repository_url(), rawurlencode($tagName)),
+        ];
+    }
+
+    /**
+     * Normalize a semantic version string by trimming whitespace and removing any leading "v".
+     */
+    private static function normalize_version(string $version): string {
+        $normalized = trim($version);
+        if ($normalized === '') {
+            return '';
+        }
+
+        return ltrim($normalized, "vV");
+    }
+
+    /**
+     * Build the base GitHub API URL for the repository.
+     */
+    private static function get_repository_api_base(): string {
+        return sprintf('https://api.github.com/repos/%s/%s', self::REPOSITORY_OWNER, self::REPOSITORY_NAME);
+    }
+
+    /**
+     * Build request arguments for GitHub API calls.
+     */
+    private static function get_github_request_args(): array {
+        $userAgent = 'MealsDB-Plugin';
+        if (defined('MEALS_DB_VERSION') && MEALS_DB_VERSION !== '') {
+            $userAgent .= '/' . MEALS_DB_VERSION;
+        }
+
+        return [
+            'headers' => [
+                'Accept'     => 'application/vnd.github+json',
+                'User-Agent' => $userAgent,
+            ],
+            'timeout' => 15,
+        ];
     }
 }
