@@ -77,32 +77,16 @@ class MealsDB_Updates {
             );
         }
 
-        $envBackup = self::maybe_backup_env_file();
-        if (is_wp_error($envBackup)) {
-            return $envBackup;
-        }
-
         $statusOutput = self::run_git_command(['status', '--porcelain']);
         if (is_wp_error($statusOutput)) {
-            self::maybe_restore_env_file($envBackup);
             return $statusOutput;
         }
 
-        $remainingChanges = self::filter_status_lines($statusOutput);
-        if (!empty($remainingChanges)) {
-            self::maybe_restore_env_file($envBackup);
-
+        if (trim($statusOutput) !== '') {
             return new WP_Error(
                 'mealsdb_git_dirty',
                 __('The plugin directory has uncommitted changes. Commit or stash them before updating.', 'meals-db')
             );
-        }
-
-        $envPreparation = self::prepare_env_file_for_pull($envBackup);
-        if (is_wp_error($envPreparation)) {
-            self::maybe_restore_env_file($envBackup);
-
-            return $envPreparation;
         }
 
         $branch = self::get_current_branch();
@@ -112,14 +96,7 @@ class MealsDB_Updates {
 
         $pullResult = self::run_git_command(['pull', '--ff-only', 'origin', $branch]);
         if (is_wp_error($pullResult)) {
-            self::maybe_restore_env_file($envBackup);
-
             return $pullResult;
-        }
-
-        $restoreResult = self::maybe_restore_env_file($envBackup);
-        if (is_wp_error($restoreResult)) {
-            return $restoreResult;
         }
 
         return [
@@ -242,195 +219,5 @@ class MealsDB_Updates {
         }
 
         return trim($stdout);
-    }
-
-    /**
-     * Extract the plugin's .env path.
-     *
-     * @return string
-     */
-    private static function get_env_path(): string {
-        return self::get_plugin_dir() . '.env';
-    }
-
-    /**
-     * Back up the .env file if it exists so we can restore it after pulling updates.
-     *
-     * @return array|null|WP_Error
-     */
-    private static function maybe_backup_env_file() {
-        $envPath = self::get_env_path();
-
-        if (!file_exists($envPath)) {
-            return null;
-        }
-
-        $contents = file_get_contents($envPath);
-        if ($contents === false) {
-            return new WP_Error(
-                'mealsdb_env_unreadable',
-                __('Unable to read the existing .env file before updating.', 'meals-db')
-            );
-        }
-
-        $perms = @fileperms($envPath);
-
-        return [
-            'path'      => $envPath,
-            'contents'  => $contents,
-            'perms'     => $perms,
-            'existed'   => true,
-            'temp_path' => null,
-        ];
-    }
-
-    /**
-     * Restore a previously backed-up .env file.
-     *
-     * @param array|null $backup
-     *
-     * @return true|WP_Error
-     */
-    private static function maybe_restore_env_file($backup) {
-        if (empty($backup) || !is_array($backup)) {
-            return true;
-        }
-
-        $path = $backup['path'];
-
-        if (!empty($backup['temp_path'])) {
-            if (file_exists($path) && !@unlink($path)) {
-                return new WP_Error(
-                    'mealsdb_env_restore_failed',
-                    __('Unable to remove the temporary .env file after updating.', 'meals-db')
-                );
-            }
-
-            if (!@rename($backup['temp_path'], $path)) {
-                return new WP_Error(
-                    'mealsdb_env_restore_failed',
-                    __('Unable to restore the .env file after updating.', 'meals-db')
-                );
-            }
-
-            if (!empty($backup['perms'])) {
-                @chmod($path, $backup['perms'] & 0777);
-            }
-
-            return true;
-        }
-
-        $result = file_put_contents($path, $backup['contents']);
-
-        if ($result === false) {
-            return new WP_Error(
-                'mealsdb_env_restore_failed',
-                __('Unable to restore the .env file after updating.', 'meals-db')
-            );
-        }
-
-        if (!empty($backup['perms'])) {
-            @chmod($path, $backup['perms'] & 0777);
-        }
-
-        return true;
-    }
-
-    /**
-     * Remove status entries that refer to the environment file.
-     *
-     * @param string $statusOutput
-     *
-     * @return array
-     */
-    private static function filter_status_lines(string $statusOutput): array {
-        $lines = preg_split('/\r?\n/', trim($statusOutput));
-        $lines = array_filter($lines);
-
-        $remaining = [];
-
-        foreach ($lines as $line) {
-            $path = trim(substr($line, 3));
-
-            if ($path === '.env' || substr($path, -5) === '/.env') {
-                continue;
-            }
-
-            $remaining[] = $line;
-        }
-
-        return $remaining;
-    }
-
-    /**
-     * Determine if the .env file is tracked and make sure Git will not overwrite it.
-     *
-     * @param array|null $backup
-     *
-     * @return true|WP_Error
-     */
-    private static function prepare_env_file_for_pull(&$backup) {
-        if (empty($backup) || !is_array($backup)) {
-            return true;
-        }
-
-        $isTracked = self::is_env_tracked();
-        if (is_wp_error($isTracked)) {
-            return $isTracked;
-        }
-
-        if ($isTracked) {
-            $checkoutResult = self::run_git_command(['checkout', '--', '.env']);
-            if (is_wp_error($checkoutResult)) {
-                return $checkoutResult;
-            }
-        } else {
-            $tempPath = self::get_temporary_env_path($backup['path']);
-
-            if (!@rename($backup['path'], $tempPath)) {
-                return new WP_Error(
-                    'mealsdb_env_protect_failed',
-                    __('Unable to move the .env file out of the way before updating.', 'meals-db')
-                );
-            }
-
-            $backup['temp_path'] = $tempPath;
-        }
-
-        return true;
-    }
-
-    /**
-     * Generate a unique temporary path for the .env backup.
-     *
-     * @param string $originalPath
-     *
-     * @return string
-     */
-    private static function get_temporary_env_path(string $originalPath): string {
-        $counter = 0;
-        $base = $originalPath . '.mealsdb-backup';
-        $candidate = $base;
-
-        while (file_exists($candidate)) {
-            $counter++;
-            $candidate = $base . '-' . $counter;
-        }
-
-        return $candidate;
-    }
-
-    /**
-     * Check if Git tracks the .env file.
-     *
-     * @return bool|WP_Error
-     */
-    private static function is_env_tracked() {
-        $result = self::run_git_command(['ls-files', '--stage', '.env']);
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        return trim($result) !== '';
     }
 }
