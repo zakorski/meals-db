@@ -16,7 +16,7 @@
 </tr>
 <tr>
     <th><label for="address_postal">Postal Code *</label></th>
-    <td><input type="text" name="address_postal" required placeholder="A1A1A1" class="regular-text postal-mask" value="<?= esc_attr($_POST['address_postal'] ?? '') ?>" /></td>
+    <td><input type="text" name="address_postal" required placeholder="A1A1A1" maxlength="6" class="regular-text postal-mask" value="<?= esc_attr($_POST['address_postal'] ?? '') ?>" /></td>
 </tr>
 <tr>
     <th><label for="customer_type">Customer Type *</label></th>

@@ -252,10 +252,6 @@ class MealsDB_Client_Form {
             $record_format_error('delivery_address_postal', 'Delivery postal code must be in A1A1A1 format.');
         }
 
-        if (!empty($sanitized['delivery_address_postal']) && !preg_match('/^[A-Z]\d[A-Z] ?\d[A-Z]\d$/i', $sanitized['delivery_address_postal'])) {
-            $record_format_error('delivery_address_postal', 'Delivery postal code must be in A1A 1A1 format.');
-        }
-
         // Phone
         $phonePattern = '/^\(\d{3}\)-\d{3}-\d{4}$/';
         if (!empty($sanitized['phone_primary']) && !preg_match($phonePattern, $sanitized['phone_primary'])) {
@@ -334,81 +330,7 @@ class MealsDB_Client_Form {
             }
         }
 
-        $delivery_day_allowed = [];
-        $week_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-        foreach ($week_days as $dayName) {
-            $delivery_day_allowed[] = strtoupper($dayName . ' AM');
-            $delivery_day_allowed[] = strtoupper($dayName . ' PM');
-        }
-
-        if (function_exists('apply_filters')) {
-            $filtered_days = apply_filters('mealsdb_allowed_delivery_days', $delivery_day_allowed);
-            if (is_array($filtered_days) && !empty($filtered_days)) {
-                $delivery_day_allowed = $filtered_days;
-            }
-        }
-
-        $delivery_day_allowed = array_values(array_filter(array_map(static function ($value) {
-            return strtoupper(trim((string) $value));
-        }, $delivery_day_allowed)));
-
-        $contact_method_allowed = [
-            'CLIENT EMAIL',
-            'CLIENT PHONE',
-            'ALTERNATE CONTACT EMAIL',
-            'ALTERNATE CONTACT PHONE',
-            'SOCIAL WORKER EMAIL',
-            'SOCIAL WORKER PHONE',
-        ];
-
-        if (function_exists('apply_filters')) {
-            $filtered_methods = apply_filters('mealsdb_allowed_contact_methods', $contact_method_allowed);
-            if (is_array($filtered_methods) && !empty($filtered_methods)) {
-                $contact_method_allowed = $filtered_methods;
-            }
-        }
-
-        $contact_method_allowed = array_values(array_filter(array_map(static function ($value) {
-            return strtoupper(trim((string) $value));
-        }, $contact_method_allowed)));
-
-        $enum_validations = [
-            'gender' => [
-                'allowed'   => ['MALE', 'FEMALE', 'OTHER'],
-                'normalize' => 'upper',
-                'message'   => 'Gender must be Male, Female, or Other.',
-            ],
-            'service_zone' => [
-                'allowed'   => ['A', 'B'],
-                'normalize' => 'upper',
-                'message'   => 'Service zone must be either A or B.',
-            ],
-            'service_course' => [
-                'allowed'   => ['1', '2'],
-                'normalize' => 'upper',
-                'message'   => 'Service course must be either 1 or 2.',
-            ],
-            'meal_type' => [
-                'allowed'   => ['1', '2'],
-                'normalize' => 'upper',
-                'message'   => 'Meal type must be either 1 or 2.',
-            ],
-            'requisition_period' => [
-                'allowed'   => ['DAY', 'WEEK', 'MONTH'],
-                'normalize' => 'upper',
-                'message'   => 'Requisition period must be Day, Week, or Month.',
-            ],
-            'delivery_day' => [
-                'allowed'   => $delivery_day_allowed,
-                'normalize' => 'upper',
-                'message'   => 'Delivery day must match one of the scheduled options.',
-            ],
-            'ordering_contact_method' => [
-                'allowed'   => $contact_method_allowed,
-                'normalize' => 'upper',
-                'message'   => 'Ordering contact method must be a supported option.',
-            ],
-        ];
+        $enum_validations = self::get_enum_validation_rules();
 
         foreach ($enum_validations as $field => $rules) {
             if (!array_key_exists($field, $sanitized)) {
@@ -1237,6 +1159,100 @@ class MealsDB_Client_Form {
         }
 
         return $value;
+    }
+
+    /**
+     * Retrieve the list of allowed options for a given enumerated field.
+     */
+    public static function get_allowed_options(string $field): array {
+        $rules = self::get_enum_validation_rules();
+
+        if (!isset($rules[$field]['allowed']) || !is_array($rules[$field]['allowed'])) {
+            return [];
+        }
+
+        return array_values(array_unique(array_map('strval', $rules[$field]['allowed'])));
+    }
+
+    /**
+     * Build the validation configuration for enumerated fields.
+     */
+    private static function get_enum_validation_rules(): array {
+        $delivery_day_allowed = [];
+        $week_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        foreach ($week_days as $dayName) {
+            $delivery_day_allowed[] = strtoupper($dayName . ' AM');
+            $delivery_day_allowed[] = strtoupper($dayName . ' PM');
+        }
+
+        if (function_exists('apply_filters')) {
+            $filtered_days = apply_filters('mealsdb_allowed_delivery_days', $delivery_day_allowed);
+            if (is_array($filtered_days) && !empty($filtered_days)) {
+                $delivery_day_allowed = $filtered_days;
+            }
+        }
+
+        $delivery_day_allowed = array_values(array_filter(array_map(static function ($value) {
+            return strtoupper(trim((string) $value));
+        }, $delivery_day_allowed)));
+
+        $contact_method_allowed = [
+            'CLIENT EMAIL',
+            'CLIENT PHONE',
+            'ALTERNATE CONTACT EMAIL',
+            'ALTERNATE CONTACT PHONE',
+            'SOCIAL WORKER EMAIL',
+            'SOCIAL WORKER PHONE',
+        ];
+
+        if (function_exists('apply_filters')) {
+            $filtered_methods = apply_filters('mealsdb_allowed_contact_methods', $contact_method_allowed);
+            if (is_array($filtered_methods) && !empty($filtered_methods)) {
+                $contact_method_allowed = $filtered_methods;
+            }
+        }
+
+        $contact_method_allowed = array_values(array_filter(array_map(static function ($value) {
+            return strtoupper(trim((string) $value));
+        }, $contact_method_allowed)));
+
+        return [
+            'gender' => [
+                'allowed'   => ['MALE', 'FEMALE', 'OTHER'],
+                'normalize' => 'upper',
+                'message'   => 'Gender must be Male, Female, or Other.',
+            ],
+            'service_zone' => [
+                'allowed'   => ['A', 'B'],
+                'normalize' => 'upper',
+                'message'   => 'Service zone must be either A or B.',
+            ],
+            'service_course' => [
+                'allowed'   => ['1', '2'],
+                'normalize' => 'upper',
+                'message'   => 'Service course must be either 1 or 2.',
+            ],
+            'meal_type' => [
+                'allowed'   => ['1', '2'],
+                'normalize' => 'upper',
+                'message'   => 'Meal type must be either 1 or 2.',
+            ],
+            'requisition_period' => [
+                'allowed'   => ['DAY', 'WEEK', 'MONTH'],
+                'normalize' => 'upper',
+                'message'   => 'Requisition period must be Day, Week, or Month.',
+            ],
+            'delivery_day' => [
+                'allowed'   => $delivery_day_allowed,
+                'normalize' => 'upper',
+                'message'   => 'Delivery day must match one of the scheduled options.',
+            ],
+            'ordering_contact_method' => [
+                'allowed'   => $contact_method_allowed,
+                'normalize' => 'upper',
+                'message'   => 'Ordering contact method must be a supported option.',
+            ],
+        ];
     }
 
     /**

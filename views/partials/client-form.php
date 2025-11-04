@@ -10,6 +10,16 @@ $form_values = isset($form_values) && is_array($form_values) ? $form_values : []
 $client_type = $form_values['customer_type'] ?? '';
 $initial_step = $client_type ? 2 : 1;
 
+$delivery_day_options = MealsDB_Client_Form::get_allowed_options('delivery_day');
+$ordering_contact_method_options = MealsDB_Client_Form::get_allowed_options('ordering_contact_method');
+$service_zone_options = MealsDB_Client_Form::get_allowed_options('service_zone');
+$format_enum_option_label = static function (string $value): string {
+    $label = ucwords(strtolower($value));
+    $label = str_ireplace(['Am', 'Pm'], ['AM', 'PM'], $label);
+
+    return $label;
+};
+
 $alt_contact_name = $form_values['alt_contact_name'] ?? '';
 $alt_contact_first = '';
 $alt_contact_last = '';
@@ -186,7 +196,7 @@ $alt_contact_enabled = (
                 </tr>
                 <tr>
                     <th><label for="address_postal"><?php esc_html_e('Postal Code *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_postal" id="address_postal" class="regular-text postal-mask" maxlength="7" placeholder="A1A 1A1" required data-base-required="1" value="<?php echo esc_attr($form_values['address_postal'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="address_postal" id="address_postal" class="regular-text postal-mask" maxlength="6" placeholder="A1A1A1" required data-base-required="1" value="<?php echo esc_attr($form_values['address_postal'] ?? ''); ?>" /></td>
                 </tr>
             </table>
 
@@ -216,7 +226,7 @@ $alt_contact_enabled = (
                     </tr>
                     <tr>
                         <th><label for="delivery_address_postal"><?php esc_html_e('Postal Code', 'meals-db'); ?></label></th>
-                        <td><input type="text" name="delivery_address_postal" id="delivery_address_postal" class="regular-text postal-mask" maxlength="7" placeholder="A1A 1A1" value="<?php echo esc_attr($form_values['delivery_address_postal'] ?? ''); ?>" /></td>
+                        <td><input type="text" name="delivery_address_postal" id="delivery_address_postal" class="regular-text postal-mask" maxlength="6" placeholder="A1A1A1" value="<?php echo esc_attr($form_values['delivery_address_postal'] ?? ''); ?>" /></td>
                     </tr>
                 </table>
             </div>
@@ -284,7 +294,16 @@ $alt_contact_enabled = (
                 </tr>
                 <tr>
                     <th><label for="delivery_day"><?php esc_html_e('Delivery Day *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="delivery_day" id="delivery_day" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['delivery_day'] ?? ''); ?>" /></td>
+                    <td>
+                        <?php $delivery_day_value = strtoupper($form_values['delivery_day'] ?? ''); ?>
+                        <select name="delivery_day" id="delivery_day" class="regular-text" required data-base-required="1">
+                            <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
+                            <?php foreach ($delivery_day_options as $option) : ?>
+                                <?php $label = $format_enum_option_label($option); ?>
+                                <option value="<?php echo esc_attr($option); ?>" <?php selected($delivery_day_value, strtoupper($option)); ?>><?php echo esc_html($label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
                 </tr>
                 <tr>
                     <th><label for="delivery_area_name"><?php esc_html_e('Delivery Area Name *', 'meals-db'); ?></label></th>
@@ -300,7 +319,16 @@ $alt_contact_enabled = (
                 </tr>
                 <tr>
                     <th><label for="ordering_contact_method"><?php esc_html_e('Ordering Contact Method *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="ordering_contact_method" id="ordering_contact_method" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['ordering_contact_method'] ?? ''); ?>" /></td>
+                    <td>
+                        <?php $ordering_contact_method_value = strtoupper($form_values['ordering_contact_method'] ?? ''); ?>
+                        <select name="ordering_contact_method" id="ordering_contact_method" class="regular-text" required data-base-required="1">
+                            <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
+                            <?php foreach ($ordering_contact_method_options as $option) : ?>
+                                <?php $label = $format_enum_option_label($option); ?>
+                                <option value="<?php echo esc_attr($option); ?>" <?php selected($ordering_contact_method_value, strtoupper($option)); ?>><?php echo esc_html($label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
                 </tr>
                 <tr>
                     <th><label for="delivery_frequency"><?php esc_html_e('Delivery Frequency *', 'meals-db'); ?></label></th>
@@ -341,7 +369,16 @@ $alt_contact_enabled = (
                 </tr>
                 <tr data-client-type="sdnb">
                     <th><label for="service_zone"><?php esc_html_e('Service Name Zone', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="service_zone" id="service_zone" class="regular-text" value="<?php echo esc_attr($form_values['service_zone'] ?? ''); ?>" /></td>
+                    <td>
+                        <?php $service_zone_value = strtoupper($form_values['service_zone'] ?? ''); ?>
+                        <select name="service_zone" id="service_zone" class="regular-text">
+                            <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
+                            <?php foreach ($service_zone_options as $option) : ?>
+                                <?php $label = $format_enum_option_label($option); ?>
+                                <option value="<?php echo esc_attr($option); ?>" <?php selected($service_zone_value, strtoupper($option)); ?>><?php echo esc_html($label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
                 </tr>
                 <tr data-client-type="sdnb">
                     <th><label for="meal_type"><?php esc_html_e('Meal Type', 'meals-db'); ?></label></th>
