@@ -34,8 +34,7 @@ jQuery(document).ready(function($) {
     // 🇨🇦 Postal Code Formatter
     // -----------------------------
     $('.postal-mask').on('input', function () {
-        let val = $(this).val().toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 6);
-        val = val.replace(/^(.{3})(.{1,3})$/, '$1 $2');
+        const val = $(this).val().toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 6);
         $(this).val(val);
     });
 
