@@ -351,6 +351,37 @@ jQuery(document).ready(function($) {
         const $checkButton = $('#mealsdb-check-updates');
         const $pullButton = $('#mealsdb-run-update');
         const $dbButton = $('#mealsdb-update-database');
+        let hasCheckedUpdates = false;
+        let lastCheckData = null;
+
+        const refreshPullButtonState = () => {
+            if (!$pullButton.length) {
+                return;
+            }
+
+            if (!hasCheckedUpdates) {
+                $pullButton.prop('disabled', true);
+                return;
+            }
+
+            const data = lastCheckData || {};
+            const canAutoUpdate = Boolean(data.can_auto_update);
+            const hasUpdates = Boolean(data.has_updates);
+            const isDirty = Boolean(data.is_dirty);
+
+            if (!canAutoUpdate) {
+                $pullButton.prop('disabled', true);
+                return;
+            }
+
+            if (hasUpdates && !isDirty) {
+                $pullButton.prop('disabled', false);
+            } else {
+                $pullButton.prop('disabled', true);
+            }
+        };
+
+        refreshPullButtonState();
 
         const showNotice = (level, message) => {
             const classes = ['notice-info', 'notice-success', 'notice-error', 'notice-warning'];
@@ -389,13 +420,17 @@ jQuery(document).ready(function($) {
                 if (!$button.data('original-text')) {
                     $button.data('original-text', $button.text());
                 }
+                $button.data('mealsdb-disabled-before-loading', $button.prop('disabled'));
                 $button.prop('disabled', true).addClass('mealsdb-is-loading');
             } else {
                 const original = $button.data('original-text');
                 if (original) {
                     $button.text(original);
                 }
-                $button.prop('disabled', false).removeClass('mealsdb-is-loading');
+                const wasDisabled = $button.data('mealsdb-disabled-before-loading');
+                $button.prop('disabled', typeof wasDisabled === 'boolean' ? wasDisabled : false);
+                $button.removeData('mealsdb-disabled-before-loading');
+                $button.removeClass('mealsdb-is-loading');
             }
         };
 
@@ -421,13 +456,17 @@ jQuery(document).ready(function($) {
                 if (res.success) {
                     const data = res.data || {};
                     showNotice('success', data.message || 'Plugin updated successfully.');
-                    setLog(data.output || '');
-                    $pullButton.hide();
+                    setLog(data.output || data.log || '');
+                    hasCheckedUpdates = false;
+                    lastCheckData = null;
+                    refreshPullButtonState();
                 } else {
                     handleErrorResponse(res);
+                    refreshPullButtonState();
                 }
             }).fail(() => {
                 showNotice('error', 'Failed to communicate with the server.');
+                refreshPullButtonState();
             }).always(() => {
                 toggleLoading($pullButton, false);
             });
@@ -435,10 +474,12 @@ jQuery(document).ready(function($) {
 
         $checkButton.on('click', function (event) {
             event.preventDefault();
+            hasCheckedUpdates = false;
+            lastCheckData = null;
+            refreshPullButtonState();
             toggleLoading($checkButton, true);
             showNotice('info', 'Checking for updates...');
             setLog('');
-            $pullButton.hide();
 
             $.post(ajaxurl, {
                 action: 'mealsdb_check_updates',
@@ -473,22 +514,27 @@ jQuery(document).ready(function($) {
 
                     setLog(summaryParts.join('\n'));
 
-                    if (data.has_updates && data.can_auto_update) {
-                        $pullButton.show();
-                        if (data.is_dirty) {
-                            showNotice('warning', 'Updates are available, but local changes must be committed or stashed first.');
-                            $pullButton.prop('disabled', true);
-                        } else {
-                            $pullButton.prop('disabled', false);
-                        }
-                    } else {
-                        $pullButton.hide();
+                    lastCheckData = data;
+                    hasCheckedUpdates = true;
+
+                    if (data.has_updates && data.can_auto_update && data.is_dirty) {
+                        showNotice('warning', 'Updates are available, but local changes must be committed or stashed first.');
+                    } else if (data.has_updates && !data.can_auto_update) {
+                        showNotice('warning', 'Automatic updates are not available for this installation.');
                     }
+
+                    refreshPullButtonState();
                 } else {
                     handleErrorResponse(res);
+                    hasCheckedUpdates = false;
+                    lastCheckData = null;
+                    refreshPullButtonState();
                 }
             }).fail(() => {
                 showNotice('error', 'Failed to communicate with the server.');
+                hasCheckedUpdates = false;
+                lastCheckData = null;
+                refreshPullButtonState();
             }).always(() => {
                 toggleLoading($checkButton, false);
             });

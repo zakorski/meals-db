@@ -52,7 +52,9 @@ class MealsDB_Updates {
                 'message'         => $defaultMessage,
                 'repository_url'  => self::get_repository_url(),
                 'release_url'     => !empty($latestRelease['url']) ? $latestRelease['url'] : self::get_repository_url(),
-                'can_auto_update' => false,
+                'can_auto_update' => !empty($latestRelease['zipball_url']),
+                'latest_tag'      => !empty($latestRelease['tag']) ? $latestRelease['tag'] : '',
+                'download_url'    => !empty($latestRelease['zipball_url']) ? $latestRelease['zipball_url'] : '',
             ];
         }
 
@@ -98,6 +100,8 @@ class MealsDB_Updates {
             'repository_url'  => self::get_repository_url(),
             'current_version' => $currentVersion,
             'can_auto_update' => true,
+            'latest_tag'      => '',
+            'download_url'    => '',
         ];
     }
 
@@ -107,40 +111,68 @@ class MealsDB_Updates {
      * @return array|WP_Error
      */
     public static function pull_updates() {
-        if (!self::is_git_repository()) {
+        if (self::is_git_repository()) {
+            $statusOutput = self::run_git_command(['status', '--porcelain']);
+            if (is_wp_error($statusOutput)) {
+                return $statusOutput;
+            }
+
+            if (trim($statusOutput) !== '') {
+                return new WP_Error(
+                    'mealsdb_git_dirty',
+                    __('The plugin directory has uncommitted changes. Commit or stash them before updating.', 'meals-db')
+                );
+            }
+
+            $branch = self::get_current_branch();
+            if (is_wp_error($branch)) {
+                return $branch;
+            }
+
+            $pullResult = self::run_git_command(['pull', '--ff-only', 'origin', $branch]);
+            if (is_wp_error($pullResult)) {
+                return $pullResult;
+            }
+
+            return [
+                'branch'  => $branch,
+                'output'  => $pullResult,
+                'message' => __('Meals DB has been updated to the latest commit.', 'meals-db'),
+            ];
+        }
+
+        $releaseInfo = self::get_remote_release_information();
+        if (is_wp_error($releaseInfo)) {
+            return $releaseInfo;
+        }
+
+        if (empty($releaseInfo['zipball_url'])) {
             return new WP_Error(
-                'mealsdb_git_missing',
-                __('This plugin directory is not a Git repository. Updates cannot be applied.', 'meals-db')
+                'mealsdb_release_download_missing',
+                __('Unable to locate a downloadable archive for the latest Meals DB release.', 'meals-db')
             );
         }
 
-        $statusOutput = self::run_git_command(['status', '--porcelain']);
-        if (is_wp_error($statusOutput)) {
-            return $statusOutput;
-        }
+        $currentVersion = defined('MEALS_DB_VERSION') ? self::normalize_version(MEALS_DB_VERSION) : '';
+        $latestVersion = !empty($releaseInfo['version']) ? self::normalize_version($releaseInfo['version']) : '';
 
-        if (trim($statusOutput) !== '') {
+        if ($latestVersion !== '' && $currentVersion !== '' && version_compare($latestVersion, $currentVersion, '<=')) {
             return new WP_Error(
-                'mealsdb_git_dirty',
-                __('The plugin directory has uncommitted changes. Commit or stash them before updating.', 'meals-db')
+                'mealsdb_no_updates',
+                __('Meals DB is already up to date.', 'meals-db')
             );
         }
 
-        $branch = self::get_current_branch();
-        if (is_wp_error($branch)) {
-            return $branch;
+        $result = self::apply_release_update($releaseInfo);
+        if (is_wp_error($result)) {
+            return $result;
         }
 
-        $pullResult = self::run_git_command(['pull', '--ff-only', 'origin', $branch]);
-        if (is_wp_error($pullResult)) {
-            return $pullResult;
+        if (!isset($result['version']) && $latestVersion !== '') {
+            $result['version'] = $latestVersion;
         }
 
-        return [
-            'branch'  => $branch,
-            'output'  => $pullResult,
-            'message' => __('Meals DB has been updated to the latest commit.', 'meals-db'),
-        ];
+        return $result;
     }
 
     /**
@@ -266,6 +298,200 @@ class MealsDB_Updates {
     }
 
     /**
+     * Download and install the latest GitHub release when Git is unavailable.
+     *
+     * @param array $releaseInfo
+     *
+     * @return array|WP_Error
+     */
+    private static function apply_release_update(array $releaseInfo) {
+        $zipUrl = !empty($releaseInfo['zipball_url']) ? $releaseInfo['zipball_url'] : '';
+        if ($zipUrl === '') {
+            return new WP_Error(
+                'mealsdb_release_download_missing',
+                __('Unable to locate a downloadable archive for the latest Meals DB release.', 'meals-db')
+            );
+        }
+
+        if (!function_exists('download_url')) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+        }
+
+        $tempFile = download_url($zipUrl, 300, '', self::get_github_download_headers());
+        if (is_wp_error($tempFile)) {
+            return new WP_Error(
+                'mealsdb_release_download',
+                __('Unable to download the latest Meals DB release from GitHub.', 'meals-db'),
+                ['error' => $tempFile->get_error_message()]
+            );
+        }
+
+        $tempDir = self::create_temp_dir(dirname($tempFile));
+        if (is_wp_error($tempDir)) {
+            self::cleanup_temp_artifacts($tempFile, null);
+            return $tempDir;
+        }
+
+        $unzipResult = unzip_file($tempFile, $tempDir);
+        if (is_wp_error($unzipResult)) {
+            self::cleanup_temp_artifacts($tempFile, $tempDir);
+            return new WP_Error(
+                'mealsdb_release_unzip',
+                __('Failed to extract the Meals DB update archive.', 'meals-db'),
+                ['error' => $unzipResult->get_error_message()]
+            );
+        }
+
+        $sourceDir = self::determine_update_source_dir($tempDir);
+        if (is_wp_error($sourceDir)) {
+            self::cleanup_temp_artifacts($tempFile, $tempDir);
+            return $sourceDir;
+        }
+
+        global $wp_filesystem;
+        if (!function_exists('WP_Filesystem')) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+        }
+
+        if (!WP_Filesystem()) {
+            self::cleanup_temp_artifacts($tempFile, $tempDir);
+            return new WP_Error(
+                'mealsdb_filesystem',
+                __('Unable to initialize the WordPress filesystem API.', 'meals-db')
+            );
+        }
+
+        $copyResult = copy_dir(trailingslashit($sourceDir), self::get_plugin_dir(), ['.env']);
+        if (is_wp_error($copyResult)) {
+            self::cleanup_temp_artifacts($tempFile, $tempDir);
+            return $copyResult;
+        }
+
+        self::cleanup_temp_artifacts($tempFile, $tempDir);
+
+        $message = !empty($releaseInfo['version'])
+            ? sprintf(__('Meals DB has been updated to version %s.', 'meals-db'), $releaseInfo['version'])
+            : __('Meals DB has been updated from the latest release.', 'meals-db');
+
+        $logLines = [];
+        if (!empty($releaseInfo['url'])) {
+            $logLines[] = sprintf(__('Release: %s', 'meals-db'), $releaseInfo['url']);
+        }
+        if (!empty($releaseInfo['tag'])) {
+            $logLines[] = sprintf(__('Tag: %s', 'meals-db'), $releaseInfo['tag']);
+        }
+
+        return [
+            'message' => $message,
+            'output'  => implode("\n", array_filter($logLines)),
+            'version' => !empty($releaseInfo['version']) ? $releaseInfo['version'] : '',
+        ];
+    }
+
+    /**
+     * Create a unique temporary directory for the update process.
+     *
+     * @param string $baseDir
+     *
+     * @return string|WP_Error
+     */
+    private static function create_temp_dir(string $baseDir) {
+        $directory = trailingslashit($baseDir) . 'mealsdb-update-' . uniqid('', true);
+
+        if (!wp_mkdir_p($directory)) {
+            return new WP_Error(
+                'mealsdb_temp_dir',
+                __('Unable to create a temporary directory for the update.', 'meals-db')
+            );
+        }
+
+        return $directory;
+    }
+
+    /**
+     * Determine the directory within the extracted archive that contains the plugin files.
+     *
+     * @param string $extractionRoot
+     *
+     * @return string|WP_Error
+     */
+    private static function determine_update_source_dir(string $extractionRoot) {
+        $entries = scandir($extractionRoot);
+        if ($entries === false) {
+            return new WP_Error(
+                'mealsdb_release_empty',
+                __('The update archive did not contain any files.', 'meals-db')
+            );
+        }
+
+        $contents = [];
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $contents[] = $entry;
+        }
+
+        if (empty($contents)) {
+            return new WP_Error(
+                'mealsdb_release_empty',
+                __('The update archive did not contain any files.', 'meals-db')
+            );
+        }
+
+        if (count($contents) === 1) {
+            $singlePath = trailingslashit($extractionRoot) . $contents[0];
+            if (is_dir($singlePath)) {
+                return $singlePath;
+            }
+        }
+
+        return $extractionRoot;
+    }
+
+    /**
+     * Remove temporary files and directories created during the update.
+     */
+    private static function cleanup_temp_artifacts(?string $file, ?string $directory): void {
+        if ($file && file_exists($file)) {
+            @unlink($file);
+        }
+
+        if ($directory && is_dir($directory)) {
+            self::delete_path($directory);
+        }
+    }
+
+    /**
+     * Recursively delete a file or directory.
+     */
+    private static function delete_path(string $path): void {
+        if (!file_exists($path)) {
+            return;
+        }
+
+        if (is_dir($path)) {
+            $items = scandir($path);
+            if ($items === false) {
+                @rmdir($path);
+                return;
+            }
+
+            foreach ($items as $item) {
+                if ($item === '.' || $item === '..') {
+                    continue;
+                }
+                self::delete_path($path . DIRECTORY_SEPARATOR . $item);
+            }
+
+            @rmdir($path);
+            return;
+        }
+
+        @unlink($path);
+    }
+
+    /**
      * Fetch metadata about the latest release or tag from GitHub.
      *
      * @return array|WP_Error
@@ -305,13 +531,16 @@ class MealsDB_Updates {
             );
         }
 
-        if (empty($data['tag_name'])) {
+        $tagName = !empty($data['tag_name']) && is_string($data['tag_name']) ? $data['tag_name'] : '';
+        if ($tagName === '') {
             return self::get_remote_latest_tag();
         }
 
         return [
-            'version' => self::normalize_version($data['tag_name']),
-            'url'     => !empty($data['html_url']) ? $data['html_url'] : self::get_repository_url(),
+            'version'     => self::normalize_version($tagName),
+            'tag'         => $tagName,
+            'url'         => !empty($data['html_url']) ? $data['html_url'] : self::get_repository_url(),
+            'zipball_url' => self::get_codeload_zip_url($tagName),
         ];
     }
 
@@ -351,27 +580,33 @@ class MealsDB_Updates {
 
         if (empty($data)) {
             return [
-                'version' => '',
-                'url'     => self::get_repository_url(),
-                'message' => __('GitHub does not have any releases or tags published for Meals DB yet.', 'meals-db'),
+                'version'     => '',
+                'url'         => self::get_repository_url(),
+                'message'     => __('GitHub does not have any releases or tags published for Meals DB yet.', 'meals-db'),
+                'tag'         => '',
+                'zipball_url' => '',
             ];
         }
 
         $tag = $data[0];
 
-        $tagName = is_string($tag['name']) ? $tag['name'] : '';
+        $tagName = isset($tag['name']) && is_string($tag['name']) ? $tag['name'] : '';
 
         if ($tagName === '') {
             return [
-                'version' => '',
-                'url'     => self::get_repository_url(),
-                'message' => __('GitHub does not have any releases or tags published for Meals DB yet.', 'meals-db'),
+                'version'     => '',
+                'url'         => self::get_repository_url(),
+                'message'     => __('GitHub does not have any releases or tags published for Meals DB yet.', 'meals-db'),
+                'tag'         => '',
+                'zipball_url' => '',
             ];
         }
 
         return [
-            'version' => self::normalize_version($tagName),
-            'url'     => sprintf('%s/releases/tag/%s', self::get_repository_url(), rawurlencode($tagName)),
+            'version'     => self::normalize_version($tagName),
+            'tag'         => $tagName,
+            'url'         => sprintf('%s/releases/tag/%s', self::get_repository_url(), rawurlencode($tagName)),
+            'zipball_url' => self::get_codeload_zip_url($tagName),
         ];
     }
 
@@ -410,5 +645,28 @@ class MealsDB_Updates {
             ],
             'timeout' => 15,
         ];
+    }
+
+    /**
+     * Build headers for downloading binary assets from GitHub.
+     */
+    private static function get_github_download_headers(): array {
+        $args = self::get_github_request_args();
+        $headers = isset($args['headers']) && is_array($args['headers']) ? $args['headers'] : [];
+        $headers['Accept'] = 'application/octet-stream';
+
+        return $headers;
+    }
+
+    /**
+     * Build the codeload URL for a release/tag archive.
+     */
+    private static function get_codeload_zip_url(string $ref): string {
+        return sprintf(
+            'https://codeload.github.com/%s/%s/zip/%s',
+            self::REPOSITORY_OWNER,
+            self::REPOSITORY_NAME,
+            rawurlencode($ref)
+        );
     }
 }
