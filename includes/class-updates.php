@@ -31,7 +31,7 @@ class MealsDB_Updates {
                 && $currentVersion !== ''
                 && version_compare(self::normalize_version($latestVersion), self::normalize_version($currentVersion), '>');
 
-            $message = $hasUpdates
+            $defaultMessage = $hasUpdates
                 ? sprintf(
                     /* translators: %s: Meals DB latest version number */
                     __('A new version of Meals DB (%s) is available on GitHub. Download the latest release to update.', 'meals-db'),
@@ -39,13 +39,19 @@ class MealsDB_Updates {
                 )
                 : __('Meals DB is up to date.', 'meals-db');
 
+            if ($latestVersion === '') {
+                $defaultMessage = !empty($latestRelease['message'])
+                    ? $latestRelease['message']
+                    : __('No releases or tags are published for Meals DB on GitHub. Unable to determine whether updates are available.', 'meals-db');
+            }
+
             return [
                 'current_version' => $currentVersion,
                 'latest_version'  => $latestVersion,
                 'has_updates'     => $hasUpdates,
-                'message'         => $message,
+                'message'         => $defaultMessage,
                 'repository_url'  => self::get_repository_url(),
-                'release_url'     => $latestRelease['url'],
+                'release_url'     => !empty($latestRelease['url']) ? $latestRelease['url'] : self::get_repository_url(),
                 'can_auto_update' => false,
             ];
         }
@@ -336,16 +342,32 @@ class MealsDB_Updates {
         }
 
         $data = json_decode(wp_remote_retrieve_body($response), true);
-        if (!is_array($data) || empty($data[0]['name'])) {
+        if (!is_array($data)) {
             return new WP_Error(
                 'mealsdb_github_json',
-                __('GitHub did not return any release or tag data.', 'meals-db')
+                __('Received invalid data from GitHub when checking for updates.', 'meals-db')
             );
+        }
+
+        if (empty($data)) {
+            return [
+                'version' => '',
+                'url'     => self::get_repository_url(),
+                'message' => __('GitHub does not have any releases or tags published for Meals DB yet.', 'meals-db'),
+            ];
         }
 
         $tag = $data[0];
 
         $tagName = is_string($tag['name']) ? $tag['name'] : '';
+
+        if ($tagName === '') {
+            return [
+                'version' => '',
+                'url'     => self::get_repository_url(),
+                'message' => __('GitHub does not have any releases or tags published for Meals DB yet.', 'meals-db'),
+            ];
+        }
 
         return [
             'version' => self::normalize_version($tagName),
