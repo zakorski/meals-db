@@ -33,19 +33,19 @@ if (!defined('MEALS_DB_VERSION')) {
     define('MEALS_DB_VERSION', '1.0.0');
 }
 
-/**
- * Check minimum PHP and WordPress versions before allowing activation.
- */
-register_activation_hook(__FILE__, 'meals_db_check_requirements');
-
 // Abort early if wp-config.php constants have not been configured.
-if (!defined('MEALS_DB_KEY') || MEALS_DB_KEY === '') {
+if (!defined('MEALS_DB_KEY')) {
     add_action('admin_notices', function () {
         echo '<div class="notice notice-error"><p><strong>Meals Database:</strong> Configuration constants are missing. Please add them to wp-config.php.</p></div>';
     });
 
     return;
 }
+
+/**
+ * Check minimum PHP and WordPress versions before allowing activation.
+ */
+register_activation_hook(__FILE__, 'meals_db_check_requirements');
 
 function meals_db_check_requirements() {
     global $wp_version;

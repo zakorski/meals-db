@@ -29,7 +29,7 @@ class MealsDB_DB {
         $pass = defined('MEALS_DB_PASS') ? MEALS_DB_PASS : null;
         $name = defined('MEALS_DB_NAME') ? MEALS_DB_NAME : null;
 
-        if ($host === null || $host === '' || $user === null || $user === '' || $name === null || $name === '') {
+        if ($host === null || $user === null || $name === null) {
             error_log('[MealsDB] Database configuration constants are missing.');
             return null;
         }
