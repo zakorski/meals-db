@@ -1,5 +1,3 @@
-name: Tag & Release on Version Bump
-
 name: Auto Bump Version and Release
 
 permissions:
@@ -11,38 +9,57 @@ on:
       - main
 
 jobs:
-  version-bump-release:
+  bump-version:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Get current plugin version
-        id: get_version
-        run: |
-          version=$(grep -E '^Version:' meals-db-main.php | awk '{print $2}')
-          echo "version=$version" >> $GITHUB_ENV
-
-      - name: Check if tag exists
-        id: tag_check
-        run: |
-          if git rev-parse "v${{ env.version }}" >/dev/null 2>&1; then
-            echo "Tag already exists. Exiting."
-            exit 0
-          fi
-
-      - name: Create Git tag
+      - name: Setup Git
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git tag -a "v${{ env.version }}" -m "Release v${{ env.version }}"
-          git push origin "v${{ env.version }}"
 
-      - name: Create GitHub release
+      #Get the latest tag (or start at 1.0.0 if none)
+      - name: Get current tag
+        id: get_tag
+        run: |
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
+          echo "latest_tag=${latest_tag}" >> $GITHUB_ENV
+
+      #Calculate next version (patch bump)
+      - name: Calculate next version
+        id: next_version
+        run: |
+          version=${latest_tag#v}
+          IFS='.' read -r major minor patch <<< "$version"
+          patch=$((patch + 1))
+          new_version="${major}.${minor}.${patch}"
+          echo "new_version=${new_version}" >> $GITHUB_ENV
+          echo "Next version: $new_version"
+
+      #Update the Version: line in the plugin file
+      - name: Update plugin header version
+        run: |
+          sed -i "s/^Version:.*/Version: ${new_version}/" meals-db-main.php
+          git add meals-db-main.php
+          git commit -m "chore: bump plugin version to ${new_version}" || echo "No changes to commit"
+
+      #Create and push the new tag
+      - name: Create Git tag
+        run: |
+          git tag -a "v${new_version}" -m "Release v${new_version}"
+          git push origin "v${new_version}"
+          git push
+
+      #Publish GitHub release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.version }}
-          name: "Release v${{ env.version }}"
-          body: "Automated release for version ${{ env.version }}"
+          tag_name: v${{ env.new_version }}
+          name: "Release v${{ env.new_version }}"
+          body: "Automated release for version v${{ env.new_version }}."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
