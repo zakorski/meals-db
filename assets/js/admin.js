@@ -354,6 +354,34 @@ jQuery(document).ready(function($) {
         let hasCheckedUpdates = false;
         let lastCheckData = null;
 
+        const coerceBoolean = (value) => {
+            if (typeof value === 'boolean') {
+                return value;
+            }
+
+            if (typeof value === 'string') {
+                const normalized = value.trim().toLowerCase();
+                if (['', '0', 'false', 'no', 'off'].includes(normalized)) {
+                    return false;
+                }
+                if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+                    return true;
+                }
+            }
+
+            return Boolean(value);
+        };
+
+        const normalizeCheckData = (data) => {
+            const normalized = { ...data };
+
+            normalized.has_updates = coerceBoolean(normalized.has_updates);
+            normalized.can_auto_update = coerceBoolean(normalized.can_auto_update);
+            normalized.is_dirty = coerceBoolean(normalized.is_dirty);
+
+            return normalized;
+        };
+
         const refreshPullButtonState = () => {
             if (!$pullButton.length) {
                 return;
@@ -365,9 +393,9 @@ jQuery(document).ready(function($) {
             }
 
             const data = lastCheckData || {};
-            const canAutoUpdate = Boolean(data.can_auto_update);
-            const hasUpdates = Boolean(data.has_updates);
-            const isDirty = Boolean(data.is_dirty);
+            const canAutoUpdate = data.can_auto_update;
+            const hasUpdates = data.has_updates;
+            const isDirty = data.is_dirty;
 
             if (!canAutoUpdate) {
                 $pullButton.prop('disabled', true);
@@ -454,7 +482,7 @@ jQuery(document).ready(function($) {
                 nonce: mealsdb.nonce
             }).done((res) => {
                 if (res.success) {
-                    const data = res.data || {};
+                    const data = normalizeCheckData(res.data || {});
                     showNotice('success', data.message || 'Plugin updated successfully.');
                     setLog(data.output || data.log || '');
                     hasCheckedUpdates = false;
@@ -486,7 +514,7 @@ jQuery(document).ready(function($) {
                 nonce: mealsdb.nonce
             }).done((res) => {
                 if (res.success) {
-                    const data = res.data || {};
+                    const data = normalizeCheckData(res.data || {});
                     showNotice('success', data.message || 'Check complete.');
 
                     const summaryParts = [];
