@@ -24,12 +24,13 @@ class MealsDB_Sync {
             );
         }
 
-        $mismatches = [];
-
         $ignored_keys = self::load_ignored_conflicts($conn);
+        $mismatches   = [];
 
-        // Get all active clients from Meals DB
-        $query = "SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM meals_clients WHERE status = 'active'";
+        $clients_by_wp_id   = [];
+        $clients_without_id = [];
+
+        $query  = "SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM meals_clients";
         $result = $conn->query($query);
 
         if (!($result instanceof \mysqli_result)) {
@@ -47,83 +48,78 @@ class MealsDB_Sync {
         }
 
         while ($client = $result->fetch_assoc()) {
-            $individual_id = $client['individual_id'] ?? '';
+            $normalized = self::normalize_client_row($client);
 
-            if ($individual_id !== '') {
-                try {
-                    $individual_id = MealsDB_Encryption::decrypt($individual_id);
-                } catch (Exception $e) {
-                    error_log('[MealsDB Sync] Failed to decrypt individual_id for client ID ' . $client['id'] . ': ' . $e->getMessage());
-                    $individual_id = '';
-                }
-            }
-
-            $client['individual_id'] = $individual_id;
-
-            // Try to find matching WooCommerce user by email or individual ID
-            $woo_user = self::find_woocommerce_user($client['client_email'], $individual_id);
-
-            if ($woo_user) {
-                self::persist_wordpress_user_id($conn, (int) $client['id'], (int) $woo_user->ID, isset($client['wordpress_user_id']) ? $client['wordpress_user_id'] : null);
-
-                $diffs = self::compare_fields($client, $woo_user);
-
-                $filtered_diffs = [];
-
-                foreach ($diffs as $field => $values) {
-                    $field_key   = self::sanitize_ignore_value($field);
-                    $source_val  = self::sanitize_ignore_value($values['meals_db'] ?? '');
-                    $target_val  = self::sanitize_ignore_value($values['woocommerce'] ?? '');
-                    $ignore_key  = self::build_ignore_key($field_key, $source_val, $target_val);
-
-                    if (isset($ignored_keys[$ignore_key])) {
-                        continue;
-                    }
-
-                    $filtered_diffs[$field] = $values;
-                }
-
-                if (!empty($filtered_diffs)) {
-                    $mismatches[] = [
-                        'client_id' => $client['id'],
-                        'woo_user_id' => $woo_user->ID,
-                        'fields' => $filtered_diffs
-                    ];
-                }
-            } elseif (isset($client['wordpress_user_id']) && $client['wordpress_user_id'] !== null && $client['wordpress_user_id'] !== '') {
-                self::persist_wordpress_user_id($conn, (int) $client['id'], null, $client['wordpress_user_id']);
+            if ($normalized['wordpress_user_id'] > 0) {
+                $clients_by_wp_id[$normalized['wordpress_user_id']][] = $normalized;
+            } else {
+                $clients_without_id[] = $normalized;
             }
         }
+
         $result->free();
 
+        $wp_users = get_users([
+            'fields' => 'all_with_meta',
+        ]);
+
+        foreach ($wp_users as $woo_user) {
+            if (!$woo_user instanceof WP_User) {
+                continue;
+            }
+
+            $wp_id = (int) $woo_user->ID;
+
+            if (isset($clients_by_wp_id[$wp_id])) {
+                foreach ($clients_by_wp_id[$wp_id] as $client) {
+                    $diffs = self::compare_fields($client, $woo_user);
+                    $filtered_diffs = self::filter_ignored_fields($diffs, $ignored_keys);
+
+                    if (!empty($filtered_diffs)) {
+                        $mismatches[] = [
+                            'type'         => 'field_mismatch',
+                            'client_id'    => $client['id'],
+                            'woo_user_id'  => $wp_id,
+                            'fields'       => $filtered_diffs,
+                            'allow_sync'   => true,
+                            'notice'       => '',
+                            'meals_client' => $client,
+                            'wp_user'      => self::extract_user_snapshot($woo_user),
+                        ];
+                    }
+                }
+
+                unset($clients_by_wp_id[$wp_id]);
+            } else {
+                $conflict = self::build_wordpress_only_conflict($woo_user, $ignored_keys);
+
+                if ($conflict !== null) {
+                    $mismatches[] = $conflict;
+                }
+            }
+        }
+
+        if (!empty($clients_by_wp_id)) {
+            foreach ($clients_by_wp_id as $clients) {
+                foreach ($clients as $client) {
+                    $conflict = self::build_meals_only_conflict($client, $ignored_keys, true);
+
+                    if ($conflict !== null) {
+                        $mismatches[] = $conflict;
+                    }
+                }
+            }
+        }
+
+        foreach ($clients_without_id as $client) {
+            $conflict = self::build_meals_only_conflict($client, $ignored_keys, false);
+
+            if ($conflict !== null) {
+                $mismatches[] = $conflict;
+            }
+        }
+
         return $mismatches;
-    }
-
-    /**
-     * Persist the linked WordPress user ID for a Meals DB client when it changes.
-     *
-     * @param \mysqli   $conn
-     * @param int       $client_id
-     * @param int|null  $wordpress_user_id
-     * @param mixed     $current_value
-     */
-    private static function persist_wordpress_user_id(\mysqli $conn, int $client_id, ?int $wordpress_user_id, $current_value): void {
-        $normalized_current = ($current_value === null || $current_value === '') ? null : (int) $current_value;
-
-        if ($normalized_current === $wordpress_user_id) {
-            return;
-        }
-
-        $value_sql = $wordpress_user_id === null ? 'NULL' : (string) max(0, $wordpress_user_id);
-        $sql = sprintf(
-            'UPDATE meals_clients SET wordpress_user_id = %s WHERE id = %d LIMIT 1',
-            $value_sql,
-            $client_id
-        );
-
-        if ($conn->query($sql) !== true) {
-            error_log('[MealsDB Sync] Failed to persist WordPress user ID for client ' . $client_id . ': ' . ($conn->error ?? 'unknown error'));
-        }
     }
 
     /**
@@ -212,36 +208,6 @@ class MealsDB_Sync {
     }
 
     /**
-     * Find a WooCommerce user by email or custom meta matching individual_id.
-     *
-     * @param string|null $email
-     * @param string|null $individual_id
-     * @return WP_User|null
-     */
-    private static function find_woocommerce_user(?string $email, ?string $individual_id): ?WP_User {
-        if ($email) {
-            $user = get_user_by('email', $email);
-            if ($user instanceof WP_User) {
-                return $user;
-            }
-        }
-
-        if ($individual_id !== null && $individual_id !== '') {
-            $users = get_users([
-                'meta_key' => 'meals_individual_id',
-                'meta_value' => $individual_id,
-                'number' => 1
-            ]);
-
-            if (!empty($users)) {
-                return $users[0];
-            }
-        }
-
-        return null;
-    }
-
-    /**
      * Compare Meals DB record and Woo user fields.
      *
      * @param array $client
@@ -272,6 +238,163 @@ class MealsDB_Sync {
         }
 
         return $mismatches;
+    }
+
+    /**
+     * Filter out fields that have been ignored by the administrator.
+     *
+     * @param array<string, array<string, mixed>> $fields
+     * @param array<string, bool>                 $ignored_keys
+     * @return array<string, array<string, mixed>>
+     */
+    private static function filter_ignored_fields(array $fields, array $ignored_keys): array {
+        $filtered = [];
+
+        foreach ($fields as $field => $values) {
+            $field_key  = self::sanitize_ignore_value($field);
+            $source_val = self::sanitize_ignore_value($values['meals_db'] ?? '');
+            $target_val = self::sanitize_ignore_value($values['woocommerce'] ?? '');
+            $ignore_key = self::build_ignore_key($field_key, $source_val, $target_val);
+
+            if (isset($ignored_keys[$ignore_key])) {
+                continue;
+            }
+
+            $filtered[$field] = $values;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * Build a conflict entry for a WordPress user that does not exist in Meals DB.
+     *
+     * @param WP_User               $woo_user
+     * @param array<string, bool>   $ignored_keys
+     * @return array<string, mixed>|null
+     */
+    private static function build_wordpress_only_conflict(WP_User $woo_user, array $ignored_keys): ?array {
+        $fields = [
+            'wordpress_user_id' => [
+                'meals_db'    => __('No Meals DB client is linked to this WordPress user.', 'meals-db'),
+                'woocommerce' => (string) $woo_user->ID,
+            ],
+        ];
+
+        $filtered = self::filter_ignored_fields($fields, $ignored_keys);
+
+        if (empty($filtered)) {
+            return null;
+        }
+
+        return [
+            'type'         => 'wordpress_only',
+            'client_id'    => 0,
+            'woo_user_id'  => (int) $woo_user->ID,
+            'fields'       => $filtered,
+            'allow_sync'   => false,
+            'notice'       => __('No Meals DB client record matches this WordPress user.', 'meals-db'),
+            'meals_client' => null,
+            'wp_user'      => self::extract_user_snapshot($woo_user),
+        ];
+    }
+
+    /**
+     * Build a conflict entry for a Meals DB client without a matching WordPress user record.
+     *
+     * @param array<string, mixed>  $client
+     * @param array<string, bool>   $ignored_keys
+     * @param bool                  $has_wordpress_id Whether the client references a WordPress user ID.
+     * @return array<string, mixed>|null
+     */
+    private static function build_meals_only_conflict(array $client, array $ignored_keys, bool $has_wordpress_id): ?array {
+        $wp_id = $client['wordpress_user_id'] ?? 0;
+
+        if ($has_wordpress_id) {
+            $notice = __('The linked WordPress user could not be found.', 'meals-db');
+            $woo_message = __('No WordPress user exists with this ID.', 'meals-db');
+            $meals_value = (string) $wp_id;
+        } else {
+            $notice = __('This Meals DB client does not have a linked WordPress user ID.', 'meals-db');
+            $woo_message = __('This client is not linked to a WordPress user ID.', 'meals-db');
+            $meals_value = __('(not set)', 'meals-db');
+        }
+
+        $fields = [
+            'wordpress_user_id' => [
+                'meals_db'    => $meals_value,
+                'woocommerce' => $woo_message,
+            ],
+        ];
+
+        $filtered = self::filter_ignored_fields($fields, $ignored_keys);
+
+        if (empty($filtered)) {
+            return null;
+        }
+
+        return [
+            'type'         => 'meals_only',
+            'client_id'    => $client['id'] ?? 0,
+            'woo_user_id'  => $has_wordpress_id ? (int) $wp_id : 0,
+            'fields'       => $filtered,
+            'allow_sync'   => false,
+            'notice'       => $notice,
+            'meals_client' => $client,
+            'wp_user'      => null,
+        ];
+    }
+
+    /**
+     * Normalize a Meals DB client record and decrypt the stored individual ID when possible.
+     *
+     * @param array<string, mixed> $client
+     * @return array<string, mixed>
+     */
+    private static function normalize_client_row(array $client): array {
+        $individual_id = $client['individual_id'] ?? '';
+
+        if ($individual_id !== '') {
+            try {
+                $individual_id = MealsDB_Encryption::decrypt($individual_id);
+            } catch (Exception $e) {
+                error_log('[MealsDB Sync] Failed to decrypt individual_id for client ID ' . ($client['id'] ?? 'unknown') . ': ' . $e->getMessage());
+                $individual_id = '';
+            }
+        }
+
+        $wp_id_raw = $client['wordpress_user_id'] ?? 0;
+        $wp_id = is_numeric($wp_id_raw) ? (int) $wp_id_raw : 0;
+
+        if ($wp_id < 0) {
+            $wp_id = 0;
+        }
+
+        return [
+            'id'               => isset($client['id']) ? (int) $client['id'] : 0,
+            'individual_id'    => (string) $individual_id,
+            'first_name'       => isset($client['first_name']) ? (string) $client['first_name'] : '',
+            'last_name'        => isset($client['last_name']) ? (string) $client['last_name'] : '',
+            'client_email'     => isset($client['client_email']) ? (string) $client['client_email'] : '',
+            'phone_primary'    => isset($client['phone_primary']) ? (string) $client['phone_primary'] : '',
+            'address_postal'   => isset($client['address_postal']) ? (string) $client['address_postal'] : '',
+            'wordpress_user_id'=> $wp_id,
+        ];
+    }
+
+    /**
+     * Create a lightweight snapshot of a WordPress user for display purposes.
+     *
+     * @param WP_User $woo_user
+     * @return array<string, string|int>
+     */
+    private static function extract_user_snapshot(WP_User $woo_user): array {
+        return [
+            'id'         => (int) $woo_user->ID,
+            'first_name' => isset($woo_user->first_name) ? (string) $woo_user->first_name : '',
+            'last_name'  => isset($woo_user->last_name) ? (string) $woo_user->last_name : '',
+            'email'      => isset($woo_user->user_email) ? (string) $woo_user->user_email : '',
+        ];
     }
 
     /**
