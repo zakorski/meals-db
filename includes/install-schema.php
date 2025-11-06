@@ -67,6 +67,7 @@ class MealsDB_Installer {
                 assigned_social_worker VARCHAR(191) NULL,
                 social_worker_email VARCHAR(191) NULL,
                 client_email VARCHAR(191) NOT NULL,
+                wordpress_user_id BIGINT UNSIGNED NULL,
                 phone_primary VARCHAR(25) NOT NULL,
                 phone_secondary VARCHAR(25) NULL,
                 do_not_call_client_phone TINYINT(1) NOT NULL DEFAULT 0,
@@ -127,7 +128,8 @@ class MealsDB_Installer {
                 UNIQUE KEY unique_vet_health_card_index (vet_health_card_index),
                 UNIQUE KEY unique_delivery_initials_index (delivery_initials_index),
                 UNIQUE KEY unique_vet_health_card (vet_health_card),
-                KEY idx_status (status)
+                KEY idx_status (status),
+                KEY idx_wordpress_user_id (wordpress_user_id)
             ) ENGINE=InnoDB $charset_sql;",
             'meals_drafts' => "CREATE TABLE IF NOT EXISTS meals_drafts (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -391,6 +393,7 @@ class MealsDB_Installer {
             'termination_date'             => 'DATE NULL',
             'most_recent_renewal_date'     => 'DATE NULL',
             'units'                        => 'TINYINT UNSIGNED NULL',
+            'wordpress_user_id'            => 'BIGINT UNSIGNED NULL',
         ];
 
         foreach ($columns as $column => $definition) {
