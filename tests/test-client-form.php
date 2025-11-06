@@ -79,6 +79,28 @@ class StubStmt {
             return true;
         }
 
+        if (stripos($sql, 'UPDATE meals_clients SET') === 0) {
+            if (preg_match('/SET\s+(.+)\s+WHERE/i', $sql, $matches)) {
+                $assignments = explode(',', $matches[1]);
+                $columns = [];
+
+                foreach ($assignments as $assignment) {
+                    if (preg_match('/`?([a-z_]+)`?\s*=\s*\?/i', trim($assignment), $columnMatch)) {
+                        $columns[] = $columnMatch[1];
+                    }
+                }
+
+                $valueCount = count($columns);
+                $values = array_slice($this->params, 0, $valueCount);
+                if (!empty($columns)) {
+                    $this->conn->lastUpdate = array_combine($columns, $values);
+                }
+                $this->conn->lastUpdateWhereId = $this->params[$valueCount] ?? null;
+            }
+
+            return true;
+        }
+
         if (stripos($sql, 'INSERT INTO meals_drafts') === 0) {
             $json = $this->params[0] ?? '';
             $user = $this->params[1] ?? 0;
@@ -133,6 +155,8 @@ class StubMysqli extends mysqli {
     private $drafts = [];
     private $nextDraftId = 1;
     public $lastInsert = [];
+    public $lastUpdate = [];
+    public $lastUpdateWhereId = null;
     public int|string $affected_rows = 0;
     public int|string $insert_id = 0;
 
@@ -684,6 +708,29 @@ run_test('save stores deterministic indexes for encrypted fields', function () {
     }
 });
 
+run_test('save omits empty wordpress user id values', function () {
+    reset_index_flag();
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
+    set_db_connection($conn);
+
+    $data = [
+        'first_name' => 'Sam',
+        'last_name' => 'Staff',
+        'customer_type' => 'Staff',
+        'client_email' => 'sam@example.com',
+        'wordpress_user_id' => '',
+    ];
+
+    $result = MealsDB_Client_Form::save($data);
+    if ($result !== true) {
+        throw new Exception('Save did not succeed when WordPress user ID is empty.');
+    }
+
+    if (array_key_exists('wordpress_user_id', $conn->lastInsert)) {
+        throw new Exception('Expected empty WordPress user ID to be omitted from insert payload.');
+    }
+});
+
 run_test('save aborts when deterministic indexes cannot be created', function () {
     reset_index_flag();
     $conn = new class([], [], [], []) extends StubMysqli {
@@ -711,6 +758,33 @@ run_test('save aborts when deterministic indexes cannot be created', function ()
 
     if ($result !== false) {
         throw new Exception('Save should fail when deterministic indexes cannot be ensured.');
+    }
+});
+
+run_test('update clears wordpress user id when blank', function () {
+    reset_index_flag();
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
+    set_db_connection($conn);
+
+    $result = MealsDB_Client_Form::update(12, [
+        'first_name' => 'Chris',
+        'wordpress_user_id' => '',
+    ]);
+
+    if ($result !== true) {
+        throw new Exception('Update should succeed when clearing WordPress user ID.');
+    }
+
+    if (!array_key_exists('wordpress_user_id', $conn->lastUpdate)) {
+        throw new Exception('Expected update payload to include the WordPress user ID column.');
+    }
+
+    if ($conn->lastUpdate['wordpress_user_id'] !== null) {
+        throw new Exception('Expected WordPress user ID to be null when cleared during update, got ' . var_export($conn->lastUpdate['wordpress_user_id'], true));
+    }
+
+    if ($conn->lastUpdateWhereId !== 12) {
+        throw new Exception('Expected update to target the provided client ID.');
     }
 });
 
