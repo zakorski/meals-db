@@ -29,7 +29,7 @@ class MealsDB_Sync {
         $ignored_keys = self::load_ignored_conflicts($conn);
 
         // Get all active clients from Meals DB
-        $query = "SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal FROM meals_clients WHERE status = 'active'";
+        $query = "SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM meals_clients WHERE status = 'active'";
         $result = $conn->query($query);
 
         if (!($result instanceof \mysqli_result)) {
@@ -64,6 +64,8 @@ class MealsDB_Sync {
             $woo_user = self::find_woocommerce_user($client['client_email'], $individual_id);
 
             if ($woo_user) {
+                self::persist_wordpress_user_id($conn, (int) $client['id'], (int) $woo_user->ID, isset($client['wordpress_user_id']) ? $client['wordpress_user_id'] : null);
+
                 $diffs = self::compare_fields($client, $woo_user);
 
                 $filtered_diffs = [];
@@ -88,11 +90,40 @@ class MealsDB_Sync {
                         'fields' => $filtered_diffs
                     ];
                 }
+            } elseif (isset($client['wordpress_user_id']) && $client['wordpress_user_id'] !== null && $client['wordpress_user_id'] !== '') {
+                self::persist_wordpress_user_id($conn, (int) $client['id'], null, $client['wordpress_user_id']);
             }
         }
         $result->free();
 
         return $mismatches;
+    }
+
+    /**
+     * Persist the linked WordPress user ID for a Meals DB client when it changes.
+     *
+     * @param \mysqli   $conn
+     * @param int       $client_id
+     * @param int|null  $wordpress_user_id
+     * @param mixed     $current_value
+     */
+    private static function persist_wordpress_user_id(\mysqli $conn, int $client_id, ?int $wordpress_user_id, $current_value): void {
+        $normalized_current = ($current_value === null || $current_value === '') ? null : (int) $current_value;
+
+        if ($normalized_current === $wordpress_user_id) {
+            return;
+        }
+
+        $value_sql = $wordpress_user_id === null ? 'NULL' : (string) max(0, $wordpress_user_id);
+        $sql = sprintf(
+            'UPDATE meals_clients SET wordpress_user_id = %s WHERE id = %d LIMIT 1',
+            $value_sql,
+            $client_id
+        );
+
+        if ($conn->query($sql) !== true) {
+            error_log('[MealsDB Sync] Failed to persist WordPress user ID for client ' . $client_id . ': ' . ($conn->error ?? 'unknown error'));
+        }
     }
 
     /**
