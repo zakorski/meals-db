@@ -98,6 +98,7 @@ class MealsDB_Client_Form {
         'submit',
         'resume_draft',
         'draft_id',
+        'client_id',
     ];
 
     /**
