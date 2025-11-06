@@ -4,6 +4,9 @@ require_once __DIR__ . '/../includes/class-encryption.php';
 require_once __DIR__ . '/../includes/class-client-form.php';
 
 putenv('PLUGIN_AES_KEY=base64:' . base64_encode(str_repeat('k', 32)));
+if (!defined('MEALS_DB_KEY')) {
+    define('MEALS_DB_KEY', 'base64:' . base64_encode(str_repeat('k', 32)));
+}
 
 if (!function_exists('get_current_user_id')) {
     function get_current_user_id(): int {
@@ -443,6 +446,64 @@ run_test('validation accepts enumerated selections', function () {
         if (($sanitized[$field] ?? null) !== $expected) {
             throw new Exception(sprintf('Expected sanitized %s to equal %s', $field, $expected));
         }
+    }
+
+    set_db_connection(null);
+});
+
+run_test('staff client allows minimal required fields', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Staff',
+        'first_name' => 'Alex',
+        'last_name' => 'Smith',
+        'client_email' => 'alex@example.com',
+        'wordpress_user_id' => '0042',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if (!$result['valid']) {
+        throw new Exception('Expected Staff clients to validate with minimal fields.');
+    }
+
+    $sanitized = $result['sanitized'];
+    if (($sanitized['wordpress_user_id'] ?? null) !== '42') {
+        throw new Exception('WordPress user ID should be sanitized to digits.');
+    }
+
+    if (($sanitized['client_email'] ?? null) !== 'alex@example.com') {
+        throw new Exception('Client email should be preserved for Staff clients.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('staff client requires email and WordPress user id', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Staff',
+        'first_name' => 'Taylor',
+        'last_name' => 'Jones',
+        'client_email' => '',
+        'wordpress_user_id' => '',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected Staff validation to fail when email and WordPress ID are missing.');
+    }
+
+    $missing = $result['error_details']['missing_required'] ?? [];
+    if (!isset($missing['client_email'])) {
+        throw new Exception('Expected missing email error for Staff client.');
+    }
+
+    if (!isset($missing['wordpress_user_id'])) {
+        throw new Exception('Expected missing WordPress user ID error for Staff client.');
     }
 
     set_db_connection(null);

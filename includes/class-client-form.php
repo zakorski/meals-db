@@ -34,6 +34,7 @@ class MealsDB_Client_Form {
         'assigned_social_worker',
         'social_worker_email',
         'client_email',
+        'wordpress_user_id',
         'phone_primary',
         'phone_secondary',
         'do_not_call_client_phone',
@@ -134,6 +135,7 @@ class MealsDB_Client_Form {
         'assigned_social_worker'         => 'Social Worker Name',
         'social_worker_email'            => 'Social Worker Email Address',
         'client_email'                   => 'Client Email',
+        'wordpress_user_id'              => 'WordPress User ID',
         'phone_primary'                  => 'Client Phone #1',
         'phone_secondary'                => 'Client Phone #2',
         'do_not_call_client_phone'       => "Do Not Call Client's Phone",
@@ -284,42 +286,57 @@ class MealsDB_Client_Form {
         }
 
         // Required fields captured by the current admin form UI
+        $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
         $required_fields = [
             'last_name',
             'first_name',
             'customer_type',
-            'address_street_number',
-            'address_street_name',
-            'address_unit',
-            'address_city',
-            'address_province',
-            'address_postal',
-            'phone_primary',
-            'payment_method',
-            'required_start_date',
-            'rate',
-            'delivery_initials',
-            'delivery_day',
-            'delivery_area_name',
-            'delivery_area_zone',
-            'ordering_frequency',
-            'ordering_contact_method',
-            'delivery_frequency',
         ];
 
-        $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
-        if (in_array($client_type, ['SDNB', 'VETERAN'], true)) {
-            $required_fields[] = 'open_date';
-            $required_fields[] = 'units';
-        }
+        if ($client_type === 'STAFF') {
+            $required_fields[] = 'client_email';
+            $required_fields[] = 'wordpress_user_id';
+        } else {
+            $required_fields = array_merge($required_fields, [
+                'address_street_number',
+                'address_street_name',
+                'address_unit',
+                'address_city',
+                'address_province',
+                'address_postal',
+                'phone_primary',
+                'payment_method',
+                'required_start_date',
+                'rate',
+                'delivery_initials',
+                'delivery_day',
+                'delivery_area_name',
+                'delivery_area_zone',
+                'ordering_frequency',
+                'ordering_contact_method',
+                'delivery_frequency',
+            ]);
 
-        if ($client_type === 'VETERAN') {
-            $required_fields[] = 'vet_health_card';
+            if (in_array($client_type, ['SDNB', 'VETERAN'], true)) {
+                $required_fields[] = 'open_date';
+                $required_fields[] = 'units';
+            }
+
+            if ($client_type === 'VETERAN') {
+                $required_fields[] = 'vet_health_card';
+            }
         }
 
         foreach (array_unique($required_fields) as $field) {
             if (empty($sanitized[$field] ?? '')) {
                 $record_required_error($field);
+            }
+        }
+
+        if (($sanitized['wordpress_user_id'] ?? '') !== '') {
+            $wp_id_value = $sanitized['wordpress_user_id'];
+            if (!ctype_digit($wp_id_value) || (int) $wp_id_value <= 0) {
+                $record_format_error('wordpress_user_id', 'WordPress User ID must be a positive integer.');
             }
         }
 
@@ -1121,6 +1138,16 @@ class MealsDB_Client_Form {
                 } else {
                     $value = trim(filter_var($value, FILTER_SANITIZE_EMAIL));
                 }
+                break;
+            case 'wordpress_user_id':
+                $value = trim($value);
+                if ($value === '') {
+                    break;
+                }
+
+                $digits = preg_replace('/[^0-9]/', '', $value);
+                $digits = ltrim($digits, '0');
+                $value = $digits === '' ? '' : $digits;
                 break;
             case 'diet_concerns':
             case 'client_comments':
