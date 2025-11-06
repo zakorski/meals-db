@@ -274,10 +274,24 @@ class MealsDB_Sync {
      * @return array<string, mixed>|null
      */
     private static function build_wordpress_only_conflict(WP_User $woo_user, array $ignored_keys): ?array {
+        $no_meals_message = __('No Meals DB client is linked to this WordPress user.', 'meals-db');
+
         $fields = [
             'wordpress_user_id' => [
-                'meals_db'    => __('No Meals DB client is linked to this WordPress user.', 'meals-db'),
+                'meals_db'    => $no_meals_message,
                 'woocommerce' => (string) $woo_user->ID,
+            ],
+            'first_name' => [
+                'meals_db'    => $no_meals_message,
+                'woocommerce' => isset($woo_user->first_name) ? (string) $woo_user->first_name : '',
+            ],
+            'last_name' => [
+                'meals_db'    => $no_meals_message,
+                'woocommerce' => isset($woo_user->last_name) ? (string) $woo_user->last_name : '',
+            ],
+            'client_email' => [
+                'meals_db'    => $no_meals_message,
+                'woocommerce' => isset($woo_user->user_email) ? (string) $woo_user->user_email : '',
             ],
         ];
 
@@ -320,10 +334,24 @@ class MealsDB_Sync {
             $meals_value = __('(not set)', 'meals-db');
         }
 
+        $no_wp_data_message = $woo_message;
+
         $fields = [
             'wordpress_user_id' => [
                 'meals_db'    => $meals_value,
                 'woocommerce' => $woo_message,
+            ],
+            'first_name' => [
+                'meals_db'    => isset($client['first_name']) ? (string) $client['first_name'] : '',
+                'woocommerce' => $no_wp_data_message,
+            ],
+            'last_name' => [
+                'meals_db'    => isset($client['last_name']) ? (string) $client['last_name'] : '',
+                'woocommerce' => $no_wp_data_message,
+            ],
+            'client_email' => [
+                'meals_db'    => isset($client['client_email']) ? (string) $client['client_email'] : '',
+                'woocommerce' => $no_wp_data_message,
             ],
         ];
 
