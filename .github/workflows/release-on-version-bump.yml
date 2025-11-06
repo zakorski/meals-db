@@ -1,4 +1,4 @@
-name: Auto Bump Version and Release
+name: Auto Bump Version, Build Plugin Zip and Release
 
 permissions:
   contents: write
@@ -9,7 +9,7 @@ on:
       - main
 
 jobs:
-  bump-version:
+  bump-and-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -22,18 +22,20 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-      # 1️⃣ Get the latest valid version tag (vX.Y.Z)
+      # ------------------------------------------------------------------
+      # 1️⃣ Get latest valid tag (vX.Y.Z)
+      # ------------------------------------------------------------------
       - name: Get current tag
         id: get_tag
         run: |
           latest_tag=$(git tag -l "v[0-9]*" --sort=-v:refname | head -n 1)
-          if [ -z "$latest_tag" ]; then
-            latest_tag="v1.0.0"
-          fi
+          if [ -z "$latest_tag" ]; then latest_tag="v1.0.0"; fi
           echo "latest_tag=${latest_tag}" >> $GITHUB_ENV
           echo "Detected latest tag: ${latest_tag}"
 
-      # 2️⃣ Calculate next version (patch bump)
+      # ------------------------------------------------------------------
+      # 2️⃣ Calculate next patch version
+      # ------------------------------------------------------------------
       - name: Calculate next version
         id: next_version
         run: |
@@ -44,26 +46,45 @@ jobs:
           echo "new_version=${new_version}" >> $GITHUB_ENV
           echo "Next version: $new_version"
 
-      # 3️⃣ Update the Version: line in the plugin file
+      # ------------------------------------------------------------------
+      # 3️⃣ Update plugin header version
+      # ------------------------------------------------------------------
       - name: Update plugin header version
         run: |
           sed -i "s/^Version:.*/Version: ${new_version}/" meals-db-main.php
           git add meals-db-main.php
           git commit -m "chore: bump plugin version to ${new_version}" || echo "No changes to commit"
 
-      # 4️⃣ Create and push the new tag
+      # ------------------------------------------------------------------
+      # 4️⃣ Create and push tag
+      # ------------------------------------------------------------------
       - name: Create Git tag
         run: |
           git tag -a "v${new_version}" -m "Release v${new_version}"
           git push origin "v${new_version}"
           git push
 
-      # 5️⃣ Publish GitHub release
+      # ------------------------------------------------------------------
+      # 5️⃣ Build plugin zip with correct root folder
+      # ------------------------------------------------------------------
+      - name: Build plugin zip
+        run: |
+          mkdir build
+          mkdir build/meals-db-main
+          rsync -av --exclude='.git' --exclude='build' --exclude='.github' ./ build/meals-db-main/
+          cd build
+          zip -r meals-db-main.zip meals-db-main
+          cd ..
+
+      # ------------------------------------------------------------------
+      # 6️⃣ Create GitHub Release and attach zip
+      # ------------------------------------------------------------------
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.new_version }}
           name: "Release v${{ env.new_version }}"
           body: "Automated release for version v${{ env.new_version }}."
+          files: build/meals-db-main.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
