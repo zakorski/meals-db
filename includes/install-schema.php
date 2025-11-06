@@ -22,6 +22,11 @@ class MealsDB_Installer {
             require_once __DIR__ . '/class-db.php';
         }
 
+        if (!self::ensure_wp_config_constants()) {
+            error_log('[MealsDB Installer] Configuration constants were missing. Placeholder entries were added to wp-config.php when possible. Update them with the correct values and reactivate the plugin.');
+            return;
+        }
+
         $conn = MealsDB_DB::get_connection();
 
         if (!$conn instanceof mysqli) {
@@ -165,6 +170,141 @@ class MealsDB_Installer {
 
         self::rename_legacy_columns($conn);
         self::ensure_meals_clients_columns($conn);
+    }
+
+    /**
+     * Ensure required configuration constants are present in wp-config.php.
+     */
+    private static function ensure_wp_config_constants(): bool {
+        $required = self::get_required_constants();
+        $missing = [];
+
+        foreach ($required as $constant => $comment) {
+            if (!defined($constant)) {
+                $missing[$constant] = $comment;
+                continue;
+            }
+
+            $value = constant($constant);
+
+            if ($value === null || $value === '') {
+                $missing[$constant] = $comment;
+            }
+        }
+
+        if (empty($missing)) {
+            return true;
+        }
+
+        $wpConfigPath = self::locate_wp_config_path();
+
+        if ($wpConfigPath === null) {
+            error_log('[MealsDB Installer] Unable to locate wp-config.php to append Meals DB constants.');
+            return false;
+        }
+
+        if (!is_writable($wpConfigPath)) {
+            error_log('[MealsDB Installer] wp-config.php is not writable; cannot append Meals DB constants.');
+            return false;
+        }
+
+        $configContents = file_get_contents($wpConfigPath);
+
+        if ($configContents === false) {
+            error_log('[MealsDB Installer] Unable to read wp-config.php while preparing Meals DB constants.');
+            return false;
+        }
+
+        foreach (array_keys($missing) as $constant) {
+            if (strpos($configContents, "define('{$constant}'") !== false || strpos($configContents, "define(\"{$constant}\"") !== false) {
+                unset($missing[$constant]);
+            }
+        }
+
+        if (!empty($missing)) {
+            $lines = [
+                '',
+                '// Meals Database configuration constants added during plugin activation.',
+                '// Update each value with the correct credentials before using the plugin.',
+            ];
+
+            foreach ($missing as $constant => $comment) {
+                $lines[] = "if (!defined('{$constant}')) {";
+                $lines[] = "    define('{$constant}', ''); // TODO: {$comment}";
+                $lines[] = '}';
+            }
+
+            $lines[] = '';
+
+            $block = implode(PHP_EOL, $lines);
+
+            if (file_put_contents($wpConfigPath, $block, FILE_APPEND | LOCK_EX) === false) {
+                error_log('[MealsDB Installer] Failed writing Meals DB constants to wp-config.php.');
+                return false;
+            }
+        }
+
+        foreach (array_keys($missing) as $constant) {
+            if (!defined($constant)) {
+                define($constant, '');
+            }
+        }
+
+        return self::are_constants_configured();
+    }
+
+    /**
+     * Mapping of required configuration constants to human-readable descriptions.
+     */
+    private static function get_required_constants(): array {
+        return [
+            'MEALS_DB_HOST' => 'Set to the Meals database host.',
+            'MEALS_DB_USER' => 'Set to the Meals database username.',
+            'MEALS_DB_PASS' => 'Set to the Meals database password.',
+            'MEALS_DB_NAME' => 'Set to the Meals database name.',
+            'MEALS_DB_KEY'  => 'Provide the base64-encoded encryption key.',
+        ];
+    }
+
+    /**
+     * Locate wp-config.php within the current installation.
+     */
+    private static function locate_wp_config_path(): ?string {
+        $paths = [];
+
+        if (defined('ABSPATH')) {
+            $paths[] = rtrim(ABSPATH, '/\\') . '/wp-config.php';
+            $paths[] = rtrim(dirname(ABSPATH), '/\\') . '/wp-config.php';
+        }
+
+        $paths = array_unique(array_filter($paths));
+
+        foreach ($paths as $path) {
+            if (file_exists($path)) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Confirm that all Meals DB constants are defined and populated.
+     */
+    private static function are_constants_configured(): bool {
+        foreach (array_keys(self::get_required_constants()) as $constant) {
+            if (!defined($constant)) {
+                return false;
+            }
+
+            $value = constant($constant);
+
+            if ($value === null || $value === '') {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
