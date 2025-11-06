@@ -20,12 +20,6 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     </table>
 
     <div class="mealsdb-update-actions">
-        <button type="button" class="button button-secondary" id="mealsdb-check-updates">
-            <?php echo esc_html__('Check for Updates', 'meals-db'); ?>
-        </button>
-        <button type="button" class="button button-secondary" id="mealsdb-run-update" disabled>
-            <?php echo esc_html__('Run Update', 'meals-db'); ?>
-        </button>
         <button type="button" class="button button-primary" id="mealsdb-update-database">
             <?php echo esc_html__('Update Database', 'meals-db'); ?>
         </button>
