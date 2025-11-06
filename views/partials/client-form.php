@@ -103,7 +103,7 @@ $alt_contact_enabled = (
 
         <div class="mealsdb-step" data-step="2" data-step-title="Client &amp; Case Details">
             <h3><?php esc_html_e('Step 2: Client &amp; Case Details', 'meals-db'); ?></h3>
-            <p class="description"><?php esc_html_e('Staff clients only require a first name, last name, and email address.', 'meals-db'); ?></p>
+            <p class="description"><?php esc_html_e('Staff clients only require a first name, last name, email address, and WordPress User ID.', 'meals-db'); ?></p>
             <table class="form-table">
                 <tr>
                     <th><label for="customer_type"><?php esc_html_e('Customer Type *', 'meals-db'); ?></label></th>
@@ -134,15 +134,13 @@ $alt_contact_enabled = (
                     </th>
                     <td><input type="email" name="client_email" id="client_email" class="regular-text" data-base-required="1" value="<?php echo esc_attr($form_values['client_email'] ?? ''); ?>" /></td>
                 </tr>
-                <?php if ($form_mode === 'edit') : ?>
-                    <tr data-client-type="staff">
-                        <th>
-                            <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID', 'meals-db'); ?></label>
-                            <span class="description"><?php esc_html_e('Optional. Used for syncing with the WordPress user record.', 'meals-db'); ?></span>
-                        </th>
-                        <td><input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" value="<?php echo esc_attr($form_values['wordpress_user_id'] ?? ''); ?>" /></td>
-                    </tr>
-                <?php endif; ?>
+                <tr data-client-type="staff" data-required-for="staff">
+                    <th>
+                        <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID *', 'meals-db'); ?></label>
+                        <span class="description"><?php esc_html_e('Link to the matching WordPress user account.', 'meals-db'); ?></span>
+                    </th>
+                    <td><input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" data-base-required="1" value="<?php echo esc_attr($form_values['wordpress_user_id'] ?? ''); ?>" /></td>
+                </tr>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="phone_primary"><?php esc_html_e('Phone Number *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="phone_primary" id="phone_primary" class="regular-text phone-mask" placeholder="(555)-555-5555" required data-base-required="1" value="<?php echo esc_attr($form_values['phone_primary'] ?? ''); ?>" /></td>

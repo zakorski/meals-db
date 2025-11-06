@@ -26,12 +26,23 @@ $staff_selected = ($selected_type === 'STAFF');
     </td>
 </tr>
 <tr>
-    <th><label for="phone_primary">Phone #1 *</label></th>
-    <td><input type="text" name="phone_primary" required placeholder="(555)-555-5555" class="regular-text phone-mask" value="<?= esc_attr($_POST['phone_primary'] ?? '') ?>" /></td>
+    <th>
+        <label for="wordpress_user_id">
+            <?php esc_html_e('WordPress User ID', 'meals-db'); ?><?= $staff_selected ? ' *' : '' ?>
+        </label>
+    </th>
+    <td>
+        <input type="number" name="wordpress_user_id" min="1" step="1" class="regular-text" <?= $staff_selected ? 'required' : '' ?> value="<?= esc_attr($_POST['wordpress_user_id'] ?? '') ?>" />
+        <p class="description"><?php esc_html_e('Required for Staff clients.', 'meals-db'); ?></p>
+    </td>
 </tr>
 <tr>
-    <th><label for="address_postal"><?php esc_html_e('Postal Code', 'meals-db'); ?> *</label></th>
-    <td><input type="text" name="address_postal" required placeholder="A1A1A1" maxlength="6" class="regular-text postal-mask" value="<?= esc_attr($_POST['address_postal'] ?? '') ?>" /></td>
+    <th><label for="phone_primary">Phone #1<?= $staff_selected ? '' : ' *' ?></label></th>
+    <td><input type="text" name="phone_primary" <?= $staff_selected ? '' : 'required' ?> placeholder="(555)-555-5555" class="regular-text phone-mask" value="<?= esc_attr($_POST['phone_primary'] ?? '') ?>" /></td>
+</tr>
+<tr>
+    <th><label for="address_postal"><?php esc_html_e('Postal Code', 'meals-db'); ?><?= $staff_selected ? '' : ' *' ?></label></th>
+    <td><input type="text" name="address_postal" <?= $staff_selected ? '' : 'required' ?> placeholder="A1A1A1" maxlength="6" class="regular-text postal-mask" value="<?= esc_attr($_POST['address_postal'] ?? '') ?>" /></td>
 </tr>
 <?php endif; ?>
 <tr>
