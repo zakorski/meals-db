@@ -1,10 +1,13 @@
 <?php
 /**
- * Plugin Name: Meals DB
- * Description: Secure, encrypted client database with WooCommerce sync, conflict resolution dashboard, and audit logging.
+ * Plugin Name: Meals Database
+ * Plugin URI: https://github.com/zakorski/meals-db
+ * Description: Custom plugin for Meals & More database integration.
  * Version: 1.0.0
- * Author: Fishhorn Design
- * Author URI: https://fishhorn.ca
+ * Author: Zak Sikorski
+ * Author URI: https://zakorski.com
+ * GitHub Plugin URI: zakorski/meals-db
+ * Primary Branch: main
  * License: GPL-3.0-or-later
  * Requires PHP: 7.4
  * Requires at least: 5.8
@@ -28,6 +31,15 @@ if (!defined('MEALS_DB_PLUGIN_URL')) {
 
 if (!defined('MEALS_DB_VERSION')) {
     define('MEALS_DB_VERSION', '1.0.0');
+}
+
+// Abort early if wp-config.php constants have not been configured.
+if (!defined('MEALS_DB_KEY')) {
+    add_action('admin_notices', function () {
+        echo '<div class="notice notice-error"><p><strong>Meals Database:</strong> Configuration constants are missing. Please add them to wp-config.php.</p></div>';
+    });
+
+    return;
 }
 
 /**
@@ -79,12 +91,6 @@ function meals_db_check_requirements() {
 }
 
 /**
- * Load environment variables from the plugin's .env file.
- */
-require_once plugin_dir_path(__FILE__) . 'includes/class-env.php';
-MealsDB_Env::load(plugin_dir_path(__FILE__) . '.env');
-
-/**
  * Load core plugin classes.
  */
 require_once plugin_dir_path(__FILE__) . 'includes/class-db.php';
@@ -105,3 +111,15 @@ add_action('plugins_loaded', function () {
     MealsDB_Admin_UI::init();
     MealsDB_Ajax::init();
 });
+
+// Register the plugin update checker against the GitHub repository.
+require_once plugin_dir_path(__FILE__) . 'plugin-update-checker/plugin-update-checker.php';
+
+$updateChecker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+    'https://github.com/zakorski/meals-db/',
+    __FILE__,
+    'meals-db-main'
+);
+
+$updateChecker->setBranch('main');
+$updateChecker->getVcsApi()->enableReleaseAssets();

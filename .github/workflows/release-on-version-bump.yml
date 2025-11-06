@@ -1,0 +1,43 @@
+name: Tag & Release on Version Bump
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  version-bump-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get current plugin version
+        id: get_version
+        run: |
+          version=$(grep -E '^Version:' meals-db-main.php | awk '{print $2}')
+          echo "version=$version" >> $GITHUB_ENV
+
+      - name: Check if tag exists
+        id: tag_check
+        run: |
+          if git rev-parse "v${{ env.version }}" >/dev/null 2>&1; then
+            echo "Tag already exists. Exiting."
+            exit 0
+          fi
+
+      - name: Create Git tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git tag -a "v${{ env.version }}" -m "Release v${{ env.version }}"
+          git push origin "v${{ env.version }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.version }}
+          name: "Release v${{ env.version }}"
+          body: "Automated release for version ${{ env.version }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

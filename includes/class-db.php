@@ -24,10 +24,15 @@ class MealsDB_DB {
             return self::$connection;
         }
 
-        $host = getenv('PLUGIN_DB_HOST');
-        $user = getenv('PLUGIN_DB_USER');
-        $pass = getenv('PLUGIN_DB_PASS');
-        $name = getenv('PLUGIN_DB_NAME');
+        $host = defined('MEALS_DB_HOST') ? MEALS_DB_HOST : null;
+        $user = defined('MEALS_DB_USER') ? MEALS_DB_USER : null;
+        $pass = defined('MEALS_DB_PASS') ? MEALS_DB_PASS : null;
+        $name = defined('MEALS_DB_NAME') ? MEALS_DB_NAME : null;
+
+        if ($host === null || $user === null || $name === null) {
+            error_log('[MealsDB] Database configuration constants are missing.');
+            return null;
+        }
 
         $previousReportMode = null;
         if (function_exists('mysqli_report')) {
