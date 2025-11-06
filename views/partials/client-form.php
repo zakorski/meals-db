@@ -72,8 +72,8 @@ $alt_contact_enabled = (
         <ol class="mealsdb-step-indicator">
             <li data-step="1">Client Type</li>
             <li data-step="2">Client &amp; Case Details</li>
-            <li data-step="3">Addresses &amp; Contacts</li>
-            <li data-step="4">Service &amp; Delivery</li>
+            <li data-step="3" data-client-type="sdnb,veteran,private">Addresses &amp; Contacts</li>
+            <li data-step="4" data-client-type="sdnb,veteran,private">Service &amp; Delivery</li>
             <li data-step="5">Notes &amp; Submit</li>
         </ol>
 
@@ -90,6 +90,7 @@ $alt_contact_enabled = (
                             <option value="SDNB" <?php selected($initial_type, 'SDNB'); ?>>SDNB</option>
                             <option value="Veteran" <?php selected($initial_type, 'Veteran'); ?>>Veteran</option>
                             <option value="Private" <?php selected($initial_type, 'Private'); ?>>Private</option>
+                            <option value="Staff" <?php selected($initial_type, 'Staff'); ?>><?php esc_html_e('Staff', 'meals-db'); ?></option>
                         </select>
                         <p class="description"><?php esc_html_e('Client fields will adjust automatically when the type changes.', 'meals-db'); ?></p>
                     </td>
@@ -102,6 +103,7 @@ $alt_contact_enabled = (
 
         <div class="mealsdb-step" data-step="2" data-step-title="Client &amp; Case Details">
             <h3><?php esc_html_e('Step 2: Client &amp; Case Details', 'meals-db'); ?></h3>
+            <p class="description"><?php esc_html_e('Staff clients only require a first name, last name, and email address.', 'meals-db'); ?></p>
             <table class="form-table">
                 <tr>
                     <th><label for="customer_type"><?php esc_html_e('Customer Type *', 'meals-db'); ?></label></th>
@@ -112,6 +114,7 @@ $alt_contact_enabled = (
                             <option value="SDNB" <?php selected($current_type, 'SDNB'); ?>>SDNB</option>
                             <option value="Veteran" <?php selected($current_type, 'Veteran'); ?>>Veteran</option>
                             <option value="Private" <?php selected($current_type, 'Private'); ?>>Private</option>
+                            <option value="Staff" <?php selected($current_type, 'Staff'); ?>><?php esc_html_e('Staff', 'meals-db'); ?></option>
                         </select>
                         <p class="description"><?php esc_html_e('Changing this selection will update the fields shown in other steps.', 'meals-db'); ?></p>
                     </td>
@@ -124,11 +127,23 @@ $alt_contact_enabled = (
                     <th><label for="last_name"><?php esc_html_e('Last Name *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="last_name" id="last_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['last_name'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
-                    <th><label for="client_email"><?php esc_html_e('Client Email', 'meals-db'); ?></label></th>
-                    <td><input type="email" name="client_email" id="client_email" class="regular-text" value="<?php echo esc_attr($form_values['client_email'] ?? ''); ?>" /></td>
+                <tr data-required-for="staff">
+                    <th>
+                        <label for="client_email"><?php esc_html_e('Client Email *', 'meals-db'); ?></label>
+                        <span class="description"><?php esc_html_e('Required for Staff clients.', 'meals-db'); ?></span>
+                    </th>
+                    <td><input type="email" name="client_email" id="client_email" class="regular-text" data-base-required="1" value="<?php echo esc_attr($form_values['client_email'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <?php if ($form_mode === 'edit') : ?>
+                    <tr data-client-type="staff">
+                        <th>
+                            <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID', 'meals-db'); ?></label>
+                            <span class="description"><?php esc_html_e('Optional. Used for syncing with the WordPress user record.', 'meals-db'); ?></span>
+                        </th>
+                        <td><input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" value="<?php echo esc_attr($form_values['wordpress_user_id'] ?? ''); ?>" /></td>
+                    </tr>
+                <?php endif; ?>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="phone_primary"><?php esc_html_e('Phone Number *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="phone_primary" id="phone_primary" class="regular-text phone-mask" placeholder="(555)-555-5555" required data-base-required="1" value="<?php echo esc_attr($form_values['phone_primary'] ?? ''); ?>" /></td>
                 </tr>
@@ -171,30 +186,30 @@ $alt_contact_enabled = (
             </div>
         </div>
 
-        <div class="mealsdb-step" data-step="3" data-step-title="Addresses &amp; Contacts">
+        <div class="mealsdb-step" data-step="3" data-step-title="Addresses &amp; Contacts" data-client-type="sdnb,veteran,private">
             <h3><?php esc_html_e('Step 3: Addresses &amp; Contacts', 'meals-db'); ?></h3>
             <table class="form-table">
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_street_number"><?php esc_html_e('Street # *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_street_number" id="address_street_number" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['address_street_number'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_street_name"><?php esc_html_e('Street Name *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_street_name" id="address_street_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['address_street_name'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_unit"><?php esc_html_e('Apt # *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_unit" id="address_unit" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['address_unit'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_city"><?php esc_html_e('City *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_city" id="address_city" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['address_city'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_province"><?php esc_html_e('Province *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_province" id="address_province" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['address_province'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_postal"><?php esc_html_e('Postal Code *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_postal" id="address_postal" class="regular-text postal-mask" maxlength="6" placeholder="A1A1A1" required data-base-required="1" value="<?php echo esc_attr($form_values['address_postal'] ?? ''); ?>" /></td>
                 </tr>
@@ -265,18 +280,18 @@ $alt_contact_enabled = (
             </div>
         </div>
 
-        <div class="mealsdb-step" data-step="4" data-step-title="Service &amp; Delivery">
+        <div class="mealsdb-step" data-step="4" data-step-title="Service &amp; Delivery" data-client-type="sdnb,veteran,private">
             <h3><?php esc_html_e('Step 4: Service &amp; Delivery', 'meals-db'); ?></h3>
             <table class="form-table">
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="payment_method"><?php esc_html_e('Payment Method *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="payment_method" id="payment_method" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['payment_method'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="required_start_date"><?php esc_html_e('Required Start Date *', 'meals-db'); ?></label></th>
                     <td><input type="date" name="required_start_date" id="required_start_date" class="mealsdb-datepicker" required data-base-required="1" value="<?php echo esc_attr($form_values['required_start_date'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="rate"><?php esc_html_e('Rate *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="rate" id="rate" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['rate'] ?? ''); ?>" /></td>
                 </tr>
@@ -288,11 +303,11 @@ $alt_contact_enabled = (
                     <th><label for="freezer_capacity"><?php esc_html_e('Freezer Capacity', 'meals-db'); ?></label></th>
                     <td><input type="text" name="freezer_capacity" id="freezer_capacity" class="regular-text" value="<?php echo esc_attr($form_values['freezer_capacity'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_initials"><?php esc_html_e('Initials for Delivery *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="delivery_initials" id="delivery_initials" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['delivery_initials'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_day"><?php esc_html_e('Delivery Day *', 'meals-db'); ?></label></th>
                     <td>
                         <?php $delivery_day_value = strtoupper($form_values['delivery_day'] ?? ''); ?>
@@ -305,19 +320,19 @@ $alt_contact_enabled = (
                         </select>
                     </td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_area_name"><?php esc_html_e('Delivery Area Name *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="delivery_area_name" id="delivery_area_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['delivery_area_name'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_area_zone"><?php esc_html_e('Delivery Area Zone *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="delivery_area_zone" id="delivery_area_zone" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['delivery_area_zone'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="ordering_frequency"><?php esc_html_e('Ordering Frequency *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="ordering_frequency" id="ordering_frequency" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['ordering_frequency'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="ordering_contact_method"><?php esc_html_e('Ordering Contact Method *', 'meals-db'); ?></label></th>
                     <td>
                         <?php $ordering_contact_method_value = strtoupper($form_values['ordering_contact_method'] ?? ''); ?>
@@ -330,7 +345,7 @@ $alt_contact_enabled = (
                         </select>
                     </td>
                 </tr>
-                <tr>
+                <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_frequency"><?php esc_html_e('Delivery Frequency *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="delivery_frequency" id="delivery_frequency" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['delivery_frequency'] ?? ''); ?>" /></td>
                 </tr>
@@ -426,14 +441,14 @@ $alt_contact_enabled = (
             </div>
         </div>
 
-        <div class="mealsdb-step" data-step="5" data-step-title="Notes &amp; Submit">
+        <div class="mealsdb-step" data-step-title="Notes &amp; Submit" data-step="5">
             <h3><?php esc_html_e('Step 5: Notes &amp; Submit', 'meals-db'); ?></h3>
             <table class="form-table">
-                <tr>
+                <tr data-client-type="sdnb,veteran,private">
                     <th><label for="diet_concerns"><?php esc_html_e('Dietary Concerns', 'meals-db'); ?></label></th>
                     <td><textarea name="diet_concerns" id="diet_concerns" rows="4" class="large-text"><?php echo esc_textarea($form_values['diet_concerns'] ?? ''); ?></textarea></td>
                 </tr>
-                <tr>
+                <tr data-client-type="sdnb,veteran,private">
                     <th><label for="client_comments"><?php esc_html_e('Customer Comments', 'meals-db'); ?></label></th>
                     <td><textarea name="client_comments" id="client_comments" rows="4" class="large-text"><?php echo esc_textarea($form_values['client_comments'] ?? ''); ?></textarea></td>
                 </tr>
