@@ -14,7 +14,19 @@ $staff_selected = ($selected_type === 'STAFF');
     <th><label for="client_email">Email *</label></th>
     <td><input type="email" name="client_email" required class="regular-text" value="<?= esc_attr($_POST['client_email'] ?? '') ?>" /></td>
 </tr>
-<?php if (!$staff_selected) : ?>
+<?php if ($staff_selected) : ?>
+<tr>
+    <th>
+        <label for="wordpress_user_id">
+            <?php esc_html_e('WordPress User ID', 'meals-db'); ?>
+        </label>
+    </th>
+    <td>
+        <input type="number" name="wordpress_user_id" min="1" step="1" class="regular-text" value="<?= esc_attr($_POST['wordpress_user_id'] ?? '') ?>" />
+        <p class="description"><?php esc_html_e('Optional link to the matching WordPress user account.', 'meals-db'); ?></p>
+    </td>
+</tr>
+<?php else : ?>
 <tr>
     <th>
         <label for="wordpress_user_id">
@@ -25,17 +37,7 @@ $staff_selected = ($selected_type === 'STAFF');
         <input type="number" name="wordpress_user_id" min="1" step="1" class="regular-text" value="<?= esc_attr($_POST['wordpress_user_id'] ?? '') ?>" />
     </td>
 </tr>
-<tr>
-    <th>
-        <label for="wordpress_user_id">
-            <?php esc_html_e('WordPress User ID', 'meals-db'); ?><?= $staff_selected ? ' *' : '' ?>
-        </label>
-    </th>
-    <td>
-        <input type="number" name="wordpress_user_id" min="1" step="1" class="regular-text" <?= $staff_selected ? 'required' : '' ?> value="<?= esc_attr($_POST['wordpress_user_id'] ?? '') ?>" />
-        <p class="description"><?php esc_html_e('Required for Staff clients.', 'meals-db'); ?></p>
-    </td>
-</tr>
+<?php endif; ?>
 <tr>
     <th><label for="phone_primary">Phone #1<?= $staff_selected ? '' : ' *' ?></label></th>
     <td><input type="text" name="phone_primary" <?= $staff_selected ? '' : 'required' ?> placeholder="(555)-555-5555" class="regular-text phone-mask" value="<?= esc_attr($_POST['phone_primary'] ?? '') ?>" /></td>
