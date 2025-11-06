@@ -14,6 +14,17 @@ $staff_selected = ($selected_type === 'STAFF');
     <th><label for="client_email">Email *</label></th>
     <td><input type="email" name="client_email" required class="regular-text" value="<?= esc_attr($_POST['client_email'] ?? '') ?>" /></td>
 </tr>
+<?php if (!$staff_selected) : ?>
+<tr>
+    <th>
+        <label for="wordpress_user_id">
+            <?php esc_html_e('WordPress User ID', 'meals-db'); ?>
+        </label>
+    </th>
+    <td>
+        <input type="number" name="wordpress_user_id" min="1" step="1" class="regular-text" value="<?= esc_attr($_POST['wordpress_user_id'] ?? '') ?>" />
+    </td>
+</tr>
 <tr>
     <th>
         <label for="wordpress_user_id">
@@ -33,6 +44,7 @@ $staff_selected = ($selected_type === 'STAFF');
     <th><label for="address_postal"><?php esc_html_e('Postal Code', 'meals-db'); ?><?= $staff_selected ? '' : ' *' ?></label></th>
     <td><input type="text" name="address_postal" <?= $staff_selected ? '' : 'required' ?> placeholder="A1A1A1" maxlength="6" class="regular-text postal-mask" value="<?= esc_attr($_POST['address_postal'] ?? '') ?>" /></td>
 </tr>
+<?php endif; ?>
 <tr>
     <th><label for="customer_type">Customer Type *</label></th>
     <td>
@@ -45,7 +57,9 @@ $staff_selected = ($selected_type === 'STAFF');
         </select>
     </td>
 </tr>
+<?php if (!$staff_selected) : ?>
 <tr>
     <th><label for="birth_date">Date of Birth</label></th>
     <td><input type="text" name="birth_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?= esc_attr($_POST['birth_date'] ?? '') ?>" /></td>
 </tr>
+<?php endif; ?>

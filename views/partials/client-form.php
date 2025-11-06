@@ -72,8 +72,8 @@ $alt_contact_enabled = (
         <ol class="mealsdb-step-indicator">
             <li data-step="1">Client Type</li>
             <li data-step="2">Client &amp; Case Details</li>
-            <li data-step="3">Addresses &amp; Contacts</li>
-            <li data-step="4">Service &amp; Delivery</li>
+            <li data-step="3" data-client-type="sdnb,veteran,private">Addresses &amp; Contacts</li>
+            <li data-step="4" data-client-type="sdnb,veteran,private">Service &amp; Delivery</li>
             <li data-step="5">Notes &amp; Submit</li>
         </ol>
 
@@ -184,7 +184,7 @@ $alt_contact_enabled = (
             </div>
         </div>
 
-        <div class="mealsdb-step" data-step="3" data-step-title="Addresses &amp; Contacts">
+        <div class="mealsdb-step" data-step="3" data-step-title="Addresses &amp; Contacts" data-client-type="sdnb,veteran,private">
             <h3><?php esc_html_e('Step 3: Addresses &amp; Contacts', 'meals-db'); ?></h3>
             <table class="form-table">
                 <tr data-required-for="sdnb,veteran,private">
@@ -278,7 +278,7 @@ $alt_contact_enabled = (
             </div>
         </div>
 
-        <div class="mealsdb-step" data-step="4" data-step-title="Service &amp; Delivery">
+        <div class="mealsdb-step" data-step="4" data-step-title="Service &amp; Delivery" data-client-type="sdnb,veteran,private">
             <h3><?php esc_html_e('Step 4: Service &amp; Delivery', 'meals-db'); ?></h3>
             <table class="form-table">
                 <tr data-required-for="sdnb,veteran,private">
@@ -439,14 +439,14 @@ $alt_contact_enabled = (
             </div>
         </div>
 
-        <div class="mealsdb-step" data-step="5" data-step-title="Notes &amp; Submit">
+        <div class="mealsdb-step" data-step-title="Notes &amp; Submit" data-step="5">
             <h3><?php esc_html_e('Step 5: Notes &amp; Submit', 'meals-db'); ?></h3>
             <table class="form-table">
-                <tr>
+                <tr data-client-type="sdnb,veteran,private">
                     <th><label for="diet_concerns"><?php esc_html_e('Dietary Concerns', 'meals-db'); ?></label></th>
                     <td><textarea name="diet_concerns" id="diet_concerns" rows="4" class="large-text"><?php echo esc_textarea($form_values['diet_concerns'] ?? ''); ?></textarea></td>
                 </tr>
-                <tr>
+                <tr data-client-type="sdnb,veteran,private">
                     <th><label for="client_comments"><?php esc_html_e('Customer Comments', 'meals-db'); ?></label></th>
                     <td><textarea name="client_comments" id="client_comments" rows="4" class="large-text"><?php echo esc_textarea($form_values['client_comments'] ?? ''); ?></textarea></td>
                 </tr>

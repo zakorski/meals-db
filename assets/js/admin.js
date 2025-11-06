@@ -62,13 +62,52 @@ jQuery(document).ready(function($) {
             });
         };
 
-        const showStep = (step) => {
-            const safeStep = Math.min(Math.max(step, 1), $steps.length);
-            currentStep = safeStep;
+        const isStepVisible = (step) => {
+            const $step = $steps.filter(`[data-step="${step}"]`);
+            return $step.length > 0 && $step.is(':visible');
+        };
+
+        const findVisibleStep = (start, direction) => {
+            if (direction === 'backward') {
+                for (let candidate = start; candidate >= 1; candidate -= 1) {
+                    if (isStepVisible(candidate)) {
+                        return candidate;
+                    }
+                }
+            } else {
+                for (let candidate = start; candidate <= $steps.length; candidate += 1) {
+                    if (isStepVisible(candidate)) {
+                        return candidate;
+                    }
+                }
+            }
+
+            return null;
+        };
+
+        const showStep = (step, direction = 'forward') => {
+            const clamped = Math.min(Math.max(step, 1), $steps.length);
+            let targetStep = clamped;
+
+            if (!isStepVisible(targetStep)) {
+                const primaryStart = direction === 'backward' ? targetStep - 1 : targetStep + 1;
+                let alternate = findVisibleStep(primaryStart, direction);
+
+                if (alternate === null) {
+                    const opposite = direction === 'backward' ? 'forward' : 'backward';
+                    alternate = findVisibleStep(targetStep, opposite);
+                }
+
+                if (alternate !== null) {
+                    targetStep = alternate;
+                }
+            }
+
+            currentStep = targetStep;
             $steps.removeClass('is-active').attr('aria-hidden', 'true');
-            const $target = $steps.filter(`[data-step="${safeStep}"]`);
+            const $target = $steps.filter(`[data-step="${targetStep}"]`);
             $target.addClass('is-active').attr('aria-hidden', 'false');
-            updateStepIndicator(safeStep);
+            updateStepIndicator(targetStep);
         };
 
         const toggleClientTypeSections = (typeValue) => {
@@ -131,14 +170,14 @@ jQuery(document).ready(function($) {
                 showStep(1);
                 return;
             }
-            showStep(nextStep);
+            showStep(nextStep, 'forward');
         });
 
         $clientForm.on('click', '.mealsdb-prev-step', function (event) {
             event.preventDefault();
             const target = parseInt($(this).data('stepTarget'), 10);
             const prevStep = Number.isNaN(target) ? currentStep - 1 : target;
-            showStep(prevStep);
+            showStep(prevStep, 'backward');
         });
 
         // Client type syncing
@@ -155,6 +194,9 @@ jQuery(document).ready(function($) {
             }
             ensureStep1ButtonState();
             toggleClientTypeSections(value);
+            if (!isStepVisible(currentStep)) {
+                showStep(currentStep, 'backward');
+            }
         });
 
         // Delivery address toggle
@@ -191,7 +233,8 @@ jQuery(document).ready(function($) {
                 showStep(1);
                 return;
             }
-            showStep(step);
+            const direction = step >= currentStep ? 'forward' : 'backward';
+            showStep(step, direction);
         });
 
         // Initialise state
@@ -199,9 +242,14 @@ jQuery(document).ready(function($) {
         if (!$initialTypeSelect.val() && $customerTypeSelect.val()) {
             $initialTypeSelect.val($customerTypeSelect.val());
         }
-        toggleClientTypeSections($customerTypeSelect.val());
+        const initialType = $customerTypeSelect.val();
+        toggleClientTypeSections(initialType);
+        if (!isStepVisible(currentStep)) {
+            showStep(currentStep, 'backward');
+        } else {
+            showStep(currentStep);
+        }
         ensureStep1ButtonState();
-        showStep(currentStep);
     }
 
     // -----------------------------
