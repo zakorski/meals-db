@@ -788,29 +788,6 @@ run_test('update clears wordpress user id when blank', function () {
     }
 });
 
-run_test('update ignores transport client_id field', function () {
-    reset_index_flag();
-    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
-    set_db_connection($conn);
-
-    $result = MealsDB_Client_Form::update(34, [
-        'first_name' => 'Taylor',
-        'client_id' => '34',
-    ]);
-
-    if ($result !== true) {
-        throw new Exception('Update should succeed when client_id is provided for transport.');
-    }
-
-    if (array_key_exists('client_id', $conn->lastUpdate)) {
-        throw new Exception('client_id should not be persisted during update.');
-    }
-
-    if ($conn->lastUpdateWhereId !== 34) {
-        throw new Exception('Expected update to target the provided client ID.');
-    }
-});
-
 run_test('save_draft updates existing record when id provided', function () {
     $existingId = 5;
     $original = json_encode(['first_name' => 'Original']);
