@@ -47,11 +47,12 @@ jQuery(document).ready(function($) {
         const $indicatorItems = $clientForm.find('.mealsdb-step-indicator li');
         const $initialTypeSelect = $('#mealsdb-client-type-initial');
         const $customerTypeSelect = $('#customer_type');
+        const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
+        const getCurrentClientType = () => normalizeType($customerTypeSelect.val());
+
         const $step1Next = $clientForm.find('.mealsdb-step[data-step="1"] .mealsdb-next-step');
         let currentStep = parseInt($clientForm.data('initialStep'), 10) || 1;
         let currentClientType = normalizeType($customerTypeSelect.val());
-
-        const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
 
         const updateStepIndicator = (step) => {
             $indicatorItems.each(function () {
