@@ -17,20 +17,14 @@ if ($preserve_data) {
 }
 
 // Reuse the runtime environment and database helpers so uninstall stays in sync with
-// the plugin's connection settings. The .env file must define PLUGIN_DB_HOST,
-// PLUGIN_DB_USER, PLUGIN_DB_PASS, and PLUGIN_DB_NAME — the same variables consumed by
-// MealsDB_DB::get_connection().
-require_once plugin_dir_path(__FILE__) . 'includes/class-env.php';
+// the plugin's connection settings.
 require_once plugin_dir_path(__FILE__) . 'includes/class-db.php';
 
-// Load .env values into getenv()/$_ENV.
-$env_path = plugin_dir_path(__FILE__) . '.env';
-if (!file_exists($env_path)) {
-    error_log('Meals DB uninstall aborted: .env file not found.');
+// Confirm required constants exist before proceeding.
+if (!defined('MEALS_DB_HOST') || !defined('MEALS_DB_USER') || !defined('MEALS_DB_NAME')) {
+    error_log('Meals DB uninstall aborted: configuration constants are missing.');
     return;
 }
-
-MealsDB_Env::load($env_path);
 
 // Connect to external Meals DB using the same logic as the runtime plugin.
 $conn = MealsDB_DB::get_connection();

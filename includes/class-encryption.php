@@ -10,18 +10,22 @@
 class MealsDB_Encryption {
 
     /**
-     * Get the AES key from the .env file.
-     * 
+     * Get the AES key defined in wp-config.php constants.
+     *
      * @return string
      */
     private static function get_key(): string {
-        $env_key = getenv('PLUGIN_AES_KEY');
-
-        if (!$env_key || strpos($env_key, 'base64:') !== 0) {
-            throw new Exception('Invalid or missing AES key in .env');
+        if (!defined('MEALS_DB_KEY')) {
+            throw new Exception('Missing Meals DB encryption key configuration.');
         }
 
-        return base64_decode(substr($env_key, 7));
+        $configKey = MEALS_DB_KEY;
+
+        if (!$configKey || strpos($configKey, 'base64:') !== 0) {
+            throw new Exception('Invalid Meals DB encryption key.');
+        }
+
+        return base64_decode(substr($configKey, 7));
     }
 
     /**
