@@ -59,6 +59,7 @@ jobs:
       # 4️⃣ Create and push tag
       # ------------------------------------------------------------------
       - name: Create Git tag
+        id: tag
         run: |
           git tag -a "v${new_version}" -m "Release v${new_version}"
           git push origin "v${new_version}"
@@ -68,6 +69,7 @@ jobs:
       # 5️⃣ Build plugin zip with correct root folder
       # ------------------------------------------------------------------
       - name: Build plugin zip
+        id: build
         run: |
           mkdir build
           mkdir build/meals-db-main
@@ -80,11 +82,31 @@ jobs:
       # 6️⃣ Create GitHub Release and attach zip
       # ------------------------------------------------------------------
       - name: Create GitHub Release
+        id: release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.new_version }}
           name: "Release v${{ env.new_version }}"
           body: "Automated release for version v${{ env.new_version }}."
           files: build/meals-db-main.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # 7️⃣ Rollback safeguard — runs if any previous step fails
+      # ------------------------------------------------------------------
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "❌ Build or release failed. Rolling back tag and release..."
+          git push --delete origin "v${new_version}" || true
+          git tag -d "v${new_version}" || true
+
+          # Delete the draft release from GitHub (if it was created)
+          release_id=$(gh api repos/${{ github.repository }}/releases/tags/v${new_version} --jq '.id' || true)
+          if [ -n "$release_id" ]; then
+            gh api repos/${{ github.repository }}/releases/$release_id -X DELETE || true
+            echo "🧹 Deleted incomplete GitHub release ID $release_id"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
