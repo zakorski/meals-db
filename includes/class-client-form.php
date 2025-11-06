@@ -295,7 +295,6 @@ class MealsDB_Client_Form {
 
         if ($client_type === 'STAFF') {
             $required_fields[] = 'client_email';
-            $required_fields[] = 'wordpress_user_id';
         } else {
             $required_fields = array_merge($required_fields, [
                 'address_street_number',

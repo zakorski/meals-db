@@ -451,7 +451,7 @@ run_test('validation accepts enumerated selections', function () {
     set_db_connection(null);
 });
 
-run_test('staff client allows minimal required fields', function () {
+run_test('staff client allows minimal required fields without wordpress id', function () {
     reset_index_flag();
     set_db_connection(new StubMysqli());
 
@@ -460,7 +460,6 @@ run_test('staff client allows minimal required fields', function () {
         'first_name' => 'Alex',
         'last_name' => 'Smith',
         'client_email' => 'alex@example.com',
-        'wordpress_user_id' => '0042',
     ];
 
     $result = MealsDB_Client_Form::validate($payload);
@@ -469,8 +468,8 @@ run_test('staff client allows minimal required fields', function () {
     }
 
     $sanitized = $result['sanitized'];
-    if (($sanitized['wordpress_user_id'] ?? null) !== '42') {
-        throw new Exception('WordPress user ID should be sanitized to digits.');
+    if (!empty($sanitized['wordpress_user_id'] ?? '')) {
+        throw new Exception('WordPress user ID should remain optional for Staff clients.');
     }
 
     if (($sanitized['client_email'] ?? null) !== 'alex@example.com') {
@@ -480,7 +479,32 @@ run_test('staff client allows minimal required fields', function () {
     set_db_connection(null);
 });
 
-run_test('staff client requires email and WordPress user id', function () {
+run_test('staff client accepts optional WordPress user id', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Staff',
+        'first_name' => 'Jamie',
+        'last_name' => 'Lee',
+        'client_email' => 'jamie@example.com',
+        'wordpress_user_id' => '0042',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if (!$result['valid']) {
+        throw new Exception('Expected Staff clients to allow providing an optional WordPress user ID.');
+    }
+
+    $sanitized = $result['sanitized'];
+    if (($sanitized['wordpress_user_id'] ?? null) !== '42') {
+        throw new Exception('WordPress user ID should be sanitized to digits when provided.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('staff client requires email but not WordPress user id', function () {
     reset_index_flag();
     set_db_connection(new StubMysqli());
 
@@ -494,7 +518,7 @@ run_test('staff client requires email and WordPress user id', function () {
 
     $result = MealsDB_Client_Form::validate($payload);
     if ($result['valid']) {
-        throw new Exception('Expected Staff validation to fail when email and WordPress ID are missing.');
+        throw new Exception('Expected Staff validation to fail when email is missing.');
     }
 
     $missing = $result['error_details']['missing_required'] ?? [];
@@ -502,8 +526,8 @@ run_test('staff client requires email and WordPress user id', function () {
         throw new Exception('Expected missing email error for Staff client.');
     }
 
-    if (!isset($missing['wordpress_user_id'])) {
-        throw new Exception('Expected missing WordPress user ID error for Staff client.');
+    if (isset($missing['wordpress_user_id'])) {
+        throw new Exception('WordPress user ID should not be required for Staff clients.');
     }
 
     set_db_connection(null);
