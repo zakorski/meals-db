@@ -295,7 +295,6 @@ class MealsDB_Client_Form {
 
         if ($client_type === 'STAFF') {
             $required_fields[] = 'client_email';
-            $required_fields[] = 'wordpress_user_id';
         } else {
             $required_fields = array_merge($required_fields, [
                 'address_street_number',
@@ -510,6 +509,10 @@ class MealsDB_Client_Form {
             return false;
         }
 
+        if (array_key_exists('wordpress_user_id', $sanitized) && $sanitized['wordpress_user_id'] === '') {
+            unset($sanitized['wordpress_user_id']);
+        }
+
         $encrypted = $sanitized;
         if (!self::ensure_index_columns_exist($conn)) {
             error_log('[MealsDB] Save aborted: deterministic index columns are unavailable.');
@@ -615,6 +618,10 @@ class MealsDB_Client_Form {
         if (empty($sanitized)) {
             error_log('[MealsDB] Update aborted: no valid data provided.');
             return false;
+        }
+
+        if (array_key_exists('wordpress_user_id', $sanitized) && $sanitized['wordpress_user_id'] === '') {
+            $sanitized['wordpress_user_id'] = null;
         }
 
         $encrypted = $sanitized;
