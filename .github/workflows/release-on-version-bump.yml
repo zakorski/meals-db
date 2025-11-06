@@ -22,12 +22,17 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-      #Get the latest tag (or start at 1.0.0 if none)
-      - name: Get current tag
-        id: get_tag
-        run: |
-          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
-          echo "latest_tag=${latest_tag}" >> $GITHUB_ENV
+     #Get the latest valid version tag (vX.Y.Z)
+- name: Get current tag
+  id: get_tag
+  run: |
+    latest_tag=$(git tag -l "v[0-9]*" --sort=-v:refname | head -n 1)
+    if [ -z "$latest_tag" ]; then
+      latest_tag="v1.0.0"
+    fi
+    echo "latest_tag=${latest_tag}" >> $GITHUB_ENV
+    echo "Detected latest tag: ${latest_tag}"
+
 
       #Calculate next version (patch bump)
       - name: Calculate next version
