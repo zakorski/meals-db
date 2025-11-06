@@ -1,0 +1,216 @@
+/* Meals DB Admin UI
+ * Author: Fishhorn Design
+ * Licensed under the GNU General Public License v3.0 or later
+ */
+
+/* -----------------------------
+   Table Styling
+------------------------------ */
+table.widefat td, table.widefat th {
+    vertical-align: top;
+    padding: 8px;
+}
+
+.mealsdb-client-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.mealsdb-client-filters select,
+.mealsdb-client-filters input[type="search"] {
+    min-width: 200px;
+}
+
+.mealsdb-client-actions-column {
+    width: 140px;
+    text-align: right;
+}
+
+/* -----------------------------
+   Sync Table Conflict Highlighting
+------------------------------ */
+.mealsdb-a,
+.mealsdb-b {
+    padding: 6px 10px;
+    background-color: #f6f7f9;
+}
+
+.mealsdb-a:not(:empty):not(.mealsdb-b):not(.match),
+.mealsdb-b:not(:empty):not(.mealsdb-a):not(.match) {
+    font-weight: bold;
+    color: #b00020;
+}
+
+/* Highlight rows when selected for syncing */
+tr[data-field] {
+    transition: background 0.3s ease;
+}
+
+tr[data-field]:hover {
+    background-color: #f9f9f9;
+}
+
+/* Disabled sync buttons */
+button.sync-field:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* -----------------------------
+   Form Layouts
+------------------------------ */
+input[type="text"],
+input[type="email"],
+select {
+    max-width: 400px;
+}
+
+/* -----------------------------
+   Tab Bar Styling (if not default WP nav-tab used)
+------------------------------ */
+.nav-tab-wrapper {
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.nav-tab {
+    padding: 8px 20px;
+    font-size: 14px;
+}
+
+.nav-tab-active {
+    background: #0073aa;
+    color: #fff;
+}
+
+/* -----------------------------
+   Status Notices
+------------------------------ */
+.notice ul {
+    margin-top: 5px;
+}
+
+.notice-error li {
+    list-style: disc;
+    margin-left: 20px;
+}
+
+/* -----------------------------
+   Draft Table
+------------------------------ */
+#mealsdb-draft-table td {
+    vertical-align: middle;
+}
+
+/* -----------------------------
+   Ignored Conflict Styling
+------------------------------ */
+tr[data-ignored="true"] {
+    opacity: 0.5;
+    font-style: italic;
+}
+
+/* -----------------------------
+   Date Picker Fix
+------------------------------ */
+.ui-datepicker {
+    z-index: 9999 !important;
+    background: #ffffff;
+    border: 1px solid #c3c4c7;
+}
+
+/* -----------------------------
+   Multi-Step Client Form
+------------------------------ */
+.mealsdb-step-indicator {
+    list-style: none;
+    margin: 20px 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.mealsdb-step-indicator li {
+    background: #f0f0f1;
+    border-radius: 3px;
+    padding: 6px 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+}
+
+.mealsdb-step-indicator li.is-active {
+    background: #0073aa;
+    color: #fff;
+}
+
+.mealsdb-step-indicator li.is-complete {
+    background: #d1e7dd;
+    color: #0f5132;
+}
+
+.mealsdb-step {
+    display: none;
+    margin-top: 20px;
+}
+
+.mealsdb-step.is-active {
+    display: block;
+}
+
+.mealsdb-step-controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.mealsdb-collapsible {
+    margin: 10px 0 0 0;
+    padding: 10px 15px;
+    background: #f9f9f9;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+}
+
+tr.mealsdb-required-disabled {
+    opacity: 0.6;
+}
+
+/* -----------------------------
+   Updates Screen
+------------------------------ */
+.mealsdb-updates-meta code {
+    display: inline-block;
+    padding: 2px 6px;
+    background: #f6f7f7;
+    border-radius: 3px;
+}
+
+.mealsdb-update-actions {
+    margin: 20px 0;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.mealsdb-is-loading {
+    position: relative;
+    opacity: 0.6 !important;
+    pointer-events: none;
+}
+
+.mealsdb-updates-log {
+    background: #1e1e1e;
+    color: #f5f5f5;
+    padding: 15px;
+    border-radius: 4px;
+    max-height: 280px;
+    overflow: auto;
+    font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
+    font-size: 12px;
+}
