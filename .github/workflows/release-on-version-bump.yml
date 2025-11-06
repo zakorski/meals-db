@@ -46,13 +46,23 @@ jobs:
           echo "new_version=${new_version}" >> $GITHUB_ENV
           echo "Next version: $new_version"
 
-      # ------------------------------------------------------------------
-      # 3️⃣ Update plugin header version
+           # ------------------------------------------------------------------
+      # 3️⃣ Update plugin header version (super-robust)
       # ------------------------------------------------------------------
       - name: Update plugin header version
         run: |
-          sed -i "s/^Version:.*/Version: ${new_version}/" meals-db-main.php
-          git add meals-db-main.php
+          file="meals-db-main.php"
+          echo "🔧 Updating version in $file to $new_version"
+          dos2unix "$file" || true
+
+          # Match optional spaces or asterisks before "Version:"
+          sed -i -E "s/^[[:space:]]*(\*[[:space:]]*)?Version:[[:space:]]*[0-9.]+/ * Version: ${new_version}/I" "$file"
+
+          echo "✅ Resulting version line:"
+          grep -i "Version:" "$file" | head -n 1 || echo "⚠️ No Version line found"
+
+          git add "$file"
+          git diff --cached || true
           git commit -m "chore: bump plugin version to ${new_version}" || echo "No changes to commit"
 
       # ------------------------------------------------------------------

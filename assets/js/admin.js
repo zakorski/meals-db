@@ -52,6 +52,7 @@ jQuery(document).ready(function($) {
 
         const $step1Next = $clientForm.find('.mealsdb-step[data-step="1"] .mealsdb-next-step');
         let currentStep = parseInt($clientForm.data('initialStep'), 10) || 1;
+        let currentClientType = normalizeType($customerTypeSelect.val());
 
         const updateStepIndicator = (step) => {
             $indicatorItems.each(function () {
@@ -83,9 +84,7 @@ jQuery(document).ready(function($) {
                 return true;
             }
 
-            const activeType = getCurrentClientType();
-
-            return allowedTypes.includes('all') || allowedTypes.includes(activeType);
+            return allowedTypes.includes('all') || allowedTypes.includes(currentClientType);
         };
 
         const findEligibleStep = (start, direction) => {
@@ -133,6 +132,7 @@ jQuery(document).ready(function($) {
 
         const toggleClientTypeSections = (typeValue) => {
             const normalized = normalizeType(typeValue);
+            currentClientType = normalized;
 
             $clientForm.find('[data-client-type]').each(function () {
                 const $row = $(this);
