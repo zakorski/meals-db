@@ -47,10 +47,11 @@ jQuery(document).ready(function($) {
         const $indicatorItems = $clientForm.find('.mealsdb-step-indicator li');
         const $initialTypeSelect = $('#mealsdb-client-type-initial');
         const $customerTypeSelect = $('#customer_type');
+        const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
+        const getCurrentClientType = () => normalizeType($customerTypeSelect.val());
+
         const $step1Next = $clientForm.find('.mealsdb-step[data-step="1"] .mealsdb-next-step');
         let currentStep = parseInt($clientForm.data('initialStep'), 10) || 1;
-
-        const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
 
         const updateStepIndicator = (step) => {
             $indicatorItems.each(function () {
@@ -62,23 +63,40 @@ jQuery(document).ready(function($) {
             });
         };
 
-        const isStepVisible = (step) => {
+        const isStepEligible = (step) => {
             const $step = $steps.filter(`[data-step="${step}"]`);
-            return $step.length > 0 && $step.is(':visible');
+            if ($step.length === 0) {
+                return false;
+            }
+
+            if ($step.is(':visible')) {
+                return true;
+            }
+
+            const allowedRaw = ($step.data('clientType') || '').toString().toLowerCase();
+            if (!allowedRaw) {
+                return true;
+            }
+
+            const allowedTypes = allowedRaw.split(',').map((item) => item.trim()).filter(Boolean);
+            if (allowedTypes.length === 0) {
+                return true;
+            }
+
+            const activeType = getCurrentClientType();
+
+            return allowedTypes.includes('all') || allowedTypes.includes(activeType);
         };
 
-        const findVisibleStep = (start, direction) => {
-            if (direction === 'backward') {
-                for (let candidate = start; candidate >= 1; candidate -= 1) {
-                    if (isStepVisible(candidate)) {
-                        return candidate;
-                    }
-                }
-            } else {
-                for (let candidate = start; candidate <= $steps.length; candidate += 1) {
-                    if (isStepVisible(candidate)) {
-                        return candidate;
-                    }
+        const findEligibleStep = (start, direction) => {
+            const increment = direction === 'backward' ? -1 : 1;
+            for (
+                let candidate = start;
+                candidate >= 1 && candidate <= $steps.length;
+                candidate += increment
+            ) {
+                if (isStepEligible(candidate)) {
+                    return candidate;
                 }
             }
 
@@ -89,13 +107,13 @@ jQuery(document).ready(function($) {
             const clamped = Math.min(Math.max(step, 1), $steps.length);
             let targetStep = clamped;
 
-            if (!isStepVisible(targetStep)) {
+            if (!isStepEligible(targetStep)) {
                 const primaryStart = direction === 'backward' ? targetStep - 1 : targetStep + 1;
-                let alternate = findVisibleStep(primaryStart, direction);
+                let alternate = findEligibleStep(primaryStart, direction);
 
                 if (alternate === null) {
                     const opposite = direction === 'backward' ? 'forward' : 'backward';
-                    alternate = findVisibleStep(targetStep, opposite);
+                    alternate = findEligibleStep(targetStep, opposite);
                 }
 
                 if (alternate !== null) {
@@ -106,6 +124,9 @@ jQuery(document).ready(function($) {
             currentStep = targetStep;
             $steps.removeClass('is-active').attr('aria-hidden', 'true');
             const $target = $steps.filter(`[data-step="${targetStep}"]`);
+            if (!$target.is(':visible')) {
+                $target.show();
+            }
             $target.addClass('is-active').attr('aria-hidden', 'false');
             updateStepIndicator(targetStep);
         };
@@ -194,8 +215,10 @@ jQuery(document).ready(function($) {
             }
             ensureStep1ButtonState();
             toggleClientTypeSections(value);
-            if (!isStepVisible(currentStep)) {
+            if (!isStepEligible(currentStep)) {
                 showStep(currentStep, 'backward');
+            } else {
+                showStep(currentStep);
             }
         });
 
@@ -244,7 +267,7 @@ jQuery(document).ready(function($) {
         }
         const initialType = $customerTypeSelect.val();
         toggleClientTypeSections(initialType);
-        if (!isStepVisible(currentStep)) {
+        if (!isStepEligible(currentStep)) {
             showStep(currentStep, 'backward');
         } else {
             showStep(currentStep);
