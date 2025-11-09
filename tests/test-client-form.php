@@ -43,6 +43,7 @@ class StubStmt {
     private $params = [];
     public $num_rows = 0;
     public int|string $affected_rows = 0;
+    public string $error = '';
 
     public function __construct(StubMysqli $conn, string $sql) {
         $this->conn = $conn;
@@ -73,6 +74,13 @@ class StubStmt {
                 $columns = array_map(static function ($col) {
                     return trim($col, "` ");
                 }, $columns);
+                $missing = array_diff($this->conn->requiredInsertColumns(), $columns);
+                if (!empty($missing)) {
+                    $missingColumn = reset($missing);
+                    $this->error = sprintf("Field '%s' cannot be null", $missingColumn);
+                    $this->conn->error = $this->error;
+                    return false;
+                }
                 $this->conn->lastInsert = array_combine($columns, $this->params);
             }
 
@@ -154,21 +162,25 @@ class StubMysqli extends mysqli {
     private $existingIndexes;
     private $drafts = [];
     private $nextDraftId = 1;
+    private $requiredInsertColumns;
     public $lastInsert = [];
     public $lastUpdate = [];
     public $lastUpdateWhereId = null;
     public int|string $affected_rows = 0;
     public int|string $insert_id = 0;
+    public string $error = '';
 
     public function __construct(
         array $existingValues = [],
         array $existingColumns = [],
         array $existingIndexes = [],
-        array $drafts = []
+        array $drafts = [],
+        array $requiredInsertColumns = []
     ) {
         $this->existingValues = $existingValues;
         $this->existingColumns = $existingColumns;
         $this->existingIndexes = $existingIndexes;
+        $this->requiredInsertColumns = array_values($requiredInsertColumns);
 
         foreach ($drafts as $draft) {
             $id = (int) ($draft['id'] ?? 0);
@@ -187,6 +199,10 @@ class StubMysqli extends mysqli {
 
     public function hasValue(string $column, string $value): bool {
         return in_array($value, $this->existingValues[$column] ?? [], true);
+    }
+
+    public function requiredInsertColumns(): array {
+        return $this->requiredInsertColumns;
     }
 
     public function real_escape_string(string $value): string {
@@ -729,6 +745,300 @@ run_test('save omits empty wordpress user id values', function () {
     if (array_key_exists('wordpress_user_id', $conn->lastInsert)) {
         throw new Exception('Expected empty WordPress user ID to be omitted from insert payload.');
     }
+});
+
+run_test('staff client save populates defaults for required database columns', function () {
+    reset_index_flag();
+    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
+    set_db_connection($conn);
+
+    $payload = [
+        'first_name'    => 'Jordan',
+        'last_name'     => 'Staff',
+        'customer_type' => 'Staff',
+        'client_email'  => 'jordan@example.com',
+    ];
+
+    $validation = MealsDB_Client_Form::validate($payload);
+    if (!$validation['valid']) {
+        throw new Exception('Staff payload should validate successfully.');
+    }
+
+    if (!MealsDB_Client_Form::save($payload)) {
+        throw new Exception('Staff save should succeed with defaults for required columns.');
+    }
+
+    foreach ($requiredColumns as $column) {
+        if (!array_key_exists($column, $conn->lastInsert)) {
+            throw new Exception('Missing expected column ' . $column . ' in insert payload.');
+        }
+    }
+
+    if ($conn->lastInsert['client_email'] !== 'jordan@example.com') {
+        throw new Exception('Client email should be preserved when saving Staff clients.');
+    }
+
+    if ($conn->lastInsert['phone_primary'] !== '') {
+        throw new Exception('Phone primary should default to an empty string for Staff clients.');
+    }
+
+    if ($conn->lastInsert['address_postal'] !== '') {
+        throw new Exception('Address postal should default to an empty string for Staff clients.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('private client submission succeeds with all fields populated', function () {
+    reset_index_flag();
+    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
+    set_db_connection($conn);
+
+    $payload = [
+        'customer_type'                 => 'Private',
+        'first_name'                    => 'Alex',
+        'last_name'                     => 'Client',
+        'client_email'                  => 'alex.private@example.com',
+        'phone_primary'                 => '(506)-123-4567',
+        'phone_secondary'               => '(506)-765-4321',
+        'do_not_call_client_phone'      => '1',
+        'address_street_number'         => '123',
+        'address_street_name'           => 'Main Street',
+        'address_unit'                  => '5B',
+        'address_city'                  => 'Moncton',
+        'address_province'              => 'NB',
+        'address_postal'                => 'E2E2E2',
+        'delivery_address_street_number'=> '456',
+        'delivery_address_street_name'  => 'Elm Street',
+        'delivery_address_unit'         => '9C',
+        'delivery_address_city'         => 'Moncton',
+        'delivery_address_province'     => 'NB',
+        'delivery_address_postal'       => 'B3B3B3',
+        'gender'                        => 'Female',
+        'birth_date'                    => '1950-05-01',
+        'service_center'                => 'Center A',
+        'service_center_charged'        => 'Center B',
+        'vendor_number'                 => 'VN-123',
+        'service_id'                    => 'SID-555',
+        'service_zone'                  => 'A',
+        'service_course'                => '1',
+        'per_sdnb_req'                  => 'N/A',
+        'payment_method'                => 'Cheque',
+        'rate'                          => '10.50',
+        'client_contribution'           => '25',
+        'delivery_fee'                  => '5.00',
+        'delivery_initials'             => 'AC',
+        'delivery_day'                  => 'MONDAY AM',
+        'delivery_area_name'            => 'Area 1',
+        'delivery_area_zone'            => 'Zone A',
+        'ordering_frequency'            => '2',
+        'ordering_contact_method'       => 'CLIENT EMAIL',
+        'delivery_frequency'            => '2',
+        'freezer_capacity'              => '4',
+        'meal_type'                     => '1',
+        'requisition_period'            => 'MONTH',
+        'service_commence_date'         => '2024-05-01',
+        'required_start_date'           => '2024-05-02',
+        'expected_termination_date'     => '2024-12-31',
+        'initial_renewal_date'          => '2024-06-01',
+        'termination_date'              => '2025-01-31',
+        'most_recent_renewal_date'      => '2024-07-01',
+        'units'                         => '3',
+        'diet_concerns'                 => 'None',
+        'client_comments'               => 'All good.',
+        'alt_contact_name'              => 'Taylor Helper',
+        'alt_contact_phone_primary'     => '(506)-111-2222',
+        'alt_contact_phone_secondary'   => '(506)-333-4444',
+        'alt_contact_email'             => 'helper@example.com',
+    ];
+
+    $validation = MealsDB_Client_Form::validate($payload);
+    if (!$validation['valid']) {
+        throw new Exception('Private payload should validate successfully: ' . json_encode($validation['errors']));
+    }
+
+    if (!MealsDB_Client_Form::save($payload)) {
+        throw new Exception('Private client save should succeed.');
+    }
+
+    if (($conn->lastInsert['delivery_day'] ?? '') !== 'MONDAY AM') {
+        throw new Exception('Delivery day should be preserved for Private clients.');
+    }
+
+    if (($conn->lastInsert['ordering_contact_method'] ?? '') !== 'CLIENT EMAIL') {
+        throw new Exception('Ordering contact method should be preserved for Private clients.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('sdnb client submission succeeds with all fields populated', function () {
+    reset_index_flag();
+    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
+    set_db_connection($conn);
+
+    $payload = [
+        'customer_type'                 => 'SDNB',
+        'first_name'                    => 'Morgan',
+        'last_name'                     => 'Support',
+        'client_email'                  => 'morgan.sdnb@example.com',
+        'phone_primary'                 => '(506)-555-1234',
+        'phone_secondary'               => '(506)-555-9876',
+        'do_not_call_client_phone'      => '0',
+        'address_street_number'         => '789',
+        'address_street_name'           => 'Pine Avenue',
+        'address_unit'                  => '12A',
+        'address_city'                  => 'Saint John',
+        'address_province'              => 'NB',
+        'address_postal'                => 'C1C1C1',
+        'delivery_address_street_number'=> '101',
+        'delivery_address_street_name'  => 'Oak Lane',
+        'delivery_address_unit'         => '3B',
+        'delivery_address_city'         => 'Saint John',
+        'delivery_address_province'     => 'NB',
+        'delivery_address_postal'       => 'D2D2D2',
+        'gender'                        => 'Male',
+        'birth_date'                    => '1945-07-15',
+        'service_center'                => 'Center C',
+        'service_center_charged'        => 'Center D',
+        'vendor_number'                 => 'VN-789',
+        'service_id'                    => 'SID-777',
+        'service_zone'                  => 'B',
+        'service_course'                => '2',
+        'per_sdnb_req'                  => 'Required check',
+        'payment_method'                => 'Credit',
+        'rate'                          => '15.00',
+        'client_contribution'           => '40',
+        'delivery_fee'                  => '7.00',
+        'delivery_initials'             => 'MS',
+        'delivery_day'                  => 'TUESDAY PM',
+        'delivery_area_name'            => 'Area 2',
+        'delivery_area_zone'            => 'Zone B',
+        'ordering_frequency'            => '4',
+        'ordering_contact_method'       => 'CLIENT PHONE',
+        'delivery_frequency'            => '4',
+        'freezer_capacity'              => '6',
+        'meal_type'                     => '2',
+        'requisition_period'            => 'WEEK',
+        'service_commence_date'         => '2024-03-15',
+        'required_start_date'           => '2024-03-20',
+        'expected_termination_date'     => '2024-11-01',
+        'initial_renewal_date'          => '2024-04-20',
+        'termination_date'              => '2024-12-31',
+        'most_recent_renewal_date'      => '2024-05-20',
+        'open_date'                     => '2024-03-01',
+        'units'                         => '6',
+        'diet_concerns'                 => 'Low sodium',
+        'client_comments'               => 'Weekly wellness check needed.',
+        'alt_contact_name'              => 'Jamie Caregiver',
+        'alt_contact_phone_primary'     => '(506)-777-8888',
+        'alt_contact_phone_secondary'   => '(506)-999-0000',
+        'alt_contact_email'             => 'care@example.com',
+    ];
+
+    $validation = MealsDB_Client_Form::validate($payload);
+    if (!$validation['valid']) {
+        throw new Exception('SDNB payload should validate successfully: ' . json_encode($validation['errors']));
+    }
+
+    if (!MealsDB_Client_Form::save($payload)) {
+        throw new Exception('SDNB client save should succeed.');
+    }
+
+    if (($conn->lastInsert['open_date'] ?? '') !== '2024-03-01') {
+        throw new Exception('Open date should be preserved for SDNB clients.');
+    }
+
+    if (($conn->lastInsert['units'] ?? '') !== '6') {
+        throw new Exception('Units should be preserved for SDNB clients.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('veteran client submission succeeds with all fields populated', function () {
+    reset_index_flag();
+    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
+    set_db_connection($conn);
+
+    $payload = [
+        'customer_type'                 => 'Veteran',
+        'first_name'                    => 'Sam',
+        'last_name'                     => 'Service',
+        'client_email'                  => 'sam.veteran@example.com',
+        'phone_primary'                 => '(506)-222-3333',
+        'phone_secondary'               => '(506)-444-5555',
+        'do_not_call_client_phone'      => '0',
+        'address_street_number'         => '222',
+        'address_street_name'           => 'Hero Road',
+        'address_unit'                  => '2D',
+        'address_city'                  => 'Fredericton',
+        'address_province'              => 'NB',
+        'address_postal'                => 'F3F3F3',
+        'delivery_address_street_number'=> '333',
+        'delivery_address_street_name'  => 'Honor Way',
+        'delivery_address_unit'         => '7E',
+        'delivery_address_city'         => 'Fredericton',
+        'delivery_address_province'     => 'NB',
+        'delivery_address_postal'       => 'G4G4G4',
+        'gender'                        => 'Other',
+        'birth_date'                    => '1940-12-10',
+        'service_center'                => 'Center E',
+        'service_center_charged'        => 'Center F',
+        'vendor_number'                 => 'VN-321',
+        'service_id'                    => 'SID-999',
+        'service_zone'                  => 'A',
+        'service_course'                => '1',
+        'per_sdnb_req'                  => 'Veteran support',
+        'payment_method'                => 'Direct Deposit',
+        'rate'                          => '18.00',
+        'client_contribution'           => '50',
+        'delivery_fee'                  => '9.00',
+        'delivery_initials'             => 'SS',
+        'delivery_day'                  => 'FRIDAY AM',
+        'delivery_area_name'            => 'Area 3',
+        'delivery_area_zone'            => 'Zone C',
+        'ordering_frequency'            => '3',
+        'ordering_contact_method'       => 'SOCIAL WORKER PHONE',
+        'delivery_frequency'            => '3',
+        'freezer_capacity'              => '8',
+        'meal_type'                     => '2',
+        'requisition_period'            => 'MONTH',
+        'service_commence_date'         => '2024-02-10',
+        'required_start_date'           => '2024-02-15',
+        'expected_termination_date'     => '2024-10-30',
+        'initial_renewal_date'          => '2024-03-15',
+        'termination_date'              => '2024-12-30',
+        'most_recent_renewal_date'      => '2024-04-15',
+        'open_date'                     => '2024-02-01',
+        'units'                         => '8',
+        'vet_health_card'               => 'VH-123456',
+        'diet_concerns'                 => 'Gluten free',
+        'client_comments'               => 'Prefers morning calls.',
+        'alt_contact_name'              => 'Riley Advocate',
+        'alt_contact_phone_primary'     => '(506)-666-7777',
+        'alt_contact_phone_secondary'   => '(506)-888-9999',
+        'alt_contact_email'             => 'advocate@example.com',
+    ];
+
+    $validation = MealsDB_Client_Form::validate($payload);
+    if (!$validation['valid']) {
+        throw new Exception('Veteran payload should validate successfully: ' . json_encode($validation['errors']));
+    }
+
+    if (!MealsDB_Client_Form::save($payload)) {
+        throw new Exception('Veteran client save should succeed.');
+    }
+
+    if (($conn->lastInsert['vet_health_card'] ?? '') === '') {
+        throw new Exception('Vet health card should be included for Veteran clients.');
+    }
+
+    set_db_connection(null);
 });
 
 run_test('save aborts when deterministic indexes cannot be created', function () {
