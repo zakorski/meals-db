@@ -213,8 +213,21 @@ jQuery(document).ready(function($) {
             if ($initialTypeSelect.val() !== value) {
                 $initialTypeSelect.val(value);
             }
+
             ensureStep1ButtonState();
             toggleClientTypeSections(value);
+
+            const hasSelection = normalizeType(value).length > 0;
+            if (!hasSelection) {
+                showStep(1);
+                return;
+            }
+
+            if (currentStep === 1) {
+                showStep(2, 'forward');
+                return;
+            }
+
             if (!isStepEligible(currentStep)) {
                 showStep(currentStep, 'backward');
             } else {
