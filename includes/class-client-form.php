@@ -122,6 +122,15 @@ class MealsDB_Client_Form {
     ];
 
     /**
+     * Default values for non-nullable columns when inserting new clients.
+     */
+    private static $insert_required_defaults = [
+        'client_email'   => '',
+        'phone_primary'  => '',
+        'address_postal' => '',
+    ];
+
+    /**
      * Human-readable labels for common form fields.
      */
     private static $field_labels = [
@@ -513,6 +522,8 @@ class MealsDB_Client_Form {
         if (array_key_exists('wordpress_user_id', $sanitized) && $sanitized['wordpress_user_id'] === '') {
             unset($sanitized['wordpress_user_id']);
         }
+
+        $sanitized = self::apply_insert_defaults($sanitized);
 
         $encrypted = $sanitized;
         if (!self::ensure_index_columns_exist($conn)) {
@@ -1091,6 +1102,19 @@ class MealsDB_Client_Form {
         }
 
         return $sanitized;
+    }
+
+    /**
+     * Ensure required insert columns are present with safe defaults.
+     */
+    private static function apply_insert_defaults(array $values): array {
+        foreach (self::$insert_required_defaults as $column => $default) {
+            if (!array_key_exists($column, $values) || $values[$column] === null) {
+                $values[$column] = $default;
+            }
+        }
+
+        return $values;
     }
 
     /**
