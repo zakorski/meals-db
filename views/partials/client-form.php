@@ -134,7 +134,7 @@ $alt_contact_enabled = (
                     </th>
                     <td><input type="email" name="client_email" id="client_email" class="regular-text" data-base-required="1" value="<?php echo esc_attr($form_values['client_email'] ?? ''); ?>" /></td>
                 </tr>
-                <tr data-client-type="staff">
+                <tr data-client-type="sdnb,veteran,private">
                     <th>
                         <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID', 'meals-db'); ?></label>
                         <span class="description"><?php esc_html_e('Optional link to the matching WordPress user account.', 'meals-db'); ?></span>
@@ -142,14 +142,17 @@ $alt_contact_enabled = (
                     <td><input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" value="<?php echo esc_attr($form_values['wordpress_user_id'] ?? ''); ?>" /></td>
                 </tr>
                 <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="phone_primary"><?php esc_html_e('Phone Number *', 'meals-db'); ?></label></th>
+                    <th>
+                        <label for="phone_primary"><?php esc_html_e('Phone Number *', 'meals-db'); ?></label>
+                        <span class="description" data-client-type="staff"><?php esc_html_e('Optional for Staff clients.', 'meals-db'); ?></span>
+                    </th>
                     <td><input type="text" name="phone_primary" id="phone_primary" class="regular-text phone-mask" placeholder="(555)-555-5555" required data-base-required="1" value="<?php echo esc_attr($form_values['phone_primary'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-client-type="sdnb,veteran,private">
                     <th><label for="phone_secondary"><?php esc_html_e('Second Phone Number', 'meals-db'); ?></label></th>
                     <td><input type="text" name="phone_secondary" id="phone_secondary" class="regular-text phone-mask" placeholder="(555)-555-5555" value="<?php echo esc_attr($form_values['phone_secondary'] ?? ''); ?>" /></td>
                 </tr>
-                <tr>
+                <tr data-client-type="sdnb,veteran,private">
                     <th><label for="do_not_call_client_phone"><?php esc_html_e("Do Not Call Client's Phone", 'meals-db'); ?></label></th>
                     <td><label><input type="checkbox" name="do_not_call_client_phone" id="do_not_call_client_phone" value="1" <?php checked($form_values['do_not_call_client_phone'] ?? '0', '1'); ?> /> <?php esc_html_e('Call alternate contact instead', 'meals-db'); ?></label></td>
                 </tr>

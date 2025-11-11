@@ -54,6 +54,21 @@ jQuery(document).ready(function($) {
         let currentStep = parseInt($clientForm.data('initialStep'), 10) || 1;
         let currentClientType = normalizeType($customerTypeSelect.val());
 
+        const toggleInteractiveState = ($container, shouldEnable) => {
+            $container.find('input, select, textarea, button').each(function () {
+                const $field = $(this);
+                if ($field.is('[data-keep-enabled]')) {
+                    return;
+                }
+
+                if (shouldEnable) {
+                    $field.prop('disabled', false);
+                } else {
+                    $field.prop('disabled', true);
+                }
+            });
+        };
+
         const updateStepIndicator = (step) => {
             $indicatorItems.each(function () {
                 const $item = $(this);
@@ -144,6 +159,8 @@ jQuery(document).ready(function($) {
 
                 const allowedTypes = allowedRaw.split(',').map((item) => item.trim()).filter(Boolean);
                 const shouldShow = allowedTypes.includes('all') || allowedTypes.includes(normalized);
+                toggleInteractiveState($row, shouldShow);
+
                 if (shouldShow) {
                     $row.show();
                 } else {
