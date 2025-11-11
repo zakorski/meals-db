@@ -234,6 +234,7 @@ class MealsDB_Client_Form {
             $label = self::get_field_label($field);
             if (!isset($error_details['invalid_format'][$field])) {
                 $error_details['invalid_format'][$field] = [
+                    'field'    => $field,
                     'label'    => $label,
                     'messages' => [],
                 ];
@@ -251,7 +252,11 @@ class MealsDB_Client_Form {
             $label = self::get_field_label($field);
             $message = sprintf('%s is required.', $label);
             $errors[] = $message;
-            $error_details['missing_required'][$field] = $label;
+            $error_details['missing_required'][$field] = [
+                'field'   => $field,
+                'label'   => $label,
+                'message' => $message,
+            ];
         };
 
         // Postal Code
@@ -295,48 +300,11 @@ class MealsDB_Client_Form {
             $record_format_error('alt_contact_email', 'Invalid alternate contact email address.');
         }
 
-        // Required fields captured by the current admin form UI
+        // Required fields based on client type configuration.
         $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
-        $required_fields = [
-            'last_name',
-            'first_name',
-            'customer_type',
-        ];
+        $required_fields = self::get_required_fields_for_type($client_type);
 
-        if ($client_type === 'STAFF') {
-            $required_fields[] = 'client_email';
-        } else {
-            $required_fields = array_merge($required_fields, [
-                'address_street_number',
-                'address_street_name',
-                'address_unit',
-                'address_city',
-                'address_province',
-                'address_postal',
-                'phone_primary',
-                'payment_method',
-                'required_start_date',
-                'rate',
-                'delivery_initials',
-                'delivery_day',
-                'delivery_area_name',
-                'delivery_area_zone',
-                'ordering_frequency',
-                'ordering_contact_method',
-                'delivery_frequency',
-            ]);
-
-            if (in_array($client_type, ['SDNB', 'VETERAN'], true)) {
-                $required_fields[] = 'open_date';
-                $required_fields[] = 'units';
-            }
-
-            if ($client_type === 'VETERAN') {
-                $required_fields[] = 'vet_health_card';
-            }
-        }
-
-        foreach (array_unique($required_fields) as $field) {
+        foreach ($required_fields as $field) {
             if (empty($sanitized[$field] ?? '')) {
                 $record_required_error($field);
             }
@@ -411,10 +379,16 @@ class MealsDB_Client_Form {
 
         $summary_parts = [];
         if (!empty($error_details['missing_required'])) {
-            $summary_parts[] = sprintf(
-                'Missing required fields: %s.',
-                self::human_join(array_values($error_details['missing_required']))
-            );
+            $labels = array_map(static function ($detail) {
+                return $detail['label'] ?? '';
+            }, $error_details['missing_required']);
+            $labels = array_filter(array_unique($labels));
+            if (!empty($labels)) {
+                $summary_parts[] = sprintf(
+                    'Missing required fields: %s.',
+                    self::human_join(array_values($labels))
+                );
+            }
         }
 
         if (!empty($error_details['invalid_format'])) {
@@ -439,6 +413,58 @@ class MealsDB_Client_Form {
             'error_summary' => $error_summary,
             'error_details' => $error_details,
         ];
+    }
+
+    /**
+     * Determine the required fields for the supplied client type.
+     */
+    private static function get_required_fields_for_type(string $client_type): array {
+        $client_type = strtoupper(trim($client_type));
+
+        $base_required = ['customer_type'];
+
+        $type_specific = [
+            'STAFF' => ['first_name', 'last_name', 'client_email'],
+            'PRIVATE' => [
+                'first_name',
+                'last_name',
+                'phone_primary',
+                'address_street_name',
+                'address_city',
+                'address_province',
+                'address_postal',
+                'delivery_day',
+                'payment_method',
+            ],
+            'SDNB' => [
+                'first_name',
+                'last_name',
+                'phone_primary',
+                'vendor_number',
+                'service_center_charged',
+                'service_id',
+                'requisition_period',
+                'rate',
+                'payment_method',
+            ],
+            'VETERAN' => [
+                'first_name',
+                'last_name',
+                'phone_primary',
+                'requisition_period',
+                'vet_health_card',
+                'payment_method',
+            ],
+        ];
+
+        if ($client_type !== '' && isset($type_specific[$client_type])) {
+            $required = array_merge($base_required, $type_specific[$client_type]);
+        } else {
+            // Fallback ensures the most common name fields remain required even for unknown types.
+            $required = array_merge($base_required, ['first_name', 'last_name']);
+        }
+
+        return array_values(array_unique($required));
     }
 
     /**
