@@ -15,6 +15,11 @@ class MealsDB_DB {
     private static $connection = null;
 
     /**
+     * @var string|null
+     */
+    private static $table_prefix = null;
+
+    /**
      * Get the existing DB connection, or establish one if it doesn't exist.
      *
      * @return mysqli|null
@@ -24,10 +29,10 @@ class MealsDB_DB {
             return self::$connection;
         }
 
-        $host = defined('MEALS_DB_HOST') ? MEALS_DB_HOST : null;
-        $user = defined('MEALS_DB_USER') ? MEALS_DB_USER : null;
-        $pass = defined('MEALS_DB_PASS') ? MEALS_DB_PASS : null;
-        $name = defined('MEALS_DB_NAME') ? MEALS_DB_NAME : null;
+        $host = (defined('MEALS_DB_HOST') && MEALS_DB_HOST !== '') ? MEALS_DB_HOST : null;
+        $user = (defined('MEALS_DB_USER') && MEALS_DB_USER !== '') ? MEALS_DB_USER : null;
+        $pass = (defined('MEALS_DB_PASS') && MEALS_DB_PASS !== '') ? MEALS_DB_PASS : null;
+        $name = (defined('MEALS_DB_NAME') && MEALS_DB_NAME !== '') ? MEALS_DB_NAME : null;
 
         if ($host === null || $user === null || $name === null) {
             error_log('[MealsDB] Database configuration constants are missing.');
@@ -68,5 +73,40 @@ class MealsDB_DB {
             self::$connection->close();
             self::$connection = null;
         }
+    }
+
+    /**
+     * Retrieve the table name prefixed with the active WordPress prefix.
+     */
+    public static function get_table_name(string $table): string {
+        $prefix = self::get_table_prefix();
+
+        if ($prefix !== '' && strpos($table, $prefix) === 0) {
+            return $table;
+        }
+
+        return $prefix . $table;
+    }
+
+    /**
+     * Determine the WordPress table prefix.
+     */
+    private static function get_table_prefix(): string {
+        if (self::$table_prefix !== null) {
+            return self::$table_prefix;
+        }
+
+        $prefix = '';
+
+        if (isset($GLOBALS['wpdb']) && is_object($GLOBALS['wpdb']) && property_exists($GLOBALS['wpdb'], 'prefix')) {
+            $prefix_value = $GLOBALS['wpdb']->prefix;
+            if (is_string($prefix_value)) {
+                $prefix = $prefix_value;
+            }
+        }
+
+        self::$table_prefix = $prefix;
+
+        return self::$table_prefix;
     }
 }
