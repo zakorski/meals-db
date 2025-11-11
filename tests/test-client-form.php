@@ -562,12 +562,130 @@ run_test('staff client requires email but not WordPress user id', function () {
     }
 
     $missing = $result['error_details']['missing_required'] ?? [];
-    if (!isset($missing['client_email'])) {
+    if (!isset($missing['client_email']['message'])) {
         throw new Exception('Expected missing email error for Staff client.');
     }
 
     if (isset($missing['wordpress_user_id'])) {
         throw new Exception('WordPress user ID should not be required for Staff clients.');
+    }
+
+    if (isset($missing['phone_primary'])) {
+        throw new Exception('Staff clients should not require primary phone numbers.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('private clients enforce configured required fields', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Private',
+        'first_name' => 'River',
+        'last_name' => 'Stone',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected Private clients to require address and delivery details.');
+    }
+
+    $missing = $result['error_details']['missing_required'] ?? [];
+    $expected = [
+        'phone_primary',
+        'address_street_name',
+        'address_city',
+        'address_province',
+        'address_postal',
+        'delivery_day',
+        'payment_method',
+    ];
+
+    foreach ($expected as $field) {
+        if (!isset($missing[$field]['message'])) {
+            throw new Exception('Missing required validation entry for ' . $field . '.');
+        }
+    }
+
+    if (isset($missing['address_street_number'])) {
+        throw new Exception('Street number should not be required for Private clients.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('sdnb clients require service identifiers and payment info', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'SDNB',
+        'first_name' => 'Morgan',
+        'last_name' => 'Quill',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected SDNB clients to require service identifiers.');
+    }
+
+    $missing = $result['error_details']['missing_required'] ?? [];
+    $expected = [
+        'phone_primary',
+        'vendor_number',
+        'service_center_charged',
+        'service_id',
+        'requisition_period',
+        'rate',
+        'payment_method',
+    ];
+
+    foreach ($expected as $field) {
+        if (!isset($missing[$field]['message'])) {
+            throw new Exception('Missing required validation entry for ' . $field . '.');
+        }
+    }
+
+    if (isset($missing['delivery_day'])) {
+        throw new Exception('Delivery day should not be required for SDNB clients.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('veteran clients require requisition and health identifiers', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Veteran',
+        'first_name' => 'Robin',
+        'last_name' => 'Vale',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected Veteran clients to require requisition and health identifiers.');
+    }
+
+    $missing = $result['error_details']['missing_required'] ?? [];
+    $expected = [
+        'phone_primary',
+        'requisition_period',
+        'vet_health_card',
+        'payment_method',
+    ];
+
+    foreach ($expected as $field) {
+        if (!isset($missing[$field]['message'])) {
+            throw new Exception('Missing required validation entry for ' . $field . '.');
+        }
+    }
+
+    if (isset($missing['vendor_number'])) {
+        throw new Exception('Vendor number should not be required for Veteran clients.');
     }
 
     set_db_connection(null);
@@ -616,7 +734,7 @@ run_test('builds a helpful summary for missing and invalid fields', function () 
     }
 
     $missing = $result['error_details']['missing_required'] ?? [];
-    if (!isset($missing['first_name'])) {
+    if (!isset($missing['first_name']['message'])) {
         throw new Exception('Missing required field details for first_name.');
     }
 
