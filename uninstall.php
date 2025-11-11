@@ -36,14 +36,15 @@ if (!$conn instanceof mysqli) {
 
 // Drop plugin-specific tables
 $tables = [
-    'meals_clients',
+    MealsDB_DB::get_table_name('meals_clients'),
     'meals_drafts',
     'meals_ignored_conflicts',
-    'meals_audit_log'
+    'meals_audit_log',
 ];
 
 foreach ($tables as $table) {
-    $sql = "DROP TABLE IF EXISTS $table";
+    $tableSafe = $conn->real_escape_string($table);
+    $sql       = "DROP TABLE IF EXISTS `{$tableSafe}`";
     if (!$conn->query($sql)) {
         error_log("Failed to drop $table: " . $conn->error);
     }

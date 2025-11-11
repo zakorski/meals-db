@@ -50,87 +50,6 @@ class MealsDB_Installer {
         }
 
         $tables = [
-            'meals_clients' => "CREATE TABLE IF NOT EXISTS meals_clients (
-                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                individual_id VARCHAR(255) NULL,
-                requisition_id VARCHAR(255) NULL,
-                vet_health_card VARCHAR(255) NULL,
-                delivery_initials VARCHAR(50) NULL,
-                individual_id_index CHAR(64) NULL,
-                requisition_id_index CHAR(64) NULL,
-                vet_health_card_index CHAR(64) NULL,
-                delivery_initials_index CHAR(64) NULL,
-                first_name VARCHAR(191) NOT NULL,
-                last_name VARCHAR(191) NOT NULL,
-                customer_type VARCHAR(100) NOT NULL,
-                open_date DATE NULL,
-                assigned_social_worker VARCHAR(191) NULL,
-                social_worker_email VARCHAR(191) NULL,
-                client_email VARCHAR(191) NOT NULL,
-                wordpress_user_id BIGINT UNSIGNED NULL,
-                phone_primary VARCHAR(25) NOT NULL,
-                phone_secondary VARCHAR(25) NULL,
-                do_not_call_client_phone TINYINT(1) NOT NULL DEFAULT 0,
-                alt_contact_name VARCHAR(191) NULL,
-                alt_contact_phone_primary VARCHAR(25) NULL,
-                alt_contact_phone_secondary VARCHAR(25) NULL,
-                alt_contact_email VARCHAR(191) NULL,
-                address_street_number VARCHAR(50) NULL,
-                address_street_name VARCHAR(191) NULL,
-                address_unit VARCHAR(50) NULL,
-                address_city VARCHAR(191) NULL,
-                address_province VARCHAR(191) NULL,
-                address_postal VARCHAR(20) NOT NULL,
-                delivery_address_street_number VARCHAR(50) NULL,
-                delivery_address_street_name VARCHAR(191) NULL,
-                delivery_address_unit VARCHAR(50) NULL,
-                delivery_address_city VARCHAR(191) NULL,
-                delivery_address_province VARCHAR(191) NULL,
-                delivery_address_postal VARCHAR(20) NULL,
-                gender VARCHAR(50) NULL,
-                birth_date DATE NULL,
-                service_center VARCHAR(191) NULL,
-                service_center_charged VARCHAR(191) NULL,
-                vendor_number VARCHAR(191) NULL,
-                service_id VARCHAR(191) NULL,
-                service_zone VARCHAR(191) NULL,
-                service_course VARCHAR(191) NULL,
-                per_sdnb_req VARCHAR(191) NULL,
-                payment_method VARCHAR(191) NULL,
-                rate VARCHAR(191) NULL,
-                client_contribution VARCHAR(191) NULL,
-                delivery_fee VARCHAR(191) NULL,
-                delivery_day VARCHAR(191) NULL,
-                delivery_area_name VARCHAR(191) NULL,
-                delivery_area_zone VARCHAR(191) NULL,
-                ordering_frequency VARCHAR(191) NULL,
-                ordering_contact_method VARCHAR(191) NULL,
-                delivery_frequency VARCHAR(191) NULL,
-                freezer_capacity VARCHAR(191) NULL,
-                meal_type VARCHAR(191) NULL,
-                requisition_period VARCHAR(191) NULL,
-                service_commence_date DATE NULL,
-                required_start_date DATE NULL,
-                expected_termination_date DATE NULL,
-                initial_renewal_date DATE NULL,
-                termination_date DATE NULL,
-                most_recent_renewal_date DATE NULL,
-                units TINYINT UNSIGNED NULL,
-                diet_concerns TEXT NULL,
-                client_comments TEXT NULL,
-                status VARCHAR(50) NOT NULL DEFAULT 'active',
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY unique_individual_id (individual_id),
-                UNIQUE KEY unique_requisition_id (requisition_id),
-                UNIQUE KEY unique_individual_id_index (individual_id_index),
-                UNIQUE KEY unique_requisition_id_index (requisition_id_index),
-                UNIQUE KEY unique_vet_health_card_index (vet_health_card_index),
-                UNIQUE KEY unique_delivery_initials_index (delivery_initials_index),
-                UNIQUE KEY unique_vet_health_card (vet_health_card),
-                KEY idx_status (status),
-                KEY idx_wordpress_user_id (wordpress_user_id)
-            ) ENGINE=InnoDB $charset_sql;",
             'meals_drafts' => "CREATE TABLE IF NOT EXISTS meals_drafts (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 data LONGTEXT NOT NULL,
@@ -170,8 +89,7 @@ class MealsDB_Installer {
             }
         }
 
-        self::rename_legacy_columns($conn);
-        self::ensure_meals_clients_columns($conn);
+        self::create_meals_clients_table();
     }
 
     /**
@@ -310,109 +228,86 @@ class MealsDB_Installer {
     }
 
     /**
-     * Rename legacy meals_clients columns to their new equivalents when possible.
+     * Create or upgrade the meals_clients table using dbDelta.
      */
-    private static function rename_legacy_columns(mysqli $conn): void {
-        $table = 'meals_clients';
-        $renames = [
-            'initial_termination_date' => ['initial_renewal_date', 'DATE NULL'],
-            'recent_renewal_date'      => ['most_recent_renewal_date', 'DATE NULL'],
-        ];
+    private static function create_meals_clients_table(): void {
+        global $wpdb;
 
-        foreach ($renames as $oldColumn => $renameData) {
-            [$newColumn, $definition] = $renameData;
-
-            $oldEscaped = $conn->real_escape_string($oldColumn);
-            $newEscaped = $conn->real_escape_string($newColumn);
-
-            $oldResult = $conn->query(sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table, $oldEscaped));
-            $newResult = $conn->query(sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table, $newEscaped));
-
-            $oldExists = ($oldResult && property_exists($oldResult, 'num_rows') && $oldResult->num_rows > 0);
-            $newExists = ($newResult && property_exists($newResult, 'num_rows') && $newResult->num_rows > 0);
-
-            if ($oldResult && method_exists($oldResult, 'free')) {
-                $oldResult->free();
-            }
-            if ($newResult && method_exists($newResult, 'free')) {
-                $newResult->free();
-            }
-
-            if (!$oldExists || $newExists) {
-                continue;
-            }
-
-            $sql = sprintf(
-                "ALTER TABLE `%s` CHANGE COLUMN `%s` `%s` %s",
-                $table,
-                $oldColumn,
-                $newColumn,
-                $definition
-            );
-
-            if ($conn->query($sql) !== true) {
-                error_log(sprintf('[MealsDB Installer] Failed renaming column %s to %s: %s', $oldColumn, $newColumn, $conn->error));
-            }
+        if (!$wpdb instanceof wpdb) {
+            error_log('[MealsDB Installer] Unable to access the WordPress database connection while creating meals_clients.');
+            return;
         }
-    }
 
-    /**
-     * Ensure new meals_clients columns exist for upgraded installations.
-     */
-    private static function ensure_meals_clients_columns(mysqli $conn): void {
-        $table = 'meals_clients';
-        $columns = [
-            'assigned_social_worker'       => 'VARCHAR(191) NULL',
-            'social_worker_email'          => 'VARCHAR(191) NULL',
-            'phone_secondary'              => 'VARCHAR(25) NULL',
-            'do_not_call_client_phone'     => 'TINYINT(1) NOT NULL DEFAULT 0',
-            'alt_contact_name'             => 'VARCHAR(191) NULL',
-            'alt_contact_phone_primary'    => 'VARCHAR(25) NULL',
-            'alt_contact_phone_secondary'  => 'VARCHAR(25) NULL',
-            'alt_contact_email'            => 'VARCHAR(191) NULL',
-            'address_street_number'        => 'VARCHAR(50) NULL',
-            'address_street_name'          => 'VARCHAR(191) NULL',
-            'address_unit'                 => 'VARCHAR(50) NULL',
-            'delivery_address_street_number' => 'VARCHAR(50) NULL',
-            'delivery_address_street_name' => 'VARCHAR(191) NULL',
-            'delivery_address_unit'        => 'VARCHAR(50) NULL',
-            'delivery_address_city'        => 'VARCHAR(191) NULL',
-            'delivery_address_province'    => 'VARCHAR(191) NULL',
-            'delivery_address_postal'      => 'VARCHAR(20) NULL',
-            'gender'                       => 'VARCHAR(50) NULL',
-            'service_center_charged'       => 'VARCHAR(191) NULL',
-            'vendor_number'                => 'VARCHAR(191) NULL',
-            'service_id'                   => 'VARCHAR(191) NULL',
-            'payment_method'               => 'VARCHAR(191) NULL',
-            'client_contribution'          => 'VARCHAR(191) NULL',
-            'delivery_fee'                 => 'VARCHAR(191) NULL',
-            'freezer_capacity'             => 'VARCHAR(191) NULL',
-            'meal_type'                    => 'VARCHAR(191) NULL',
-            'requisition_period'           => 'VARCHAR(191) NULL',
-            'initial_renewal_date'         => 'DATE NULL',
-            'termination_date'             => 'DATE NULL',
-            'most_recent_renewal_date'     => 'DATE NULL',
-            'units'                        => 'TINYINT UNSIGNED NULL',
-            'wordpress_user_id'            => 'BIGINT UNSIGNED NULL',
-        ];
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-        foreach ($columns as $column => $definition) {
-            $escaped = $conn->real_escape_string($column);
-            $result = $conn->query(sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table, $escaped));
-            $exists = ($result && property_exists($result, 'num_rows') && $result->num_rows > 0);
+        $table_name      = $wpdb->prefix . 'meals_clients';
+        $charset_collate = $wpdb->get_charset_collate();
 
-            if ($result && method_exists($result, 'free')) {
-                $result->free();
-            }
+        $sql = "CREATE TABLE {$table_name} (
+            client_id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+            wp_user_id BIGINT(20) UNSIGNED NOT NULL,
+            client_type ENUM('Private','SDNB','Veteran','Staff') NOT NULL,
+            first_name VARCHAR(100) NOT NULL,
+            last_name VARCHAR(100) NOT NULL,
+            client_email VARCHAR(255) NULL,
+            client_phone_1 VARCHAR(20) NULL,
+            client_phone_2 VARCHAR(20) NULL,
+            alternate_contact_name VARCHAR(255) NULL,
+            alternate_contact_phone_1 VARCHAR(20) NULL,
+            alternate_contact_phone_2 VARCHAR(20) NULL,
+            alternate_contact_email VARCHAR(255) NULL,
+            do_not_call_client_phone BOOLEAN NOT NULL DEFAULT 0,
+            payment_method VARCHAR(50) NULL,
+            open_date DATE NULL,
+            birth_date DATE NULL,
+            gender VARCHAR(10) NULL,
+            assigned_worker_name VARCHAR(255) NULL,
+            assigned_worker_email VARCHAR(255) NULL,
+            vendor_number VARCHAR(50) NULL,
+            service_center_charged VARCHAR(255) NULL,
+            service_id VARCHAR(50) NULL,
+            requisition_id VARCHAR(50) NULL,
+            requisition_period VARCHAR(50) NULL,
+            meal_type VARCHAR(50) NULL,
+            service_name_zone VARCHAR(10) NULL,
+            service_name_course VARCHAR(10) NULL,
+            service_commence_date DATE NULL,
+            expected_termination_date DATE NULL,
+            initial_renewal_termination_date DATE NULL,
+            most_recent_renewal_termination_date DATE NULL,
+            notes_to_service_provider TEXT NULL,
+            client_contribution DECIMAL(10,2) NULL,
+            vet_health_id_card VARCHAR(50) NULL,
+            rate DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            required_start_date DATE NULL,
+            delivery_day VARCHAR(50) NULL,
+            delivery_area_name VARCHAR(255) NULL,
+            delivery_area_zone VARCHAR(50) NULL,
+            ordering_contact_method VARCHAR(50) NULL,
+            ordering_frequency INT NULL,
+            delivery_frequency INT NULL,
+            freezer_capacity VARCHAR(50) NULL,
+            delivery_fee DECIMAL(10,2) NULL,
+            diet_concerns TEXT NULL,
+            customer_comments TEXT NULL,
+            initials_for_delivery VARCHAR(10) NULL,
+            street_number VARCHAR(20) NULL,
+            street_name VARCHAR(255) NULL,
+            apartment_number VARCHAR(20) NULL,
+            city VARCHAR(255) NULL,
+            province VARCHAR(10) NULL,
+            postal_code VARCHAR(10) NULL,
+            delivery_street_number VARCHAR(20) NULL,
+            delivery_street_name VARCHAR(255) NULL,
+            delivery_apartment_number VARCHAR(20) NULL,
+            delivery_city VARCHAR(255) NULL,
+            delivery_province VARCHAR(10) NULL,
+            delivery_postal_code VARCHAR(10) NULL,
+            PRIMARY KEY  (client_id),
+            KEY client_type (client_type),
+            KEY wp_user_id (wp_user_id)
+        ) {$charset_collate};";
 
-            if ($exists) {
-                continue;
-            }
-
-            $sql = sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s", $table, $column, $definition);
-            if ($conn->query($sql) !== true) {
-                error_log(sprintf('[MealsDB Installer] Failed adding column %s: %s', $column, $conn->error));
-            }
-        }
+        dbDelta($sql);
     }
 }
