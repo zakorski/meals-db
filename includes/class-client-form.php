@@ -313,22 +313,17 @@ class MealsDB_Client_Form {
         $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
         $required_fields = self::get_required_fields_for_type($client_type);
 
-        $is_staff_client = ($client_type === 'STAFF');
-        if ($is_staff_client) {
-            $sanitized['delivery_initials'] = null;
-        } else {
-            $initials_value = strtoupper(trim((string) ($sanitized['delivery_initials'] ?? '')));
+        $initials_value = strtoupper(trim((string) ($sanitized['delivery_initials'] ?? '')));
 
-            if ($initials_value === '') {
-                $record_required_error('delivery_initials');
+        if ($initials_value === '') {
+            $record_required_error('delivery_initials');
+        } else {
+            $validation = MealsDB_Initials::validate_code($initials_value, $ignore_client_id);
+            if (empty($validation['valid'])) {
+                $message = $validation['message'] ?? __('Invalid initials for delivery.', 'meals-db');
+                $record_format_error('delivery_initials', $message);
             } else {
-                $validation = MealsDB_Initials::validate_code($initials_value, $ignore_client_id);
-                if (empty($validation['valid'])) {
-                    $message = $validation['message'] ?? __('Invalid initials for delivery.', 'meals-db');
-                    $record_format_error('delivery_initials', $message);
-                } else {
-                    $sanitized['delivery_initials'] = $initials_value;
-                }
+                $sanitized['delivery_initials'] = $initials_value;
             }
         }
 
@@ -452,7 +447,6 @@ class MealsDB_Client_Form {
         $base_required = ['customer_type'];
 
         $type_specific = [
-            'STAFF' => ['first_name', 'last_name', 'client_email'],
             'PRIVATE' => [
                 'first_name',
                 'last_name',
