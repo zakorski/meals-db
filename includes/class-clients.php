@@ -129,6 +129,129 @@ class MealsDB_Clients {
     }
 
     /**
+     * Permanently delete a client and any optionally related rows.
+     */
+    public static function delete_client(int $client_id): bool {
+        $conn = MealsDB_DB::get_connection();
+        if (!$conn) {
+            return false;
+        }
+
+        $client_snapshot = null;
+        $select = $conn->prepare('SELECT first_name, last_name, customer_type, client_email FROM meals_clients WHERE id = ?');
+        if ($select instanceof mysqli_stmt) {
+            if ($select->bind_param('i', $client_id) && $select->execute()) {
+                if ($select->bind_result($first_name, $last_name, $customer_type, $client_email)) {
+                    if ($select->fetch()) {
+                        $client_snapshot = [
+                            'first_name' => $first_name,
+                            'last_name' => $last_name,
+                            'customer_type' => $customer_type,
+                            'client_email' => $client_email,
+                        ];
+                    }
+                }
+            }
+            $select->close();
+        }
+
+        $transaction_started = false;
+        if (method_exists($conn, 'begin_transaction')) {
+            $transaction_started = $conn->begin_transaction();
+            if (!$transaction_started) {
+                error_log('[MealsDB] Failed to begin transaction for client deletion.');
+            }
+        }
+
+        $success = true;
+
+        $tables_to_cleanup = [
+            ['table' => 'meals_drafts', 'column' => 'client_id'],
+            ['table' => 'meals_ignored_conflicts', 'column' => 'client_id'],
+        ];
+
+        foreach ($tables_to_cleanup as $cleanup) {
+            $table_name = MealsDB_DB::get_table_name($cleanup['table']);
+            $column = $cleanup['column'];
+
+            if (!self::table_has_column($conn, $table_name, $column)) {
+                continue;
+            }
+
+            $escaped_table = str_replace('`', '``', $table_name);
+            $escaped_column = str_replace('`', '``', $column);
+            $sql = sprintf('DELETE FROM `%s` WHERE `%s` = ?', $escaped_table, $escaped_column);
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt instanceof mysqli_stmt) {
+                error_log(sprintf('[MealsDB] Failed to prepare cleanup delete for %s.', $cleanup['table']));
+                $success = false;
+                break;
+            }
+
+            if (!$stmt->bind_param('i', $client_id)) {
+                error_log(sprintf('[MealsDB] Failed to bind cleanup delete parameters for %s.', $cleanup['table']));
+                $stmt->close();
+                $success = false;
+                break;
+            }
+
+            if (!$stmt->execute()) {
+                error_log(sprintf('[MealsDB] Failed to execute cleanup delete for %s: %s', $cleanup['table'], $stmt->error ?? 'unknown error'));
+                $stmt->close();
+                $success = false;
+                break;
+            }
+
+            $stmt->close();
+        }
+
+        if ($success) {
+            $delete_stmt = $conn->prepare('DELETE FROM meals_clients WHERE id = ?');
+            if (!$delete_stmt instanceof mysqli_stmt) {
+                error_log('[MealsDB] Failed to prepare client deletion statement.');
+                $success = false;
+            } else {
+                if (!$delete_stmt->bind_param('i', $client_id)) {
+                    error_log('[MealsDB] Failed to bind client deletion parameter.');
+                    $success = false;
+                } elseif (!$delete_stmt->execute()) {
+                    error_log('[MealsDB] Failed to execute client deletion: ' . ($delete_stmt->error ?? 'unknown error'));
+                    $success = false;
+                } elseif ($delete_stmt->affected_rows < 1) {
+                    $success = false;
+                }
+                $delete_stmt->close();
+            }
+        }
+
+        if ($transaction_started) {
+            if ($success) {
+                if (!$conn->commit()) {
+                    error_log('[MealsDB] Failed to commit client deletion transaction.');
+                    $conn->rollback();
+                    $success = false;
+                }
+            } else {
+                $conn->rollback();
+            }
+        }
+
+        if ($success) {
+            $old_value = null;
+            if ($client_snapshot !== null) {
+                $encoded = json_encode($client_snapshot);
+                if ($encoded !== false) {
+                    $old_value = $encoded;
+                }
+            }
+            MealsDB_Logger::log('delete_client', $client_id, 'record', $old_value, null);
+        }
+
+        return $success;
+    }
+
+    /**
      * Update a client's active status and log the change.
      *
      * @return bool
@@ -177,5 +300,36 @@ class MealsDB_Clients {
         MealsDB_Logger::log($action, $client_id, 'active', $old_value, (string) $active);
 
         return true;
+    }
+
+    /**
+     * Check if a table contains a specific column.
+     */
+    private static function table_has_column(mysqli $conn, string $table_name, string $column): bool {
+        $escaped_table = str_replace('`', '``', $table_name);
+        $escaped_column = $column;
+
+        if (method_exists($conn, 'real_escape_string')) {
+            $escaped_column = $conn->real_escape_string($escaped_column);
+        }
+
+        $sql = sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $escaped_table, $escaped_column);
+        $result = $conn->query($sql);
+
+        if ($result instanceof mysqli_result) {
+            $exists = $result->num_rows > 0;
+            $result->free();
+            return $exists;
+        }
+
+        if ($result && isset($result->num_rows)) {
+            $exists = $result->num_rows > 0;
+            if (method_exists($result, 'free')) {
+                $result->free();
+            }
+            return $exists;
+        }
+
+        return false;
     }
 }
