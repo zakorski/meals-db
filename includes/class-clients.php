@@ -36,11 +36,12 @@ class MealsDB_Clients {
     /**
      * Fetch a paginated list of clients for the admin table.
      *
-     * @param string|null $client_type Optional client type filter.
-     * @param string|null $search      Optional search string that matches first or last name.
+     * @param string|null $client_type  Optional client type filter.
+     * @param string|null $search       Optional search string that matches first or last name.
+     * @param bool        $show_inactive Whether inactive clients should be included in the results.
      * @return array<int, array<string, string|null>>
      */
-    public static function get_clients(?string $client_type = null, ?string $search = null): array {
+    public static function get_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): array {
         $conn = MealsDB_DB::get_connection();
         if (!$conn) {
             return [];
@@ -50,6 +51,10 @@ class MealsDB_Clients {
         $conditions = [];
         $types = '';
         $params = [];
+
+        if (!$show_inactive) {
+            $conditions[] = 'active = 1';
+        }
 
         if ($client_type !== null && $client_type !== '') {
             $conditions[] = 'UPPER(customer_type) = ?';
