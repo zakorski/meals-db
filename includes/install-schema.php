@@ -291,6 +291,7 @@ class MealsDB_Installer {
             diet_concerns TEXT NULL,
             customer_comments TEXT NULL,
             initials_for_delivery VARCHAR(10) NULL,
+            initials_delivery VARCHAR(3) NOT NULL DEFAULT '',
             street_number VARCHAR(20) NULL,
             street_name VARCHAR(255) NULL,
             apartment_number VARCHAR(20) NULL,
@@ -305,6 +306,7 @@ class MealsDB_Installer {
             delivery_postal_code VARCHAR(10) NULL,
             PRIMARY KEY  (client_id),
             KEY client_type (client_type),
+            UNIQUE KEY initials_delivery_unique (initials_delivery),
             KEY wp_user_id (wp_user_id)
         ) {$charset_collate};";
 
