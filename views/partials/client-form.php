@@ -304,9 +304,22 @@ $alt_contact_enabled = (
                     <th><label for="freezer_capacity"><?php esc_html_e('Freezer Capacity', 'meals-db'); ?></label></th>
                     <td><input type="text" name="freezer_capacity" id="freezer_capacity" class="regular-text" value="<?php echo esc_attr($form_values['freezer_capacity'] ?? ''); ?>" /></td>
                 </tr>
-                <tr data-required-for="sdnb,veteran,private">
+                <?php
+                $delivery_initials_value = $form_values['delivery_initials'] ?? '';
+                $is_staff_client = strtolower($client_type ?? '') === 'staff';
+                ?>
+                <tr data-required-for="sdnb,veteran,private"<?php echo $is_staff_client ? ' style="display:none;"' : ''; ?>>
                     <th><label for="delivery_initials"><?php esc_html_e('Initials for Delivery *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="delivery_initials" id="delivery_initials" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($form_values['delivery_initials'] ?? ''); ?>" /></td>
+                    <td>
+                        <div class="mealsdb-initials-tools">
+                            <input type="text" name="delivery_initials" id="delivery_initials" class="regular-text" <?php echo $is_staff_client ? '' : 'required data-base-required="1"'; ?> value="<?php echo esc_attr($delivery_initials_value); ?>" />
+                            <div class="mealsdb-initials-buttons">
+                                <button type="button" class="button mealsdb-initials-generate"><?php esc_html_e('Generate', 'meals-db'); ?></button>
+                                <button type="button" class="button mealsdb-initials-validate"><?php esc_html_e('Validate', 'meals-db'); ?></button>
+                            </div>
+                            <div class="mealsdb-initials-message" aria-live="polite"></div>
+                        </div>
+                    </td>
                 </tr>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_day"><?php esc_html_e('Delivery Day *', 'meals-db'); ?></label></th>
