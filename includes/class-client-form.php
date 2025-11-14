@@ -1,4 +1,13 @@
 <?php
+if (!function_exists('__')) {
+    function __(string $text, string $domain = 'default') {
+        return $text;
+    }
+}
+
+if (!class_exists('MealsDB_Initials')) {
+    require_once __DIR__ . '/class-initials.php';
+}
 /**
  * Handles validation and saving of Meals DB client records and drafts.
  *
@@ -303,6 +312,25 @@ class MealsDB_Client_Form {
         // Required fields based on client type configuration.
         $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
         $required_fields = self::get_required_fields_for_type($client_type);
+
+        $is_staff_client = ($client_type === 'STAFF');
+        if ($is_staff_client) {
+            $sanitized['delivery_initials'] = null;
+        } else {
+            $initials_value = $sanitized['delivery_initials'] ?? '';
+
+            if ($initials_value === '') {
+                $record_required_error('delivery_initials');
+            } else {
+                $validation = MealsDB_Initials::validate_code($initials_value, $ignore_client_id);
+                if (empty($validation['valid'])) {
+                    $message = $validation['message'] ?? __('Invalid initials for delivery.', 'meals-db');
+                    $record_format_error('delivery_initials', $message);
+                } else {
+                    $sanitized['delivery_initials'] = strtoupper(trim($initials_value));
+                }
+            }
+        }
 
         foreach ($required_fields as $field) {
             if (empty($sanitized[$field] ?? '')) {
@@ -1041,58 +1069,72 @@ class MealsDB_Client_Form {
         $errors = [];
 
         foreach (self::$unique_fields as $field) {
-            if (array_key_exists($field, $data) && $data[$field] !== '') {
-                $column = $field;
-                $value = $data[$field];
-
-                if (isset(self::$deterministic_index_map[$field])) {
-                    if (!$indexes_ready) {
-                        continue;
-                    }
-                    $column = self::$deterministic_index_map[$field];
-                    $value = self::deterministic_hash($data[$field]);
-                }
-
-                $sql = "SELECT id FROM meals_clients WHERE $column = ?";
-                if ($exclude_id !== null) {
-                    $sql .= ' AND id <> ?';
-                }
-                $sql .= ' LIMIT 1';
-
-                $stmt = $conn->prepare($sql);
-                if (!$stmt) {
-                    error_log('[MealsDB] Duplicate check failed to prepare statement for column ' . $column . ': ' . ($conn->error ?? 'unknown error'));
-                    continue;
-                }
-
-                if ($exclude_id !== null) {
-                    if (!$stmt->bind_param('si', $value, $exclude_id)) {
-                        error_log('[MealsDB] Duplicate check failed to bind parameters for column ' . $column . '.');
-                        $stmt->close();
-                        continue;
-                    }
-                } elseif (!$stmt->bind_param('s', $value)) {
-                    error_log('[MealsDB] Duplicate check failed to bind parameter for column ' . $column . '.');
-                    $stmt->close();
-                    continue;
-                }
-
-                if (!$stmt->execute()) {
-                    error_log('[MealsDB] Duplicate check failed to execute for column ' . $column . ': ' . ($stmt->error ?? 'unknown error'));
-                    $stmt->close();
-                    continue;
-                }
-
-                if (method_exists($stmt, 'store_result')) {
-                    $stmt->store_result();
-                }
-
-                if ($stmt->num_rows > 0) {
-                    $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' already exists in another client.';
-                }
-
-                $stmt->close();
+            if (!array_key_exists($field, $data)) {
+                continue;
             }
+
+            $value = $data[$field];
+            if ($value === '' || $value === null) {
+                continue;
+            }
+
+            if (is_string($value)) {
+                $value = trim($value);
+                if ($value === '') {
+                    continue;
+                }
+            }
+
+            $column = $field;
+            $value_for_query = $value;
+
+            if (isset(self::$deterministic_index_map[$field])) {
+                if (!$indexes_ready) {
+                    continue;
+                }
+                $column = self::$deterministic_index_map[$field];
+                $value_for_query = self::deterministic_hash((string) $value);
+            }
+
+            $sql = "SELECT id FROM meals_clients WHERE $column = ?";
+            if ($exclude_id !== null) {
+                $sql .= ' AND id <> ?';
+            }
+            $sql .= ' LIMIT 1';
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                error_log('[MealsDB] Duplicate check failed to prepare statement for column ' . $column . ': ' . ($conn->error ?? 'unknown error'));
+                continue;
+            }
+
+            if ($exclude_id !== null) {
+                if (!$stmt->bind_param('si', $value_for_query, $exclude_id)) {
+                    error_log('[MealsDB] Duplicate check failed to bind parameters for column ' . $column . '.');
+                    $stmt->close();
+                    continue;
+                }
+            } elseif (!$stmt->bind_param('s', $value_for_query)) {
+                error_log('[MealsDB] Duplicate check failed to bind parameter for column ' . $column . '.');
+                $stmt->close();
+                continue;
+            }
+
+            if (!$stmt->execute()) {
+                error_log('[MealsDB] Duplicate check failed to execute for column ' . $column . ': ' . ($stmt->error ?? 'unknown error'));
+                $stmt->close();
+                continue;
+            }
+
+            if (method_exists($stmt, 'store_result')) {
+                $stmt->store_result();
+            }
+
+            if ($stmt->num_rows > 0) {
+                $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' already exists in another client.';
+            }
+
+            $stmt->close();
         }
 
         return $errors;

@@ -456,7 +456,7 @@ run_test('validation accepts enumerated selections', function () {
         'payment_method' => 'Cheque',
         'required_start_date' => '2024-01-01',
         'rate' => '20',
-        'delivery_initials' => 'AB',
+        'delivery_initials' => 'ABC',
         'delivery_area_name' => 'Area 1',
         'delivery_area_zone' => 'A',
     ];
@@ -514,6 +514,84 @@ run_test('staff client allows minimal required fields without wordpress id', fun
 
     if (($sanitized['client_email'] ?? null) !== 'alex@example.com') {
         throw new Exception('Client email should be preserved for Staff clients.');
+    }
+
+    if (!array_key_exists('delivery_initials', $sanitized)) {
+        throw new Exception('Staff clients should include delivery_initials key in sanitized data.');
+    }
+
+    if ($sanitized['delivery_initials'] !== null) {
+        throw new Exception('Staff clients should have delivery_initials forced to null.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('non-staff clients require delivery initials', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Private',
+        'first_name' => 'Jamie',
+        'last_name' => 'Doe',
+        'phone_primary' => '(506)-555-1111',
+        'address_street_name' => 'Main',
+        'address_city' => 'Moncton',
+        'address_province' => 'NB',
+        'address_postal' => 'E1E1E1',
+        'delivery_day' => 'MONDAY AM',
+        'payment_method' => 'Cheque',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected validation to fail when delivery initials are missing.');
+    }
+
+    if (!in_array('Initials for delivery is required.', $result['errors'], true)) {
+        throw new Exception('Missing required error for delivery initials.');
+    }
+
+    set_db_connection(null);
+});
+
+run_test('non-staff delivery initials must pass server-side validation', function () {
+    reset_index_flag();
+    set_db_connection(new StubMysqli());
+
+    $payload = [
+        'customer_type' => 'Private',
+        'first_name' => 'Jamie',
+        'last_name' => 'Doe',
+        'phone_primary' => '(506)-555-1111',
+        'address_street_name' => 'Main',
+        'address_city' => 'Moncton',
+        'address_province' => 'NB',
+        'address_postal' => 'E1E1E1',
+        'delivery_day' => 'MONDAY AM',
+        'payment_method' => 'Cheque',
+        'delivery_initials' => 'AB1',
+    ];
+
+    $result = MealsDB_Client_Form::validate($payload);
+    if ($result['valid']) {
+        throw new Exception('Expected validation to fail for invalid delivery initials.');
+    }
+
+    if (!in_array('Initials must be exactly three uppercase letters.', $result['errors'], true)) {
+        throw new Exception('Expected format error for invalid delivery initials.');
+    }
+
+    $payload['delivery_initials'] = 'ABC';
+    $result = MealsDB_Client_Form::validate($payload);
+    if (!$result['valid']) {
+        throw new Exception('Expected valid initials to pass validation.');
+    }
+
+    $sanitized = $result['sanitized'];
+    if (($sanitized['delivery_initials'] ?? null) !== 'ABC') {
+        throw new Exception('Sanitized delivery initials should preserve validated code.');
     }
 
     set_db_connection(null);
@@ -709,7 +787,7 @@ run_test('builds a helpful summary for missing and invalid fields', function () 
         'payment_method' => 'Cheque',
         'required_start_date' => '2024-01-01',
         'rate' => '20',
-        'delivery_initials' => 'AB',
+        'delivery_initials' => 'ABC',
         'delivery_day' => 'Monday',
         'delivery_area_name' => 'Zone 1',
         'delivery_area_zone' => 'A',
@@ -773,7 +851,7 @@ run_test('detects duplicate vet health card via deterministic hash', function ()
 
 run_test('detects duplicate delivery initials via deterministic hash', function () {
     reset_index_flag();
-    $hash = hash('sha256', strtolower(trim('AB')));
+    $hash = hash('sha256', strtolower(trim('ABC')));
     $conn = new StubMysqli([
         'delivery_initials_index' => [$hash]
     ], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index']);
@@ -781,7 +859,7 @@ run_test('detects duplicate delivery initials via deterministic hash', function 
 
     $method = new ReflectionMethod(MealsDB_Client_Form::class, 'check_unique_fields');
     $method->setAccessible(true);
-    $errors = $method->invoke(null, ['delivery_initials' => 'AB']);
+    $errors = $method->invoke(null, ['delivery_initials' => 'ABC']);
 
     if (empty($errors) || stripos($errors[0], 'Delivery initials') === false) {
         throw new Exception('Expected duplicate error for delivery_initials.');
@@ -811,7 +889,7 @@ run_test('save stores deterministic indexes for encrypted fields', function () {
         'individual_id' => 'ID-001',
         'requisition_id' => 'REQ-002',
         'vet_health_card' => 'VH-123',
-        'delivery_initials' => 'AB',
+        'delivery_initials' => 'ABC',
         'first_name' => 'Jane'
     ];
 
@@ -836,7 +914,7 @@ run_test('save stores deterministic indexes for encrypted fields', function () {
         throw new Exception('Missing deterministic hash for vet_health_card.');
     }
 
-    $expectedInitials = hash('sha256', strtolower(trim('AB')));
+    $expectedInitials = hash('sha256', strtolower(trim('ABC')));
     if (($conn->lastInsert['delivery_initials_index'] ?? null) !== $expectedInitials) {
         throw new Exception('Missing deterministic hash for delivery_initials.');
     }
@@ -947,7 +1025,7 @@ run_test('private client submission succeeds with all fields populated', functio
         'rate'                          => '10.50',
         'client_contribution'           => '25',
         'delivery_fee'                  => '5.00',
-        'delivery_initials'             => 'AC',
+        'delivery_initials'             => 'ACD',
         'delivery_day'                  => 'MONDAY AM',
         'delivery_area_name'            => 'Area 1',
         'delivery_area_zone'            => 'Zone A',
@@ -1031,7 +1109,7 @@ run_test('sdnb client submission succeeds with all fields populated', function (
         'rate'                          => '15.00',
         'client_contribution'           => '40',
         'delivery_fee'                  => '7.00',
-        'delivery_initials'             => 'MS',
+        'delivery_initials'             => 'MSQ',
         'delivery_day'                  => 'TUESDAY PM',
         'delivery_area_name'            => 'Area 2',
         'delivery_area_zone'            => 'Zone B',
@@ -1116,7 +1194,7 @@ run_test('veteran client submission succeeds with all fields populated', functio
         'rate'                          => '18.00',
         'client_contribution'           => '50',
         'delivery_fee'                  => '9.00',
-        'delivery_initials'             => 'SS',
+        'delivery_initials'             => 'SSA',
         'delivery_day'                  => 'FRIDAY AM',
         'delivery_area_name'            => 'Area 3',
         'delivery_area_zone'            => 'Zone C',
