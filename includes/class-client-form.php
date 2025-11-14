@@ -317,7 +317,7 @@ class MealsDB_Client_Form {
         if ($is_staff_client) {
             $sanitized['delivery_initials'] = null;
         } else {
-            $initials_value = $sanitized['delivery_initials'] ?? '';
+            $initials_value = strtoupper(trim((string) ($sanitized['delivery_initials'] ?? '')));
 
             if ($initials_value === '') {
                 $record_required_error('delivery_initials');
@@ -327,7 +327,7 @@ class MealsDB_Client_Form {
                     $message = $validation['message'] ?? __('Invalid initials for delivery.', 'meals-db');
                     $record_format_error('delivery_initials', $message);
                 } else {
-                    $sanitized['delivery_initials'] = strtoupper(trim($initials_value));
+                    $sanitized['delivery_initials'] = $initials_value;
                 }
             }
         }
