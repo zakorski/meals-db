@@ -99,7 +99,54 @@ class MealsDB_Installer {
             }
         }
 
+        self::upgrade_meals_clients_table($conn);
+
         self::create_meals_clients_table();
+    }
+
+    /**
+     * Apply schema updates required for the meals_clients table.
+     */
+    private static function upgrade_meals_clients_table(mysqli $conn): void {
+        $table = MealsDB_DB::get_table_name('meals_clients');
+
+        $tableName = method_exists($conn, 'real_escape_string')
+            ? $conn->real_escape_string($table)
+            : $table;
+        $tableName = str_replace('`', '``', $tableName);
+
+        $columnName = 'active';
+        $escapedColumn = method_exists($conn, 'real_escape_string')
+            ? $conn->real_escape_string($columnName)
+            : $columnName;
+        $escapedColumn = str_replace('`', '``', $escapedColumn);
+
+        $columnExists = false;
+        $columnSql    = "SHOW COLUMNS FROM `{$tableName}` LIKE '{$escapedColumn}'";
+        $result       = $conn->query($columnSql);
+
+        if ($result instanceof mysqli_result) {
+            $columnExists = $result->num_rows > 0;
+            $result->free();
+        } elseif ($result && isset($result->num_rows)) {
+            $columnExists = $result->num_rows > 0;
+            if (method_exists($result, 'free')) {
+                $result->free();
+            }
+        } elseif ($result === false) {
+            error_log('[MealsDB Installer] Failed inspecting meals_clients.active column: ' . $conn->error);
+            return;
+        }
+
+        if ($columnExists) {
+            return;
+        }
+
+        $alterSql = "ALTER TABLE `{$tableName}` ADD COLUMN `{$columnName}` TINYINT(1) NOT NULL DEFAULT 1";
+
+        if (!$conn->query($alterSql)) {
+            error_log('[MealsDB Installer] Failed adding meals_clients.active column: ' . $conn->error);
+        }
     }
 
     /**
@@ -260,6 +307,7 @@ class MealsDB_Installer {
             first_name VARCHAR(100) NOT NULL,
             last_name VARCHAR(100) NOT NULL,
             client_email VARCHAR(255) NULL,
+            active TINYINT(1) NOT NULL DEFAULT 1,
             client_phone_1 VARCHAR(20) NULL,
             client_phone_2 VARCHAR(20) NULL,
             alternate_contact_name VARCHAR(255) NULL,
