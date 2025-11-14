@@ -109,4 +109,73 @@ class MealsDB_Clients {
 
         return $records;
     }
+
+    /**
+     * Deactivate a client by ID.
+     *
+     * @return bool
+     */
+    public static function deactivate_client(int $client_id): bool {
+        return self::set_client_active_status($client_id, 0, 'deactivate_client');
+    }
+
+    /**
+     * Activate a client by ID.
+     *
+     * @return bool
+     */
+    public static function activate_client(int $client_id): bool {
+        return self::set_client_active_status($client_id, 1, 'activate_client');
+    }
+
+    /**
+     * Update a client's active status and log the change.
+     *
+     * @return bool
+     */
+    private static function set_client_active_status(int $client_id, int $active, string $action): bool {
+        $conn = MealsDB_DB::get_connection();
+        if (!$conn) {
+            return false;
+        }
+
+        $old_value = null;
+        $select = $conn->prepare('SELECT active FROM meals_clients WHERE id = ?');
+        if ($select instanceof mysqli_stmt) {
+            if ($select->bind_param('i', $client_id) && $select->execute()) {
+                $current_active = null;
+                if (!$select->bind_result($current_active)) {
+                    $current_active = null;
+                }
+                if ($select->fetch()) {
+                    $old_value = (string) $current_active;
+                }
+            }
+            $select->close();
+        }
+
+        $stmt = $conn->prepare('UPDATE meals_clients SET active = ? WHERE id = ?');
+        if (!$stmt) {
+            error_log('[MealsDB] Failed to prepare client activation update: ' . ($conn->error ?? 'unknown error'));
+            return false;
+        }
+
+        if (!$stmt->bind_param('ii', $active, $client_id)) {
+            error_log('[MealsDB] Failed to bind parameters for client activation update.');
+            $stmt->close();
+            return false;
+        }
+
+        if (!$stmt->execute()) {
+            error_log('[MealsDB] Failed to execute client activation update: ' . ($stmt->error ?? 'unknown error'));
+            $stmt->close();
+            return false;
+        }
+
+        $stmt->close();
+
+        MealsDB_Logger::log($action, $client_id, 'active', $old_value, (string) $active);
+
+        return true;
+    }
 }
