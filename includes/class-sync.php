@@ -450,11 +450,110 @@ class MealsDB_Sync {
      */
     private static function extract_user_snapshot(WP_User $woo_user): array {
         return [
-            'id'         => (int) $woo_user->ID,
-            'first_name' => isset($woo_user->first_name) ? (string) $woo_user->first_name : '',
-            'last_name'  => isset($woo_user->last_name) ? (string) $woo_user->last_name : '',
-            'email'      => isset($woo_user->user_email) ? (string) $woo_user->user_email : '',
+            'id'           => (int) $woo_user->ID,
+            'first_name'   => isset($woo_user->first_name) ? (string) $woo_user->first_name : '',
+            'last_name'    => isset($woo_user->last_name) ? (string) $woo_user->last_name : '',
+            'email'        => isset($woo_user->user_email) ? (string) $woo_user->user_email : '',
+            'display_name' => isset($woo_user->display_name) ? (string) $woo_user->display_name : '',
+            'phone'        => (string) get_user_meta($woo_user->ID, 'billing_phone', true),
         ];
+    }
+
+    /**
+     * Link a Meals DB client to a WordPress user account.
+     *
+     * @param int $client_id
+     * @param int $wp_user_id
+     * @return true|WP_Error
+     */
+    public static function link_client_to_wordpress_user(int $client_id, int $wp_user_id)
+    {
+        if ($client_id <= 0 || $wp_user_id <= 0) {
+            return new WP_Error(
+                'mealsdb_invalid_link_request',
+                __('A valid client ID and WordPress user ID are required to create a link.', 'meals-db')
+            );
+        }
+
+        $wp_user = get_userdata($wp_user_id);
+        if (!$wp_user instanceof WP_User) {
+            return new WP_Error(
+                'mealsdb_sync_user_missing',
+                __('Unable to locate the selected WordPress user.', 'meals-db')
+            );
+        }
+
+        $conn = MealsDB_DB::get_connection();
+
+        if (!$conn) {
+            return new WP_Error(
+                'mealsdb_db_connection_failed',
+                __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db')
+            );
+        }
+
+        $current_id = null;
+        $check_stmt = $conn->prepare('SELECT wordpress_user_id FROM meals_clients WHERE id = ? LIMIT 1');
+        if ($check_stmt) {
+            if ($check_stmt->bind_param('i', $client_id) && $check_stmt->execute()) {
+                $result = $check_stmt->get_result();
+                if ($result instanceof \mysqli_result && ($row = $result->fetch_assoc())) {
+                    $raw = $row['wordpress_user_id'] ?? null;
+                    if ($raw !== null && $raw !== '') {
+                        $current_id = (int) $raw;
+                    }
+                }
+                if ($result instanceof \mysqli_result) {
+                    $result->free();
+                }
+            }
+            $check_stmt->close();
+        }
+
+        if ($current_id === $wp_user_id) {
+            return true;
+        }
+
+        $stmt = $conn->prepare('UPDATE meals_clients SET wordpress_user_id = ? WHERE id = ?');
+        if (!$stmt) {
+            error_log('[MealsDB Sync] Failed to prepare client link statement: ' . ($conn->error ?? 'unknown error'));
+            return new WP_Error(
+                'mealsdb_link_prepare_failed',
+                __('Failed to prepare the database statement to link the client.', 'meals-db')
+            );
+        }
+
+        if (!$stmt->bind_param('ii', $wp_user_id, $client_id)) {
+            $stmt->close();
+            error_log('[MealsDB Sync] Failed binding parameters for client link statement.');
+            return new WP_Error(
+                'mealsdb_link_bind_failed',
+                __('Failed to bind parameters for the link request.', 'meals-db')
+            );
+        }
+
+        if (!$stmt->execute()) {
+            $message = $stmt->error ?: __('Unknown database error.', 'meals-db');
+            $stmt->close();
+            error_log('[MealsDB Sync] Failed executing client link statement: ' . $message);
+
+            return new WP_Error(
+                'mealsdb_link_execute_failed',
+                sprintf(__('Unable to link the client to the WordPress user: %s', 'meals-db'), $message)
+            );
+        }
+
+        $affected = $stmt->affected_rows;
+        $stmt->close();
+
+        if ($affected === 0) {
+            return new WP_Error(
+                'mealsdb_link_no_rows',
+                __('No Meals DB client record was updated. The client may not exist.', 'meals-db')
+            );
+        }
+
+        return true;
     }
 
     /**
@@ -550,7 +649,7 @@ class MealsDB_Sync {
      * @param array<string, mixed> $client
      * @return array<int, array<string, mixed>>
      */
-    private static function find_probable_matches_for_client(array $client): array {
+    public static function find_probable_matches_for_client(array $client): array {
         $matches = [];
 
         $wp_users = get_users([

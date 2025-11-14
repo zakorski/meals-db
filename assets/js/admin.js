@@ -202,6 +202,43 @@ jQuery(document).ready(function($) {
     });
 
     // -----------------------------
+    // 🔗 Link Meals DB Client to WordPress User
+    // -----------------------------
+    $(document).on('click', '.mealsdb-link-user', function () {
+        const $button = $(this);
+        const clientIdRaw = $button.data('clientId');
+        const wpUserIdRaw = $button.data('wpUserId');
+        const clientId = parseInt(clientIdRaw, 10);
+        const wpUserId = parseInt(wpUserIdRaw, 10);
+
+        if (!Number.isInteger(clientId) || clientId <= 0 || !Number.isInteger(wpUserId) || wpUserId <= 0) {
+            alert('Invalid link request.');
+            return;
+        }
+
+        $button.prop('disabled', true);
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_link_client',
+            nonce: mealsdb.nonce,
+            client_id: clientId,
+            wp_user_id: wpUserId
+        }, function (res) {
+            if (res && res.success) {
+                const message = res.data && res.data.message ? res.data.message : 'Client linked successfully.';
+                alert(message);
+            } else {
+                const errorMessage = res && res.data && res.data.message ? res.data.message : 'Failed to link client.';
+                alert(errorMessage);
+            }
+        }).fail(function () {
+            alert('Failed to link client.');
+        }).always(function () {
+            $button.prop('disabled', false);
+        });
+    });
+
+    // -----------------------------
     // 🔁 Sync All Selected Fields
     // -----------------------------
     $('#mealsdb-sync-all').on('click', function () {
