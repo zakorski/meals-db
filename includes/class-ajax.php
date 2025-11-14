@@ -23,6 +23,7 @@ class MealsDB_Ajax {
         add_action('wp_ajax_mealsdb_generate_initials', [__CLASS__, 'generate_initials']);
         add_action('wp_ajax_mealsdb_validate_initials', [__CLASS__, 'validate_initials']);
         add_action('wp_ajax_mealsdb_link_client', [__CLASS__, 'link_client']);
+        add_action('wp_ajax_mealsdb_link_client_to_wp_user', [__CLASS__, 'link_client_to_wp_user']);
     }
 
     /**
@@ -188,6 +189,113 @@ class MealsDB_Ajax {
         wp_send_json_success([
             'message' => __('Client linked successfully.', 'meals-db'),
         ]);
+    }
+
+    /**
+     * Link a Meals DB client record directly to a WordPress user ID.
+     */
+    public static function link_client_to_wp_user() {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $client_id = intval($_POST['client_id'] ?? 0);
+        $wp_user_id = isset($_POST['wp_user_id']) ? intval($_POST['wp_user_id']) : null;
+
+        if ($client_id <= 0 || $wp_user_id === null || $wp_user_id < 0) {
+            wp_send_json_error(['message' => __('Invalid client or WordPress user.', 'meals-db')]);
+        }
+
+        $conn = MealsDB_DB::get_connection();
+
+        if (!$conn) {
+            wp_send_json_error(['message' => __('Database connection failed.', 'meals-db')]);
+        }
+
+        $existing_wp_user_id = null;
+        $client_found = false;
+
+        $select_stmt = $conn->prepare('SELECT wordpress_user_id FROM meals_clients WHERE id = ? LIMIT 1');
+        if (!$select_stmt) {
+            error_log('[MealsDB AJAX] Failed to prepare client lookup statement: ' . ($conn->error ?? 'unknown error'));
+            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
+        }
+
+        if (!$select_stmt->bind_param('i', $client_id)) {
+            $select_stmt->close();
+            error_log('[MealsDB AJAX] Failed binding parameters for client lookup statement.');
+            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
+        }
+
+        if (!$select_stmt->execute()) {
+            $select_stmt->close();
+            error_log('[MealsDB AJAX] Failed executing client lookup statement: ' . ($select_stmt->error ?? 'unknown error'));
+            wp_send_json_error(['message' => __('Failed to query Meals DB.', 'meals-db')]);
+        }
+
+        $raw_existing = null;
+
+        if (method_exists($select_stmt, 'get_result')) {
+            $result = $select_stmt->get_result();
+            if ($result instanceof mysqli_result) {
+                if ($row = $result->fetch_assoc()) {
+                    $client_found = true;
+                    $raw_existing = $row['wordpress_user_id'] ?? null;
+                    if ($raw_existing !== null && $raw_existing !== '') {
+                        $existing_wp_user_id = (int) $raw_existing;
+                    }
+                }
+                $result->free();
+            }
+        } else {
+            if ($select_stmt->bind_result($raw_existing)) {
+                if ($select_stmt->fetch()) {
+                    $client_found = true;
+                    if ($raw_existing !== null && $raw_existing !== '') {
+                        $existing_wp_user_id = (int) $raw_existing;
+                    }
+                }
+            }
+        }
+
+        $select_stmt->close();
+
+        if (!$client_found) {
+            wp_send_json_error(['message' => __('Client not found.', 'meals-db')]);
+        }
+
+        $update_stmt = $conn->prepare('UPDATE meals_clients SET wordpress_user_id = ? WHERE id = ?');
+        if (!$update_stmt) {
+            error_log('[MealsDB AJAX] Failed to prepare client link update statement: ' . ($conn->error ?? 'unknown error'));
+            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
+        }
+
+        if (!$update_stmt->bind_param('ii', $wp_user_id, $client_id)) {
+            $update_stmt->close();
+            error_log('[MealsDB AJAX] Failed binding parameters for client link update statement.');
+            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
+        }
+
+        if (!$update_stmt->execute()) {
+            $message = $update_stmt->error ?? 'unknown error';
+            $update_stmt->close();
+            error_log('[MealsDB AJAX] Failed executing client link update statement: ' . $message);
+            wp_send_json_error(['message' => __('Failed to update Meals DB.', 'meals-db')]);
+        }
+
+        $update_stmt->close();
+
+        MealsDB_Logger::log(
+            'link_client_to_wp_user',
+            $client_id,
+            'wordpress_user_id',
+            $existing_wp_user_id !== null ? (string) $existing_wp_user_id : null,
+            (string) $wp_user_id
+        );
+
+        wp_send_json(['success' => true]);
     }
 
     /**
