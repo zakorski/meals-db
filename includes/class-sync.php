@@ -458,6 +458,129 @@ class MealsDB_Sync {
     }
 
     /**
+     * Normalize a human-readable name string for comparison purposes.
+     */
+    private static function normalize_name(string $value): string {
+        $normalized = strtolower(trim($value));
+
+        if (function_exists('remove_accents')) {
+            $normalized = remove_accents($normalized);
+        }
+
+        $normalized = preg_replace('/[^\p{L}\p{N}\s]/u', '', $normalized);
+        $normalized = preg_replace('/\s+/u', ' ', $normalized ?? '');
+
+        return trim((string) $normalized);
+    }
+
+    /**
+     * Normalize a phone number by stripping non-digit characters.
+     */
+    private static function normalize_phone(string $value): string {
+        return preg_replace('/\D+/', '', $value) ?? '';
+    }
+
+    /**
+     * Compute a similarity score between a Meals DB client and a WordPress user.
+     *
+     * @param array<string, mixed> $client
+     */
+    private static function compute_similarity_score(array $client, WP_User $wp_user): int {
+        $score = 0;
+
+        $client_first = self::normalize_name($client['first_name'] ?? '');
+        $client_last  = self::normalize_name($client['last_name'] ?? '');
+        $client_phone = self::normalize_phone($client['phone_primary'] ?? '');
+        $client_email = isset($client['client_email']) ? strtolower(trim((string) $client['client_email'])) : '';
+
+        $wp_first = self::normalize_name(isset($wp_user->first_name) ? (string) $wp_user->first_name : '');
+        $wp_last  = self::normalize_name(isset($wp_user->last_name) ? (string) $wp_user->last_name : '');
+        $wp_phone = self::normalize_phone((string) get_user_meta($wp_user->ID, 'billing_phone', true));
+        $wp_email = isset($wp_user->user_email) ? strtolower(trim((string) $wp_user->user_email)) : '';
+
+        if ($client_first !== '' && $client_first === $wp_first) {
+            $score += 40;
+        } elseif ($client_first !== '' && $wp_first !== '' && levenshtein($client_first, $wp_first) <= 2) {
+            $score += 25;
+        }
+
+        if ($client_last !== '' && $client_last === $wp_last) {
+            $score += 40;
+        } elseif ($client_last !== '' && $wp_last !== '' && levenshtein($client_last, $wp_last) <= 2) {
+            $score += 25;
+        }
+
+        if ($client_phone !== '' && $wp_phone !== '') {
+            $client_last7 = strlen($client_phone) >= 7 ? substr($client_phone, -7) : $client_phone;
+            $wp_last7     = strlen($wp_phone) >= 7 ? substr($wp_phone, -7) : $wp_phone;
+
+            if (strlen($client_last7) === 7 && strlen($wp_last7) === 7 && $client_last7 === $wp_last7) {
+                $score += 60;
+            } else {
+                $client_last4 = strlen($client_phone) >= 4 ? substr($client_phone, -4) : $client_phone;
+                $wp_last4     = strlen($wp_phone) >= 4 ? substr($wp_phone, -4) : $wp_phone;
+
+                if (strlen($client_last4) === 4 && strlen($wp_last4) === 4 && $client_last4 === $wp_last4) {
+                    $score += 20;
+                }
+            }
+        }
+
+        if ($client_email !== '' && $wp_email !== '') {
+            $client_user = explode('@', $client_email, 2)[0] ?? '';
+            $wp_user_part = explode('@', $wp_email, 2)[0] ?? '';
+
+            if ($client_user !== '' && $client_user === $wp_user_part) {
+                $score += 20;
+            }
+        }
+
+        if ($score < 0) {
+            $score = 0;
+        } elseif ($score > 200) {
+            $score = 200;
+        }
+
+        return $score;
+    }
+
+    /**
+     * Find probable WordPress user matches for a Meals DB client.
+     *
+     * @param array<string, mixed> $client
+     * @return array<int, array<string, mixed>>
+     */
+    private static function find_probable_matches_for_client(array $client): array {
+        $matches = [];
+
+        $wp_users = get_users([
+            'fields' => 'all_with_meta',
+        ]);
+
+        foreach ($wp_users as $wp_user) {
+            if (!$wp_user instanceof WP_User) {
+                continue;
+            }
+
+            $score = self::compute_similarity_score($client, $wp_user);
+
+            if ($score >= 50) {
+                $matches[] = [
+                    'score'    => $score,
+                    'wp_user'  => self::extract_user_snapshot($wp_user),
+                    'wp_user_id' => (int) $wp_user->ID,
+                ];
+            }
+        }
+
+        usort($matches, static function (array $a, array $b): int {
+            return $b['score'] <=> $a['score'];
+        });
+
+        return array_slice($matches, 0, 5);
+    }
+
+    /**
      * Sync a single field from Meals DB to WooCommerce.
      *
      * @param int $woo_user_id
