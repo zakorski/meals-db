@@ -208,11 +208,31 @@ jQuery(document).ready(function($) {
         const $button = $(this);
         const clientIdRaw = $button.data('clientId');
         const wpUserIdRaw = $button.data('wpUserId');
+        const wpUserNameRaw = $button.data('wpUserName');
+        const decodeHtml = (value) => {
+            if (typeof value !== 'string') {
+                return '';
+            }
+            const textarea = document.createElement('textarea');
+            textarea.innerHTML = value;
+            return textarea.value;
+        };
         const clientId = parseInt(clientIdRaw, 10);
         const wpUserId = parseInt(wpUserIdRaw, 10);
+        const decodedName = decodeHtml(wpUserNameRaw);
+        const wpUserName = decodedName !== ''
+            ? decodedName.trim()
+            : null;
 
         if (!Number.isInteger(clientId) || clientId <= 0 || !Number.isInteger(wpUserId) || wpUserId <= 0) {
             alert('Invalid link request.');
+            return;
+        }
+
+        const confirmName = wpUserName ?? 'this WordPress user';
+        const confirmMessage = `Link this client to WordPress user ${confirmName}? This cannot be undone.`;
+
+        if (!window.confirm(confirmMessage)) {
             return;
         }
 
@@ -225,8 +245,8 @@ jQuery(document).ready(function($) {
             wp_user_id: wpUserId
         }, function (res) {
             if (res && res.success) {
-                const message = res.data && res.data.message ? res.data.message : 'Client linked successfully.';
-                alert(message);
+                window.location.reload();
+                return;
             } else {
                 const errorMessage = res && res.data && res.data.message ? res.data.message : 'Failed to link client.';
                 alert(errorMessage);

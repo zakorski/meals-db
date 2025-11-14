@@ -978,9 +978,10 @@ class MealsDB_Admin_UI {
             echo '<td>';
             if ($client_id > 0 && $wp_user_id > 0) {
                 $button_attrs = sprintf(
-                    'class="button button-secondary mealsdb-link-user" data-client-id="%d" data-wp-user-id="%d"',
+                    'class="button button-secondary mealsdb-link-user" data-client-id="%d" data-wp-user-id="%d" data-wp-user-name="%s"',
                     $client_id,
-                    $wp_user_id
+                    $wp_user_id,
+                    esc_attr($display_name)
                 );
                 echo '<button type="button" ' . $button_attrs . '>' . esc_html__('Link to This User', 'meals-db') . '</button>';
             } else {
