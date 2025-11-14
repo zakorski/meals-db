@@ -99,6 +99,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-logger.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-sync.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-client-form.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-clients.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-staff.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-admin-ui.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-ajax.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-permissions.php';
@@ -110,6 +111,7 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-updates.php';
 add_action('plugins_loaded', function () {
     MealsDB_Admin_UI::init();
     MealsDB_Ajax::init();
+    MealsDB_Staff::init();
 });
 
 // Register the plugin update checker against the GitHub repository.

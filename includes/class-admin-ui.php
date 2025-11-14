@@ -34,6 +34,15 @@ class MealsDB_Admin_UI {
             'dashicons-clipboard',
             56
         );
+
+        add_submenu_page(
+            'meals-db',
+            __('Staff Directory', 'meals-db'),
+            __('Staff Directory', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
+            'meals-db-staff',
+            ['MealsDB_Staff', 'render_admin_page']
+        );
     }
 
     /**
@@ -42,7 +51,9 @@ class MealsDB_Admin_UI {
      * @param string $hook
      */
     public static function enqueue_assets(string $hook): void {
-        if ($hook !== 'toplevel_page_meals-db') {
+        $is_staff_page = ($hook === 'meals-db_page_meals-db-staff');
+
+        if ($hook !== 'toplevel_page_meals-db' && !$is_staff_page) {
             return;
         }
 
@@ -54,6 +65,10 @@ class MealsDB_Admin_UI {
             [],
             $style_version
         );
+
+        if ($is_staff_page) {
+            return;
+        }
 
         $tab = $_GET['tab'] ?? '';
         if (function_exists('wp_unslash')) {
