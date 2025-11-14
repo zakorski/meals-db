@@ -29,6 +29,7 @@ class MealsDB_Sync {
 
         $clients_by_wp_id   = [];
         $clients_without_id = [];
+        $staff_wp_ids       = self::load_staff_wordpress_ids($conn);
 
         $query  = "SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM meals_clients";
         $result = $conn->query($query);
@@ -90,7 +91,7 @@ class MealsDB_Sync {
                 }
 
                 unset($clients_by_wp_id[$wp_id]);
-            } else {
+            } elseif (!isset($staff_wp_ids[$wp_id])) {
                 $conflict = self::build_wordpress_only_conflict($woo_user, $ignored_keys);
 
                 if ($conflict !== null) {
@@ -120,6 +121,37 @@ class MealsDB_Sync {
         }
 
         return $mismatches;
+    }
+
+    /**
+     * Load a lookup map of WordPress user IDs that are linked to staff records.
+     *
+     * @param \mysqli $conn
+     * @return array<int, bool>
+     */
+    private static function load_staff_wordpress_ids(\mysqli $conn): array {
+        $staff_ids = [];
+
+        $sql = 'SELECT wordpress_user_id FROM meals_staff WHERE wordpress_user_id IS NOT NULL AND wordpress_user_id > 0';
+        $result = $conn->query($sql);
+
+        if ($result instanceof \mysqli_result) {
+            while ($row = $result->fetch_assoc()) {
+                $wp_id_raw = $row['wordpress_user_id'] ?? null;
+
+                if (is_numeric($wp_id_raw)) {
+                    $wp_id = (int) $wp_id_raw;
+
+                    if ($wp_id > 0) {
+                        $staff_ids[$wp_id] = true;
+                    }
+                }
+            }
+
+            $result->free();
+        }
+
+        return $staff_ids;
     }
 
     /**
