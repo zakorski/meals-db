@@ -46,7 +46,7 @@ class MealsDB_Clients {
             return [];
         }
 
-        $sql = 'SELECT id, first_name, last_name, customer_type, phone_primary, client_email FROM meals_clients';
+        $sql = 'SELECT id, first_name, last_name, customer_type, phone_primary, client_email, active FROM meals_clients';
         $conditions = [];
         $types = '';
         $params = [];

@@ -136,6 +136,16 @@ class MealsDB_Admin_UI {
             'ajaxUrl' => admin_url('admin-ajax.php'),
         ]);
 
+        wp_localize_script('mealsdb-admin', 'mealsdbClientActions', [
+            'activateLabel'      => __('Activate', 'meals-db'),
+            'deactivateLabel'    => __('Deactivate', 'meals-db'),
+            'genericError'       => __('An unexpected error occurred. Please try again.', 'meals-db'),
+            'toggleError'        => __('Unable to update the client status.', 'meals-db'),
+            'deleteError'        => __('Unable to delete the client.', 'meals-db'),
+            'deleteSuccess'      => __('Client deleted successfully.', 'meals-db'),
+            'emptyState'         => __('No clients found for the selected criteria.', 'meals-db'),
+        ]);
+
         wp_localize_script('mealsdb-client-initials', 'mealsdbInitials', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonces'  => [
