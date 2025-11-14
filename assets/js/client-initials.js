@@ -11,6 +11,7 @@
         const $generateButton = $('#mealsdb-generate-initials');
         const $validateButton = $('#mealsdb-validate-initials');
         const $message = $form.find('.mealsdb-initials-message');
+        const $validationStatus = $('#initials-validation-status');
 
         if ($initialsInput.length === 0 || $generateButton.length === 0 || $validateButton.length === 0 || $message.length === 0) {
             return;
@@ -26,6 +27,9 @@
         let validationRequest = null;
         let validatedValue = null;
         let isValid = false;
+        let initialsIsValid = false;
+        let lastValidatedValue = '';
+        let stylesInjected = false;
 
         const normalize = (value) => (value || '').toString().trim().toUpperCase();
 
@@ -51,14 +55,55 @@
             $message.text(text);
         };
 
+        const ensureValidCheckStyles = () => {
+            if (stylesInjected) {
+                return;
+            }
+
+            const style = document.createElement('style');
+            style.id = 'mealsdb-valid-check-style';
+            style.type = 'text/css';
+            style.textContent = '.mealsdb-valid-check { color: #2e8540; font-weight: 600; }';
+            document.head.appendChild(style);
+            stylesInjected = true;
+        };
+
         const markValid = (valid) => {
             isValid = !!valid;
-            validatedValue = valid ? normalize($initialsInput.val()) : null;
+            if (valid) {
+                validatedValue = normalize($initialsInput.val());
+            } else {
+                validatedValue = null;
+            }
             $form.data('mealsdbInitialsValid', isValid);
+
+            if (isValid) {
+                initialsIsValid = true;
+                lastValidatedValue = $initialsInput.val();
+                if ($validationStatus.length) {
+                    ensureValidCheckStyles();
+                    $validationStatus.html('<span class="mealsdb-valid-check">✔ Valid</span>');
+                }
+            } else {
+                initialsIsValid = false;
+                lastValidatedValue = '';
+                if ($validationStatus.length) {
+                    $validationStatus.empty();
+                }
+            }
         };
 
         const resetValidation = () => {
             markValid(false);
+        };
+
+        const isClientStaff = () => {
+            if (!$customerType.length) {
+                return false;
+            }
+
+            const value = ($customerType.val() || '').toString().toLowerCase();
+            return value === 'staff';
         };
 
         const finishRequest = () => {
@@ -105,6 +150,10 @@
 
         const isValidationRequired = () => {
             if (!isFieldActive()) {
+                return false;
+            }
+
+            if (isClientStaff()) {
                 return false;
             }
 
@@ -247,7 +296,15 @@
         });
 
         $initialsInput.on('input', function () {
-            const current = normalize($(this).val());
+            const rawValue = $(this).val();
+            if (rawValue !== lastValidatedValue) {
+                initialsIsValid = false;
+                if ($validationStatus.length) {
+                    $validationStatus.empty();
+                }
+            }
+
+            const current = normalize(rawValue);
             if (!current) {
                 resetValidation();
                 setMessage(null, '');
@@ -279,6 +336,16 @@
         }
 
         $form.on('submit', function (event) {
+            const staff = isClientStaff();
+            if (!staff && !initialsIsValid) {
+                event.preventDefault();
+                window.alert('Please validate initials before saving.');
+                const text = messages.required || 'Please validate the initials before submitting.';
+                setMessage('error', text);
+                $initialsInput.trigger('focus');
+                return;
+            }
+
             if (!isValidationRequired()) {
                 return;
             }
