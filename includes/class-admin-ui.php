@@ -319,7 +319,6 @@ class MealsDB_Admin_UI {
         $client = $form_values;
 
         $identity_fields = [
-            '__before' => '<p class="description">' . esc_html__('Staff clients only require a first name, last name, and email address.', 'meals-db') . '</p>',
             static function (array $client) use ($client_type) {
                 ?>
                 <tr>
@@ -331,7 +330,6 @@ class MealsDB_Admin_UI {
                             <option value="SDNB" <?php selected($current_type, 'SDNB'); ?>>SDNB</option>
                             <option value="Veteran" <?php selected($current_type, 'Veteran'); ?>>Veteran</option>
                             <option value="Private" <?php selected($current_type, 'Private'); ?>>Private</option>
-                            <option value="Staff" <?php selected($current_type, 'Staff'); ?>><?php esc_html_e('Staff', 'meals-db'); ?></option>
                         </select>
                         <p class="description"><?php esc_html_e('Changing this selection updates which sections are shown below.', 'meals-db'); ?></p>
                     </td>
@@ -356,11 +354,8 @@ class MealsDB_Admin_UI {
             },
             static function (array $client) {
                 ?>
-                <tr data-required-for="staff">
-                    <th>
-                        <label for="client_email"><?php esc_html_e('Client Email *', 'meals-db'); ?></label>
-                        <span class="description"><?php esc_html_e('Required for Staff clients.', 'meals-db'); ?></span>
-                    </th>
+                <tr>
+                    <th><label for="client_email"><?php esc_html_e('Client Email', 'meals-db'); ?></label></th>
                     <td><input type="email" name="client_email" id="client_email" class="regular-text" data-base-required="1" value="<?php echo esc_attr($client['client_email'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
