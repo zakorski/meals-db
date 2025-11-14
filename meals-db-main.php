@@ -3,7 +3,7 @@
  * Plugin Name: Meals Database
  * Plugin URI: https://github.com/zakorski/meals-db
  * Description: Custom plugin for Meals & More database integration.
- * Version: 1.0.22
+ * Version: 1.0.23
  * Author: Zak Sikorski
  * Author URI: https://zakorski.com
  * GitHub Plugin URI: zakorski/meals-db
