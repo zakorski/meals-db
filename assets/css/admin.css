@@ -25,8 +25,61 @@ table.widefat td, table.widefat th {
 }
 
 .mealsdb-client-actions-column {
-    width: 140px;
+    width: 260px;
     text-align: right;
+}
+
+.mealsdb-client-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.mealsdb-client-actions .button {
+    margin: 0;
+}
+
+.button.button-link-delete {
+    background: #ffffff;
+    border-color: #b32d2e;
+    color: #b32d2e;
+    box-shadow: none;
+}
+
+.button.button-link-delete:hover,
+.button.button-link-delete:focus {
+    background: #fbeaea;
+    border-color: #8a1f1f;
+    color: #8a1f1f;
+}
+
+.button.button-link-delete:focus {
+    box-shadow: 0 0 0 1px rgba(138, 31, 31, 0.4);
+}
+
+.button.is-busy {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.mealsdb-client-row-inactive td {
+    opacity: 0.7;
+}
+
+.mealsdb-client-row-inactive .mealsdb-client-actions .mealsdb-client-toggle-status {
+    background: #f6f7f7;
+}
+
+@media (max-width: 782px) {
+    .mealsdb-client-actions-column {
+        width: auto;
+        text-align: left;
+    }
+
+    .mealsdb-client-actions {
+        justify-content: flex-start;
+    }
 }
 
 /* -----------------------------
@@ -197,6 +250,67 @@ tr[data-ignored="true"] {
 
 .mealsdb-initials-message.is-error {
     color: #842029;
+}
+
+/* -----------------------------
+   Client Table Modal
+------------------------------ */
+.mealsdb-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    align-items: center;
+    justify-content: center;
+}
+
+.mealsdb-modal.is-visible {
+    display: flex;
+}
+
+.mealsdb-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.mealsdb-modal__dialog {
+    position: relative;
+    z-index: 2;
+    background: #ffffff;
+    border-radius: 6px;
+    padding: 24px;
+    max-width: 420px;
+    width: calc(100% - 40px);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+}
+
+.mealsdb-modal__title {
+    margin-top: 0;
+}
+
+.mealsdb-modal__message {
+    margin-bottom: 12px;
+}
+
+.mealsdb-modal__client-name {
+    margin: 0 0 20px;
+    font-size: 14px;
+    color: #3c434a;
+}
+
+.mealsdb-modal__client-name[data-has-name="false"] {
+    display: none;
+}
+
+.mealsdb-modal__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+body.mealsdb-modal-open {
+    overflow: hidden;
 }
 
 .mealsdb-collapsible {
