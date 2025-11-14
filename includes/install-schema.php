@@ -81,6 +81,16 @@ class MealsDB_Installer {
                 KEY idx_user_id (user_id),
                 KEY idx_target_id (target_id)
             ) ENGINE=InnoDB $charset_sql;",
+            'meals_staff' => "CREATE TABLE IF NOT EXISTS meals_staff (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                wordpress_user_id BIGINT UNSIGNED NULL,
+                first_name VARCHAR(191) NOT NULL,
+                last_name VARCHAR(191) NOT NULL,
+                email VARCHAR(191) NOT NULL,
+                phone VARCHAR(50) NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB $charset_sql;",
         ];
 
         foreach ($tables as $table => $sql) {
