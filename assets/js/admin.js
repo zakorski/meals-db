@@ -39,20 +39,12 @@ jQuery(document).ready(function($) {
     });
 
     // -----------------------------
-    // 🪜 Multi-Step Client Form
+    // 🧾 Client Form Interactions
     // -----------------------------
     const $clientForm = $('#mealsdb-client-form');
     if ($clientForm.length) {
-        const $steps = $clientForm.find('.mealsdb-step');
-        const $indicatorItems = $clientForm.find('.mealsdb-step-indicator li');
-        const $initialTypeSelect = $('#mealsdb-client-type-initial');
         const $customerTypeSelect = $('#customer_type');
         const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
-        const getCurrentClientType = () => normalizeType($customerTypeSelect.val());
-
-        const $step1Next = $clientForm.find('.mealsdb-step[data-step="1"] .mealsdb-next-step');
-        let currentStep = parseInt($clientForm.data('initialStep'), 10) || 1;
-        let currentClientType = normalizeType($customerTypeSelect.val());
 
         const toggleInteractiveState = ($container, shouldEnable) => {
             $container.find('input, select, textarea, button').each(function () {
@@ -69,96 +61,21 @@ jQuery(document).ready(function($) {
             });
         };
 
-        const updateStepIndicator = (step) => {
-            $indicatorItems.each(function () {
-                const $item = $(this);
-                const itemStep = parseInt($item.data('step'), 10);
-                const isActive = itemStep === step;
-                $item.toggleClass('is-active', isActive);
-                $item.toggleClass('is-complete', itemStep < step);
-            });
-        };
-
-        const isStepEligible = (step) => {
-            const $step = $steps.filter(`[data-step="${step}"]`);
-            if ($step.length === 0) {
-                return false;
-            }
-
-            if ($step.is(':visible')) {
-                return true;
-            }
-
-            const allowedRaw = ($step.data('clientType') || '').toString().toLowerCase();
-            if (!allowedRaw) {
-                return true;
-            }
-
-            const allowedTypes = allowedRaw.split(',').map((item) => item.trim()).filter(Boolean);
-            if (allowedTypes.length === 0) {
-                return true;
-            }
-
-            return allowedTypes.includes('all') || allowedTypes.includes(currentClientType);
-        };
-
-        const findEligibleStep = (start, direction) => {
-            const increment = direction === 'backward' ? -1 : 1;
-            for (
-                let candidate = start;
-                candidate >= 1 && candidate <= $steps.length;
-                candidate += increment
-            ) {
-                if (isStepEligible(candidate)) {
-                    return candidate;
-                }
-            }
-
-            return null;
-        };
-
-        const showStep = (step, direction = 'forward') => {
-            const clamped = Math.min(Math.max(step, 1), $steps.length);
-            let targetStep = clamped;
-
-            if (!isStepEligible(targetStep)) {
-                const primaryStart = direction === 'backward' ? targetStep - 1 : targetStep + 1;
-                let alternate = findEligibleStep(primaryStart, direction);
-
-                if (alternate === null) {
-                    const opposite = direction === 'backward' ? 'forward' : 'backward';
-                    alternate = findEligibleStep(targetStep, opposite);
-                }
-
-                if (alternate !== null) {
-                    targetStep = alternate;
-                }
-            }
-
-            currentStep = targetStep;
-            $steps.removeClass('is-active').attr('aria-hidden', 'true');
-            const $target = $steps.filter(`[data-step="${targetStep}"]`);
-            if (!$target.is(':visible')) {
-                $target.show();
-            }
-            $target.addClass('is-active').attr('aria-hidden', 'false');
-            updateStepIndicator(targetStep);
-        };
-
         const toggleClientTypeSections = (typeValue) => {
             const normalized = normalizeType(typeValue);
-            currentClientType = normalized;
+            $clientForm.toggleClass('mealsdb-client-type-selected', normalized.length > 0);
 
             $clientForm.find('[data-client-type]').each(function () {
                 const $row = $(this);
                 const allowedRaw = ($row.data('clientType') || '').toString().toLowerCase();
                 if (!allowedRaw) {
+                    toggleInteractiveState($row, true);
                     $row.show();
                     return;
                 }
 
                 const allowedTypes = allowedRaw.split(',').map((item) => item.trim()).filter(Boolean);
-                const shouldShow = allowedTypes.includes('all') || allowedTypes.includes(normalized);
+                const shouldShow = allowedTypes.length === 0 || allowedTypes.includes('all') || allowedTypes.includes(normalized);
                 toggleInteractiveState($row, shouldShow);
 
                 if (shouldShow) {
@@ -193,66 +110,6 @@ jQuery(document).ready(function($) {
             $('#alt_contact_name').val(combined);
         };
 
-        const ensureStep1ButtonState = () => {
-            const value = $initialTypeSelect.val();
-            const hasSelection = value && value.length > 0;
-            $step1Next.prop('disabled', !hasSelection);
-        };
-
-        // Navigation controls
-        $clientForm.on('click', '.mealsdb-next-step', function (event) {
-            event.preventDefault();
-            const target = parseInt($(this).data('stepTarget'), 10);
-            const nextStep = Number.isNaN(target) ? currentStep + 1 : target;
-            if (nextStep > 1 && !$customerTypeSelect.val()) {
-                showStep(1);
-                return;
-            }
-            showStep(nextStep, 'forward');
-        });
-
-        $clientForm.on('click', '.mealsdb-prev-step', function (event) {
-            event.preventDefault();
-            const target = parseInt($(this).data('stepTarget'), 10);
-            const prevStep = Number.isNaN(target) ? currentStep - 1 : target;
-            showStep(prevStep, 'backward');
-        });
-
-        // Client type syncing
-        $initialTypeSelect.on('change', function () {
-            const value = $(this).val();
-            $customerTypeSelect.val(value).trigger('change');
-            ensureStep1ButtonState();
-        });
-
-        $customerTypeSelect.on('change', function () {
-            const value = $(this).val();
-            if ($initialTypeSelect.val() !== value) {
-                $initialTypeSelect.val(value);
-            }
-
-            ensureStep1ButtonState();
-            toggleClientTypeSections(value);
-
-            const hasSelection = normalizeType(value).length > 0;
-            if (!hasSelection) {
-                showStep(1);
-                return;
-            }
-
-            if (currentStep === 1) {
-                showStep(2, 'forward');
-                return;
-            }
-
-            if (!isStepEligible(currentStep)) {
-                showStep(currentStep, 'backward');
-            } else {
-                showStep(currentStep);
-            }
-        });
-
-        // Delivery address toggle
         $('#delivery-address-toggle').on('change', function () {
             const show = $(this).is(':checked');
             const $container = $('#delivery-address-fields');
@@ -263,7 +120,6 @@ jQuery(document).ready(function($) {
             }
         });
 
-        // Alternate contact toggle
         $('#alternate-contact-toggle').on('change', function () {
             const show = $(this).is(':checked');
             const $container = $('#alternate-contact-fields');
@@ -278,35 +134,14 @@ jQuery(document).ready(function($) {
 
         $('#alt_contact_first_name, #alt_contact_last_name').on('input', syncAltContactName);
 
-        // Step indicator click (optional direct navigation)
-        $indicatorItems.on('click', function () {
-            const step = parseInt($(this).data('step'), 10);
-            if (!step) return;
-            if (step > 1 && !$customerTypeSelect.val()) {
-                showStep(1);
-                return;
-            }
-            const direction = step >= currentStep ? 'forward' : 'backward';
-            showStep(step, direction);
+        $customerTypeSelect.on('change', function () {
+            toggleClientTypeSections($(this).val());
         });
 
-        // Initialise state
         syncAltContactName();
-        if (!$initialTypeSelect.val() && $customerTypeSelect.val()) {
-            $initialTypeSelect.val($customerTypeSelect.val());
-        }
-        const initialType = $customerTypeSelect.val();
-        toggleClientTypeSections(initialType);
-        if (!isStepEligible(currentStep)) {
-            showStep(currentStep, 'backward');
-        } else {
-            showStep(currentStep);
-        }
-        ensureStep1ButtonState();
+        toggleClientTypeSections($customerTypeSelect.val());
     }
-
-    // -----------------------------
-    // 💾 Save to Draft
+// 💾 Save to Draft
     // -----------------------------
     $('#mealsdb-save-draft').on('click', function () {
         const $form = $('#mealsdb-client-form');
