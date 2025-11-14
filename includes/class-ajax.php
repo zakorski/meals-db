@@ -451,14 +451,38 @@ class MealsDB_Ajax {
      * Activate a client record.
      */
     public static function activate_client() {
-        self::toggle_client_status(true);
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+        self::ensure_client_permissions();
+
+        $client_id = self::get_requested_client_id();
+
+        if (!MealsDB_Clients::activate_client($client_id)) {
+            wp_send_json_error(['message' => __('Unable to activate the client.', 'meals-db')]);
+        }
+
+        wp_send_json_success([
+            'message' => __('Client activated successfully.', 'meals-db'),
+            'active'  => 1,
+        ]);
     }
 
     /**
      * Deactivate a client record.
      */
     public static function deactivate_client() {
-        self::toggle_client_status(false);
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+        self::ensure_client_permissions();
+
+        $client_id = self::get_requested_client_id();
+
+        if (!MealsDB_Clients::deactivate_client($client_id)) {
+            wp_send_json_error(['message' => __('Unable to deactivate the client.', 'meals-db')]);
+        }
+
+        wp_send_json_success([
+            'message' => __('Client deactivated successfully.', 'meals-db'),
+            'active'  => 0,
+        ]);
     }
 
     /**
@@ -466,7 +490,7 @@ class MealsDB_Ajax {
      */
     public static function delete_client() {
         check_ajax_referer('mealsdb_nonce', 'nonce');
-        self::ensure_ajax_permissions();
+        self::ensure_client_permissions();
 
         $client_id = self::get_requested_client_id();
 
@@ -480,40 +504,13 @@ class MealsDB_Ajax {
     }
 
     /**
-     * Toggle the active status for a client.
-     *
-     * @param bool $activate
-     */
-    private static function toggle_client_status(bool $activate) {
-        check_ajax_referer('mealsdb_nonce', 'nonce');
-        self::ensure_ajax_permissions();
-
-        $client_id = self::get_requested_client_id();
-
-        $result = $activate
-            ? MealsDB_Clients::activate_client($client_id)
-            : MealsDB_Clients::deactivate_client($client_id);
-
-        if (!$result) {
-            $message = $activate
-                ? __('Unable to activate the client.', 'meals-db')
-                : __('Unable to deactivate the client.', 'meals-db');
-
-            wp_send_json_error(['message' => $message]);
-        }
-
-        wp_send_json_success([
-            'message' => $activate
-                ? __('Client activated successfully.', 'meals-db')
-                : __('Client deactivated successfully.', 'meals-db'),
-            'active'  => $activate ? 1 : 0,
-        ]);
-    }
-
-    /**
      * Ensure the current user has permission to perform AJAX actions.
      */
-    private static function ensure_ajax_permissions() {
+    private static function ensure_client_permissions() {
+        if (current_user_can('manage_options')) {
+            return;
+        }
+
         if (!MealsDB_Permissions::can_access_plugin()) {
             wp_send_json_error([
                 'message' => __('You do not have permission to perform this action.', 'meals-db'),
