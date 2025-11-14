@@ -65,8 +65,36 @@ class MealsDB_Admin_UI {
             true
         );
 
+        $initials_script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/client-initials.js';
+        $initials_script_version = file_exists($initials_script_path) ? filemtime($initials_script_path) : MEALS_DB_VERSION;
+        wp_enqueue_script(
+            'mealsdb-client-initials',
+            MEALS_DB_PLUGIN_URL . 'assets/js/client-initials.js',
+            ['jquery', 'mealsdb-admin'],
+            $initials_script_version,
+            true
+        );
+
         wp_localize_script('mealsdb-admin', 'mealsdb', [
-            'nonce' => wp_create_nonce('mealsdb_nonce'),
+            'nonce'   => wp_create_nonce('mealsdb_nonce'),
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+        ]);
+
+        wp_localize_script('mealsdb-client-initials', 'mealsdbInitials', [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonces'  => [
+                'generate' => wp_create_nonce('mealsdb_generate_initials'),
+                'validate' => wp_create_nonce('mealsdb_validate_initials'),
+            ],
+            'messages' => [
+                'success'       => __('Initials are valid.', 'meals-db'),
+                'invalid'       => __('These initials are invalid or already in use.', 'meals-db'),
+                'required'      => __('Please validate the initials before submitting.', 'meals-db'),
+                'empty'         => __('Enter initials before validating.', 'meals-db'),
+                'error'         => __('An unexpected error occurred. Please try again.', 'meals-db'),
+                'generateError' => __('Unable to generate initials. Please try again.', 'meals-db'),
+                'validating'    => __('Validating initials…', 'meals-db'),
+            ],
         ]);
     }
 

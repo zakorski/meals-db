@@ -314,8 +314,8 @@ $alt_contact_enabled = (
                         <div class="mealsdb-initials-tools">
                             <input type="text" name="delivery_initials" id="delivery_initials" class="regular-text" <?php echo $is_staff_client ? '' : 'required data-base-required="1"'; ?> value="<?php echo esc_attr($delivery_initials_value); ?>" />
                             <div class="mealsdb-initials-buttons">
-                                <button type="button" class="button mealsdb-initials-generate"><?php esc_html_e('Generate', 'meals-db'); ?></button>
-                                <button type="button" class="button mealsdb-initials-validate"><?php esc_html_e('Validate', 'meals-db'); ?></button>
+                                <button type="button" class="button mealsdb-initials-generate" id="mealsdb-generate-initials"><?php esc_html_e('Generate', 'meals-db'); ?></button>
+                                <button type="button" class="button mealsdb-initials-validate" id="mealsdb-validate-initials"><?php esc_html_e('Validate', 'meals-db'); ?></button>
                             </div>
                             <div class="mealsdb-initials-message" aria-live="polite"></div>
                         </div>

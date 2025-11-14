@@ -168,6 +168,30 @@ tr[data-ignored="true"] {
     margin-top: 20px;
 }
 
+.mealsdb-initials-tools {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 400px;
+}
+
+.mealsdb-initials-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.mealsdb-initials-message {
+    font-weight: 600;
+}
+
+.mealsdb-initials-message.is-success {
+    color: #0f5132;
+}
+
+.mealsdb-initials-message.is-error {
+    color: #842029;
+}
+
 .mealsdb-collapsible {
     margin: 10px 0 0 0;
     padding: 10px 15px;
