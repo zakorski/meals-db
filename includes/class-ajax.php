@@ -20,6 +20,8 @@ class MealsDB_Ajax {
         add_action('wp_ajax_mealsdb_check_updates', [__CLASS__, 'check_updates']);
         add_action('wp_ajax_mealsdb_run_update', [__CLASS__, 'run_update']);
         add_action('wp_ajax_mealsdb_update_database', [__CLASS__, 'update_database']);
+        add_action('wp_ajax_mealsdb_generate_initials', [__CLASS__, 'generate_initials']);
+        add_action('wp_ajax_mealsdb_validate_initials', [__CLASS__, 'validate_initials']);
     }
 
     /**
@@ -236,5 +238,67 @@ class MealsDB_Ajax {
         $result = MealsDB_Updates::run_database_maintenance();
 
         wp_send_json_success($result);
+    }
+
+    /**
+     * Generate a unique initials code for a client.
+     */
+    public static function generate_initials() {
+        check_ajax_referer('mealsdb_generate_initials', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json(['success' => false, 'message' => 'Unauthorized']);
+        }
+
+        $code = MealsDB_Initials::generate();
+
+        if (empty($code)) {
+            wp_send_json(['success' => false, 'message' => 'Unable to generate initials.']);
+        }
+
+        wp_send_json([
+            'success' => true,
+            'code'    => $code,
+        ]);
+    }
+
+    /**
+     * Validate an initials code for a client.
+     */
+    public static function validate_initials() {
+        check_ajax_referer('mealsdb_validate_initials', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json(['success' => false, 'message' => 'Unauthorized']);
+        }
+
+        $code = sanitize_text_field($_POST['code'] ?? '');
+        $client_id_raw = $_POST['client_id'] ?? null;
+        $client_id = null;
+
+        if ($client_id_raw !== null && $client_id_raw !== '') {
+            $client_id = intval($client_id_raw);
+
+            if ($client_id <= 0) {
+                $client_id = null;
+            }
+        }
+
+        $validation = MealsDB_Initials::validate_code($code, $client_id);
+
+        if (!is_array($validation)) {
+            wp_send_json(['success' => false, 'message' => 'Unable to validate initials.']);
+        }
+
+        if (!empty($validation['valid'])) {
+            wp_send_json(['success' => true]);
+        }
+
+        $message = isset($validation['message']) ? $validation['message'] : __('Invalid initials.', 'meals-db');
+
+        wp_send_json([
+            'success' => false,
+            'message' => $message,
+        ]);
     }
 }
