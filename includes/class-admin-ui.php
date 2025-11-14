@@ -55,6 +55,37 @@ class MealsDB_Admin_UI {
             $style_version
         );
 
+        $tab = $_GET['tab'] ?? '';
+        if (function_exists('wp_unslash')) {
+            $tab = wp_unslash($tab);
+        }
+        if (function_exists('sanitize_key')) {
+            $tab = sanitize_key($tab);
+        } else {
+            $tab = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $tab));
+        }
+
+        $action = $_GET['action'] ?? '';
+        if (function_exists('wp_unslash')) {
+            $action = wp_unslash($action);
+        }
+        if (function_exists('sanitize_key')) {
+            $action = sanitize_key($action);
+        } else {
+            $action = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $action));
+        }
+
+        if ($tab === 'add' || ($tab === 'clients' && $action === 'edit')) {
+            $client_style_path = MEALS_DB_PLUGIN_DIR . 'assets/css/client-form.css';
+            $client_style_version = file_exists($client_style_path) ? filemtime($client_style_path) : MEALS_DB_VERSION;
+            wp_enqueue_style(
+                'mealsdb-client-form',
+                MEALS_DB_PLUGIN_URL . 'assets/css/client-form.css',
+                [],
+                $client_style_version
+            );
+        }
+
         $script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/admin.js';
         $script_version = file_exists($script_path) ? filemtime($script_path) : MEALS_DB_VERSION;
         wp_enqueue_script(

@@ -1,0 +1,16 @@
+.mealsdb-form-columns {
+    display: flex;
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.mealsdb-column {
+    flex: 1;
+    min-width: 300px;
+}
+
+@media (max-width: 800px) {
+    .mealsdb-form-columns {
+        flex-direction: column;
+    }
+}
