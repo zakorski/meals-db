@@ -195,6 +195,11 @@ $field_labels = [
                             <?php endforeach; ?>
                         </tbody>
                     </table>
+                    <?php
+                    if (($mismatch['type'] ?? '') === 'meals_only' && !empty($client_data) && is_array($client_data)) {
+                        MealsDB_Admin_UI::render_unlinked_client_matches($client_data);
+                    }
+                    ?>
                 </div>
             <?php endforeach; ?>
         </form>

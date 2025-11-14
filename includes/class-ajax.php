@@ -22,6 +22,7 @@ class MealsDB_Ajax {
         add_action('wp_ajax_mealsdb_update_database', [__CLASS__, 'update_database']);
         add_action('wp_ajax_mealsdb_generate_initials', [__CLASS__, 'generate_initials']);
         add_action('wp_ajax_mealsdb_validate_initials', [__CLASS__, 'validate_initials']);
+        add_action('wp_ajax_mealsdb_link_client', [__CLASS__, 'link_client']);
     }
 
     /**
@@ -153,6 +154,39 @@ class MealsDB_Ajax {
         wp_send_json_success([
             'message'   => 'Saved to drafts.',
             'draft_id'  => intval($saved_id),
+        ]);
+    }
+
+    /**
+     * Link a Meals DB client record to a WordPress user.
+     */
+    public static function link_client() {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $client_id = intval($_POST['client_id'] ?? 0);
+        $wp_user_id = intval($_POST['wp_user_id'] ?? 0);
+
+        if ($client_id <= 0 || $wp_user_id <= 0) {
+            wp_send_json_error(['message' => __('Invalid client or WordPress user.', 'meals-db')]);
+        }
+
+        $result = MealsDB_Sync::link_client_to_wordpress_user($client_id, $wp_user_id);
+
+        if (is_wp_error($result)) {
+            $message = $result->get_error_message();
+            if ($message === '') {
+                $message = __('Failed to link client.', 'meals-db');
+            }
+
+            wp_send_json_error(['message' => $message]);
+        }
+
+        wp_send_json_success([
+            'message' => __('Client linked successfully.', 'meals-db'),
         ]);
     }
 

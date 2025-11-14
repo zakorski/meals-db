@@ -906,6 +906,96 @@ class MealsDB_Admin_UI {
     }
 
     /**
+     * Render a list of probable WordPress user matches for an unlinked Meals DB client.
+     *
+     * @param array<string, mixed> $client
+     */
+    public static function render_unlinked_client_matches(array $client): void
+    {
+        echo '<div class="mealsdb-possible-matches">';
+
+        if (!class_exists('MealsDB_Sync')) {
+            echo '<p class="description">' . esc_html__('No likely matches', 'meals-db') . '</p>';
+            echo '</div>';
+            return;
+        }
+
+        $matches = MealsDB_Sync::find_probable_matches_for_client($client);
+
+        if (empty($matches)) {
+            echo '<p class="description">' . esc_html__('No likely matches', 'meals-db') . '</p>';
+            echo '</div>';
+            return;
+        }
+
+        $match_count = count($matches);
+        echo '<h4>';
+        printf(
+            esc_html__('Possible Matches Found (%d)', 'meals-db'),
+            $match_count
+        );
+        echo '</h4>';
+
+        echo '<table class="widefat fixed striped mealsdb-matches-table">';
+        echo '<thead><tr>';
+        echo '<th>' . esc_html__('Name', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Email', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Phone', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Confidence', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Actions', 'meals-db') . '</th>';
+        echo '</tr></thead>';
+        echo '<tbody>';
+
+        $client_id = isset($client['id']) ? (int) $client['id'] : 0;
+
+        foreach ($matches as $match) {
+            $wp_user_id = isset($match['wp_user_id']) ? (int) $match['wp_user_id'] : 0;
+            $wp_user = is_array($match['wp_user'] ?? null) ? $match['wp_user'] : [];
+
+            $first = trim((string) ($wp_user['first_name'] ?? ''));
+            $last = trim((string) ($wp_user['last_name'] ?? ''));
+            $display_name = trim($first . ' ' . $last);
+
+            if ($display_name === '' && !empty($wp_user['display_name'])) {
+                $display_name = (string) $wp_user['display_name'];
+            }
+
+            if ($display_name === '') {
+                $display_name = sprintf(__('User #%d', 'meals-db'), $wp_user_id);
+            }
+
+            $email = (string) ($wp_user['email'] ?? '');
+            $phone = (string) ($wp_user['phone'] ?? '');
+            $score = isset($match['score']) ? (int) $match['score'] : 0;
+            $score = max(0, min(200, $score));
+            $confidence = round(($score / 200) * 100);
+
+            echo '<tr>';
+            echo '<td>' . esc_html($display_name) . '</td>';
+            echo '<td>' . ($email !== '' ? esc_html($email) : '&mdash;') . '</td>';
+            echo '<td>' . ($phone !== '' ? esc_html($phone) : '&mdash;') . '</td>';
+            echo '<td>' . esc_html($confidence . '%') . '</td>';
+            echo '<td>';
+            if ($client_id > 0 && $wp_user_id > 0) {
+                $button_attrs = sprintf(
+                    'class="button button-secondary mealsdb-link-user" data-client-id="%d" data-wp-user-id="%d"',
+                    $client_id,
+                    $wp_user_id
+                );
+                echo '<button type="button" ' . $button_attrs . '>' . esc_html__('Link to This User', 'meals-db') . '</button>';
+            } else {
+                echo '<span class="description">' . esc_html__('Link unavailable', 'meals-db') . '</span>';
+            }
+            echo '</td>';
+            echo '</tr>';
+        }
+
+        echo '</tbody>';
+        echo '</table>';
+        echo '</div>';
+    }
+
+    /**
      * Render a field group within the client form.
      *
      * @param string $group_name
