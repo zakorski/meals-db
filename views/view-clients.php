@@ -111,7 +111,7 @@ $edit_base = admin_url('admin.php?page=meals-db&tab=clients&action=edit');
                                 </button>
                                 <button
                                     type="button"
-                                    class="button button-link-delete mealsdb-client-delete"
+                                    class="button button-secondary mealsdb-delete-client"
                                     data-client-id="<?php echo esc_attr($client_id); ?>"
                                     data-client-name="<?php echo esc_attr($client_display_name); ?>"
                                 >
@@ -132,9 +132,22 @@ $edit_base = admin_url('admin.php?page=meals-db&tab=clients&action=edit');
             <p class="mealsdb-modal__client-name" data-has-name="false">
                 <strong id="mealsdb-delete-client-name"></strong>
             </p>
+            <p class="mealsdb-modal__warning">
+                <?php esc_html_e('Type "YES" in the box below to confirm.', 'meals-db'); ?>
+            </p>
+            <label for="mealsdb-delete-client-confirmation" class="screen-reader-text"><?php esc_html_e('Confirm deletion by typing YES', 'meals-db'); ?></label>
+            <input
+                type="text"
+                id="mealsdb-delete-client-confirmation"
+                class="mealsdb-modal__confirmation-input"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                placeholder="<?php esc_attr_e('Type YES to confirm', 'meals-db'); ?>"
+            />
             <div class="mealsdb-modal__actions">
                 <button type="button" class="button button-secondary" id="mealsdb-delete-client-cancel" data-close="true"><?php esc_html_e('Cancel', 'meals-db'); ?></button>
-                <button type="button" class="button button-secondary button-link-delete" id="mealsdb-delete-client-confirm">
+                <button type="button" class="button button-secondary" id="mealsdb-delete-client-confirm" disabled>
                     <?php esc_html_e('Delete Client', 'meals-db'); ?>
                 </button>
             </div>

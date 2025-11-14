@@ -10,9 +10,6 @@ jQuery(document).ready(function($) {
 
     const genericErrorMessage = clientMessages.genericError || 'An unexpected error occurred. Please try again.';
     const toggleErrorMessage = clientMessages.toggleError || genericErrorMessage;
-    const deleteErrorMessage = clientMessages.deleteError || genericErrorMessage;
-    const deleteSuccessMessage = clientMessages.deleteSuccess || '';
-    const emptyStateMessage = clientMessages.emptyState || '';
 
     const setBusyState = ($element, busy) => {
         if (!$element || !$element.length) {
@@ -28,71 +25,6 @@ jQuery(document).ready(function($) {
     // -----------------------------
     const $clientsTable = $('.mealsdb-client-table');
     if ($clientsTable.length) {
-        const $tableBody = $clientsTable.find('tbody');
-        const emptyMessage = (() => {
-            const raw = $tableBody.data('emptyMessage');
-            if (typeof raw === 'string' && raw.trim().length) {
-                return raw;
-            }
-            return emptyStateMessage;
-        })();
-        const columnCount = $clientsTable.find('thead th').length || 1;
-        const $deleteModal = $('#mealsdb-delete-client-modal');
-        const $deleteModalConfirm = $('#mealsdb-delete-client-confirm');
-        const $deleteModalCancel = $('#mealsdb-delete-client-cancel');
-        const $deleteModalBackdrop = $deleteModal.find('.mealsdb-modal__backdrop');
-        const $deleteClientName = $('#mealsdb-delete-client-name');
-        const $deleteClientNameWrapper = $deleteClientName.closest('.mealsdb-modal__client-name');
-        let deleteTargetId = null;
-        let $deleteTriggerRow = null;
-
-        const ensureEmptyStateRow = () => {
-            const $dataRows = $tableBody.children('tr').not('.mealsdb-client-empty');
-            if ($dataRows.length === 0) {
-                $tableBody.find('.mealsdb-client-empty').remove();
-                if (emptyMessage) {
-                    const $emptyRow = $('<tr>', { class: 'mealsdb-client-empty' });
-                    $('<td>', {
-                        colspan: columnCount,
-                        text: emptyMessage
-                    }).appendTo($emptyRow);
-                    $tableBody.append($emptyRow);
-                }
-            } else {
-                $tableBody.find('.mealsdb-client-empty').remove();
-            }
-        };
-
-        const openDeleteModal = (clientId, clientName, $row) => {
-            deleteTargetId = clientId;
-            $deleteTriggerRow = $row;
-            const safeName = (clientName || '').toString();
-
-            if (safeName.length) {
-                $deleteClientName.text(safeName);
-                $deleteClientNameWrapper.attr('data-has-name', 'true');
-            } else {
-                $deleteClientName.text('');
-                $deleteClientNameWrapper.attr('data-has-name', 'false');
-            }
-
-            $deleteModal.attr('aria-hidden', 'false').addClass('is-visible');
-            $('body').addClass('mealsdb-modal-open');
-            setTimeout(() => {
-                $deleteModalConfirm.trigger('focus');
-            }, 0);
-        };
-
-        const closeDeleteModal = () => {
-            $deleteModal.attr('aria-hidden', 'true').removeClass('is-visible');
-            $('body').removeClass('mealsdb-modal-open');
-            $deleteClientName.text('');
-            $deleteClientNameWrapper.attr('data-has-name', 'false');
-            setBusyState($deleteModalConfirm, false);
-            deleteTargetId = null;
-            $deleteTriggerRow = null;
-        };
-
         $(document).on('click', '.mealsdb-client-toggle-status', function () {
             const $button = $(this);
             const clientIdRaw = $button.data('clientId');
@@ -136,78 +68,6 @@ jQuery(document).ready(function($) {
             }).always(function () {
                 setBusyState($button, false);
             });
-        });
-
-        $(document).on('click', '.mealsdb-client-delete', function () {
-            const $button = $(this);
-            const clientIdRaw = $button.data('clientId');
-            const clientId = parseInt(clientIdRaw, 10);
-
-            if (!Number.isInteger(clientId) || clientId <= 0 || !$deleteModal.length) {
-                return;
-            }
-
-            const clientName = $button.data('clientName') || '';
-            openDeleteModal(clientId, clientName, $button.closest('tr'));
-        });
-
-        $deleteModalConfirm.on('click', function () {
-            if (!deleteTargetId || !ajaxEndpoint || typeof mealsdb === 'undefined') {
-                return;
-            }
-
-            setBusyState($deleteModalConfirm, true);
-
-            $.post(ajaxEndpoint, {
-                action: 'mealsdb_delete_client',
-                nonce: mealsdb.nonce,
-                client_id: deleteTargetId
-            }, function (response) {
-                if (response && response.success) {
-                    const afterRemoval = () => {
-                        ensureEmptyStateRow();
-                        const successMessage = response.data && response.data.message
-                            ? response.data.message
-                            : deleteSuccessMessage;
-                        if (successMessage) {
-                            window.alert(successMessage);
-                        }
-                        closeDeleteModal();
-                    };
-
-                    if ($deleteTriggerRow && $deleteTriggerRow.length) {
-                        $deleteTriggerRow.fadeOut(150, function () {
-                            $(this).remove();
-                            afterRemoval();
-                        });
-                    } else {
-                        afterRemoval();
-                    }
-                } else {
-                    const errorMessage = response && response.data && response.data.message
-                        ? response.data.message
-                        : deleteErrorMessage;
-                    window.alert(errorMessage);
-                }
-            }).fail(function () {
-                window.alert(deleteErrorMessage);
-            }).always(function () {
-                setBusyState($deleteModalConfirm, false);
-            });
-        });
-
-        const handleModalClose = (event) => {
-            event.preventDefault();
-            closeDeleteModal();
-        };
-
-        $deleteModalCancel.on('click', handleModalClose);
-        $deleteModalBackdrop.on('click', handleModalClose);
-
-        $(document).on('keydown', function (event) {
-            if (event.key === 'Escape' && $deleteModal.hasClass('is-visible')) {
-                closeDeleteModal();
-            }
         });
     }
 
