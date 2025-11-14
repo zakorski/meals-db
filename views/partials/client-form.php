@@ -306,10 +306,8 @@ $alt_contact_enabled = (
                 </tr>
                 <?php
                 $delivery_initials_value = $form_values['delivery_initials'] ?? '';
-                $is_staff_client = strtolower($client_type ?? '') === 'staff';
                 ?>
-                <?php if (!$is_staff_client) : ?>
-                <tr data-required-for="sdnb,veteran,private">
+                <tr data-client-type="sdnb,veteran,private" data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_initials"><?php esc_html_e('Initials for Delivery *', 'meals-db'); ?></label></th>
                     <td>
                         <div class="mealsdb-initials-tools">
@@ -323,7 +321,6 @@ $alt_contact_enabled = (
                         </div>
                     </td>
                 </tr>
-                <?php endif; ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_day"><?php esc_html_e('Delivery Day *', 'meals-db'); ?></label></th>
                     <td>
