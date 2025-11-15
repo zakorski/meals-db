@@ -103,6 +103,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Staff::init();
     MealsDB_Ajax_Drafts::init();
     MealsDB_Ajax_Initials::init();
+    MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();
 });
 
