@@ -8,6 +8,9 @@ if (!function_exists('__')) {
 if (!class_exists('MealsDB_Initials')) {
     require_once __DIR__ . '/class-initials.php';
 }
+if (!class_exists('MealsDB_Clients_Repository')) {
+    require_once __DIR__ . '/services/class-clients-repository.php';
+}
 /**
  * Handles validation and saving of Meals DB client records and drafts.
  *
@@ -314,9 +317,14 @@ class MealsDB_Client_Form {
         $required_fields = self::get_required_fields_for_type($client_type);
 
         $initials_value = strtoupper(trim((string) ($sanitized['delivery_initials'] ?? '')));
+        $requires_delivery_initials = $client_type !== 'STAFF';
 
         if ($initials_value === '') {
-            $record_required_error('delivery_initials');
+            if ($requires_delivery_initials) {
+                $record_required_error('delivery_initials');
+            } else {
+                $sanitized['delivery_initials'] = null;
+            }
         } else {
             $validation = MealsDB_Initials::validate_code($initials_value, $ignore_client_id);
             if (empty($validation['valid'])) {
@@ -325,6 +333,10 @@ class MealsDB_Client_Form {
             } else {
                 $sanitized['delivery_initials'] = $initials_value;
             }
+        }
+
+        if ($client_type === 'STAFF' && ($sanitized['client_email'] ?? '') === '') {
+            $record_required_error('client_email');
         }
 
         foreach ($required_fields as $field) {
@@ -615,39 +627,9 @@ class MealsDB_Client_Form {
             unset($encrypted['units']);
         }
 
-        // Insert statement (simplified, auto-field mapping can be done later)
-        $columns = array_keys($encrypted);
-        $placeholders = array_fill(0, count($columns), '?');
-        $types = str_repeat('s', count($columns));
-        $values = array_values($encrypted);
+        $repository = new MealsDB_Clients_Repository($conn);
 
-        $sql = "INSERT INTO meals_clients (" . implode(',', $columns) . ") VALUES (" . implode(',', $placeholders) . ")";
-        $stmt = $conn->prepare($sql);
-        if (!$stmt) {
-            error_log('[MealsDB] Save failed: ' . $conn->error);
-            return false;
-        }
-
-        $params = [$types];
-        foreach ($values as $index => $value) {
-            $params[] =& $values[$index];
-        }
-
-        $bound = call_user_func_array([$stmt, 'bind_param'], $params);
-        if ($bound === false) {
-            error_log('[MealsDB] Save failed: unable to bind parameters for client insert.');
-            $stmt->close();
-            return false;
-        }
-
-        if (!$stmt->execute()) {
-            error_log('[MealsDB] Save failed to execute insert: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return false;
-        }
-        $stmt->close();
-
-        return true;
+        return $repository->create_client($encrypted);
     }
 
     /**
@@ -738,42 +720,9 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $set_clause = [];
-        foreach ($columns as $column) {
-            $set_clause[] = '`' . $column . '` = ?';
-        }
+        $repository = new MealsDB_Clients_Repository($conn);
 
-        $sql = 'UPDATE meals_clients SET ' . implode(', ', $set_clause) . ' WHERE id = ? LIMIT 1';
-        $stmt = $conn->prepare($sql);
-        if (!$stmt) {
-            error_log('[MealsDB] Update failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
-            return false;
-        }
-
-        $values = array_values($encrypted);
-        $values[] = $client_id;
-        $types = str_repeat('s', count($columns)) . 'i';
-
-        $params = [$types];
-        foreach ($values as $index => $value) {
-            $params[] =& $values[$index];
-        }
-
-        if (call_user_func_array([$stmt, 'bind_param'], $params) === false) {
-            error_log('[MealsDB] Update failed: unable to bind parameters for client update.');
-            $stmt->close();
-            return false;
-        }
-
-        if (!$stmt->execute()) {
-            error_log('[MealsDB] Update failed to execute: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return false;
-        }
-
-        $stmt->close();
-
-        return true;
+        return $repository->update_client($client_id, $encrypted);
     }
 
     /**
@@ -792,27 +741,8 @@ class MealsDB_Client_Form {
             return null;
         }
 
-        $stmt = $conn->prepare('SELECT * FROM meals_clients WHERE id = ? LIMIT 1');
-        if (!$stmt) {
-            error_log('[MealsDB] Load client failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
-            return null;
-        }
-
-        if (!$stmt->bind_param('i', $client_id)) {
-            error_log('[MealsDB] Load client failed to bind parameters.');
-            $stmt->close();
-            return null;
-        }
-
-        if (!$stmt->execute()) {
-            error_log('[MealsDB] Load client failed to execute: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return null;
-        }
-
-        $result = $stmt->get_result();
-        $record = $result instanceof mysqli_result ? $result->fetch_assoc() : null;
-        $stmt->close();
+        $repository = new MealsDB_Clients_Repository($conn);
+        $record = $repository->get_client_by_id($client_id);
 
         if (empty($record)) {
             return null;

@@ -96,6 +96,7 @@ function meals_db_check_requirements() {
  * Load core plugin classes.
  */
 require_once plugin_dir_path(__FILE__) . 'includes/class-db.php';
+require_once plugin_dir_path(__FILE__) . 'includes/services/class-clients-repository.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-encryption.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-logger.php';
 require_once plugin_dir_path(__FILE__) . 'includes/class-sync.php';
