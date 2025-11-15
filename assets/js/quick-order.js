@@ -562,6 +562,7 @@
                     $image.append($('<img>', {
                         src: product.image_url,
                         alt: product.name || 'Product image',
+                        loading: 'lazy',
                     }));
                     $product.append($image);
                 }
@@ -579,6 +580,7 @@
                 $content.append($actions);
                 $product.append($content);
 
+                $product.toggleClass('selected', quantity > 0);
                 $product.data('product', product);
                 $grid.append($product);
             });
@@ -623,6 +625,7 @@
             const $product = this.$products.find(`.mealsdb-quick-order__product[data-product-id="${productId}"]`);
             if ($product.length) {
                 $product.find('.mealsdb-quick-order__qty-input').val(quantity);
+                $product.toggleClass('selected', quantity > 0);
             }
 
             this.renderSummary();
