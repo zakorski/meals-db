@@ -45,8 +45,173 @@
     margin-bottom: 1rem;
 }
 
+.mealsdb-quick-order__product-grid,
+.mealsdb-qo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1.5rem;
+    align-items: stretch;
+}
+
+.mealsdb-quick-order__product,
+.mealsdb-qo-tile {
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 12px;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow: hidden;
+    padding: 1rem;
+    transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+
+.mealsdb-quick-order__product:hover,
+.mealsdb-qo-tile:hover {
+    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.14);
+    transform: translateY(-2px);
+}
+
+.mealsdb-quick-order__product.is-selected,
+.mealsdb-quick-order__product[data-has-quantity="true"],
+.mealsdb-qo-tile.selected {
+    border-color: #3c82f6;
+    box-shadow: 0 16px 30px rgba(60, 130, 246, 0.25);
+}
+
+.mealsdb-quick-order__product-image,
+.mealsdb-qo-image {
+    background: #f8fafc;
+    border-radius: 8px;
+    height: 160px;
+    overflow: hidden;
+    position: relative;
+}
+
+.mealsdb-quick-order__product-image img,
+.mealsdb-qo-image img {
+    height: 100%;
+    left: 0;
+    object-fit: cover;
+    position: absolute;
+    top: 0;
+    width: 100%;
+}
+
+.mealsdb-quick-order__product-content {
+    flex: 1 1 auto;
+}
+
+.mealsdb-quick-order__product-actions,
+.mealsdb-qo-qty-controls {
+    align-items: center;
+    display: flex;
+    gap: 0.5rem;
+    justify-content: space-between;
+}
+
+.mealsdb-quick-order__qty-input,
+.mealsdb-qo-qty {
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.8);
+    font-weight: 600;
+    padding: 0.35rem 0.75rem;
+    text-align: center;
+    width: 72px;
+}
+
+.mealsdb-quick-order__qty-decrease,
+.mealsdb-quick-order__qty-increase,
+.mealsdb-qo-btn {
+    align-items: center;
+    background: linear-gradient(135deg, #2563eb, #3b82f6);
+    border: none;
+    border-radius: 999px;
+    color: #ffffff;
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 0.875rem;
+    font-weight: 600;
+    height: 36px;
+    justify-content: center;
+    line-height: 1;
+    min-width: 36px;
+    padding: 0.5rem 0.75rem;
+    transition: box-shadow 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+
+.mealsdb-quick-order__qty-decrease:hover,
+.mealsdb-quick-order__qty-increase:hover,
+.mealsdb-qo-btn:hover {
+    box-shadow: 0 10px 20px rgba(37, 99, 235, 0.3);
+    transform: translateY(-1px);
+}
+
+.mealsdb-quick-order__qty-decrease:focus,
+.mealsdb-quick-order__qty-increase:focus,
+.mealsdb-qo-btn:focus {
+    outline: 3px solid rgba(59, 130, 246, 0.35);
+    outline-offset: 2px;
+}
+
+.mealsdb-quick-order__qty-decrease.button,
+.mealsdb-quick-order__qty-increase.button {
+    box-shadow: none;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+}
+
+@media (max-width: 782px) {
+    .mealsdb-quick-order__product-grid,
+    .mealsdb-qo-grid {
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    }
+
+    .mealsdb-quick-order__product,
+    .mealsdb-qo-tile {
+        padding: 0.875rem;
+    }
+
+    .mealsdb-quick-order__product-actions,
+    .mealsdb-qo-qty-controls {
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+
+    .mealsdb-quick-order__qty-input,
+    .mealsdb-qo-qty {
+        width: 64px;
+    }
+}
+
 @media (max-width: 960px) {
     .mealsdb-quick-order__layout {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    .mealsdb-quick-order__product-grid,
+    .mealsdb-qo-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mealsdb-quick-order__product,
+    .mealsdb-qo-tile {
+        padding: 0.75rem;
+    }
+
+    .mealsdb-quick-order__qty-decrease,
+    .mealsdb-quick-order__qty-increase,
+    .mealsdb-qo-btn {
+        flex: 1 1 48%;
+        min-width: 0;
+    }
+
+    .mealsdb-quick-order__qty-input,
+    .mealsdb-qo-qty {
+        flex: 1 1 100%;
     }
 }
