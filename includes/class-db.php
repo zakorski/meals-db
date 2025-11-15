@@ -1,11 +1,15 @@
 <?php
 /**
  * Handles mysqli connection to the Meals DB external database.
- * 
+ *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
  * Licensed under the GNU General Public License v3.0 or later.
  */
+
+if (!class_exists('MealsDB_Config')) {
+    require_once __DIR__ . '/class-config.php';
+}
 
 class MealsDB_DB {
 
@@ -29,13 +33,15 @@ class MealsDB_DB {
             return self::$connection;
         }
 
-        $host = (defined('MEALS_DB_HOST') && MEALS_DB_HOST !== '') ? MEALS_DB_HOST : null;
-        $user = (defined('MEALS_DB_USER') && MEALS_DB_USER !== '') ? MEALS_DB_USER : null;
-        $pass = (defined('MEALS_DB_PASS') && MEALS_DB_PASS !== '') ? MEALS_DB_PASS : null;
-        $name = (defined('MEALS_DB_NAME') && MEALS_DB_NAME !== '') ? MEALS_DB_NAME : null;
+        $config = new MealsDB_Config();
 
-        if ($host === null || $user === null || $name === null) {
-            error_log('[MealsDB] Database configuration constants are missing.');
+        $host = $config->get_db_host();
+        $user = $config->get_db_user();
+        $pass = $config->get_db_password();
+        $name = $config->get_db_name();
+
+        if ($host === null || $host === '' || $user === null || $user === '' || $pass === null || $pass === '' || $name === null || $name === '') {
+            error_log('[MealsDB] External database credentials are missing. Set MEALSDB_* environment variables or define the MEALS_DB_* constants.');
             return null;
         }
 

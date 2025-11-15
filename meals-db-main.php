@@ -33,6 +33,8 @@ if (!defined('MEALS_DB_VERSION')) {
     define('MEALS_DB_VERSION', '1.0.0');
 }
 
+require_once plugin_dir_path(__FILE__) . 'includes/class-config.php';
+
 // Abort early if wp-config.php constants have not been configured.
 if (!defined('MEALS_DB_KEY')) {
     add_action('admin_notices', function () {
