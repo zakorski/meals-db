@@ -22,31 +22,7 @@ class MealsDB_Sync {
         $query   = new MealsDB_Sync_Query();
         $compare = new MealsDB_Sync_Compare();
 
-        $clients = $query->get_meals_clients();
-        if (is_wp_error($clients)) {
-            return $clients;
-        }
-
-        $ignored_keys = $query->get_ignored_conflicts();
-        if (is_wp_error($ignored_keys)) {
-            return $ignored_keys;
-        }
-
-        $staff_wp_ids = $query->get_staff_wordpress_ids();
-        if (is_wp_error($staff_wp_ids)) {
-            return $staff_wp_ids;
-        }
-
-        $wp_users = $query->get_wp_users();
-
-        $mismatches = $compare->detect_mismatches(
-            $wp_users,
-            $clients['by_wp_id'] ?? [],
-            $clients['without_wp_id'] ?? [],
-            $staff_wp_ids
-        );
-
-        return $compare->filter_ignored($mismatches, is_array($ignored_keys) ? $ignored_keys : []);
+        return $compare->get_mismatches($query);
     }
 
     /**
@@ -72,9 +48,7 @@ class MealsDB_Sync {
         $query   = new MealsDB_Sync_Query();
         $compare = new MealsDB_Sync_Compare();
 
-        $wp_users = $query->get_wp_users();
-
-        return $compare->find_probable_matches($client, $wp_users);
+        return $compare->find_probable_matches_for_client($client, $query);
     }
 
     /**
@@ -89,8 +63,6 @@ class MealsDB_Sync {
     public static function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
         $mutate = new MealsDB_Sync_Mutate();
 
-        return $mutate->update_wp_user($woo_user_id, [
-            $field => $new_value,
-        ]);
+        return $mutate->push_to_woocommerce($woo_user_id, $field, $new_value);
     }
 }

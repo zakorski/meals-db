@@ -5,6 +5,39 @@
 
 class MealsDB_Sync_Compare {
     /**
+     * Retrieve and compare Meals DB and WordPress data to identify mismatches.
+     *
+     * @return array|WP_Error
+     */
+    public function get_mismatches(MealsDB_Sync_Query $query) {
+        $clients = $query->get_meals_clients();
+        if (is_wp_error($clients)) {
+            return $clients;
+        }
+
+        $ignored_keys = $query->get_ignored_conflicts();
+        if (is_wp_error($ignored_keys)) {
+            return $ignored_keys;
+        }
+
+        $staff_wp_ids = $query->get_staff_wordpress_ids();
+        if (is_wp_error($staff_wp_ids)) {
+            return $staff_wp_ids;
+        }
+
+        $wp_users = $query->get_wp_users();
+
+        $mismatches = $this->detect_mismatches(
+            $wp_users,
+            $clients['by_wp_id'] ?? [],
+            $clients['without_wp_id'] ?? [],
+            is_array($staff_wp_ids) ? $staff_wp_ids : []
+        );
+
+        return $this->filter_ignored($mismatches, is_array($ignored_keys) ? $ignored_keys : []);
+    }
+
+    /**
      * Detect mismatches between WordPress users and Meals DB clients.
      *
      * @param array<int, WP_User>                 $wp_users          Pre-fetched WordPress user data.
@@ -241,6 +274,19 @@ class MealsDB_Sync_Compare {
         });
 
         return array_slice($matches, 0, 5);
+    }
+
+    /**
+     * Find probable WordPress user matches for a Meals DB client.
+     *
+     * @param array<string, mixed> $client
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function find_probable_matches_for_client(array $client, MealsDB_Sync_Query $query): array {
+        $wp_users = $query->get_wp_users();
+
+        return $this->find_probable_matches($client, $wp_users);
     }
 
     /**

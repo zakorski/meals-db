@@ -44,6 +44,17 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
+     * Sync a single field from Meals DB to WooCommerce.
+     *
+     * @return true|WP_Error
+     */
+    public function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
+        return $this->update_wp_user($woo_user_id, [
+            $field => $new_value,
+        ]);
+    }
+
+    /**
      * Update a Meals DB client with the provided field values.
      *
      * @param int                  $client_id Identifier of the Meals DB client to update.
