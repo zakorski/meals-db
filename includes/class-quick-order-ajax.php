@@ -194,12 +194,12 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
-     * AJAX endpoint to clone an existing WooCommerce order.
+     * AJAX endpoint to retrieve items from an existing WooCommerce order.
      */
     public static function clone_order(): void {
         self::verify_request();
 
-        $source_order_id = isset($_POST['order_id']) ? intval($_POST['order_id']) : 0;
+        $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
         if ($source_order_id <= 0) {
             wp_send_json_error([
                 'message' => __('An order to clone must be specified.', 'meals-db'),
@@ -213,23 +213,15 @@ class MealsDB_Quick_Order_Ajax {
             ]);
         }
 
-        $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
-        if ($client_id <= 0) {
-            $client_id = intval($source_order->get_meta('mealsdb_client_id'));
-        }
+        $items_map = [];
 
-        if ($client_id <= 0) {
-            wp_send_json_error([
-                'message' => __('A client could not be determined for the cloned order.', 'meals-db'),
-            ]);
-        }
-
-        $date = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
-        $order_date = self::parse_order_date($date);
-
-        $items = [];
         foreach ($source_order->get_items('line_item') as $item) {
             if (!$item instanceof WC_Order_Item_Product) {
+                continue;
+            }
+
+            $quantity = (int) $item->get_quantity();
+            if ($quantity <= 0) {
                 continue;
             }
 
@@ -238,43 +230,57 @@ class MealsDB_Quick_Order_Ajax {
                 continue;
             }
 
-            $items[] = [
-                'product_id'   => $product->get_id(),
-                'variation_id' => $item->get_variation_id(),
-                'quantity'     => (int) $item->get_quantity(),
-            ];
+            $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
+            if (empty($payload) || !isset($payload[0]['product_id'])) {
+                continue;
+            }
+
+            $product_id = (int) $payload[0]['product_id'];
+            if ($product_id <= 0) {
+                continue;
+            }
+
+            if (isset($items_map[$product_id])) {
+                $items_map[$product_id]['quantity'] += $quantity;
+            } else {
+                $items_map[$product_id] = [
+                    'product'  => $payload[0],
+                    'quantity' => $quantity,
+                ];
+            }
         }
 
-        if (empty($items)) {
+        if (empty($items_map)) {
             wp_send_json_error([
                 'message' => __('No products were found on the source order.', 'meals-db'),
             ]);
         }
 
-        $order = self::create_wc_order($items, $order_date);
-        if (is_wp_error($order)) {
-            wp_send_json_error([
-                'message' => $order->get_error_message(),
-            ]);
-        }
-
-        $order->update_meta_data('mealsdb_client_id', $client_id);
-        $order->save();
-
-        if (!self::log_transaction($order, $client_id, $order_date)) {
-            $order_id = $order->get_id();
-            if ($order_id > 0) {
-                wp_trash_post($order_id);
+        $order_date = '';
+        $created = $source_order->get_date_created();
+        if ($created instanceof WC_DateTime) {
+            $date = clone $created;
+            if (function_exists('wp_timezone')) {
+                $date = $date->setTimezone(wp_timezone());
             }
 
-            wp_send_json_error([
-                'message' => __('Failed to record Meals DB transaction.', 'meals-db'),
-            ]);
+            $order_date = $date->format('Y-m-d');
         }
 
+        $client_id = intval($source_order->get_meta('mealsdb_client_id'));
+        if ($client_id <= 0) {
+            $client_id = null;
+        }
+
+        $order_number = method_exists($source_order, 'get_order_number') ? $source_order->get_order_number() : $source_order_id;
+        $message = sprintf(__('Products from order %s have been loaded into Quick Order.', 'meals-db'), $order_number);
+
         wp_send_json_success([
-            'order_id' => $order->get_id(),
-            'message'  => __('Order cloned successfully.', 'meals-db'),
+            'message'    => $message,
+            'items'      => array_values($items_map),
+            'client_id'  => $client_id,
+            'order_date' => $order_date,
+            'order_id'   => $source_order_id,
         ]);
     }
 

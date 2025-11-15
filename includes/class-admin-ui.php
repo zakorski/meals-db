@@ -40,6 +40,8 @@ class MealsDB_Admin_UI {
     public function register_hooks(): void {
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
+        add_action('admin_init', [$this, 'redirect_legacy_quick_order_slug']);
+        add_filter('woocommerce_admin_order_actions', [$this, 'add_quick_order_clone_action'], 10, 2);
     }
 
     /**
@@ -74,9 +76,77 @@ class MealsDB_Admin_UI {
             __('Quick Order', 'meals-db'),
             __('Quick Order', 'meals-db'),
             MealsDB_Permissions::required_capability(),
-            'meals-db-quick-order',
+            'mealsdb_quick_order',
             ['MealsDB_Quick_Order_UI', 'render_quick_order_page']
         );
+    }
+
+    /**
+     * Redirect legacy Quick Order slug requests to the new slug.
+     */
+    public function redirect_legacy_quick_order_slug(): void {
+        if (!isset($_GET['page'])) {
+            return;
+        }
+
+        $page = $_GET['page'];
+        if (function_exists('wp_unslash')) {
+            $page = wp_unslash($page);
+        }
+
+        if ($page !== 'meals-db-quick-order') {
+            return;
+        }
+
+        $args = $_GET;
+        $args['page'] = 'mealsdb_quick_order';
+
+        if (function_exists('wp_safe_redirect')) {
+            wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
+        } else {
+            wp_redirect(add_query_arg($args, admin_url('admin.php')));
+        }
+
+        exit;
+    }
+
+    /**
+     * Add the "Clone to Quick Order" action to WooCommerce orders list.
+     *
+     * @param array     $actions Existing actions for the order.
+     * @param WC_Order  $order   Order instance provided by WooCommerce.
+     */
+    public function add_quick_order_clone_action(array $actions, $order): array {
+        if (!is_object($order) || !is_a($order, 'WC_Order')) {
+            return $actions;
+        }
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            return $actions;
+        }
+
+        $order_id = $order->get_id();
+        if (!is_numeric($order_id) || (int) $order_id <= 0) {
+            return $actions;
+        }
+
+        $order_id = (int) $order_id;
+
+        $url = add_query_arg(
+            [
+                'page'           => 'mealsdb_quick_order',
+                'clone_order_id' => $order_id,
+            ],
+            admin_url('admin.php')
+        );
+
+        $actions['mealsdb_clone_quick_order'] = [
+            'url'    => $url,
+            'name'   => __('Clone to Quick Order', 'meals-db'),
+            'action' => 'mealsdb-clone-quick-order',
+        ];
+
+        return $actions;
     }
 
     /**
@@ -87,7 +157,7 @@ class MealsDB_Admin_UI {
     public function enqueue_assets(string $hook): void {
         $is_main_page        = ($hook === 'toplevel_page_meals-db');
         $is_staff_page       = ($hook === 'meals-db_page_meals-db-staff');
-        $is_quick_order_page = ($hook === 'meals-db_page_meals-db-quick-order');
+        $is_quick_order_page = ($hook === 'meals-db_page_mealsdb_quick_order' || $hook === 'meals-db_page_meals-db-quick-order');
 
         if (!$is_main_page && !$is_staff_page && !$is_quick_order_page) {
             return;
@@ -126,11 +196,21 @@ class MealsDB_Admin_UI {
                 true
             );
 
+            $clone_order_id = MealsDB_Quick_Order_UI::get_requested_clone_order_id();
+
             wp_localize_script('mealsdb-quick-order', 'mealsdbQuickOrder', [
-                'ajaxUrl' => admin_url('admin-ajax.php'),
-                'nonces'  => [
+                'ajaxUrl'       => admin_url('admin-ajax.php'),
+                'cloneOrderId'  => $clone_order_id,
+                'nonces'        => [
                     'searchProducts' => wp_create_nonce('mealsdb_quick_order_search_products'),
                     'createOrder'    => wp_create_nonce('mealsdb_quick_order_create_order'),
+                    'cloneOrder'     => wp_create_nonce('mealsdb_nonce'),
+                ],
+                'messages'      => [
+                    'cloneLoading' => __('Loading products from the selected order…', 'meals-db'),
+                    'cloneLoaded'  => __('Products from the selected order have been added to Quick Order.', 'meals-db'),
+                    'cloneFailed'  => __('Unable to load products from the selected order.', 'meals-db'),
+                    'cloneNoItems' => __('The selected order does not contain any products that can be cloned.', 'meals-db'),
                 ],
             ]);
 

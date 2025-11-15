@@ -9,6 +9,9 @@
             cart: {},
             searchTerm: '',
             isSearching: false,
+            hasLoadedClone: false,
+            isCloning: false,
+            cloneOrderId: null,
         },
 
         init() {
@@ -22,9 +25,11 @@
             this.renderSummary();
 
             this.fetchCategories();
+            this.maybeLoadClonedOrder();
         },
 
         cacheElements() {
+            this.$root = $('.mealsdb-quick-order');
             this.$categories = $('#mealsdb-quick-order-categories');
             this.$products = $('#mealsdb-quick-order-products');
             this.$summary = $('#mealsdb-quick-order-summary');
@@ -274,6 +279,100 @@
             });
         },
 
+        maybeLoadClonedOrder() {
+            const cloneOrderId = this.getCloneOrderId();
+            if (!Number.isInteger(cloneOrderId) || cloneOrderId <= 0) {
+                return;
+            }
+
+            if (this.state.hasLoadedClone || this.state.isCloning) {
+                return;
+            }
+
+            this.state.hasLoadedClone = true;
+            this.state.cloneOrderId = cloneOrderId;
+            this.loadClonedOrder(cloneOrderId);
+        },
+
+        loadClonedOrder(orderId) {
+            const nonce = this.getSecurityNonce('cloneOrder');
+            if (!nonce) {
+                return;
+            }
+
+            this.state.isCloning = true;
+            this.addNotice(this.getCloneMessage('cloneLoading', 'Loading products from the selected order…'));
+
+            $.ajax({
+                url: this.getAjaxUrl(),
+                method: 'GET',
+                dataType: 'json',
+                data: {
+                    action: 'mealsdb_qo_clone_order',
+                    nonce: nonce,
+                    order_id: orderId,
+                },
+            }).done((response) => {
+                if (!response || !response.success || !response.data) {
+                    const message = response && response.data && response.data.message ? response.data.message : this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
+                    this.addNotice(message, 'error');
+                    return;
+                }
+
+                const data = response.data;
+                const items = Array.isArray(data.items) ? data.items : [];
+                if (!items.length) {
+                    const emptyMessage = data.message || this.getCloneMessage('cloneNoItems', 'The selected order does not contain any products that can be cloned.');
+                    this.addNotice(emptyMessage, 'error');
+                    return;
+                }
+
+                this.applyClonedItems(items);
+
+                if (data.order_date && this.$orderDate && this.$orderDate.length && !this.$orderDate.val()) {
+                    this.$orderDate.val(data.order_date);
+                }
+
+                const successMessage = data.message || this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.');
+                this.addNotice(successMessage, 'success');
+            }).fail((jqXHR) => {
+                let message = this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
+                if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
+                    message = jqXHR.responseJSON.data.message;
+                }
+                this.addNotice(message, 'error');
+            }).always(() => {
+                this.state.isCloning = false;
+                this.state.cloneOrderId = 0;
+                if (window.mealsdbQuickOrder) {
+                    window.mealsdbQuickOrder.cloneOrderId = 0;
+                }
+            });
+        },
+
+        getCloneOrderId() {
+            let candidate = this.state.cloneOrderId;
+            if (Number.isInteger(candidate) && candidate > 0) {
+                return candidate;
+            }
+
+            if (window.mealsdbQuickOrder && typeof window.mealsdbQuickOrder.cloneOrderId !== 'undefined') {
+                candidate = parseInt(window.mealsdbQuickOrder.cloneOrderId, 10);
+                if (Number.isInteger(candidate) && candidate > 0) {
+                    return candidate;
+                }
+            }
+
+            if (this.$root && this.$root.length) {
+                candidate = parseInt(this.$root.attr('data-clone-order-id'), 10);
+                if (Number.isInteger(candidate) && candidate > 0) {
+                    return candidate;
+                }
+            }
+
+            return 0;
+        },
+
         setCategoriesLoadingState(isLoading) {
             if (!this.$categories || !this.$categories.length) {
                 return;
@@ -485,6 +584,7 @@
             });
 
             this.$products.empty().append($grid);
+            this.syncCartToVisibleProducts();
         },
 
         incrementProduct(productId) {
@@ -526,6 +626,42 @@
             }
 
             this.renderSummary();
+        },
+
+        applyClonedItems(items) {
+            if (!Array.isArray(items)) {
+                return;
+            }
+
+            const cart = {};
+
+            items.forEach((entry) => {
+                if (!entry || !entry.product) {
+                    return;
+                }
+
+                const product = entry.product;
+                const productId = product && product.product_id ? parseInt(product.product_id, 10) : 0;
+                const quantity = entry && entry.quantity ? parseInt(entry.quantity, 10) : 0;
+
+                if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(quantity) || quantity <= 0) {
+                    return;
+                }
+
+                if (cart[productId]) {
+                    const existingQuantity = parseInt(cart[productId].quantity, 10) || 0;
+                    cart[productId].quantity = existingQuantity + quantity;
+                } else {
+                    cart[productId] = {
+                        product: product,
+                        quantity: quantity,
+                    };
+                }
+            });
+
+            this.state.cart = cart;
+            this.renderSummary();
+            this.syncCartToVisibleProducts();
         },
 
         findProduct(productId) {
@@ -602,6 +738,25 @@
             $footer.append($('<div class="mealsdb-quick-order__summary-total-price" />').text(`Total: ${this.formatPrice(totalPrice)}`));
 
             this.$summaryContent.empty().append($list, $footer);
+        },
+
+        syncCartToVisibleProducts() {
+            if (!this.$products || !this.$products.length) {
+                return;
+            }
+
+            this.$products.find('.mealsdb-quick-order__product').each((index, element) => {
+                const $product = $(element);
+                const productId = parseInt($product.data('productId'), 10);
+                if (!Number.isInteger(productId) || productId <= 0) {
+                    return;
+                }
+
+                const entry = this.state.cart && this.state.cart[productId] ? this.state.cart[productId] : null;
+                const quantity = entry ? parseInt(entry.quantity, 10) || 0 : 0;
+
+                $product.find('.mealsdb-quick-order__qty-input').val(quantity);
+            });
         },
 
         handleCreateOrder() {
@@ -745,9 +900,22 @@
             return ''; // Fallback.
         },
 
+        getCloneMessage(key, fallback = '') {
+            const config = window.mealsdbQuickOrder && window.mealsdbQuickOrder.messages ? window.mealsdbQuickOrder.messages : null;
+            if (config && typeof config[key] !== 'undefined' && config[key] !== null) {
+                return config[key];
+            }
+
+            return fallback;
+        },
+
         getSecurityNonce(type) {
             const globalNonce = window.mealsdb && window.mealsdb.nonce ? window.mealsdb.nonce : '';
             const quickOrderNonces = window.mealsdbQuickOrder && window.mealsdbQuickOrder.nonces ? window.mealsdbQuickOrder.nonces : {};
+
+            if (type === 'cloneOrder' && quickOrderNonces.cloneOrder) {
+                return quickOrderNonces.cloneOrder;
+            }
 
             if (type === 'createOrder' && quickOrderNonces.createOrder) {
                 return quickOrderNonces.createOrder;
