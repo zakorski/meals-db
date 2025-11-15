@@ -32,14 +32,33 @@ class MealsDB_Ajax_Sync {
         }
 
         $woo_user_id = intval($_POST['woo_user_id'] ?? 0);
+        $client_id = intval($_POST['client_id'] ?? 0);
         $field = sanitize_text_field($_POST['field'] ?? '');
         $value = sanitize_text_field($_POST['value'] ?? '');
+        $direction = sanitize_key($_POST['direction'] ?? 'meals_db');
 
-        if (!$woo_user_id || !$field) {
+        if (!$field) {
             wp_send_json_error(['message' => 'Missing data.']);
         }
 
-        $result = MealsDB_Sync::push_to_woocommerce($woo_user_id, $field, $value);
+        switch ($direction) {
+            case 'meals_db':
+                if (!$woo_user_id) {
+                    wp_send_json_error(['message' => 'Missing data.']);
+                }
+
+                $result = MealsDB_Sync::push_to_woocommerce($woo_user_id, $field, $value);
+                break;
+            case 'woocommerce':
+                if (!$client_id) {
+                    wp_send_json_error(['message' => 'Missing data.']);
+                }
+
+                $result = MealsDB_Sync::push_to_meals_db($client_id, $field, $value);
+                break;
+            default:
+                wp_send_json_error(['message' => 'Invalid sync direction.']);
+        }
 
         if (is_wp_error($result)) {
             $message = $result->get_error_message();

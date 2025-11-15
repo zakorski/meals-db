@@ -250,8 +250,11 @@ jQuery(document).ready(function($) {
         const selected = $row.find('input[type=radio]:checked').val();
         const field = $row.data('field');
         const woo_id = $row.data('woo');
+        const clientIdRaw = $row.data('client');
+        const client_id = Number.isInteger(clientIdRaw) ? clientIdRaw : parseInt(clientIdRaw, 10);
         const source = $row.find('.mealsdb-a');
         const target = $row.find('.mealsdb-b');
+        const direction = selected === 'woocommerce' ? 'woocommerce' : 'meals_db';
         const value = (selected === 'meals_db')
             ? (source.data('value') ?? source.text())
             : (target.data('value') ?? target.text());
@@ -261,6 +264,8 @@ jQuery(document).ready(function($) {
             nonce: mealsdb.nonce,
             woo_user_id: woo_id,
             field: field,
+            client_id: Number.isNaN(client_id) ? 0 : client_id,
+            direction: direction,
             value: value
         }, function (res) {
             if (res.success) {
@@ -340,8 +345,11 @@ jQuery(document).ready(function($) {
 
             const field = $row.data('field');
             const woo_id = $row.data('woo');
+            const clientIdRaw = $row.data('client');
+            const client_id = Number.isInteger(clientIdRaw) ? clientIdRaw : parseInt(clientIdRaw, 10);
             const source = $row.find('.mealsdb-a');
             const target = $row.find('.mealsdb-b');
+            const direction = selected === 'woocommerce' ? 'woocommerce' : 'meals_db';
             const value = (selected === 'meals_db')
                 ? (source.data('value') ?? source.text())
                 : (target.data('value') ?? target.text());
@@ -351,6 +359,8 @@ jQuery(document).ready(function($) {
                 nonce: mealsdb.nonce,
                 woo_user_id: woo_id,
                 field: field,
+                client_id: Number.isNaN(client_id) ? 0 : client_id,
+                direction: direction,
                 value: value
             }, function (res) {
                 if (res.success) {

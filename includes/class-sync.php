@@ -61,4 +61,19 @@ class MealsDB_Sync {
 
         return $mutate->push_to_woocommerce($woo_user_id, $field, $new_value);
     }
+
+    /**
+     * Sync a single field from WooCommerce to Meals DB.
+     *
+     * @param int    $client_id
+     * @param string $field
+     * @param string $new_value
+     *
+     * @return true|WP_Error Whether the field was synced successfully.
+     */
+    public static function push_to_meals_db(int $client_id, string $field, string $new_value) {
+        $mutate = new MealsDB_Sync_Mutate();
+
+        return $mutate->push_to_meals_db($client_id, $field, $new_value);
+    }
 }
