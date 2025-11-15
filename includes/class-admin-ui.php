@@ -197,6 +197,8 @@ class MealsDB_Admin_UI {
             );
 
             $clone_order_id = MealsDB_Quick_Order_UI::get_requested_clone_order_id();
+            $tax_settings   = $this->get_quick_order_tax_settings();
+            $client_type    = $this->get_quick_order_client_type();
 
             wp_localize_script('mealsdb-quick-order', 'mealsdbQuickOrder', [
                 'ajaxUrl'       => admin_url('admin-ajax.php'),
@@ -212,6 +214,11 @@ class MealsDB_Admin_UI {
                     'cloneFailed'  => __('Unable to load products from the selected order.', 'meals-db'),
                     'cloneNoItems' => __('The selected order does not contain any products that can be cloned.', 'meals-db'),
                 ],
+                'tax'           => [
+                    'rate'          => $tax_settings['rate'],
+                    'taxableTypes'  => $tax_settings['taxable_types'],
+                ],
+                'clientType'   => $client_type,
             ]);
 
             return;
@@ -1161,6 +1168,176 @@ class MealsDB_Admin_UI {
         echo '</tbody>';
         echo '</table>';
         echo '</div>';
+    }
+
+    /**
+     * Retrieve the Quick Order tax settings.
+     */
+    private function get_quick_order_tax_settings(): array
+    {
+        $settings = [
+            'rate'          => $this->resolve_quick_order_tax_rate(),
+            'taxable_types' => ['PRIVATE'],
+        ];
+
+        if (function_exists('apply_filters')) {
+            $settings = apply_filters('mealsdb_quick_order_tax_settings', $settings);
+        }
+
+        $rate = isset($settings['rate']) ? (float) $settings['rate'] : 0.0;
+        if ($rate < 0) {
+            $rate = 0.0;
+        }
+
+        if ($rate > 1 && $rate <= 100) {
+            $rate /= 100;
+        }
+
+        if ($rate > 1) {
+            $rate = 1.0;
+        }
+
+        $taxable_types = $settings['taxable_types'] ?? ['PRIVATE'];
+        if (!is_array($taxable_types)) {
+            $taxable_types = [];
+        }
+
+        $normalised_types = [];
+        foreach ($taxable_types as $type) {
+            $clean = $this->sanitise_client_type_value($type);
+            if ($clean !== '') {
+                $normalised_types[] = strtoupper($clean);
+            }
+        }
+
+        if (empty($normalised_types)) {
+            $normalised_types = ['PRIVATE'];
+        } else {
+            $normalised_types = array_values(array_unique($normalised_types));
+        }
+
+        return [
+            'rate'          => $rate,
+            'taxable_types' => $normalised_types,
+        ];
+    }
+
+    /**
+     * Determine the WooCommerce base tax rate for Quick Order calculations.
+     */
+    private function resolve_quick_order_tax_rate(): float
+    {
+        if (!class_exists('WC_Tax')) {
+            return 0.0;
+        }
+
+        try {
+            $rates = \WC_Tax::get_rates('');
+            if (!is_array($rates) || empty($rates)) {
+                return 0.0;
+            }
+
+            $first_rate = reset($rates);
+            if (!is_array($first_rate) || !isset($first_rate['rate'])) {
+                return 0.0;
+            }
+
+            $rate = (float) $first_rate['rate'];
+            return $rate > 0 ? $rate / 100 : 0.0;
+        } catch (Throwable $e) {
+            return 0.0;
+        }
+    }
+
+    /**
+     * Determine the client type to seed into the Quick Order UI.
+     */
+    private function get_quick_order_client_type(): string
+    {
+        $client_type = '';
+
+        if (isset($_GET['client_type'])) {
+            $client_type = $this->sanitise_client_type_value($_GET['client_type']);
+        }
+
+        $client_id = isset($_GET['client_id']) ? absint($_GET['client_id']) : 0;
+
+        if ($client_type === '' && $client_id <= 0 && isset($_GET['clone_order_id'])) {
+            $clone_order_id = absint($_GET['clone_order_id']);
+            if ($clone_order_id > 0 && function_exists('wc_get_order')) {
+                $order = wc_get_order($clone_order_id);
+                if ($order instanceof WC_Order) {
+                    $meta_client_id = (int) $order->get_meta('mealsdb_client_id');
+                    if ($meta_client_id > 0) {
+                        $client_id = $meta_client_id;
+                    }
+                }
+            }
+        }
+
+        if ($client_type === '' && $client_id > 0) {
+            $client_type = $this->fetch_quick_order_client_type($client_id);
+        }
+
+        if (function_exists('apply_filters')) {
+            $client_type = apply_filters('mealsdb_quick_order_client_type', $client_type, $client_id);
+        }
+
+        return $this->sanitise_client_type_value($client_type);
+    }
+
+    /**
+     * Fetch the client type from Meals DB for the given client ID.
+     */
+    private function fetch_quick_order_client_type(int $client_id): string
+    {
+        if ($client_id <= 0 || !class_exists('MealsDB_Clients_Repository')) {
+            return '';
+        }
+
+        try {
+            $repository = new MealsDB_Clients_Repository();
+            $record      = $repository->get_client_by_id($client_id);
+        } catch (Throwable $e) {
+            return '';
+        }
+
+        if (!is_array($record)) {
+            return '';
+        }
+
+        $type = $record['customer_type'] ?? ($record['client_type'] ?? '');
+
+        return $this->sanitise_client_type_value($type);
+    }
+
+    /**
+     * Normalise client type strings for downstream use.
+     *
+     * @param mixed $value Raw client type value.
+     */
+    private function sanitise_client_type_value($value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        if (!is_string($value)) {
+            $value = (string) $value;
+        }
+
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+
+        if (function_exists('sanitize_text_field')) {
+            $value = sanitize_text_field($value);
+        } else {
+            $value = preg_replace('/[^A-Za-z0-9 _\-]/', '', $value);
+        }
+
+        return $value;
     }
 
     /**
