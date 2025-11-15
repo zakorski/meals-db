@@ -63,14 +63,44 @@ class MealsDB_Quick_Order_UI {
                     <p><?php esc_html_e('Product grid will load here.', 'meals-db'); ?></p>
                 </div>
 
-                <aside class="mealsdb-quick-order__summary" id="mealsdb-quick-order-summary">
-                    <h2><?php esc_html_e('Order Summary', 'meals-db'); ?></h2>
-                    <div class="mealsdb-quick-order__summary-content">
-                        <p><?php esc_html_e('Summary details will appear here.', 'meals-db'); ?></p>
+                <aside class="mealsdb-quick-order__summary" id="mealsdb-quick-order-summary" aria-labelledby="mealsdb-quick-order-summary-heading">
+                    <header class="mealsdb-quick-order__summary-header">
+                        <h2 class="mealsdb-quick-order__summary-title" id="mealsdb-quick-order-summary-heading"><?php esc_html_e('Order Summary', 'meals-db'); ?></h2>
+                        <dl class="mealsdb-quick-order__summary-meta">
+                            <div class="mealsdb-quick-order__summary-meta-row">
+                                <dt class="mealsdb-quick-order__summary-meta-label"><?php esc_html_e('Client', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-meta-value" id="mealsdb-quick-order-summary-client"><?php esc_html_e('Not selected', 'meals-db'); ?></dd>
+                            </div>
+                            <div class="mealsdb-quick-order__summary-meta-row">
+                                <dt class="mealsdb-quick-order__summary-meta-label"><?php esc_html_e('Order Date', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-meta-value" id="mealsdb-quick-order-summary-date"><?php esc_html_e('Not set', 'meals-db'); ?></dd>
+                            </div>
+                        </dl>
+                    </header>
+
+                    <div class="mealsdb-quick-order__summary-body">
+                        <div class="mealsdb-quick-order__summary-empty" id="mealsdb-quick-order-summary-empty">
+                            <p><?php esc_html_e('Summary details will appear here.', 'meals-db'); ?></p>
+                        </div>
+                        <div class="mealsdb-quick-order__summary-content" id="mealsdb-quick-order-summary-content" hidden></div>
                     </div>
-                    <button type="button" class="button button-primary mealsdb-quick-order__create-order" id="mealsdb-quick-order-create">
-                        <?php esc_html_e('Create Order', 'meals-db'); ?>
-                    </button>
+
+                    <footer class="mealsdb-quick-order__summary-footer">
+                        <dl class="mealsdb-quick-order__summary-totals">
+                            <div class="mealsdb-quick-order__summary-total-row">
+                                <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Items', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-items">0</dd>
+                            </div>
+                            <div class="mealsdb-quick-order__summary-total-row">
+                                <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Total', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-total">0</dd>
+                            </div>
+                        </dl>
+
+                        <button type="button" class="button button-primary mealsdb-quick-order__create-order" id="mealsdb-quick-order-create">
+                            <?php esc_html_e('Create Order', 'meals-db'); ?>
+                        </button>
+                    </footer>
                 </aside>
             </div>
         </div>
