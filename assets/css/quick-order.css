@@ -1,0 +1,52 @@
+.mealsdb-quick-order__controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.mealsdb-quick-order__control {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+}
+
+.mealsdb-quick-order__categories {
+    margin-bottom: 1.5rem;
+}
+
+.mealsdb-quick-order__layout {
+    display: grid;
+    gap: 2rem;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.mealsdb-quick-order__products {
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    min-height: 300px;
+    padding: 1rem;
+    background: #fff;
+}
+
+.mealsdb-quick-order__summary {
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 1rem;
+    background: #fff;
+}
+
+.mealsdb-quick-order__summary h2 {
+    margin-top: 0;
+}
+
+.mealsdb-quick-order__summary-content {
+    min-height: 150px;
+    margin-bottom: 1rem;
+}
+
+@media (max-width: 960px) {
+    .mealsdb-quick-order__layout {
+        grid-template-columns: 1fr;
+    }
+}

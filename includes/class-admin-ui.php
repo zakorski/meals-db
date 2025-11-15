@@ -68,6 +68,15 @@ class MealsDB_Admin_UI {
             'meals-db-staff',
             ['MealsDB_Staff', 'render_admin_page']
         );
+
+        add_submenu_page(
+            'meals-db',
+            __('Quick Order', 'meals-db'),
+            __('Quick Order', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
+            'meals-db-quick-order',
+            ['MealsDB_Quick_Order_UI', 'render_quick_order_page']
+        );
     }
 
     /**
@@ -76,9 +85,11 @@ class MealsDB_Admin_UI {
      * @param string $hook
      */
     public function enqueue_assets(string $hook): void {
-        $is_staff_page = ($hook === 'meals-db_page_meals-db-staff');
+        $is_main_page        = ($hook === 'toplevel_page_meals-db');
+        $is_staff_page       = ($hook === 'meals-db_page_meals-db-staff');
+        $is_quick_order_page = ($hook === 'meals-db_page_meals-db-quick-order');
 
-        if ($hook !== 'toplevel_page_meals-db' && !$is_staff_page) {
+        if (!$is_main_page && !$is_staff_page && !$is_quick_order_page) {
             return;
         }
 
@@ -92,6 +103,37 @@ class MealsDB_Admin_UI {
         );
 
         if ($is_staff_page) {
+            return;
+        }
+
+        if ($is_quick_order_page) {
+            $quick_order_style_path = MEALS_DB_PLUGIN_DIR . 'assets/css/quick-order.css';
+            $quick_order_style_version = file_exists($quick_order_style_path) ? filemtime($quick_order_style_path) : MEALS_DB_VERSION;
+            wp_enqueue_style(
+                'mealsdb-quick-order',
+                MEALS_DB_PLUGIN_URL . 'assets/css/quick-order.css',
+                ['mealsdb-admin'],
+                $quick_order_style_version
+            );
+
+            $quick_order_script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/quick-order.js';
+            $quick_order_script_version = file_exists($quick_order_script_path) ? filemtime($quick_order_script_path) : MEALS_DB_VERSION;
+            wp_enqueue_script(
+                'mealsdb-quick-order',
+                MEALS_DB_PLUGIN_URL . 'assets/js/quick-order.js',
+                ['jquery'],
+                $quick_order_script_version,
+                true
+            );
+
+            wp_localize_script('mealsdb-quick-order', 'mealsdbQuickOrder', [
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'nonces'  => [
+                    'searchProducts' => wp_create_nonce('mealsdb_quick_order_search_products'),
+                    'createOrder'    => wp_create_nonce('mealsdb_quick_order_create_order'),
+                ],
+            ]);
+
             return;
         }
 
