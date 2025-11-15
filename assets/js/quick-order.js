@@ -42,6 +42,7 @@
             this.$clientSelect = $('#mealsdb-quick-order-client');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#mealsdb-quick-order-create');
+            this.$orderSuccess = $('#qo-order-success');
             this.$qoItemsCount = $('#qo-items-count');
             this.$qoSubtotal = $('#qo-subtotal');
             this.$qoTax = $('#qo-tax');
@@ -49,6 +50,21 @@
 
             this.$notices = $('<div class="mealsdb-quick-order__notices" />');
             this.$summary.prepend(this.$notices);
+
+            if (this.$createOrder && this.$createOrder.length) {
+                const existingSpinner = this.$createOrder.find('.mealsdb-quick-order__spinner');
+                if (existingSpinner.length) {
+                    this.$createOrderSpinner = existingSpinner;
+                } else {
+                    this.$createOrderSpinner = $('<span>', {
+                        class: 'spinner mealsdb-quick-order__spinner',
+                        'aria-hidden': 'true',
+                    });
+                    this.$createOrder.append(this.$createOrderSpinner);
+                }
+
+                this.$createOrderSpinner.removeClass('is-active').hide();
+            }
         },
 
         loadConfigurationFromGlobals() {
@@ -165,6 +181,18 @@
                 this.$createOrder.on('click', (event) => {
                     event.preventDefault();
                     this.handleCreateOrder();
+                });
+            }
+
+            if (this.$orderSuccess && this.$orderSuccess.length) {
+                this.$orderSuccess.on('click', '.qo-order-create-another', (event) => {
+                    event.preventDefault();
+                    this.handleCreateAnotherOrder();
+                });
+
+                this.$orderSuccess.on('click', '.qo-order-return', (event) => {
+                    event.preventDefault();
+                    this.handleReturnToQuickOrder();
                 });
             }
         },
@@ -806,6 +834,7 @@
             }
 
             this.clearNotices();
+            this.hideOrderSuccess();
 
             const clientIdRaw = this.$clientSelect && this.$clientSelect.length ? this.$clientSelect.val() : '';
             const clientId = parseInt(clientIdRaw, 10);
@@ -853,7 +882,7 @@
 
                 const orderId = response.data.order_id ? parseInt(response.data.order_id, 10) : 0;
                 const message = response.data.message || 'Order created successfully.';
-                this.addNotice(this.createOrderSuccessMessage(message, orderId), 'success', true);
+                this.showOrderSuccess(message, orderId);
 
                 this.state.cart = {};
                 this.renderSummary();
@@ -896,11 +925,89 @@
 
             this.$createOrder.prop('disabled', !!isBusy);
             this.$createOrder.toggleClass('is-busy', !!isBusy);
+            this.$createOrder.attr('aria-busy', isBusy ? 'true' : 'false');
+
+            if (this.$createOrderSpinner && this.$createOrderSpinner.length) {
+                this.$createOrderSpinner.toggleClass('is-active', !!isBusy);
+                if (isBusy) {
+                    this.$createOrderSpinner.show();
+                } else {
+                    this.$createOrderSpinner.hide();
+                }
+            }
         },
 
         clearNotices() {
             if (this.$notices && this.$notices.length) {
                 this.$notices.empty();
+            }
+        },
+
+        hideOrderSuccess() {
+            if (this.$orderSuccess && this.$orderSuccess.length) {
+                this.$orderSuccess.stop(true, true).hide().empty();
+            }
+        },
+
+        showOrderSuccess(message, orderId) {
+            if (!this.$orderSuccess || !this.$orderSuccess.length) {
+                this.addNotice(this.createOrderSuccessMessage(message, orderId), 'success', true);
+                return;
+            }
+
+            const rawMessage = message || 'Order created successfully.';
+            let safeMessage = this.escapeHtml(rawMessage);
+            const trimmedMessage = safeMessage.replace(/\s+$/u, '');
+            const needsPunctuation = !/[.!?]$/u.test(trimmedMessage);
+            if (needsPunctuation) {
+                safeMessage = `${trimmedMessage}.`;
+            } else {
+                safeMessage = trimmedMessage;
+            }
+            let orderLinkHtml = '';
+            if (Number.isInteger(orderId) && orderId > 0) {
+                const orderUrl = this.escapeAttribute(this.buildOrderAdminLink(orderId));
+                const viewOrderText = this.translate('View order #%s');
+                const orderText = this.escapeHtml(viewOrderText.replace('%s', orderId));
+                orderLinkHtml = ` <a href="${orderUrl}" target="_blank" rel="noopener noreferrer">${orderText}</a>`;
+            }
+
+            const successMessage = `<p class="qo-order-success__message">${safeMessage}${orderLinkHtml ? `${orderLinkHtml}.` : ''}</p>`;
+            const actionButtons = [
+                {
+                    className: 'button button-primary qo-order-create-another',
+                    label: this.translate('Create Another Order'),
+                },
+                {
+                    className: 'button qo-order-return',
+                    label: this.translate('Return to Quick Order'),
+                },
+            ]
+                .map((button) => `<button type="button" class="${this.escapeAttribute(button.className)}">${this.escapeHtml(button.label)}</button>`)
+                .join('');
+
+            const actionsWrapper = `<div class="qo-order-success__actions">${actionButtons}</div>`;
+
+            this.$orderSuccess
+                .html(successMessage + actionsWrapper)
+                .stop(true, true)
+                .fadeIn(150);
+        },
+
+        handleCreateAnotherOrder() {
+            this.hideOrderSuccess();
+            if (this.$clientSelect && this.$clientSelect.length) {
+                this.$clientSelect.trigger('focus');
+            }
+        },
+
+        handleReturnToQuickOrder() {
+            this.hideOrderSuccess();
+            if (this.$root && this.$root.length && typeof this.$root[0].scrollIntoView === 'function') {
+                this.$root[0].scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start',
+                });
             }
         },
 
@@ -1145,6 +1252,14 @@
 
         escapeAttribute(text) {
             return this.escapeHtml(text).replace(/`/g, '&#096;');
+        },
+
+        translate(text) {
+            if (window.wp && window.wp.i18n && typeof window.wp.i18n.__ === 'function') {
+                return window.wp.i18n.__(text, 'meals-db');
+            }
+
+            return text;
         },
     };
 
