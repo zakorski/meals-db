@@ -113,7 +113,11 @@ require_once plugin_dir_path(__FILE__) . 'includes/class-updates.php';
  */
 add_action('plugins_loaded', function () {
     MealsDB_Admin_UI::init();
-    MealsDB_Ajax::init();
+    MealsDB_Ajax_Sync::init();
+    MealsDB_Ajax_Clients::init();
+    MealsDB_Ajax_Staff::init();
+    MealsDB_Ajax_Drafts::init();
+    MealsDB_Ajax_Initials::init();
     MealsDB_Staff::init();
 });
 
