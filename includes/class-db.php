@@ -40,8 +40,13 @@ class MealsDB_DB {
         $pass = $config->get_db_password();
         $name = $config->get_db_name();
 
-        if ($host === null || $host === '' || $user === null || $user === '' || $pass === null || $pass === '' || $name === null || $name === '') {
-            error_log('[MealsDB] External database credentials are missing. Set MEALSDB_* environment variables or define the MEALS_DB_* constants.');
+        $has_missing_credentials = $host === null || $host === ''
+            || $user === null || $user === ''
+            || $pass === null || $pass === ''
+            || $name === null || $name === '';
+
+        if ($has_missing_credentials) {
+            error_log('[MealsDB DB] External DB credentials are missing. See MealsDB_Config documentation.');
             return null;
         }
 
