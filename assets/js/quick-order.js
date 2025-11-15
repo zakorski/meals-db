@@ -12,10 +12,14 @@
             hasLoadedClone: false,
             isCloning: false,
             cloneOrderId: null,
+            currentClientType: '',
+            taxRate: 0,
+            taxableClientTypes: [],
         },
 
         init() {
             this.cacheElements();
+            this.loadConfigurationFromGlobals();
             if (!this.$products || !this.$summary) {
                 return;
             }
@@ -38,9 +42,29 @@
             this.$clientSelect = $('#mealsdb-quick-order-client');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#mealsdb-quick-order-create');
+            this.$qoItemsCount = $('#qo-items-count');
+            this.$qoSubtotal = $('#qo-subtotal');
+            this.$qoTax = $('#qo-tax');
+            this.$qoTotal = $('#qo-total');
 
             this.$notices = $('<div class="mealsdb-quick-order__notices" />');
             this.$summary.prepend(this.$notices);
+        },
+
+        loadConfigurationFromGlobals() {
+            const config = window.mealsdbQuickOrder || {};
+
+            this.state.taxRate = this.normaliseTaxRate(
+                config.tax && typeof config.tax.rate !== 'undefined' ? config.tax.rate : config.taxRate
+            );
+
+            const configuredTypes = Array.isArray(config.tax && config.tax.taxableTypes)
+                ? config.tax.taxableTypes
+                : config.taxableClientTypes;
+            this.state.taxableClientTypes = this.normaliseClientTypeList(configuredTypes);
+
+            const initialType = typeof config.clientType !== 'undefined' ? config.clientType : '';
+            this.state.currentClientType = this.normaliseClientType(initialType);
         },
 
         createClientSearchField() {
@@ -74,6 +98,12 @@
 
             if (this.$clientSearchInput && this.$clientSearchInput.length) {
                 this.$clientSearchInput.on('input', debouncedClientSearch);
+            }
+
+            if (this.$clientSelect && this.$clientSelect.length) {
+                this.$clientSelect.on('change', () => {
+                    this.handleClientSelectionChange();
+                });
             }
 
             this.$categories.on('click', '.mealsdb-quick-order__category-button', (event) => {
@@ -708,6 +738,7 @@
 
         renderSummary() {
             if (!this.$summaryContent || !this.$summaryContent.length) {
+                this.updateSummaryPanel();
                 return;
             }
 
@@ -746,6 +777,8 @@
             $footer.append($('<div class="mealsdb-quick-order__summary-total-price" />').text(`Total: ${this.formatPrice(totalPrice)}`));
 
             this.$summaryContent.empty().append($list, $footer);
+
+            this.updateSummaryPanel();
         },
 
         syncCartToVisibleProducts() {
@@ -896,6 +929,142 @@
             }
 
             this.$notices.empty().append($notice);
+        },
+
+        handleClientSelectionChange() {
+            if (!this.$clientSelect || !this.$clientSelect.length) {
+                return;
+            }
+
+            const $selected = this.$clientSelect.find('option:selected');
+            let clientType = '';
+
+            if ($selected.length) {
+                const clientData = $selected.data('client');
+                if (clientData && clientData.customer_type) {
+                    clientType = clientData.customer_type;
+                } else if (clientData && clientData.client_type) {
+                    clientType = clientData.client_type;
+                } else if ($selected.data('clientType')) {
+                    clientType = $selected.data('clientType');
+                }
+            }
+
+            this.state.currentClientType = this.normaliseClientType(clientType);
+
+            if (window.mealsdbQuickOrder) {
+                window.mealsdbQuickOrder.clientType = this.state.currentClientType;
+            }
+
+            this.updateSummaryPanel();
+        },
+
+        normaliseClientType(value) {
+            if (typeof value === 'undefined' || value === null) {
+                return '';
+            }
+
+            const trimmed = String(value).trim();
+            return trimmed ? trimmed.toUpperCase() : '';
+        },
+
+        normaliseClientTypeList(values) {
+            if (!Array.isArray(values)) {
+                return ['PRIVATE'];
+            }
+
+            const mapped = values
+                .map((value) => this.normaliseClientType(value))
+                .filter((value, index, array) => value !== '' && array.indexOf(value) === index);
+
+            return mapped.length ? mapped : ['PRIVATE'];
+        },
+
+        normaliseTaxRate(rawRate) {
+            let rate = parseFloat(rawRate);
+
+            if (!Number.isFinite(rate)) {
+                return 0;
+            }
+
+            if (rate < 0) {
+                rate = 0;
+            }
+
+            if (rate > 1) {
+                rate /= 100;
+            }
+
+            return rate;
+        },
+
+        getApplicableTaxRate() {
+            const baseRate = Number.isFinite(this.state.taxRate) ? this.state.taxRate : 0;
+            if (baseRate <= 0) {
+                return 0;
+            }
+
+            const clientType = this.state.currentClientType || '';
+            if (!clientType) {
+                return 0;
+            }
+
+            const taxableTypes = Array.isArray(this.state.taxableClientTypes) ? this.state.taxableClientTypes : [];
+
+            if (taxableTypes.length > 0) {
+                return taxableTypes.includes(clientType) ? baseRate : 0;
+            }
+
+            return clientType === 'PRIVATE' ? baseRate : 0;
+        },
+
+        getCurrencyPrecision() {
+            const currencySettings = window.wcSettings && window.wcSettings.currency ? window.wcSettings.currency : null;
+            return currencySettings && typeof currencySettings.precision === 'number' ? currencySettings.precision : 2;
+        },
+
+        updateSummaryPanel() {
+            const items = Object.values(this.state.cart || {});
+            let totalItems = 0;
+            let subtotal = 0;
+
+            items.forEach((entry) => {
+                if (!entry || !entry.product) {
+                    return;
+                }
+
+                const quantity = parseInt(entry.quantity, 10) || 0;
+                const price = parseFloat(entry.product.price || 0);
+
+                if (quantity <= 0 || !Number.isFinite(price)) {
+                    return;
+                }
+
+                totalItems += quantity;
+                subtotal += quantity * price;
+            });
+
+            const taxRate = this.getApplicableTaxRate();
+            const precision = this.getCurrencyPrecision();
+            const factor = Math.pow(10, precision);
+            const taxAmount = Math.round((subtotal * taxRate + Number.EPSILON) * factor) / factor;
+            const total = Math.round((subtotal + taxAmount + Number.EPSILON) * factor) / factor;
+
+            if (this.$qoItemsCount && this.$qoItemsCount.length) {
+                this.$qoItemsCount.text(totalItems);
+            }
+
+            if (this.$qoSubtotal && this.$qoSubtotal.length) {
+                this.$qoSubtotal.text(this.formatPrice(subtotal));
+            }
+
+            if (this.$qoTax && this.$qoTax.length) {
+                this.$qoTax.text(this.formatPrice(taxAmount));
+            }
+
+            if (this.$qoTotal && this.$qoTotal.length) {
+                this.$qoTotal.text(this.formatPrice(total));
+            }
         },
 
         getAjaxUrl() {
