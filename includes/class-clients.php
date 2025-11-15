@@ -7,10 +7,6 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-if (!class_exists('MealsDB_Clients_Repository')) {
-    require_once __DIR__ . '/services/class-clients-repository.php';
-}
-
 class MealsDB_Clients {
 
     /**

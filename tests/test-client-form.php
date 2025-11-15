@@ -1,7 +1,6 @@
 <?php
-require_once __DIR__ . '/../includes/class-db.php';
-require_once __DIR__ . '/../includes/class-encryption.php';
-require_once __DIR__ . '/../includes/class-client-form.php';
+require_once __DIR__ . '/../includes/class-autoloader.php';
+MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 
 putenv('PLUGIN_AES_KEY=base64:' . base64_encode(str_repeat('k', 32)));
 if (!defined('MEALS_DB_KEY')) {

@@ -33,7 +33,8 @@ if (!defined('MEALS_DB_VERSION')) {
     define('MEALS_DB_VERSION', '1.0.0');
 }
 
-require_once plugin_dir_path(__FILE__) . 'includes/class-config.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-autoloader.php';
+MealsDB_Autoloader::register(MEALS_DB_PLUGIN_DIR);
 
 // Abort early if wp-config.php constants have not been configured.
 if (!defined('MEALS_DB_KEY')) {
@@ -91,22 +92,6 @@ function meals_db_check_requirements() {
     require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
     MealsDB_Installer::install();
 }
-
-/**
- * Load core plugin classes.
- */
-require_once plugin_dir_path(__FILE__) . 'includes/class-db.php';
-require_once plugin_dir_path(__FILE__) . 'includes/services/class-clients-repository.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-encryption.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-logger.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-sync.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-client-form.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-clients.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-staff.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-admin-ui.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-ajax.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-permissions.php';
-require_once plugin_dir_path(__FILE__) . 'includes/class-updates.php';
 
 /**
  * Initialize plugin functionality after all plugins are loaded.

@@ -5,12 +5,6 @@ if (!function_exists('__')) {
     }
 }
 
-if (!class_exists('MealsDB_Initials')) {
-    require_once __DIR__ . '/class-initials.php';
-}
-if (!class_exists('MealsDB_Clients_Repository')) {
-    require_once __DIR__ . '/services/class-clients-repository.php';
-}
 /**
  * Handles validation and saving of Meals DB client records and drafts.
  *

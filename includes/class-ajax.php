@@ -7,12 +7,6 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-require_once __DIR__ . '/ajax/class-ajax-sync.php';
-require_once __DIR__ . '/ajax/class-ajax-drafts.php';
-require_once __DIR__ . '/ajax/class-ajax-clients.php';
-require_once __DIR__ . '/ajax/class-ajax-staff.php';
-require_once __DIR__ . '/ajax/class-ajax-initials.php';
-
 class MealsDB_Ajax {
 
     /**

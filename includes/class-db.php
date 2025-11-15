@@ -7,10 +7,6 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-if (!class_exists('MealsDB_Config')) {
-    require_once __DIR__ . '/class-config.php';
-}
-
 class MealsDB_DB {
 
     /**
