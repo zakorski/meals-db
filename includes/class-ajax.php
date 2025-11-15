@@ -1,11 +1,15 @@
 <?php
 /**
  * Handles AJAX endpoints for Meals DB.
- * 
+ *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
  * Licensed under the GNU General Public License v3.0 or later.
  */
+
+if (!class_exists('MealsDB_Clients_Repository')) {
+    require_once __DIR__ . '/services/class-clients-repository.php';
+}
 
 class MealsDB_Ajax {
 
@@ -217,78 +221,22 @@ class MealsDB_Ajax {
             wp_send_json_error(['message' => __('Database connection failed.', 'meals-db')]);
         }
 
-        $existing_wp_user_id = null;
-        $client_found = false;
+        $repository = new MealsDB_Clients_Repository($conn);
 
-        $select_stmt = $conn->prepare('SELECT wordpress_user_id FROM meals_clients WHERE id = ? LIMIT 1');
-        if (!$select_stmt) {
-            error_log('[MealsDB AJAX] Failed to prepare client lookup statement: ' . ($conn->error ?? 'unknown error'));
-            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
-        }
-
-        if (!$select_stmt->bind_param('i', $client_id)) {
-            $select_stmt->close();
-            error_log('[MealsDB AJAX] Failed binding parameters for client lookup statement.');
-            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
-        }
-
-        if (!$select_stmt->execute()) {
-            $select_stmt->close();
-            error_log('[MealsDB AJAX] Failed executing client lookup statement: ' . ($select_stmt->error ?? 'unknown error'));
-            wp_send_json_error(['message' => __('Failed to query Meals DB.', 'meals-db')]);
-        }
-
-        $raw_existing = null;
-
-        if (method_exists($select_stmt, 'get_result')) {
-            $result = $select_stmt->get_result();
-            if ($result instanceof mysqli_result) {
-                if ($row = $result->fetch_assoc()) {
-                    $client_found = true;
-                    $raw_existing = $row['wordpress_user_id'] ?? null;
-                    if ($raw_existing !== null && $raw_existing !== '') {
-                        $existing_wp_user_id = (int) $raw_existing;
-                    }
-                }
-                $result->free();
-            }
-        } else {
-            if ($select_stmt->bind_result($raw_existing)) {
-                if ($select_stmt->fetch()) {
-                    $client_found = true;
-                    if ($raw_existing !== null && $raw_existing !== '') {
-                        $existing_wp_user_id = (int) $raw_existing;
-                    }
-                }
-            }
-        }
-
-        $select_stmt->close();
-
-        if (!$client_found) {
+        $client_row = $repository->get_client_by_id($client_id);
+        if (!$client_row) {
             wp_send_json_error(['message' => __('Client not found.', 'meals-db')]);
         }
 
-        $update_stmt = $conn->prepare('UPDATE meals_clients SET wordpress_user_id = ? WHERE id = ?');
-        if (!$update_stmt) {
-            error_log('[MealsDB AJAX] Failed to prepare client link update statement: ' . ($conn->error ?? 'unknown error'));
-            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
+        $existing_wp_user_id = null;
+        $raw_existing = $client_row['wordpress_user_id'] ?? null;
+        if ($raw_existing !== null && $raw_existing !== '') {
+            $existing_wp_user_id = (int) $raw_existing;
         }
 
-        if (!$update_stmt->bind_param('ii', $wp_user_id, $client_id)) {
-            $update_stmt->close();
-            error_log('[MealsDB AJAX] Failed binding parameters for client link update statement.');
-            wp_send_json_error(['message' => __('Failed to prepare database query.', 'meals-db')]);
-        }
-
-        if (!$update_stmt->execute()) {
-            $message = $update_stmt->error ?? 'unknown error';
-            $update_stmt->close();
-            error_log('[MealsDB AJAX] Failed executing client link update statement: ' . $message);
+        if (!$repository->update_client($client_id, ['wordpress_user_id' => $wp_user_id])) {
             wp_send_json_error(['message' => __('Failed to update Meals DB.', 'meals-db')]);
         }
-
-        $update_stmt->close();
 
         MealsDB_Logger::log(
             'link_client_to_wp_user',

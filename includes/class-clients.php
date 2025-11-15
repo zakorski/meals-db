@@ -7,6 +7,10 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
+if (!class_exists('MealsDB_Clients_Repository')) {
+    require_once __DIR__ . '/services/class-clients-repository.php';
+}
+
 class MealsDB_Clients {
 
     /**
@@ -142,22 +146,17 @@ class MealsDB_Clients {
             return false;
         }
 
+        $repository = new MealsDB_Clients_Repository($conn);
+
         $client_snapshot = null;
-        $select = $conn->prepare('SELECT first_name, last_name, customer_type, client_email FROM meals_clients WHERE id = ?');
-        if ($select instanceof mysqli_stmt) {
-            if ($select->bind_param('i', $client_id) && $select->execute()) {
-                if ($select->bind_result($first_name, $last_name, $customer_type, $client_email)) {
-                    if ($select->fetch()) {
-                        $client_snapshot = [
-                            'first_name' => $first_name,
-                            'last_name' => $last_name,
-                            'customer_type' => $customer_type,
-                            'client_email' => $client_email,
-                        ];
-                    }
-                }
-            }
-            $select->close();
+        $client_record = $repository->get_client_by_id($client_id);
+        if (is_array($client_record)) {
+            $client_snapshot = [
+                'first_name' => $client_record['first_name'] ?? null,
+                'last_name' => $client_record['last_name'] ?? null,
+                'customer_type' => $client_record['customer_type'] ?? null,
+                'client_email' => $client_record['client_email'] ?? null,
+            ];
         }
 
         $transaction_started = false;
@@ -212,21 +211,8 @@ class MealsDB_Clients {
         }
 
         if ($success) {
-            $delete_stmt = $conn->prepare('DELETE FROM meals_clients WHERE id = ?');
-            if (!$delete_stmt instanceof mysqli_stmt) {
-                error_log('[MealsDB] Failed to prepare client deletion statement.');
+            if (!$repository->delete_client($client_id)) {
                 $success = false;
-            } else {
-                if (!$delete_stmt->bind_param('i', $client_id)) {
-                    error_log('[MealsDB] Failed to bind client deletion parameter.');
-                    $success = false;
-                } elseif (!$delete_stmt->execute()) {
-                    error_log('[MealsDB] Failed to execute client deletion: ' . ($delete_stmt->error ?? 'unknown error'));
-                    $success = false;
-                } elseif ($delete_stmt->affected_rows < 1) {
-                    $success = false;
-                }
-                $delete_stmt->close();
             }
         }
 
@@ -267,40 +253,17 @@ class MealsDB_Clients {
             return false;
         }
 
+        $repository = new MealsDB_Clients_Repository($conn);
+
         $old_value = null;
-        $select = $conn->prepare('SELECT active FROM meals_clients WHERE id = ?');
-        if ($select instanceof mysqli_stmt) {
-            if ($select->bind_param('i', $client_id) && $select->execute()) {
-                $current_active = null;
-                if (!$select->bind_result($current_active)) {
-                    $current_active = null;
-                }
-                if ($select->fetch()) {
-                    $old_value = (string) $current_active;
-                }
-            }
-            $select->close();
+        $existing = $repository->get_client_by_id($client_id);
+        if (is_array($existing) && array_key_exists('active', $existing)) {
+            $old_value = (string) $existing['active'];
         }
 
-        $stmt = $conn->prepare('UPDATE meals_clients SET active = ? WHERE id = ?');
-        if (!$stmt) {
-            error_log('[MealsDB] Failed to prepare client activation update: ' . ($conn->error ?? 'unknown error'));
+        if (!$repository->update_client($client_id, ['active' => $active])) {
             return false;
         }
-
-        if (!$stmt->bind_param('ii', $active, $client_id)) {
-            error_log('[MealsDB] Failed to bind parameters for client activation update.');
-            $stmt->close();
-            return false;
-        }
-
-        if (!$stmt->execute()) {
-            error_log('[MealsDB] Failed to execute client activation update: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return false;
-        }
-
-        $stmt->close();
 
         MealsDB_Logger::log($action, $client_id, 'active', $old_value, (string) $active);
 
