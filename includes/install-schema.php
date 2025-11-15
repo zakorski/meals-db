@@ -16,16 +16,6 @@ class MealsDB_Installer {
      * ensuring the shared database connection class is not redeclared.
      */
     public static function install(): void {
-        if (!class_exists('MealsDB_DB')) {
-            // The calling code is expected to load the DB class beforehand, but
-            // guard against missing includes to avoid fatal errors.
-            require_once __DIR__ . '/class-db.php';
-        }
-
-        if (!class_exists('MealsDB_Config')) {
-            require_once __DIR__ . '/class-config.php';
-        }
-
         $conn = MealsDB_DB::get_connection();
 
         if (!MealsDB_Config::is_db_configured()) {

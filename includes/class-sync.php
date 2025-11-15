@@ -7,10 +7,6 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-require_once __DIR__ . '/services/sync/class-sync-query.php';
-require_once __DIR__ . '/services/sync/class-sync-compare.php';
-require_once __DIR__ . '/services/sync/class-sync-mutate.php';
-
 class MealsDB_Sync {
 
     /**

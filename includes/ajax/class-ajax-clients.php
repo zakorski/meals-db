@@ -5,10 +5,6 @@
  * @package MealsDB
  */
 
-if (!class_exists('MealsDB_Clients_Repository')) {
-    require_once __DIR__ . '/../services/class-clients-repository.php';
-}
-
 /**
  * Handles AJAX requests for client management.
  */

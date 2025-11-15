@@ -18,7 +18,9 @@ if ($preserve_data) {
 
 // Reuse the runtime environment and database helpers so uninstall stays in sync with
 // the plugin's connection settings.
-require_once plugin_dir_path(__FILE__) . 'includes/class-db.php';
+$plugin_dir = plugin_dir_path(__FILE__);
+require_once $plugin_dir . 'includes/class-autoloader.php';
+MealsDB_Autoloader::register($plugin_dir);
 
 // Confirm required constants exist before proceeding.
 if (!defined('MEALS_DB_HOST') || !defined('MEALS_DB_USER') || !defined('MEALS_DB_NAME')) {

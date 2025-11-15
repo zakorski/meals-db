@@ -10,17 +10,42 @@
 class MealsDB_Admin_UI {
 
     /**
+     * Shared instance for registering hooks without relying on global state.
+     *
+     * @var self|null
+     */
+    private static $instance = null;
+
+    /**
      * Initialize the admin UI: menu + routing.
      */
-    public static function init() {
-        add_action('admin_menu', [__CLASS__, 'register_menu']);
-        add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_assets']);
+    public static function init(): void {
+        self::instance()->register_hooks();
+    }
+
+    /**
+     * Retrieve the shared instance.
+     */
+    public static function instance(): self {
+        if (!self::$instance instanceof self) {
+            self::$instance = new self();
+        }
+
+        return self::$instance;
+    }
+
+    /**
+     * Register admin hooks for menus and assets.
+     */
+    public function register_hooks(): void {
+        add_action('admin_menu', [$this, 'register_menu']);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
     }
 
     /**
      * Register the Meals DB menu and subpage.
      */
-    public static function register_menu() {
+    public function register_menu(): void {
         if (!MealsDB_Permissions::can_access_plugin()) {
             return;
         }
@@ -30,7 +55,7 @@ class MealsDB_Admin_UI {
             'Meals DB',
             MealsDB_Permissions::required_capability(),
             'meals-db',
-            [__CLASS__, 'render_main_page'],
+            [$this, 'render_main_page'],
             'dashicons-clipboard',
             56
         );
@@ -50,7 +75,7 @@ class MealsDB_Admin_UI {
      *
      * @param string $hook
      */
-    public static function enqueue_assets(string $hook): void {
+    public function enqueue_assets(string $hook): void {
         $is_staff_page = ($hook === 'meals-db_page_meals-db-staff');
 
         if ($hook !== 'toplevel_page_meals-db' && !$is_staff_page) {
@@ -177,7 +202,7 @@ class MealsDB_Admin_UI {
     /**
      * Render the main admin page, routing to correct tab.
      */
-    public static function render_main_page() {
+    public function render_main_page() {
         MealsDB_Permissions::enforce();
 
         $tab = $_GET['tab'] ?? 'sync';
@@ -185,7 +210,7 @@ class MealsDB_Admin_UI {
         echo '<div class="wrap">';
         echo '<h1>Meals DB</h1>';
 
-        self::render_tabs($tab);
+        $this->render_tabs($tab);
 
         echo '<div class="mealsdb-tab-content">';
 
@@ -239,7 +264,7 @@ class MealsDB_Admin_UI {
      *
      * @param string $active
      */
-    private static function render_tabs(string $active = 'sync') {
+    private function render_tabs(string $active = 'sync') {
         $active_tab = $active;
         $tabs = [
             'sync'    => __('Sync Dashboard', 'meals-db'),
