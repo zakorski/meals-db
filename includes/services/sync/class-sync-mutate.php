@@ -55,6 +55,131 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
+     * Sync a single field from WooCommerce to Meals DB.
+     *
+     * @return true|WP_Error
+     */
+    public function push_to_meals_db(int $client_id, string $field, string $new_value) {
+        if ($client_id <= 0) {
+            return new WP_Error(
+                'mealsdb_sync_invalid_client',
+                __('A valid Meals DB client is required to sync this field.', 'meals-db')
+            );
+        }
+
+        $allowed_fields = [
+            'first_name'     => 'first_name',
+            'last_name'      => 'last_name',
+            'client_email'   => 'client_email',
+            'phone_primary'  => 'phone_primary',
+            'address_postal' => 'address_postal',
+        ];
+
+        if (!isset($allowed_fields[$field])) {
+            return new WP_Error(
+                'mealsdb_sync_unsupported_field',
+                __('This field cannot be overridden from WooCommerce.', 'meals-db')
+            );
+        }
+
+        $connection = $this->require_connection();
+
+        if (is_wp_error($connection)) {
+            return $connection;
+        }
+
+        $column = $allowed_fields[$field];
+        $select_sql = sprintf('SELECT %s FROM meals_clients WHERE id = ? LIMIT 1', $column);
+        $stmt = $connection->prepare($select_sql);
+
+        if (!$stmt) {
+            error_log('[MealsDB Sync] Failed to prepare Meals DB client lookup statement: ' . ($connection->error ?? 'unknown error'));
+
+            return new WP_Error(
+                'mealsdb_sync_failed',
+                __('Unable to read the current Meals DB value for this client.', 'meals-db')
+            );
+        }
+
+        if (!$stmt->bind_param('i', $client_id)) {
+            $stmt->close();
+            error_log('[MealsDB Sync] Failed binding parameters for Meals DB lookup statement.');
+
+            return new WP_Error(
+                'mealsdb_sync_failed',
+                __('Unable to load the Meals DB client record.', 'meals-db')
+            );
+        }
+
+        $existing_value = null;
+
+        if ($stmt->execute()) {
+            $value_raw = null;
+
+            if (!$stmt->bind_result($value_raw)) {
+                $stmt->close();
+                error_log('[MealsDB Sync] Failed binding result for Meals DB lookup statement.');
+
+                return new WP_Error(
+                    'mealsdb_sync_failed',
+                    __('Unable to read the Meals DB value for this client.', 'meals-db')
+                );
+            }
+
+            if ($stmt->fetch()) {
+                $existing_value = is_scalar($value_raw) ? (string) $value_raw : '';
+            } else {
+                $stmt->close();
+
+                return new WP_Error(
+                    'mealsdb_sync_client_missing',
+                    __('The Meals DB client could not be found.', 'meals-db')
+                );
+            }
+        } else {
+            $message = $stmt->error ?: __('Unknown database error.', 'meals-db');
+            $stmt->close();
+            error_log('[MealsDB Sync] Failed executing Meals DB lookup statement: ' . $message);
+
+            return new WP_Error(
+                'mealsdb_sync_failed',
+                sprintf(__('Unable to load the Meals DB client record: %s', 'meals-db'), $message)
+            );
+        }
+
+        $stmt->close();
+
+        if ($existing_value === null) {
+            return new WP_Error(
+                'mealsdb_sync_failed',
+                __('Unable to determine the existing Meals DB value for this client.', 'meals-db')
+            );
+        }
+
+        $update_success = $this->update_meals_client($client_id, [
+            $column => $new_value,
+        ]);
+
+        if (!$update_success) {
+            return new WP_Error(
+                'mealsdb_sync_failed',
+                __('Unable to update the Meals DB client record.', 'meals-db')
+            );
+        }
+
+        MealsDB_Logger::log(
+            'sync_override',
+            $client_id,
+            $field,
+            $existing_value,
+            $new_value,
+            'woocommerce'
+        );
+
+        return true;
+    }
+
+    /**
      * Update a Meals DB client with the provided field values.
      *
      * @param int                  $client_id Identifier of the Meals DB client to update.
