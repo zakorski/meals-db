@@ -544,7 +544,7 @@
                 return;
             }
 
-            const $grid = $('<div class="mealsdb-quick-order__product-grid" />');
+            const $grid = $('<div class="mealsdb-quick-order__product-grid mealsdb-qo-grid" />');
 
             list.forEach((product) => {
                 const productId = product && product.product_id ? parseInt(product.product_id, 10) : 0;
@@ -555,34 +555,38 @@
                 const quantity = this.state.cart[productId] ? this.state.cart[productId].quantity : 0;
                 const formattedPrice = this.formatPrice(product.price || 0);
 
+                const $tile = $('<div class="mealsdb-qo-tile" />');
                 const $product = $('<div class="mealsdb-quick-order__product" />').attr('data-product-id', productId);
 
                 if (product.image_url) {
-                    const $image = $('<div class="mealsdb-quick-order__product-image" />');
-                    $image.append($('<img>', {
+                    const $imageWrapper = $('<div class="mealsdb-quick-order__product-image" />');
+                    $imageWrapper.append($('<img>', {
                         src: product.image_url,
                         alt: product.name || 'Product image',
+                        class: 'mealsdb-qo-image',
                         loading: 'lazy',
                     }));
-                    $product.append($image);
+                    $product.append($imageWrapper);
                 }
 
                 const $content = $('<div class="mealsdb-quick-order__product-content" />');
                 $content.append($('<h3 class="mealsdb-quick-order__product-title" />').text(product.name || `Product #${productId}`));
                 $content.append($('<div class="mealsdb-quick-order__product-price" />').text(formattedPrice));
 
-                const $actions = $('<div class="mealsdb-quick-order__product-actions" />');
-                const $decrease = $('<button type="button" class="button mealsdb-quick-order__qty-decrease" aria-label="Decrease quantity">-</button>');
-                const $increase = $('<button type="button" class="button mealsdb-quick-order__qty-increase" aria-label="Increase quantity">+</button>');
-                const $input = $('<input type="number" min="0" class="small-text mealsdb-quick-order__qty-input" />').val(quantity);
+                const $actions = $('<div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls" />');
+                const $decrease = $('<button type="button" class="button mealsdb-quick-order__qty-decrease mealsdb-qo-btn" aria-label="Decrease quantity">-</button>');
+                const $increase = $('<button type="button" class="button mealsdb-quick-order__qty-increase mealsdb-qo-btn" aria-label="Increase quantity">+</button>');
+                const $input = $('<input type="number" min="0" class="small-text mealsdb-quick-order__qty-input mealsdb-qo-qty" />').val(quantity);
 
                 $actions.append($decrease, $input, $increase);
                 $content.append($actions);
                 $product.append($content);
 
                 $product.toggleClass('selected', quantity > 0);
+                $tile.toggleClass('selected', quantity > 0);
                 $product.data('product', product);
-                $grid.append($product);
+                $tile.append($product);
+                $grid.append($tile);
             });
 
             this.$products.empty().append($grid);
@@ -626,6 +630,7 @@
             if ($product.length) {
                 $product.find('.mealsdb-quick-order__qty-input').val(quantity);
                 $product.toggleClass('selected', quantity > 0);
+                $product.closest('.mealsdb-qo-tile').toggleClass('selected', quantity > 0);
             }
 
             this.renderSummary();
