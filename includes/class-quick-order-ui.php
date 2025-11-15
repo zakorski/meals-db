@@ -12,8 +12,22 @@ class MealsDB_Quick_Order_UI {
             wp_die(esc_html__('You do not have permission to access this page.', 'meals-db'));
         }
 
+        $clone_order_id = self::get_requested_clone_order_id();
+        $attributes = [
+            'class' => 'wrap mealsdb-quick-order',
+        ];
+
+        if ($clone_order_id > 0) {
+            $attributes['data-clone-order-id'] = (string) $clone_order_id;
+        }
+
+        $attribute_string = '';
+        foreach ($attributes as $name => $value) {
+            $attribute_string .= sprintf(' %s="%s"', esc_attr($name), esc_attr($value));
+        }
+
         ?>
-        <div class="wrap mealsdb-quick-order">
+        <div<?php echo $attribute_string; ?>>
             <h1><?php esc_html_e('Quick Order', 'meals-db'); ?></h1>
             <?php
             if (function_exists('settings_errors')) {
@@ -61,5 +75,21 @@ class MealsDB_Quick_Order_UI {
             </div>
         </div>
         <?php
+    }
+
+    /**
+     * Retrieve the requested order ID to clone from the current request.
+     */
+    public static function get_requested_clone_order_id(): int {
+        if (!isset($_GET['clone_order_id'])) {
+            return 0;
+        }
+
+        $clone_order_id = $_GET['clone_order_id'];
+        if (function_exists('wp_unslash')) {
+            $clone_order_id = wp_unslash($clone_order_id);
+        }
+
+        return absint($clone_order_id);
     }
 }
