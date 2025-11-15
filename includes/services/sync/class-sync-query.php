@@ -20,9 +20,19 @@ class MealsDB_Sync_Query {
      * @return array<int, WP_User> List of WordPress users.
      */
     public function get_wp_users(): array {
-        $users = get_users([
-            'fields' => 'all_with_meta',
-        ]);
+        $users = $this->batched_query(
+            static function (int $batch_size, int $page, int $offset): array {
+                unset($offset);
+
+                $results = get_users([
+                    'fields' => 'all_with_meta',
+                    'number' => $batch_size,
+                    'paged'  => $page,
+                ]);
+
+                return is_array($results) ? $results : [];
+            }
+        );
 
         $valid_users = [];
 
@@ -47,27 +57,53 @@ class MealsDB_Sync_Query {
             return $connection;
         }
 
-        $query = 'SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM meals_clients';
-        $result = $connection->query($query);
+        $query_error = null;
 
-        if (!($result instanceof \mysqli_result)) {
-            $message = $connection->error ?: __('Unknown database error.', 'meals-db');
-            error_log('[MealsDB Sync] Failed to fetch Meals DB records: ' . $message);
+        $clients = $this->batched_query(
+            function (int $batch_size, int $page, int $offset) use ($connection, &$query_error): array {
+                $sql = sprintf(
+                    'SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM meals_clients LIMIT %d OFFSET %d',
+                    (int) $batch_size,
+                    (int) $offset
+                );
 
-            return new WP_Error(
-                'mealsdb_query_failed',
-                sprintf(
-                    /* translators: %s: database error message */
-                    __('Failed to retrieve Meals DB records: %s', 'meals-db'),
-                    $message
-                )
-            );
+                $result = $connection->query($sql);
+
+                if (!($result instanceof \mysqli_result)) {
+                    $message = $connection->error ?: __('Unknown database error.', 'meals-db');
+                    error_log('[MealsDB Sync] Failed to fetch Meals DB records: ' . $message);
+                    $query_error = new WP_Error(
+                        'mealsdb_query_failed',
+                        sprintf(
+                            /* translators: %s: database error message */
+                            __('Failed to retrieve Meals DB records: %s', 'meals-db'),
+                            $message
+                        )
+                    );
+
+                    return [];
+                }
+
+                $rows = [];
+
+                while ($row = $result->fetch_assoc()) {
+                    $rows[] = $row;
+                }
+
+                $result->free();
+
+                return $rows;
+            }
+        );
+
+        if ($query_error instanceof WP_Error) {
+            return $query_error;
         }
 
         $clients_by_wp_id = [];
         $clients_without_id = [];
 
-        while ($client = $result->fetch_assoc()) {
+        foreach ($clients as $client) {
             $normalized = $this->normalize_client_row($client);
 
             if ($normalized['wordpress_user_id'] > 0) {
@@ -76,8 +112,6 @@ class MealsDB_Sync_Query {
                 $clients_without_id[] = $normalized;
             }
         }
-
-        $result->free();
 
         return [
             'by_wp_id'      => $clients_by_wp_id,
@@ -185,6 +219,39 @@ class MealsDB_Sync_Query {
         }
 
         return $staff_ids;
+    }
+
+    /**
+     * Execute batched callbacks until the dataset is fully retrieved.
+     *
+     * @param callable $callback   Callback invoked with (int $batch_size, int $page, int $offset).
+     * @param int      $batch_size Number of records to request on each iteration.
+     *
+     * @return array<int, mixed> Concatenated results from all batches.
+     */
+    private function batched_query(callable $callback, int $batch_size = 500): array {
+        $results = [];
+        $page    = 1;
+        $offset  = 0;
+
+        while (true) {
+            $batch = $callback($batch_size, $page, $offset);
+
+            if (!is_array($batch) || $batch === []) {
+                break;
+            }
+
+            $results = array_merge($results, $batch);
+
+            if (count($batch) < $batch_size) {
+                break;
+            }
+
+            $page++;
+            $offset += $batch_size;
+        }
+
+        return $results;
     }
 
     /**
