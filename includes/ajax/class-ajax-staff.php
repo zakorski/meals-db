@@ -1,42 +1,50 @@
 <?php
 /**
- * AJAX handlers for staff directory management.
+ * AJAX handlers for Meals DB staff management endpoints.
  *
- * Author: Fishhorn Design
- * Author URI: https://fishhorn.ca
- * Licensed under the GNU General Public License v3.0 or later.
+ * @package MealsDB
  */
 
+/**
+ * Handles AJAX requests for staff management.
+ */
 class MealsDB_Ajax_Staff {
 
-    public function __construct() {
-        add_action('wp_ajax_mealsdb_add_staff', [$this, 'add_staff']);
-        add_action('wp_ajax_mealsdb_update_staff', [$this, 'update_staff']);
-        add_action('wp_ajax_mealsdb_deactivate_staff', [$this, 'deactivate_staff']);
+    /**
+     * Register the AJAX actions for staff management events.
+     *
+     * @return void
+     */
+    public static function init(): void {
+        add_action('wp_ajax_mealsdb_add_staff', [self::class, 'add_staff']);
+        add_action('wp_ajax_mealsdb_update_staff', [self::class, 'update_staff']);
+        add_action('wp_ajax_mealsdb_deactivate_staff', [self::class, 'deactivate_staff']);
     }
 
-    public function add_staff(): void {
-        check_ajax_referer('mealsdb_nonce', 'nonce');
-        $this->deny_unimplemented();
+    /**
+     * Handle adding a staff member.
+     *
+     * @return void
+     */
+    public static function add_staff(): void {
+        // Placeholder for add staff logic.
     }
 
-    public function update_staff(): void {
-        check_ajax_referer('mealsdb_nonce', 'nonce');
-        $this->deny_unimplemented();
+    /**
+     * Handle updating a staff member.
+     *
+     * @return void
+     */
+    public static function update_staff(): void {
+        // Placeholder for update staff logic.
     }
 
-    public function deactivate_staff(): void {
-        check_ajax_referer('mealsdb_nonce', 'nonce');
-        $this->deny_unimplemented();
-    }
-
-    private function deny_unimplemented(): void {
-        if (!MealsDB_Permissions::can_access_plugin()) {
-            wp_send_json_error(['message' => __('Unauthorized', 'meals-db')]);
-        }
-
-        wp_send_json_error([
-            'message' => __('This staff AJAX endpoint has not been implemented yet.', 'meals-db'),
-        ]);
+    /**
+     * Handle deactivating a staff member.
+     *
+     * @return void
+     */
+    public static function deactivate_staff(): void {
+        // Placeholder for deactivate staff logic.
     }
 }
