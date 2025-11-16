@@ -22,7 +22,8 @@ class MealsDB_Quick_Order_Ajax {
     public static function find_clients(): void {
         self::verify_request();
 
-        $search = isset($_REQUEST['search']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['search'])) : '';
+        $search = isset($_REQUEST['term']) ? (string) $_REQUEST['term'] : ($_REQUEST['search'] ?? '');
+        $search = sanitize_text_field(wp_unslash($search));
         $search = trim($search);
 
         if ($search === '') {
@@ -38,10 +39,34 @@ class MealsDB_Quick_Order_Ajax {
             ]);
         }
 
-        $like = '%' . strtolower($search) . '%';
-        $sql = 'SELECT id, first_name, last_name, customer_type, client_email FROM meals_clients WHERE active = 1 AND (
-            LOWER(first_name) LIKE ? OR LOWER(last_name) LIKE ? OR LOWER(CONCAT(first_name, " ", last_name)) LIKE ? OR LOWER(client_email) LIKE ?
-        ) ORDER BY last_name ASC, first_name ASC LIMIT 20';
+        $term_lower       = strtolower($search);
+        $normalized_name  = self::normalize_name($search);
+        $normalized_phone = self::normalize_phone($search);
+
+        $conditions = [
+            'LOWER(first_name) LIKE ?',
+            'LOWER(last_name) LIKE ?',
+            'LOWER(CONCAT(first_name, " ", last_name)) LIKE ?',
+            'LOWER(client_email) LIKE ?',
+            'LOWER(initials_delivery) LIKE ?',
+        ];
+
+        $params = [];
+        $types  = '';
+        $like   = '%' . $term_lower . '%';
+        foreach (range(1, 5) as $_) {
+            $params[] = $like;
+            $types   .= 's';
+        }
+
+        if ($normalized_phone !== '') {
+            $conditions[] = 'REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone_primary, " ", ""), "-", ""), "(", ""), ")", ""), ".", "") LIKE ?';
+            $params[] = '%' . $normalized_phone . '%';
+            $types   .= 's';
+        }
+
+        $where = implode(' OR ', $conditions);
+        $sql = "SELECT id, first_name, last_name, phone_primary, customer_type, initials_delivery, active, client_email FROM meals_clients WHERE active = 1 AND ({$where}) ORDER BY last_name ASC, first_name ASC LIMIT 20";
 
         $stmt = $conn->prepare($sql);
         if (!$stmt instanceof mysqli_stmt) {
@@ -50,7 +75,12 @@ class MealsDB_Quick_Order_Ajax {
             ]);
         }
 
-        if (!$stmt->bind_param('ssss', $like, $like, $like, $like)) {
+        $bind_params = [$types];
+        foreach ($params as $index => $value) {
+            $bind_params[] =& $params[$index];
+        }
+
+        if (!call_user_func_array([$stmt, 'bind_param'], $bind_params)) {
             $stmt->close();
             wp_send_json_error([
                 'message' => __('Failed to bind parameters for client lookup.', 'meals-db'),
@@ -75,19 +105,52 @@ class MealsDB_Quick_Order_Ajax {
 
                 $first_name = isset($row['first_name']) ? (string) $row['first_name'] : '';
                 $last_name  = isset($row['last_name']) ? (string) $row['last_name'] : '';
-                $name = trim($first_name . ' ' . $last_name);
+                $name       = trim($first_name . ' ' . $last_name);
                 if ($name === '') {
                     $name = sprintf(__('Client #%d', 'meals-db'), $client_id);
                 }
 
+                $row_name_normalized  = self::normalize_name($name);
+                $row_phone_normalized = self::normalize_phone($row['phone_primary'] ?? '');
+                $include = false;
+
+                if ($normalized_phone !== '' && $row_phone_normalized !== '' && strpos($row_phone_normalized, $normalized_phone) !== false) {
+                    $include = true;
+                }
+
+                if (!$include && $normalized_name !== '' && $row_name_normalized !== '') {
+                    if (strpos($row_name_normalized, $normalized_name) !== false) {
+                        $include = true;
+                    } elseif (function_exists('levenshtein') && levenshtein($row_name_normalized, $normalized_name) <= 2) {
+                        $include = true;
+                    }
+                }
+
+                if (!$include && $term_lower !== '') {
+                    $email    = strtolower((string) ($row['client_email'] ?? ''));
+                    $initials = strtolower((string) ($row['initials_delivery'] ?? ''));
+                    $type     = strtolower((string) ($row['customer_type'] ?? ''));
+                    if (strpos($email, $term_lower) !== false || strpos($initials, $term_lower) !== false || strpos($type, $term_lower) !== false) {
+                        $include = true;
+                    }
+                }
+
+                if (!$include) {
+                    continue;
+                }
+
                 $clients[] = [
-                    'id'            => $client_id,
-                    'name'          => $name,
-                    'first_name'    => $first_name,
-                    'last_name'     => $last_name,
-                    'customer_type' => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
-                    'email'         => isset($row['client_email']) ? (string) $row['client_email'] : '',
+                    'id'       => $client_id,
+                    'name'     => $name,
+                    'phone'    => isset($row['phone_primary']) ? (string) $row['phone_primary'] : '',
+                    'initials' => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
+                    'type'     => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
+                    'active'   => isset($row['active']) ? (int) $row['active'] : 0,
                 ];
+
+                if (count($clients) >= 20) {
+                    break;
+                }
             }
         }
 
@@ -96,6 +159,18 @@ class MealsDB_Quick_Order_Ajax {
         wp_send_json_success([
             'clients' => $clients,
         ]);
+    }
+
+    private static function normalize_phone(string $value): string {
+        $digits = preg_replace('/\D+/', '', $value);
+        return $digits ?? '';
+    }
+
+    private static function normalize_name(string $value): string {
+        $value = strtolower(trim($value));
+        $value = preg_replace('/[^\p{L}\p{N}\s]/u', '', $value);
+        $value = preg_replace('/\s+/', ' ', $value);
+        return $value ?? '';
     }
 
     /**
