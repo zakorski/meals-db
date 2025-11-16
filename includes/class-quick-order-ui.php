@@ -49,8 +49,10 @@ class MealsDB_Quick_Order_UI {
                 </div>
             </div>
 
-            <div id="mealsdb-qo-categories" class="mealsdb-qo-categories" aria-live="polite" role="tablist">
-                <p><?php esc_html_e('Category tabs will load here.', 'meals-db'); ?></p>
+            <div id="mealsdb-qo-categories" class="mealsdb-qo-categories">
+                <!-- Category buttons should be inserted here dynamically or in PHP -->
+                <!-- Example structure: -->
+                <!-- <button class="mealsdb-qo-cat-tab" data-cat="CATEGORY_SLUG">Category Name</button> -->
             </div>
 
             <div class="mealsdb-quick-order__layout">
