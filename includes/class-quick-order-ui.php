@@ -49,7 +49,7 @@ class MealsDB_Quick_Order_UI {
                 </div>
             </div>
 
-            <div class="mealsdb-quick-order__categories" id="mealsdb-quick-order-categories" aria-live="polite">
+            <div id="mealsdb-qo-categories" class="mealsdb-qo-categories" aria-live="polite" role="tablist">
                 <p><?php esc_html_e('Category tabs will load here.', 'meals-db'); ?></p>
             </div>
 
