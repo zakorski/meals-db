@@ -159,22 +159,6 @@
                 }
             }
 
-            this.$categories.on('click', '.mealsdb-qo-cat-tab', (event) => {
-                event.preventDefault();
-                const $target = $(event.currentTarget);
-                const categoryId = parseInt($target.data('cat') || $target.data('categoryId'), 10);
-                if (!Number.isInteger(categoryId) || categoryId <= 0 || categoryId === this.state.activeCategoryId) {
-                    return;
-                }
-
-                this.state.searchTerm = '';
-                if (this.$search && this.$search.length) {
-                    this.$search.val('');
-                }
-
-                this.activateCategory(categoryId);
-            });
-
             const debouncedProductSearch = this.debounce((event) => {
                 const term = $(event.target).val().trim();
                 this.handleProductSearch(term);
@@ -316,10 +300,7 @@
                 this.state.categories = response.data.categories;
                 this.renderCategories();
 
-                const firstCategory = this.state.categories.length ? parseInt(this.state.categories[0].id, 10) : null;
-                if (Number.isInteger(firstCategory) && firstCategory > 0) {
-                    this.activateCategory(firstCategory);
-                } else {
+                if (!this.state.categories.length) {
                     this.renderProducts([]);
                 }
             }).fail(() => {
@@ -464,13 +445,62 @@
                 });
 
                 if (this.state.activeCategoryId === categoryId) {
-                    $button.addClass('is-active');
+                    $button.addClass('is-active active');
                 }
 
                 this.$categories.append($button);
             });
 
             this.$categories.toggleClass('has-categories', true);
+
+            const $tabs = this.$categories.find('.mealsdb-qo-cat-tab');
+            const $firstTab = $tabs.first();
+            const hasActiveTab = $tabs.filter('.active, .is-active').length > 0;
+
+            if (!hasActiveTab && $firstTab.length) {
+                $firstTab.addClass('active is-active');
+                this.loadCategory($firstTab.data('cat'));
+            }
+        },
+
+        loadCategory(categoryId) {
+            const parsedCategoryId = parseInt(categoryId, 10);
+            if (!Number.isInteger(parsedCategoryId) || parsedCategoryId <= 0) {
+                return null;
+            }
+
+            if (parsedCategoryId === this.state.activeCategoryId && !this.state.isSearching) {
+                return null;
+            }
+
+            this.state.searchTerm = '';
+            if (this.$search && this.$search.length) {
+                this.$search.val('');
+            }
+
+            const $grid = $('#mealsdb-qo-grid');
+            const $fadeTarget = $grid.length ? $grid : this.$products;
+            if ($fadeTarget && $fadeTarget.length) {
+                $fadeTarget.stop(true, true).fadeTo(100, 0.3);
+            }
+
+            const finalizeFade = () => {
+                const $latestGrid = $('#mealsdb-qo-grid');
+                const $target = $latestGrid.length ? $latestGrid : this.$products;
+                if ($target && $target.length) {
+                    $target.stop(true, true).fadeTo(150, 1);
+                }
+            };
+
+            const request = this.activateCategory(parsedCategoryId);
+
+            if (request && typeof request.always === 'function') {
+                request.always(finalizeFade);
+            } else {
+                finalizeFade();
+            }
+
+            return request;
         },
 
         renderCategoriesError(message) {
@@ -488,16 +518,19 @@
 
             if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts[categoryId])) {
                 this.renderProducts(this.state.categoryProducts[categoryId]);
-                return;
+                if ($ && $.Deferred) {
+                    return $.Deferred().resolve().promise();
+                }
+                return null;
             }
 
-            this.fetchProductsByCategory(categoryId);
+            return this.fetchProductsByCategory(categoryId);
         },
 
         fetchProductsByCategory(categoryId) {
             this.renderProductsLoading();
 
-            $.ajax({
+            return $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'GET',
                 dataType: 'json',
@@ -595,7 +628,10 @@
                 return;
             }
 
-            const $grid = $('<div class="mealsdb-quick-order__product-grid mealsdb-qo-grid" />');
+            const $grid = $('<div />', {
+                class: 'mealsdb-quick-order__product-grid mealsdb-qo-grid',
+                id: 'mealsdb-qo-grid',
+            });
 
             list.forEach((product) => {
                 const productId = product && product.product_id ? parseInt(product.product_id, 10) : 0;
@@ -1267,6 +1303,45 @@
             return text;
         },
     };
+
+    const loadCategory = (categoryId) => {
+        if (QuickOrder && typeof QuickOrder.loadCategory === 'function') {
+            return QuickOrder.loadCategory(categoryId);
+        }
+
+        return null;
+    };
+
+    $(document).on('click', '.mealsdb-qo-cat-tab', function () {
+        const $tab = $(this);
+        $('.mealsdb-qo-cat-tab').removeClass('active is-active');
+        $tab.addClass('active is-active');
+        loadCategory($tab.data('cat'));
+    });
+
+    $(document).on('keydown', function (event) {
+        const $tabs = $('.mealsdb-qo-cat-tab');
+        if (!$tabs.length) {
+            return;
+        }
+
+        const $activeTab = $tabs.filter('.active, .is-active').first();
+        const currentIndex = $tabs.index($activeTab);
+
+        if (event.key === 'ArrowRight') {
+            const $next = $tabs.eq(currentIndex + 1);
+            if ($next.length) {
+                $next.trigger('click');
+            }
+        }
+
+        if (event.key === 'ArrowLeft') {
+            const $prev = $tabs.eq(currentIndex - 1);
+            if ($prev.length) {
+                $prev.trigger('click');
+            }
+        }
+    });
 
     $(function () {
         if (typeof mealsdbQuickOrder === 'undefined') {
