@@ -35,14 +35,9 @@ class MealsDB_Quick_Order_UI {
             }
             ?>
 
-            <div class="mealsdb-quick-order__controls">
-                <div class="mealsdb-quick-order__control">
-                    <label for="mealsdb-quick-order-client"><?php esc_html_e('Client', 'meals-db'); ?></label>
-                    <select id="mealsdb-quick-order-client" class="mealsdb-quick-order__client-selector" data-placeholder="<?php echo esc_attr__('Client', 'meals-db'); ?>">
-                        <option value=""><?php esc_html_e('Select a client…', 'meals-db'); ?></option>
-                    </select>
-                </div>
+            <select id="mealsdb-qo-client" style="width: 100%;" placeholder="Search clients..."></select>
 
+            <div class="mealsdb-quick-order__controls">
                 <div class="mealsdb-quick-order__control">
                     <label for="mealsdb-quick-order-date"><?php esc_html_e('Order Date', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-quick-order-date" class="mealsdb-quick-order__order-date" />
