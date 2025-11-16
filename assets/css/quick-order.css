@@ -11,8 +11,20 @@
     min-width: 200px;
 }
 
-.mealsdb-quick-order__categories {
+.mealsdb-quick-order__categories,
+.mealsdb-qo-categories {
     margin-bottom: 1.5rem;
+}
+
+.mealsdb-qo-cat-tab {
+    margin-right: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.mealsdb-qo-cat-tab.is-active {
+    background-color: #2271b1;
+    border-color: #0a4b78;
+    color: #fff;
 }
 
 .mealsdb-quick-order__layout {

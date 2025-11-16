@@ -36,7 +36,7 @@
 
         cacheElements() {
             this.$root = $('.mealsdb-quick-order');
-            this.$categories = $('#mealsdb-quick-order-categories');
+            this.$categories = $('#mealsdb-qo-categories');
             this.$products = $('#mealsdb-quick-order-products');
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
@@ -159,9 +159,10 @@
                 }
             }
 
-            this.$categories.on('click', '.mealsdb-quick-order__category-button', (event) => {
+            this.$categories.on('click', '.mealsdb-qo-cat-tab', (event) => {
                 event.preventDefault();
-                const categoryId = parseInt($(event.currentTarget).data('categoryId'), 10);
+                const $target = $(event.currentTarget);
+                const categoryId = parseInt($target.data('cat') || $target.data('categoryId'), 10);
                 if (!Number.isInteger(categoryId) || categoryId <= 0 || categoryId === this.state.activeCategoryId) {
                     return;
                 }
@@ -443,7 +444,8 @@
                 return;
             }
 
-            const $list = $('<div class="mealsdb-quick-order__category-list" role="tablist" />');
+            this.$categories.empty();
+            this.$categories.attr('role', 'tablist');
 
             this.state.categories.forEach((category) => {
                 const categoryId = parseInt(category.id, 10);
@@ -453,10 +455,10 @@
 
                 const $button = $('<button>', {
                     type: 'button',
-                    class: 'button button-secondary mealsdb-quick-order__category-button',
+                    class: 'button button-secondary mealsdb-qo-cat-tab',
                     text: category.name || `Category #${categoryId}`,
                 }).attr({
-                    'data-category-id': categoryId,
+                    'data-cat': categoryId,
                     role: 'tab',
                     'aria-selected': this.state.activeCategoryId === categoryId ? 'true' : 'false',
                 });
@@ -465,10 +467,10 @@
                     $button.addClass('is-active');
                 }
 
-                $list.append($button);
+                this.$categories.append($button);
             });
 
-            this.$categories.empty().append($list);
+            this.$categories.toggleClass('has-categories', true);
         },
 
         renderCategoriesError(message) {
