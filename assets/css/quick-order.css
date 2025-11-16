@@ -11,14 +11,45 @@
     min-width: 200px;
 }
 
-.mealsdb-quick-order__categories,
-.mealsdb-qo-categories {
+.mealsdb-quick-order__categories {
     margin-bottom: 1.5rem;
 }
 
+/* ================================
+   QUICK ORDER — CATEGORY TAB STYLES
+   ================================ */
+
+.mealsdb-qo-categories {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+    scrollbar-width: thin;
+}
+
+/* Category Tab Buttons */
 .mealsdb-qo-cat-tab {
-    margin-right: 0.5rem;
-    margin-bottom: 0.5rem;
+    background: #f7f7f7;
+    border: 1px solid #ccc;
+    padding: 8px 15px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: 14px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.mealsdb-qo-cat-tab:hover {
+    background: #eee;
+}
+
+/* Active Tab */
+.mealsdb-qo-cat-tab.active {
+    background: #2271b1;        /* WP Admin Blue */
+    border-color: #1e5a94;
+    color: white;
+    font-weight: bold;
 }
 
 .mealsdb-qo-cat-tab.is-active {
