@@ -2,20 +2,22 @@
     'use strict';
 
     const QuickOrder = {
-        state: {
-            categories: [],
-            activeCategoryId: null,
-            categoryProducts: {},
-            cart: {},
-            searchTerm: '',
-            isSearching: false,
-            hasLoadedClone: false,
-            isCloning: false,
-            cloneOrderId: null,
-            currentClientType: '',
-            taxRate: 0,
-            taxableClientTypes: [],
-        },
+            state: {
+                categories: [],
+                activeCategoryId: null,
+                categoryProducts: {},
+                cart: {},
+                searchTerm: '',
+                isSearching: false,
+                hasLoadedClone: false,
+                isCloning: false,
+                cloneOrderId: null,
+                currentClientId: null,
+                currentClientType: '',
+                taxRate: 0,
+                taxableClientTypes: [],
+                clientSelectEnhanced: false,
+            },
 
         init() {
             this.cacheElements();
@@ -24,7 +26,7 @@
                 return;
             }
 
-            this.createClientSearchField();
+            this.initialiseClientSelect();
             this.bindEvents();
             this.renderSummary();
 
@@ -39,7 +41,7 @@
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
             this.$search = $('#mealsdb-quick-order-search');
-            this.$clientSelect = $('#mealsdb-quick-order-client');
+            this.$clientSelect = $('#mealsdb-qo-client');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#mealsdb-quick-order-create');
             this.$orderSuccess = $('#qo-order-success');
@@ -83,43 +85,78 @@
             this.state.currentClientType = this.normaliseClientType(initialType);
         },
 
-        createClientSearchField() {
+        initialiseClientSelect() {
             if (!this.$clientSelect || !this.$clientSelect.length) {
                 return;
             }
 
-            const placeholder = this.$clientSelect.data('placeholder') || this.$clientSelect.find('option:first').text() || '';
-            this.$clientSearchWrapper = $('<div class="mealsdb-quick-order__client-search" />');
-            this.$clientSearchInput = $('<input>', {
-                type: 'search',
-                class: 'mealsdb-quick-order__client-search-input',
-                placeholder: placeholder,
-                'aria-label': placeholder || 'Search clients',
+            if (typeof this.$clientSelect.select2 !== 'function') {
+                return;
+            }
+
+            const placeholder =
+                this.$clientSelect.attr('placeholder') ||
+                this.$clientSelect.data('placeholder') ||
+                (window.wp && window.wp.i18n ? window.wp.i18n.__('Search clients…', 'meals-db') : 'Search clients…');
+
+            this.$clientSelect.select2({
+                width: '100%',
+                placeholder,
+                minimumInputLength: 2,
+                allowClear: true,
+                ajax: {
+                    url: this.getAjaxUrl(),
+                    dataType: 'json',
+                    delay: 250,
+                    data: (params) => ({
+                        action: 'mealsdb_qo_find_clients',
+                        search: params && params.term ? params.term.trim() : '',
+                        nonce: this.getSecurityNonce(),
+                    }),
+                    processResults: (response) => {
+                        const clients =
+                            response && response.success && response.data && Array.isArray(response.data.clients)
+                                ? response.data.clients
+                                : [];
+
+                        const results = clients.map((client) => ({
+                            id: client.id,
+                            text: client.name || `Client #${client.id}`,
+                            name: client.name || `Client #${client.id}`,
+                            first_name: client.first_name || '',
+                            last_name: client.last_name || '',
+                            email: client.email || '',
+                            customer_type: client.customer_type || client.client_type || '',
+                        }));
+
+                        return { results };
+                    },
+                    cache: true,
+                },
+                templateResult: (data) => this.renderClientTemplate(data),
+                templateSelection: (data) => this.renderClientSelection(data),
+                escapeMarkup: (markup) => markup,
             });
 
-            this.$clientSearchNotice = $('<p>', {
-                class: 'description mealsdb-quick-order__client-search-notice',
-                text: window.wp && window.wp.i18n ? window.wp.i18n.__('Begin typing to search for clients.', 'meals-db') : 'Begin typing to search for clients.',
+            this.$clientSelect.on('select2:select', (event) => {
+                const clientData = event && event.params ? event.params.data : null;
+                this.handleClientSelectionChange(clientData);
             });
 
-            this.$clientSelect.before(this.$clientSearchWrapper);
-            this.$clientSearchWrapper.append(this.$clientSearchInput, this.$clientSearchNotice);
+            this.$clientSelect.on('select2:clear', () => {
+                this.handleClientSelectionChange({ id: null, customer_type: '' });
+            });
+
+            this.state.clientSelectEnhanced = true;
         },
 
         bindEvents() {
-            const debouncedClientSearch = this.debounce((event) => {
-                const term = $(event.target).val();
-                this.fetchClients(term);
-            }, 250);
-
-            if (this.$clientSearchInput && this.$clientSearchInput.length) {
-                this.$clientSearchInput.on('input', debouncedClientSearch);
-            }
-
             if (this.$clientSelect && this.$clientSelect.length) {
-                this.$clientSelect.on('change', () => {
-                    this.handleClientSelectionChange();
-                });
+                if (!this.state.clientSelectEnhanced) {
+                    this.$clientSelect.on('change', () => {
+                        this.handleClientSelectionChange();
+                    });
+                }
             }
 
             this.$categories.on('click', '.mealsdb-quick-order__category-button', (event) => {
@@ -208,100 +245,54 @@
             };
         },
 
-        fetchClients(term) {
-            const query = (term || '').trim();
-            if (query.length < 2) {
-                this.resetClientOptions();
-                return;
+        renderClientTemplate(data) {
+            if (!data || data.loading) {
+                return data && data.text ? data.text : '';
             }
 
-            if (this.pendingClientRequest && typeof this.pendingClientRequest.abort === 'function') {
-                this.pendingClientRequest.abort();
+            const $container = $('<div class="mealsdb-qo-client-option" />');
+            $('<div class="mealsdb-qo-client-option__name" />').text(data.name || data.text || '').appendTo($container);
+
+            const metaItems = [];
+            if (data.email) {
+                metaItems.push({ className: 'mealsdb-qo-client-option__email', value: data.email });
             }
 
-            this.$clientSearchWrapper.addClass('is-loading');
-
-            this.pendingClientRequest = $.ajax({
-                url: this.getAjaxUrl(),
-                method: 'GET',
-                dataType: 'json',
-                data: {
-                    action: 'mealsdb_qo_find_clients',
-                    search: query,
-                    nonce: this.getSecurityNonce(),
-                },
-            }).done((response) => {
-                if (!response || !response.success || !response.data || !Array.isArray(response.data.clients)) {
-                    this.renderClientNotice(response && response.data && response.data.message ? response.data.message : 'Unable to fetch clients.');
-                    return;
-                }
-
-                const clients = response.data.clients;
-                this.populateClientOptions(clients);
-            }).fail(() => {
-                this.renderClientNotice('Unable to fetch clients.');
-            }).always(() => {
-                this.$clientSearchWrapper.removeClass('is-loading');
-            });
-        },
-
-        resetClientOptions() {
-            if (!this.$clientSelect || !this.$clientSelect.length) {
-                return;
+            const typeLabel = this.normaliseClientType(data.customer_type || data.client_type);
+            if (typeLabel) {
+                metaItems.push({ className: 'mealsdb-qo-client-option__type', value: typeLabel });
             }
 
-            const currentValue = this.$clientSelect.val();
-            this.$clientSelect.find('option').not(':first').remove();
-
-            if (currentValue && !this.$clientSelect.find(`option[value="${currentValue}"]`).length) {
-                this.$clientSelect.append($('<option>', {
-                    value: currentValue,
-                    text: this.$clientSelect.find(':selected').text() || currentValue,
-                }));
-            }
-        },
-
-        populateClientOptions(clients) {
-            if (!this.$clientSelect || !this.$clientSelect.length) {
-                return;
-            }
-
-            const previousValue = this.$clientSelect.val();
-            const placeholderText = this.$clientSelect.find('option:first').text();
-            this.$clientSelect.empty();
-            this.$clientSelect.append($('<option>', { value: '', text: placeholderText || 'Select a client…' }));
-
-            clients.forEach((client) => {
-                if (!client || typeof client !== 'object') {
-                    return;
-                }
-
-                const clientId = parseInt(client.id, 10);
-                if (!Number.isInteger(clientId) || clientId <= 0) {
-                    return;
-                }
-
-                const name = client.name || `Client #${clientId}`;
-                const option = $('<option>', {
-                    value: clientId,
-                    text: name,
+            if (metaItems.length) {
+                const $meta = $('<div class="mealsdb-qo-client-option__meta" />');
+                metaItems.forEach((item, index) => {
+                    if (index > 0) {
+                        $('<span class="mealsdb-qo-client-option__separator" />').text('·').appendTo($meta);
+                    }
+                    $('<span />', { class: item.className }).text(item.value).appendTo($meta);
                 });
-
-                option.data('client', client);
-                this.$clientSelect.append(option);
-            });
-
-            if (previousValue && this.$clientSelect.find(`option[value="${previousValue}"]`).length) {
-                this.$clientSelect.val(previousValue);
+                $container.append($meta);
             }
+
+            return $container;
         },
 
-        renderClientNotice(message) {
-            if (!this.$clientSearchNotice) {
-                return;
+        renderClientSelection(data) {
+            if (!data) {
+                return '';
             }
 
-            this.$clientSearchNotice.text(message || '');
+            const name = data.name || data.text || '';
+            const typeLabel = this.normaliseClientType(data.customer_type || data.client_type);
+
+            if (!typeLabel) {
+                return name;
+            }
+
+            const $container = $('<span class="mealsdb-qo-client-selection" />');
+            $('<span class="mealsdb-qo-client-selection__name" />').text(name).appendTo($container);
+            $('<span class="mealsdb-qo-client-selection__type" />').text(typeLabel).appendTo($container);
+            return $container;
         },
 
         fetchCategories() {
@@ -1038,25 +1029,37 @@
             this.$notices.empty().append($notice);
         },
 
-        handleClientSelectionChange() {
+        handleClientSelectionChange(clientData = null) {
             if (!this.$clientSelect || !this.$clientSelect.length) {
                 return;
             }
 
-            const $selected = this.$clientSelect.find('option:selected');
             let clientType = '';
+            let clientId = null;
 
-            if ($selected.length) {
-                const clientData = $selected.data('client');
-                if (clientData && clientData.customer_type) {
-                    clientType = clientData.customer_type;
-                } else if (clientData && clientData.client_type) {
-                    clientType = clientData.client_type;
-                } else if ($selected.data('clientType')) {
-                    clientType = $selected.data('clientType');
+            if (clientData && typeof clientData === 'object') {
+                const parsedId = parseInt(clientData.id, 10);
+                clientId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
+                clientType = clientData.customer_type || clientData.client_type || '';
+            } else {
+                const selectedValue = this.$clientSelect.val();
+                const parsedId = parseInt(selectedValue, 10);
+                clientId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
+
+                const $selected = this.$clientSelect.find('option:selected');
+                if ($selected.length) {
+                    const selectedData = $selected.data('client');
+                    if (selectedData && selectedData.customer_type) {
+                        clientType = selectedData.customer_type;
+                    } else if (selectedData && selectedData.client_type) {
+                        clientType = selectedData.client_type;
+                    } else if ($selected.data('clientType')) {
+                        clientType = $selected.data('clientType');
+                    }
                 }
             }
 
+            this.state.currentClientId = clientId;
             this.state.currentClientType = this.normaliseClientType(clientType);
 
             if (window.mealsdbQuickOrder) {
