@@ -174,6 +174,126 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
+     * Build a list of keywords for the provided product for fuzzy matching.
+     */
+    private static function collect_product_keywords(WC_Product $product): array {
+        $keywords = [];
+
+        $tag_names = wp_get_post_terms($product->get_id(), 'product_tag', ['fields' => 'names']);
+        if (is_array($tag_names) && !is_wp_error($tag_names)) {
+            $keywords = array_merge($keywords, $tag_names);
+        }
+
+        $category_names = wp_get_post_terms($product->get_id(), 'product_cat', ['fields' => 'names']);
+        if (is_array($category_names) && !is_wp_error($category_names)) {
+            $keywords = array_merge($keywords, $category_names);
+        }
+
+        return array_filter(array_map('strval', $keywords));
+    }
+
+    /**
+     * Calculate a fuzzy search score for the provided fields.
+     *
+     * @param string              $term   Search term from user input.
+     * @param array<int, string>  $fields Fields to compare against.
+     */
+    private static function calculate_search_score(string $term, array $fields): ?int {
+        $normalized_term = self::normalize_name($term);
+        if ($normalized_term === '') {
+            return null;
+        }
+
+        $best_score = null;
+        foreach ($fields as $field) {
+            $field_normalized = self::normalize_name((string) $field);
+            if ($field_normalized === '') {
+                continue;
+            }
+
+            if (strpos($field_normalized, $normalized_term) !== false) {
+                $best_score = 0;
+                break;
+            }
+
+            if (!function_exists('levenshtein')) {
+                continue;
+            }
+
+            $parts = preg_split('/\s+/', $field_normalized);
+            foreach ($parts as $part) {
+                if ($part === '') {
+                    continue;
+                }
+
+                $distance = levenshtein($normalized_term, $part);
+                if ($distance <= 2) {
+                    if ($best_score === null || $distance < $best_score) {
+                        $best_score = $distance;
+                    }
+                }
+            }
+        }
+
+        return $best_score;
+    }
+
+    /**
+     * Render product tiles in the same structure as the category loader.
+     *
+     * @param array<int, array<string, mixed>> $products
+     */
+    private static function render_product_tiles(array $products): string {
+        if (empty($products)) {
+            return '<p>' . esc_html__('No products matched your search.', 'meals-db') . '</p>';
+        }
+
+        $buffer = '<div class="mealsdb-quick-order__product-grid mealsdb-qo-grid" id="mealsdb-qo-grid">';
+
+        foreach ($products as $product) {
+            $product_id = isset($product['product_id']) ? intval($product['product_id']) : 0;
+            if ($product_id <= 0) {
+                continue;
+            }
+
+            $name       = isset($product['name']) ? (string) $product['name'] : sprintf(__('Product #%d', 'meals-db'), $product_id);
+            $price      = isset($product['price']) ? (float) $product['price'] : 0.0;
+            $image_url  = isset($product['image_url']) ? (string) $product['image_url'] : '';
+            $json_data  = wp_json_encode($product);
+            $price_html = function_exists('wc_price') ? wc_price($price) : number_format($price, 2);
+
+            $buffer .= '<div class="mealsdb-qo-tile">';
+            $buffer .= '<div class="mealsdb-quick-order__product" data-product-id="' . esc_attr((string) $product_id) . '"';
+            if (!empty($json_data)) {
+                $buffer .= ' data-product="' . esc_attr($json_data) . '"';
+            }
+            $buffer .= '>';
+
+            if ($image_url !== '') {
+                $buffer .= '<div class="mealsdb-quick-order__product-image">';
+                $buffer .= '<img src="' . esc_url($image_url) . '" alt="' . esc_attr($name) . '" class="mealsdb-qo-image" loading="lazy" />';
+                $buffer .= '</div>';
+            }
+
+            $buffer .= '<div class="mealsdb-quick-order__product-content">';
+            $buffer .= '<h3 class="mealsdb-quick-order__product-title">' . esc_html($name) . '</h3>';
+            $buffer .= '<div class="mealsdb-quick-order__product-price">' . wp_kses_post($price_html) . '</div>';
+            $buffer .= '<div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls">';
+            $buffer .= '<button type="button" class="button mealsdb-quick-order__qty-decrease mealsdb-qo-btn" aria-label="' . esc_attr__('Decrease quantity', 'meals-db') . '">-</button>';
+            $buffer .= '<input type="number" min="0" class="small-text mealsdb-quick-order__qty-input mealsdb-qo-qty" value="0" />';
+            $buffer .= '<button type="button" class="button mealsdb-quick-order__qty-increase mealsdb-qo-btn" aria-label="' . esc_attr__('Increase quantity', 'meals-db') . '">+</button>';
+            $buffer .= '</div>';
+            $buffer .= '</div>';
+            $buffer .= '</div>';
+            $buffer .= '</div>';
+        }
+
+        $buffer .= '</div>';
+
+        return $buffer;
+    }
+
+    /**
      * AJAX endpoint to fetch product categories.
      */
     public static function get_categories(): void {
@@ -210,11 +330,125 @@ class MealsDB_Quick_Order_Ajax {
     public static function search_products(): void {
         self::verify_request();
 
-        $keyword = isset($_REQUEST['keyword']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['keyword'])) : '';
-        $products = MealsDB_Quick_Order_Products::search_products($keyword);
+        $term = '';
+        if (isset($_POST['term'])) {
+            $term = (string) $_POST['term'];
+        } elseif (isset($_REQUEST['term'])) {
+            $term = (string) $_REQUEST['term'];
+        } elseif (isset($_REQUEST['keyword'])) {
+            $term = (string) $_REQUEST['keyword'];
+        }
+
+        if (function_exists('wp_unslash')) {
+            $term = wp_unslash($term);
+        }
+
+        $term = sanitize_text_field($term);
+        $term = trim($term);
+
+        if ($term === '') {
+            wp_send_json_success([
+                'html' => '<p>' . esc_html__('Please enter a search term.', 'meals-db') . '</p>',
+            ]);
+        }
+
+        global $wpdb;
+
+        if (!$wpdb instanceof wpdb) {
+            wp_send_json_error([
+                'message' => __('Unable to connect to the database.', 'meals-db'),
+            ]);
+        }
+
+        if (!function_exists('wc_get_product')) {
+            wp_send_json_error([
+                'message' => __('WooCommerce is required to search for products.', 'meals-db'),
+            ]);
+        }
+
+        $like_term = '%' . $wpdb->esc_like($term) . '%';
+
+        $sql = $wpdb->prepare(
+            "SELECT DISTINCT p.ID, p.post_title, p.post_excerpt, p.post_content, sku.meta_value AS sku
+             FROM {$wpdb->posts} AS p
+             LEFT JOIN {$wpdb->postmeta} AS sku ON sku.post_id = p.ID AND sku.meta_key = '_sku'
+             WHERE p.post_type = 'product'
+               AND p.post_status = 'publish'
+               AND (p.post_title LIKE %s OR p.post_excerpt LIKE %s OR p.post_content LIKE %s OR sku.meta_value LIKE %s)
+             ORDER BY p.post_title ASC
+             LIMIT 50",
+            $like_term,
+            $like_term,
+            $like_term,
+            $like_term
+        );
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!is_array($rows)) {
+            $rows = [];
+        }
+
+        $matches = [];
+        foreach ($rows as $row) {
+            $product_id = isset($row['ID']) ? intval($row['ID']) : 0;
+            if ($product_id <= 0) {
+                continue;
+            }
+
+            $product = wc_get_product($product_id);
+            if (!$product instanceof WC_Product) {
+                continue;
+            }
+
+            if (!$product->is_visible() || $product->get_status() !== 'publish') {
+                continue;
+            }
+
+            $keywords = self::collect_product_keywords($product);
+
+            $score = self::calculate_search_score($term, [
+                $row['post_title'] ?? '',
+                $row['sku'] ?? '',
+                $row['post_excerpt'] ?? '',
+                $row['post_content'] ?? '',
+                implode(' ', $keywords),
+            ]);
+
+            if ($score === null) {
+                continue;
+            }
+
+            $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
+            if (empty($payload) || !isset($payload[0])) {
+                continue;
+            }
+
+            $matches[] = [
+                'score'   => $score,
+                'product' => $payload[0],
+            ];
+        }
+
+        usort($matches, static function ($a, $b) {
+            $score_compare = $a['score'] <=> $b['score'];
+            if ($score_compare !== 0) {
+                return $score_compare;
+            }
+
+            $name_a = isset($a['product']['name']) ? (string) $a['product']['name'] : '';
+            $name_b = isset($b['product']['name']) ? (string) $b['product']['name'] : '';
+
+            return strcasecmp($name_a, $name_b);
+        });
+
+        $products = array_map(static function ($match) {
+            return $match['product'];
+        }, $matches);
+
+        $html = self::render_product_tiles($products);
 
         wp_send_json_success([
-            'products' => $products,
+            'html' => $html,
         ]);
     }
 
