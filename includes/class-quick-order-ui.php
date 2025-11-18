@@ -42,17 +42,23 @@ class MealsDB_Quick_Order_UI {
                     <label for="mealsdb-quick-order-date"><?php esc_html_e('Order Date', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-quick-order-date" class="mealsdb-quick-order__order-date" />
                 </div>
-
-                <div class="mealsdb-quick-order__control">
-                    <label for="mealsdb-quick-order-search"><?php esc_html_e('Search Products', 'meals-db'); ?></label>
-                    <input type="search" id="mealsdb-quick-order-search" class="mealsdb-quick-order__search" placeholder="<?php echo esc_attr__('Search products…', 'meals-db'); ?>" />
-                </div>
             </div>
 
             <div id="mealsdb-qo-categories" class="mealsdb-qo-categories">
                 <!-- Category buttons should be inserted here dynamically or in PHP -->
                 <!-- Example structure: -->
                 <!-- <button class="mealsdb-qo-cat-tab" data-cat="CATEGORY_SLUG">Category Name</button> -->
+            </div>
+
+            <div id="mealsdb-qo-search-container" style="margin-bottom: 15px;">
+                <input 
+                    type="text" 
+                    id="mealsdb-qo-search" 
+                    class="regular-text" 
+                    placeholder="Search products..."
+                    autocomplete="off"
+                    style="width: 100%; max-width: 400px;"
+                >
             </div>
 
             <div class="mealsdb-quick-order__layout">
