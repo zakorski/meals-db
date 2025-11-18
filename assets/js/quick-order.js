@@ -8,6 +8,12 @@
     const QO_PRODUCTS = Array.isArray(preload.products) ? preload.products : [];
     const QO_CATEGORIES = Array.isArray(preload.categories) ? preload.categories : [];
 
+    let lastRequest = null;
+
+    function setLastRequest(callback) {
+        lastRequest = typeof callback === 'function' ? callback : null;
+    }
+
     const QuickOrder = {
             state: {
                 categories: [],
@@ -309,6 +315,8 @@
         fetchCategories() {
             this.setCategoriesLoadingState(true);
 
+            const retryRequest = () => this.fetchCategories();
+
             $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'GET',
@@ -318,8 +326,13 @@
                     nonce: this.getSecurityNonce(),
                 },
             }).done((response) => {
-                if (!response || !response.success || !response.data || !Array.isArray(response.data.categories)) {
-                    this.renderCategoriesError(response && response.data && response.data.message ? response.data.message : 'Unable to load categories.');
+                if (!response || response.success === false || !response.data || !Array.isArray(response.data.categories)) {
+                    const message =
+                        response && response.data && response.data.message
+                            ? response.data.message
+                            : 'Unable to load categories.';
+                    this.renderCategoriesError(message);
+                    qoShowToast(response && response.success === false ? message || 'An error occurred.' : message, 'error');
                     return;
                 }
 
@@ -331,6 +344,15 @@
                 }
             }).fail(() => {
                 this.renderCategoriesError('Unable to load categories.');
+                qoShowToast('Unable to load category. Check connection.', 'error');
+                qoShowToast('Network error: could not complete request.', 'error');
+                setLastRequest(retryRequest);
+                jQuery('#mealsdb-qo-toast').one('click', () => {
+                    if (lastRequest) {
+                        lastRequest();
+                    }
+                });
+                qoShowToast('Connection error — click to retry.', 'warning');
             }).always(() => {
                 this.setCategoriesLoadingState(false);
             });
@@ -360,6 +382,8 @@
             this.state.isCloning = true;
             this.addNotice(this.getCloneMessage('cloneLoading', 'Loading products from the selected order…'));
 
+            const retryRequest = () => this.loadClonedOrder(orderId);
+
             $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'GET',
@@ -370,9 +394,13 @@
                     order_id: orderId,
                 },
             }).done((response) => {
-                if (!response || !response.success || !response.data) {
-                    const message = response && response.data && response.data.message ? response.data.message : this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
+                if (!response || response.success === false || !response.data) {
+                    const message =
+                        response && response.data && response.data.message
+                            ? response.data.message
+                            : this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
                     this.addNotice(message, 'error');
+                    qoShowToast(response && response.success === false ? message || 'An error occurred.' : message, 'error');
                     return;
                 }
 
@@ -415,6 +443,15 @@
                     message = jqXHR.responseJSON.data.message;
                 }
                 this.addNotice(message, 'error');
+                qoShowToast(message, 'error');
+                qoShowToast('Network error: could not complete request.', 'error');
+                setLastRequest(retryRequest);
+                jQuery('#mealsdb-qo-toast').one('click', () => {
+                    if (lastRequest) {
+                        lastRequest();
+                    }
+                });
+                qoShowToast('Connection error — click to retry.', 'warning');
             }).always(() => {
                 this.state.isCloning = false;
                 this.state.cloneOrderId = 0;
@@ -773,6 +810,8 @@
 
             const cacheKey = categorySlug || categoryId;
 
+            const retryRequest = () => this.fetchProductsByCategory(categoryId, categorySlug);
+
             return $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'GET',
@@ -783,8 +822,13 @@
                     nonce: this.getSecurityNonce(),
                 },
             }).done((response) => {
-                if (!response || !response.success || !response.data || !Array.isArray(response.data.products)) {
-                    this.renderProductsError(response && response.data && response.data.message ? response.data.message : 'Unable to load products.');
+                if (!response || response.success === false || !response.data || !Array.isArray(response.data.products)) {
+                    const message =
+                        response && response.data && response.data.message
+                            ? response.data.message
+                            : 'Unable to load products.';
+                    this.renderProductsError(message);
+                    qoShowToast(response && response.success === false ? message || 'An error occurred.' : message, 'error');
                     return;
                 }
 
@@ -793,6 +837,15 @@
                 this.renderProducts(response.data.products);
             }).fail(() => {
                 this.renderProductsError('Unable to load products.');
+                qoShowToast('Unable to load category. Check connection.', 'error');
+                qoShowToast('Network error: could not complete request.', 'error');
+                setLastRequest(retryRequest);
+                jQuery('#mealsdb-qo-toast').one('click', () => {
+                    if (lastRequest) {
+                        lastRequest();
+                    }
+                });
+                qoShowToast('Connection error — click to retry.', 'warning');
             });
         },
 
@@ -889,6 +942,8 @@
                 this.pendingSearchRequest.abort();
             }
 
+            const retryRequest = () => this.handleProductSearch(keyword);
+
             this.pendingSearchRequest = $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'GET',
@@ -903,8 +958,23 @@
                     return;
                 }
 
-                if (!response || !response.success || !response.data || !Array.isArray(response.data.products)) {
-                    this.renderProductsError(response && response.data && response.data.message ? response.data.message : 'No products found.');
+                if (!response || response.success === false || !response.data || !Array.isArray(response.data.products)) {
+                    const message =
+                        response && response.data && response.data.message
+                            ? response.data.message
+                            : 'No products found.';
+                    this.renderProductsError(message);
+                    if (response && response.success === false) {
+                        qoShowToast(response.message || 'An error occurred.', 'error');
+                    } else {
+                        qoShowToast(message, 'warning');
+                    }
+                    return;
+                }
+
+                if (!response.data.products.length) {
+                    this.renderProductsError('No products found.');
+                    qoShowToast('No products found.', 'warning');
                     return;
                 }
 
@@ -912,6 +982,14 @@
             }).fail(() => {
                 if (this.state.searchTerm === keyword) {
                     this.renderProductsError('Unable to search for products.');
+                    qoShowToast('Network error: could not complete request.', 'error');
+                    setLastRequest(retryRequest);
+                    jQuery('#mealsdb-qo-toast').one('click', () => {
+                        if (lastRequest) {
+                            lastRequest();
+                        }
+                    });
+                    qoShowToast('Connection error — click to retry.', 'warning');
                 }
             });
         },
@@ -1222,6 +1300,8 @@
 
             this.setCreateOrderBusy(true);
 
+            const retryRequest = () => this.handleCreateOrder();
+
             $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'POST',
@@ -1234,8 +1314,9 @@
                     items: payloadItems,
                 },
             }).done((response) => {
-                if (!response || !response.success || !response.data) {
+                if (!response || response.success === false || !response.data) {
                     this.addNotice(response && response.data && response.data.message ? response.data.message : 'Failed to create the order.', 'error');
+                    qoShowToast('Error creating order. Please retry.', 'error');
                     return;
                 }
 
@@ -1252,6 +1333,15 @@
                     message = jqXHR.responseJSON.data.message;
                 }
                 this.addNotice(message, 'error');
+                qoShowToast('Error creating order. Please retry.', 'error');
+                qoShowToast('Network error: could not complete request.', 'error');
+                setLastRequest(retryRequest);
+                jQuery('#mealsdb-qo-toast').one('click', () => {
+                    if (lastRequest) {
+                        lastRequest();
+                    }
+                });
+                qoShowToast('Connection error — click to retry.', 'warning');
             }).always(() => {
                 this.setCreateOrderBusy(false);
             });
@@ -1664,15 +1754,36 @@
     }
 
     function searchProducts(term) {
-        jQuery.post(mealsdb_qo.ajax_url, {
-            action: 'mealsdb_qo_search_products',
-            nonce: mealsdb_qo.nonce,
-            term: term,
-        }, function (response) {
-            if (response && response.html) {
-                jQuery('#mealsdb-qo-grid').html(response.html);
-            }
-        });
+        const retryRequest = () => searchProducts(term);
+
+        jQuery
+            .post(mealsdb_qo.ajax_url, {
+                action: 'mealsdb_qo_search_products',
+                nonce: mealsdb_qo.nonce,
+                term: term,
+            })
+            .done((response) => {
+                if (response && response.success === false) {
+                    qoShowToast(response.message || 'An error occurred.', 'error');
+                    return;
+                }
+
+                if (response && response.html) {
+                    jQuery('#mealsdb-qo-grid').html(response.html);
+                } else {
+                    qoShowToast('No products found.', 'warning');
+                }
+            })
+            .fail(() => {
+                qoShowToast('Network error: could not complete request.', 'error');
+                setLastRequest(retryRequest);
+                jQuery('#mealsdb-qo-toast').one('click', () => {
+                    if (lastRequest) {
+                        lastRequest();
+                    }
+                });
+                qoShowToast('Connection error — click to retry.', 'warning');
+            });
     }
 
     const $document = jQuery(document);
