@@ -137,8 +137,8 @@ class MealsDB_Quick_Order_UI {
                             </div>
                         </dl>
 
-                        <button type="button" class="button button-primary mealsdb-quick-order__create-order" id="mealsdb-quick-order-create">
-                            <?php esc_html_e('Create Order', 'meals-db'); ?>
+                        <button id="qo-create-order" class="button button-primary button-large">
+                            Create Order
                         </button>
                     </footer>
                 </aside>

@@ -61,7 +61,7 @@
             this.$search = $('#mealsdb-quick-order-search');
             this.$clientSelect = $('#mealsdb-qo-client');
             this.$orderDate = $('#mealsdb-quick-order-date');
-            this.$createOrder = $('#mealsdb-quick-order-create');
+            this.$createOrder = $('#qo-create-order');
             this.$orderSuccess = $('#qo-order-success');
             this.$qoItemsCount = $('#qo-items-count');
             this.$qoSubtotal = $('#qo-subtotal');
@@ -72,18 +72,18 @@
             this.$summary.prepend(this.$notices);
 
             if (this.$createOrder && this.$createOrder.length) {
-                const existingSpinner = this.$createOrder.find('.mealsdb-quick-order__spinner');
+                const existingSpinner = this.$createOrder.find('.qo-spinner');
                 if (existingSpinner.length) {
                     this.$createOrderSpinner = existingSpinner;
                 } else {
                     this.$createOrderSpinner = $('<span>', {
-                        class: 'spinner mealsdb-quick-order__spinner',
+                        class: 'qo-spinner',
                         'aria-hidden': 'true',
                     });
                     this.$createOrder.append(this.$createOrderSpinner);
                 }
 
-                this.$createOrderSpinner.removeClass('is-active').hide();
+                this.$createOrderSpinner.hide();
             }
         },
 
@@ -1380,7 +1380,7 @@
             }
 
             this.$createOrder.prop('disabled', !!isBusy);
-            this.$createOrder.toggleClass('is-busy', !!isBusy);
+            this.$createOrder.toggleClass('loading', !!isBusy);
             this.$createOrder.attr('aria-busy', isBusy ? 'true' : 'false');
 
             if (this.$createOrderSpinner && this.$createOrderSpinner.length) {
