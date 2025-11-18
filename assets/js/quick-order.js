@@ -187,6 +187,12 @@
             }
 
             $(document)
+                .off('click', '.mealsdb-qo-tile')
+                .on('click', '.mealsdb-qo-tile', function () {
+                    $(this).focus();
+                });
+
+            $(document)
                 .off('click', '.mealsdb-qo-btn')
                 .on('click', '.mealsdb-qo-btn', (event) => {
                     event.preventDefault();
@@ -584,10 +590,10 @@
                 return null;
             }
 
-            const $tile = $('<div class="mealsdb-qo-tile mealsdb-qo-tile--unavailable selected" />').attr(
-                'data-product-id',
-                productId
-            );
+            const $tile = $('<div class="mealsdb-qo-tile mealsdb-qo-tile--unavailable selected" />').attr({
+                'data-product-id': productId,
+                tabindex: 0,
+            });
             const $product = $('<article class="mealsdb-quick-order__product" />').attr('data-product-id', productId);
             const $content = $('<div class="mealsdb-quick-order__product-content" />');
             $content.append(
@@ -1044,7 +1050,7 @@
                     : '';
 
             return `
-                <div class="mealsdb-qo-tile${selectedClass}">
+                <div class="mealsdb-qo-tile${selectedClass}" tabindex="0">
                     <div class="mealsdb-quick-order__product${selectedClass}" data-product-id="${this.escapeAttribute(
                         productId
                     )}">
