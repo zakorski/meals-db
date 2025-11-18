@@ -1812,6 +1812,25 @@
         }, 150)
     );
 
+    $document.off('keydown.mealsdb-qo-shortcuts');
+    $document.on('keydown.mealsdb-qo-shortcuts', function (event) {
+        const $target = jQuery(event.target);
+        const tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
+        const isFormField = ['input', 'textarea', 'select', 'button', 'option'].includes(tag);
+        const isEditable = event.target && event.target.isContentEditable;
+        const isSelect2Field = $target.closest('.select2-container').length > 0;
+
+        if (isFormField || isEditable || isSelect2Field) {
+            return;
+        }
+
+        const $search = jQuery('#mealsdb-qo-search');
+        if (event.key === '/' && $search.length && !$search.is(':focus')) {
+            event.preventDefault();
+            $search.focus().select();
+        }
+    });
+
     const loadCategory = (categoryId) => {
         if (QuickOrder && typeof QuickOrder.loadCategory === 'function') {
             return QuickOrder.loadCategory(categoryId);
@@ -1830,6 +1849,67 @@
         $('.mealsdb-qo-cat-tab').removeClass('active is-active');
         $tab.addClass('active is-active');
         loadCategory($tab.data('cat'));
+    });
+
+    $document.off('keydown.mealsdb-qo-tiles');
+    $document.on('keydown.mealsdb-qo-tiles', '.mealsdb-qo-tile', function (event) {
+        const $tiles = jQuery('.mealsdb-qo-tile:visible');
+        const index = $tiles.index(this);
+
+        const $grid = jQuery('#mealsdb-qo-grid');
+        let cols = 4;
+
+        if ($grid.length && typeof window !== 'undefined' && window.getComputedStyle) {
+            const template = window.getComputedStyle($grid[0]).gridTemplateColumns;
+            if (template) {
+                const columnCount = template.split(' ').filter(Boolean).length;
+                if (columnCount > 0) {
+                    cols = columnCount;
+                }
+            }
+        }
+
+        if (event.key === 'ArrowRight') {
+            const $next = $tiles.eq(index + 1);
+            if ($next.length) {
+                event.preventDefault();
+                $next.focus();
+            }
+        }
+
+        if (event.key === 'ArrowLeft') {
+            const $prev = $tiles.eq(index - 1);
+            if ($prev.length) {
+                event.preventDefault();
+                $prev.focus();
+            }
+        }
+
+        if (event.key === 'ArrowDown') {
+            const $down = $tiles.eq(index + cols);
+            if ($down.length) {
+                event.preventDefault();
+                $down.focus();
+            }
+        }
+
+        if (event.key === 'ArrowUp') {
+            const $up = $tiles.eq(index - cols);
+            if ($up.length) {
+                event.preventDefault();
+                $up.focus();
+            }
+        }
+
+        if (event.key === '+') {
+            event.preventDefault();
+            jQuery(this).find('.mealsdb-qo-btn[data-action="plus"]').click();
+        }
+
+        if (event.key === '-') {
+            event.preventDefault();
+            jQuery(this).find('.mealsdb-qo-btn[data-action="minus"]').click();
+        }
     });
 
     $document.off('keydown.mealsdb-qo-tabs');
