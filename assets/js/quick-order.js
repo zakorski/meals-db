@@ -14,6 +14,8 @@
                 activeCategoryId: null,
                 activeCategorySlug: null,
                 categoryProducts: {},
+                renderedProducts: {},
+                searchResultsById: {},
                 cart: {},
                 searchTerm: '',
                 isSearching: false,
@@ -47,6 +49,7 @@
             this.$root = $('.mealsdb-quick-order');
             this.$categories = $('#mealsdb-qo-categories');
             this.$products = $('#mealsdb-quick-order-products');
+            this.$grid = $('#mealsdb-qo-grid');
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
             this.$search = $('#mealsdb-quick-order-search');
@@ -171,29 +174,28 @@
             const debouncedProductSearch = this.debounce((event) => {
                 const term = $(event.target).val().trim();
                 this.handleProductSearch(term);
-            }, 300);
+            }, 150);
 
             if (this.$search && this.$search.length) {
                 this.$search.on('input', debouncedProductSearch);
             }
 
-            this.$products.on('click', '.mealsdb-quick-order__qty-increase', (event) => {
-                event.preventDefault();
-                const productId = parseInt($(event.currentTarget).closest('.mealsdb-quick-order__product').data('productId'), 10);
-                if (!Number.isInteger(productId) || productId <= 0) {
-                    return;
-                }
-                this.incrementProduct(productId);
-            });
+            $(document)
+                .off('click', '.mealsdb-qo-btn')
+                .on('click', '.mealsdb-qo-btn', (event) => {
+                    event.preventDefault();
+                    const $button = $(event.currentTarget);
+                    const productId = parseInt($button.closest('.mealsdb-quick-order__product').data('productId'), 10);
+                    if (!Number.isInteger(productId) || productId <= 0) {
+                        return;
+                    }
 
-            this.$products.on('click', '.mealsdb-quick-order__qty-decrease', (event) => {
-                event.preventDefault();
-                const productId = parseInt($(event.currentTarget).closest('.mealsdb-quick-order__product').data('productId'), 10);
-                if (!Number.isInteger(productId) || productId <= 0) {
-                    return;
-                }
-                this.decrementProduct(productId);
-            });
+                    if ($button.hasClass('mealsdb-quick-order__qty-increase')) {
+                        this.incrementProduct(productId);
+                    } else if ($button.hasClass('mealsdb-quick-order__qty-decrease')) {
+                        this.decrementProduct(productId);
+                    }
+                });
 
             this.$products.on('change', '.mealsdb-quick-order__qty-input', (event) => {
                 const $input = $(event.currentTarget);
@@ -692,14 +694,14 @@
                 this.$search.val('');
             }
 
-            const $grid = $('#mealsdb-qo-grid');
+            const $grid = this.$grid && this.$grid.length ? this.$grid : $('#mealsdb-qo-grid');
             const $fadeTarget = $grid.length ? $grid : this.$products;
             if ($fadeTarget && $fadeTarget.length) {
                 $fadeTarget.stop(true, true).fadeTo(100, 0.3);
             }
 
             const finalizeFade = () => {
-                const $latestGrid = $('#mealsdb-qo-grid');
+                const $latestGrid = this.$grid && this.$grid.length ? this.$grid : $('#mealsdb-qo-grid');
                 const $target = $latestGrid.length ? $latestGrid : this.$products;
                 if ($target && $target.length) {
                     $target.stop(true, true).fadeTo(150, 1);
@@ -919,6 +921,7 @@
                 return;
             }
 
+            this.state.renderedProducts = {};
             const list = Array.isArray(products) ? products : [];
 
             if (!list.length) {
@@ -927,10 +930,7 @@
                 return;
             }
 
-            const $grid = $('<div />', {
-                class: 'mealsdb-quick-order__product-grid mealsdb-qo-grid',
-                id: 'mealsdb-qo-grid',
-            });
+            let gridHtml = '<div class="mealsdb-quick-order__product-grid mealsdb-qo-grid" id="mealsdb-qo-grid">';
 
             list.forEach((product) => {
                 const productId = product && product.product_id ? parseInt(product.product_id, 10) : 0;
@@ -940,44 +940,50 @@
 
                 const quantity = this.state.cart[productId] ? this.state.cart[productId].quantity : 0;
                 const formattedPrice = this.formatPrice(product.price || 0);
-
-                const $tile = $('<div class="mealsdb-qo-tile" />');
-                const $product = $('<div class="mealsdb-quick-order__product" />').attr('data-product-id', productId);
-
-                if (product.image_url) {
-                    const $imageWrapper = $('<div class="mealsdb-quick-order__product-image" />');
-                    $imageWrapper.append($('<img>', {
-                        src: product.image_url,
-                        alt: product.name || 'Product image',
-                        class: 'mealsdb-qo-image',
-                        loading: 'lazy',
-                    }));
-                    $product.append($imageWrapper);
-                }
-
-                const $content = $('<div class="mealsdb-quick-order__product-content" />');
-                $content.append($('<h3 class="mealsdb-quick-order__product-title" />').text(product.name || `Product #${productId}`));
-                $content.append($('<div class="mealsdb-quick-order__product-price" />').text(formattedPrice));
-
-                const $actions = $('<div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls" />');
-                const $decrease = $('<button type="button" class="button mealsdb-quick-order__qty-decrease mealsdb-qo-btn" aria-label="Decrease quantity">-</button>');
-                const $increase = $('<button type="button" class="button mealsdb-quick-order__qty-increase mealsdb-qo-btn" aria-label="Increase quantity">+</button>');
-                const $input = $('<input type="number" min="0" class="small-text mealsdb-quick-order__qty-input mealsdb-qo-qty" />').val(quantity);
-
-                $actions.append($decrease, $input, $increase);
-                $content.append($actions);
-                $product.append($content);
-
-                $product.toggleClass('selected', quantity > 0);
-                $tile.toggleClass('selected', quantity > 0);
-                $product.data('product', product);
-                $tile.append($product);
-                $grid.append($tile);
+                this.state.renderedProducts[productId] = product;
+                gridHtml += this.buildProductTileHTML(product, productId, quantity, formattedPrice);
             });
 
-            this.$products.empty().append($grid);
+            gridHtml += '</div>';
+
+            this.$products.html(gridHtml);
+            this.$grid = this.$products.find('#mealsdb-qo-grid');
+            this.state.searchResultsById = options.isSearchResults ? this.state.renderedProducts : {};
             this.syncCartToVisibleProducts();
             this.renderUnavailableTilesFromState();
+        },
+
+        buildProductTileHTML(product, productId, quantity, formattedPrice) {
+            const safeName = this.escapeHtml(product.name || `Product #${productId}`);
+            const safePrice = this.escapeHtml(formattedPrice);
+            const isSelected = quantity > 0;
+            const selectedClass = isSelected ? ' selected' : '';
+            const imageHtml =
+                product.image_url && typeof product.image_url === 'string'
+                    ? `<div class="mealsdb-quick-order__product-image"><img src="${this.escapeAttribute(
+                          product.image_url
+                      )}" alt="${this.escapeAttribute(product.name || 'Product image')}" class="mealsdb-qo-image" loading="lazy"></div>`
+                    : '';
+
+            return `
+                <div class="mealsdb-qo-tile${selectedClass}">
+                    <div class="mealsdb-quick-order__product${selectedClass}" data-product-id="${this.escapeAttribute(
+                        productId
+                    )}">
+                        ${imageHtml}
+                        <div class="mealsdb-quick-order__product-content">
+                            <h3 class="mealsdb-quick-order__product-title">${safeName}</h3>
+                            <div class="mealsdb-quick-order__product-price">${safePrice}</div>
+                            <div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls">
+                                <button type="button" class="button mealsdb-quick-order__qty-decrease mealsdb-qo-btn" aria-label="Decrease quantity">-</button>
+                                <input type="number" min="0" class="small-text mealsdb-quick-order__qty-input mealsdb-qo-qty" value="${this.escapeAttribute(
+                                    quantity
+                                )}">
+                                <button type="button" class="button mealsdb-quick-order__qty-increase mealsdb-qo-btn" aria-label="Increase quantity">+</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
         },
 
         incrementProduct(productId) {
@@ -1015,9 +1021,21 @@
 
             const $product = this.$products.find(`.mealsdb-quick-order__product[data-product-id="${productId}"]`);
             if ($product.length) {
-                $product.find('.mealsdb-quick-order__qty-input').val(quantity);
-                $product.toggleClass('selected', quantity > 0);
-                $product.closest('.mealsdb-qo-tile').toggleClass('selected', quantity > 0);
+                const $input = $product.find('.mealsdb-quick-order__qty-input');
+                const existingValue = parseInt($input.val(), 10);
+                if (existingValue !== quantity) {
+                    $input.val(quantity);
+                }
+
+                const isSelected = quantity > 0;
+                if ($product.hasClass('selected') !== isSelected) {
+                    $product.toggleClass('selected', isSelected);
+                }
+
+                const $tile = $product.closest('.mealsdb-qo-tile');
+                if ($tile.length && $tile.hasClass('selected') !== isSelected) {
+                    $tile.toggleClass('selected', isSelected);
+                }
             }
 
             this.renderSummary();
@@ -1062,6 +1080,14 @@
         findProduct(productId) {
             if (this.state.cart[productId]) {
                 return this.state.cart[productId].product;
+            }
+
+            if (this.state.searchResultsById && this.state.searchResultsById[productId]) {
+                return this.state.searchResultsById[productId];
+            }
+
+            if (this.state.renderedProducts && this.state.renderedProducts[productId]) {
+                return this.state.renderedProducts[productId];
             }
 
             if (this.state.isSearching && this.$products) {
@@ -1153,7 +1179,11 @@
                 const entry = this.state.cart && this.state.cart[productId] ? this.state.cart[productId] : null;
                 const quantity = entry ? parseInt(entry.quantity, 10) || 0 : 0;
 
-                $product.find('.mealsdb-quick-order__qty-input').val(quantity);
+                const $input = $product.find('.mealsdb-quick-order__qty-input');
+                const currentValue = parseInt($input.val(), 10);
+                if (currentValue !== quantity) {
+                    $input.val(quantity);
+                }
             });
         },
 
@@ -1624,7 +1654,9 @@
         });
     }
 
-    jQuery(document).on(
+    const $document = jQuery(document);
+    $document.off('input', '#mealsdb-qo-search');
+    $document.on(
         'input',
         '#mealsdb-qo-search',
         debounce(function () {
@@ -1650,14 +1682,20 @@
         return null;
     };
 
-    $(document).on('click', '.mealsdb-qo-cat-tab', function () {
+    $document.off('click', '.mealsdb-qo-cat-tab');
+    $document.on('click', '.mealsdb-qo-cat-tab', function () {
         const $tab = $(this);
+        if ($tab.hasClass('active') || $tab.hasClass('is-active')) {
+            return;
+        }
+
         $('.mealsdb-qo-cat-tab').removeClass('active is-active');
         $tab.addClass('active is-active');
         loadCategory($tab.data('cat'));
     });
 
-    $(document).on('keydown', function (event) {
+    $document.off('keydown.mealsdb-qo-tabs');
+    $document.on('keydown.mealsdb-qo-tabs', function (event) {
         const $tabs = $('.mealsdb-qo-cat-tab');
         if (!$tabs.length) {
             return;
