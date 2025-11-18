@@ -23,143 +23,157 @@ class MealsDB_Quick_Order_Ajax {
     public static function find_clients(): void {
         self::verify_request();
 
-        $search = isset($_REQUEST['term']) ? (string) $_REQUEST['term'] : ($_REQUEST['search'] ?? '');
-        $search = sanitize_text_field(wp_unslash($search));
-        $search = trim($search);
+        try {
+            $search = isset($_REQUEST['term']) ? (string) $_REQUEST['term'] : ($_REQUEST['search'] ?? '');
+            $search = sanitize_text_field(wp_unslash($search));
+            $search = trim($search);
 
-        if ($search === '') {
-            wp_send_json_success([
-                'clients' => [],
-            ]);
-        }
+            if ($search === '') {
+                wp_send_json([
+                    'success' => true,
+                    'clients' => [],
+                ]);
+            }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
-            wp_send_json_error([
-                'message' => __('Unable to connect to the Meals DB database.', 'meals-db'),
-            ]);
-        }
+            $conn = MealsDB_DB::get_connection();
+            if (!$conn instanceof mysqli) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Unable to connect to the Meals DB database.', 'meals-db'),
+                ]);
+            }
 
-        $term_lower       = strtolower($search);
-        $normalized_name  = self::normalize_name($search);
-        $normalized_phone = self::normalize_phone($search);
+            $term_lower       = strtolower($search);
+            $normalized_name  = self::normalize_name($search);
+            $normalized_phone = self::normalize_phone($search);
 
-        $conditions = [
-            'LOWER(first_name) LIKE ?',
-            'LOWER(last_name) LIKE ?',
-            'LOWER(CONCAT(first_name, " ", last_name)) LIKE ?',
-            'LOWER(client_email) LIKE ?',
-            'LOWER(initials_delivery) LIKE ?',
-        ];
+            $conditions = [
+                'LOWER(first_name) LIKE ?',
+                'LOWER(last_name) LIKE ?',
+                'LOWER(CONCAT(first_name, " ", last_name)) LIKE ?',
+                'LOWER(client_email) LIKE ?',
+                'LOWER(initials_delivery) LIKE ?',
+            ];
 
-        $params = [];
-        $types  = '';
-        $like   = '%' . $term_lower . '%';
-        foreach (range(1, 5) as $_) {
-            $params[] = $like;
-            $types   .= 's';
-        }
+            $params = [];
+            $types  = '';
+            $like   = '%' . $term_lower . '%';
+            foreach (range(1, 5) as $_) {
+                $params[] = $like;
+                $types   .= 's';
+            }
 
-        if ($normalized_phone !== '') {
-            $conditions[] = 'REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone_primary, " ", ""), "-", ""), "(", ""), ")", ""), ".", "") LIKE ?';
-            $params[] = '%' . $normalized_phone . '%';
-            $types   .= 's';
-        }
+            if ($normalized_phone !== '') {
+                $conditions[] = 'REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone_primary, " ", ""), "-", ""), "(", ""), ")", ""), ".", "") LIKE ?';
+                $params[] = '%' . $normalized_phone . '%';
+                $types   .= 's';
+            }
 
-        $where = implode(' OR ', $conditions);
-        $sql = "SELECT id, first_name, last_name, phone_primary, customer_type, initials_delivery, active, client_email FROM meals_clients WHERE active = 1 AND ({$where}) ORDER BY last_name ASC, first_name ASC LIMIT 20";
+            $where = implode(' OR ', $conditions);
+            $sql = "SELECT id, first_name, last_name, phone_primary, customer_type, initials_delivery, active, client_email FROM meals_clients WHERE active = 1 AND ({$where}) ORDER BY last_name ASC, first_name ASC LIMIT 20";
 
-        $stmt = $conn->prepare($sql);
-        if (!$stmt instanceof mysqli_stmt) {
-            wp_send_json_error([
-                'message' => __('Failed to prepare client lookup.', 'meals-db'),
-            ]);
-        }
+            $stmt = $conn->prepare($sql);
+            if (!$stmt instanceof mysqli_stmt) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Failed to prepare client lookup.', 'meals-db'),
+                ]);
+            }
 
-        $bind_params = [$types];
-        foreach ($params as $index => $value) {
-            $bind_params[] =& $params[$index];
-        }
+            $bind_params = [$types];
+            foreach ($params as $index => $value) {
+                $bind_params[] =& $params[$index];
+            }
 
-        if (!call_user_func_array([$stmt, 'bind_param'], $bind_params)) {
-            $stmt->close();
-            wp_send_json_error([
-                'message' => __('Failed to bind parameters for client lookup.', 'meals-db'),
-            ]);
-        }
+            if (!call_user_func_array([$stmt, 'bind_param'], $bind_params)) {
+                $stmt->close();
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Failed to bind parameters for client lookup.', 'meals-db'),
+                ]);
+            }
 
-        if (!$stmt->execute()) {
-            $stmt->close();
-            wp_send_json_error([
-                'message' => __('Failed to execute client lookup.', 'meals-db'),
-            ]);
-        }
+            if (!$stmt->execute()) {
+                $stmt->close();
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Failed to execute client lookup.', 'meals-db'),
+                ]);
+            }
 
-        $result = $stmt->get_result();
-        $clients = [];
-        if ($result instanceof mysqli_result) {
-            while ($row = $result->fetch_assoc()) {
-                $client_id = isset($row['id']) ? (int) $row['id'] : 0;
-                if ($client_id <= 0) {
-                    continue;
-                }
+            $result = $stmt->get_result();
+            $clients = [];
+            if ($result instanceof mysqli_result) {
+                while ($row = $result->fetch_assoc()) {
+                    $client_id = isset($row['id']) ? (int) $row['id'] : 0;
+                    if ($client_id <= 0) {
+                        continue;
+                    }
 
-                $first_name = isset($row['first_name']) ? (string) $row['first_name'] : '';
-                $last_name  = isset($row['last_name']) ? (string) $row['last_name'] : '';
-                $name       = trim($first_name . ' ' . $last_name);
-                if ($name === '') {
-                    $name = sprintf(__('Client #%d', 'meals-db'), $client_id);
-                }
+                    $first_name = isset($row['first_name']) ? (string) $row['first_name'] : '';
+                    $last_name  = isset($row['last_name']) ? (string) $row['last_name'] : '';
+                    $name       = trim($first_name . ' ' . $last_name);
+                    if ($name === '') {
+                        $name = sprintf(__('Client #%d', 'meals-db'), $client_id);
+                    }
 
-                $row_name_normalized  = self::normalize_name($name);
-                $row_phone_normalized = self::normalize_phone($row['phone_primary'] ?? '');
-                $include = false;
+                    $row_name_normalized  = self::normalize_name($name);
+                    $row_phone_normalized = self::normalize_phone($row['phone_primary'] ?? '');
+                    $include = false;
 
-                if ($normalized_phone !== '' && $row_phone_normalized !== '' && strpos($row_phone_normalized, $normalized_phone) !== false) {
-                    $include = true;
-                }
-
-                if (!$include && $normalized_name !== '' && $row_name_normalized !== '') {
-                    if (strpos($row_name_normalized, $normalized_name) !== false) {
-                        $include = true;
-                    } elseif (function_exists('levenshtein') && levenshtein($row_name_normalized, $normalized_name) <= 2) {
+                    if ($normalized_phone !== '' && $row_phone_normalized !== '' && strpos($row_phone_normalized, $normalized_phone) !== false) {
                         $include = true;
                     }
-                }
 
-                if (!$include && $term_lower !== '') {
-                    $email    = strtolower((string) ($row['client_email'] ?? ''));
-                    $initials = strtolower((string) ($row['initials_delivery'] ?? ''));
-                    $type     = strtolower((string) ($row['customer_type'] ?? ''));
-                    if (strpos($email, $term_lower) !== false || strpos($initials, $term_lower) !== false || strpos($type, $term_lower) !== false) {
-                        $include = true;
+                    if (!$include && $normalized_name !== '' && $row_name_normalized !== '') {
+                        if (strpos($row_name_normalized, $normalized_name) !== false) {
+                            $include = true;
+                        } elseif (function_exists('levenshtein') && levenshtein($row_name_normalized, $normalized_name) <= 2) {
+                            $include = true;
+                        }
                     }
-                }
 
-                if (!$include) {
-                    continue;
-                }
+                    if (!$include && $term_lower !== '') {
+                        $email    = strtolower((string) ($row['client_email'] ?? ''));
+                        $initials = strtolower((string) ($row['initials_delivery'] ?? ''));
+                        $type     = strtolower((string) ($row['customer_type'] ?? ''));
+                        if (strpos($email, $term_lower) !== false || strpos($initials, $term_lower) !== false || strpos($type, $term_lower) !== false) {
+                            $include = true;
+                        }
+                    }
 
-                $clients[] = [
-                    'id'       => $client_id,
-                    'name'     => $name,
-                    'phone'    => isset($row['phone_primary']) ? (string) $row['phone_primary'] : '',
-                    'initials' => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
-                    'type'     => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
-                    'active'   => isset($row['active']) ? (int) $row['active'] : 0,
-                ];
+                    if (!$include) {
+                        continue;
+                    }
 
-                if (count($clients) >= 20) {
-                    break;
+                    $clients[] = [
+                        'id'       => $client_id,
+                        'name'     => $name,
+                        'phone'    => isset($row['phone_primary']) ? (string) $row['phone_primary'] : '',
+                        'initials' => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
+                        'type'     => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
+                        'active'   => isset($row['active']) ? (int) $row['active'] : 0,
+                    ];
+
+                    if (count($clients) >= 20) {
+                        break;
+                    }
                 }
             }
+
+            $stmt->close();
+
+            wp_send_json([
+                'success' => true,
+                'clients' => $clients,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] find_clients error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage(),
+            ]);
         }
-
-        $stmt->close();
-
-        wp_send_json_success([
-            'clients' => $clients,
-        ]);
     }
 
     private static function normalize_phone(string $value): string {
@@ -300,10 +314,19 @@ class MealsDB_Quick_Order_Ajax {
     public static function get_categories(): void {
         self::verify_request();
 
-        $categories = MealsDB_Quick_Order_Products::get_categories();
-        wp_send_json_success([
-            'categories' => $categories,
-        ]);
+        try {
+            $categories = MealsDB_Quick_Order_Products::get_categories();
+            wp_send_json([
+                'success'    => true,
+                'categories' => $categories,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] get_categories error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -312,17 +335,27 @@ class MealsDB_Quick_Order_Ajax {
     public static function get_products_by_category(): void {
         self::verify_request();
 
-        $category_id = isset($_REQUEST['category_id']) ? intval($_REQUEST['category_id']) : 0;
-        if ($category_id <= 0) {
-            wp_send_json_error([
-                'message' => __('Invalid category.', 'meals-db'),
+        try {
+            $category_id = isset($_REQUEST['category_id']) ? intval($_REQUEST['category_id']) : 0;
+            if ($category_id <= 0) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Missing or invalid category.', 'meals-db'),
+                ]);
+            }
+
+            $products = MealsDB_Quick_Order_Products::get_products_by_category($category_id);
+            wp_send_json([
+                'success'  => true,
+                'products' => $products,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] get_products_by_category error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage(),
             ]);
         }
-
-        $products = MealsDB_Quick_Order_Products::get_products_by_category($category_id);
-        wp_send_json_success([
-            'products' => $products,
-        ]);
     }
 
     /**
@@ -331,126 +364,138 @@ class MealsDB_Quick_Order_Ajax {
     public static function search_products(): void {
         self::verify_request();
 
-        $term = '';
-        if (isset($_POST['term'])) {
-            $term = (string) $_POST['term'];
-        } elseif (isset($_REQUEST['term'])) {
-            $term = (string) $_REQUEST['term'];
-        } elseif (isset($_REQUEST['keyword'])) {
-            $term = (string) $_REQUEST['keyword'];
-        }
+        try {
+            $term = '';
+            if (isset($_POST['term'])) {
+                $term = (string) $_POST['term'];
+            } elseif (isset($_REQUEST['term'])) {
+                $term = (string) $_REQUEST['term'];
+            } elseif (isset($_REQUEST['keyword'])) {
+                $term = (string) $_REQUEST['keyword'];
+            }
 
-        if (function_exists('wp_unslash')) {
-            $term = wp_unslash($term);
-        }
+            if (function_exists('wp_unslash')) {
+                $term = wp_unslash($term);
+            }
 
-        $term = sanitize_text_field($term);
-        $term = trim($term);
+            $term = sanitize_text_field($term);
+            $term = trim($term);
 
-        if ($term === '') {
-            wp_send_json_success([
-                'html' => '<p>' . esc_html__('Please enter a search term.', 'meals-db') . '</p>',
+            if ($term === '') {
+                wp_send_json([
+                    'success' => true,
+                    'html'    => '<p>' . esc_html__('Please enter a search term.', 'meals-db') . '</p>',
+                ]);
+            }
+
+            global $wpdb;
+
+            if (!$wpdb instanceof wpdb) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Unable to connect to the database.', 'meals-db'),
+                ]);
+            }
+
+            if (!function_exists('wc_get_product')) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('WooCommerce is required to search for products.', 'meals-db'),
+                ]);
+            }
+
+            $like_term = '%' . $wpdb->esc_like($term) . '%';
+
+            $sql = $wpdb->prepare(
+                "SELECT DISTINCT p.ID, p.post_title, p.post_excerpt, p.post_content, sku.meta_value AS sku
+                 FROM {$wpdb->posts} AS p
+                 LEFT JOIN {$wpdb->postmeta} AS sku ON sku.post_id = p.ID AND sku.meta_key = '_sku'
+                 WHERE p.post_type = 'product'
+                   AND p.post_status = 'publish'
+                   AND (p.post_title LIKE %s OR p.post_excerpt LIKE %s OR p.post_content LIKE %s OR sku.meta_value LIKE %s)
+                 ORDER BY p.post_title ASC
+                 LIMIT 50",
+                $like_term,
+                $like_term,
+                $like_term,
+                $like_term
+            );
+
+            $rows = $wpdb->get_results($sql, ARRAY_A);
+            if (!is_array($rows)) {
+                $rows = [];
+            }
+
+            $matches = [];
+            foreach ($rows as $row) {
+                $product_id = isset($row['ID']) ? intval($row['ID']) : 0;
+                if ($product_id <= 0) {
+                    continue;
+                }
+
+                $product = wc_get_product($product_id);
+                if (!$product instanceof WC_Product) {
+                    continue;
+                }
+
+                if (!$product->is_visible() || $product->get_status() !== 'publish') {
+                    continue;
+                }
+
+                $keywords = self::collect_product_keywords($product);
+
+                $score = self::calculate_search_score($term, [
+                    $row['post_title'] ?? '',
+                    $row['sku'] ?? '',
+                    $row['post_excerpt'] ?? '',
+                    $row['post_content'] ?? '',
+                    implode(' ', $keywords),
+                ]);
+
+                if ($score === null) {
+                    continue;
+                }
+
+                $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
+                if (empty($payload) || !isset($payload[0])) {
+                    continue;
+                }
+
+                $matches[] = [
+                    'score'   => $score,
+                    'product' => $payload[0],
+                ];
+            }
+
+            usort($matches, static function ($a, $b) {
+                $score_compare = $a['score'] <=> $b['score'];
+                if ($score_compare !== 0) {
+                    return $score_compare;
+                }
+
+                $name_a = isset($a['product']['name']) ? (string) $a['product']['name'] : '';
+                $name_b = isset($b['product']['name']) ? (string) $b['product']['name'] : '';
+
+                return strcasecmp($name_a, $name_b);
+            });
+
+            $products = array_map(static function ($match) {
+                return $match['product'];
+            }, $matches);
+
+            $html = self::render_product_tiles($products);
+
+            wp_send_json([
+                'success' => true,
+                'html'    => $html,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] search_products error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage(),
             ]);
         }
-
-        global $wpdb;
-
-        if (!$wpdb instanceof wpdb) {
-            wp_send_json_error([
-                'message' => __('Unable to connect to the database.', 'meals-db'),
-            ]);
-        }
-
-        if (!function_exists('wc_get_product')) {
-            wp_send_json_error([
-                'message' => __('WooCommerce is required to search for products.', 'meals-db'),
-            ]);
-        }
-
-        $like_term = '%' . $wpdb->esc_like($term) . '%';
-
-        $sql = $wpdb->prepare(
-            "SELECT DISTINCT p.ID, p.post_title, p.post_excerpt, p.post_content, sku.meta_value AS sku
-             FROM {$wpdb->posts} AS p
-             LEFT JOIN {$wpdb->postmeta} AS sku ON sku.post_id = p.ID AND sku.meta_key = '_sku'
-             WHERE p.post_type = 'product'
-               AND p.post_status = 'publish'
-               AND (p.post_title LIKE %s OR p.post_excerpt LIKE %s OR p.post_content LIKE %s OR sku.meta_value LIKE %s)
-             ORDER BY p.post_title ASC
-             LIMIT 50",
-            $like_term,
-            $like_term,
-            $like_term,
-            $like_term
-        );
-
-        $rows = $wpdb->get_results($sql, ARRAY_A);
-        if (!is_array($rows)) {
-            $rows = [];
-        }
-
-        $matches = [];
-        foreach ($rows as $row) {
-            $product_id = isset($row['ID']) ? intval($row['ID']) : 0;
-            if ($product_id <= 0) {
-                continue;
-            }
-
-            $product = wc_get_product($product_id);
-            if (!$product instanceof WC_Product) {
-                continue;
-            }
-
-            if (!$product->is_visible() || $product->get_status() !== 'publish') {
-                continue;
-            }
-
-            $keywords = self::collect_product_keywords($product);
-
-            $score = self::calculate_search_score($term, [
-                $row['post_title'] ?? '',
-                $row['sku'] ?? '',
-                $row['post_excerpt'] ?? '',
-                $row['post_content'] ?? '',
-                implode(' ', $keywords),
-            ]);
-
-            if ($score === null) {
-                continue;
-            }
-
-            $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
-            if (empty($payload) || !isset($payload[0])) {
-                continue;
-            }
-
-            $matches[] = [
-                'score'   => $score,
-                'product' => $payload[0],
-            ];
-        }
-
-        usort($matches, static function ($a, $b) {
-            $score_compare = $a['score'] <=> $b['score'];
-            if ($score_compare !== 0) {
-                return $score_compare;
-            }
-
-            $name_a = isset($a['product']['name']) ? (string) $a['product']['name'] : '';
-            $name_b = isset($b['product']['name']) ? (string) $b['product']['name'] : '';
-
-            return strcasecmp($name_a, $name_b);
-        });
-
-        $products = array_map(static function ($match) {
-            return $match['product'];
-        }, $matches);
-
-        $html = self::render_product_tiles($products);
-
-        wp_send_json_success([
-            'html' => $html,
-        ]);
     }
 
     /**
@@ -459,48 +504,62 @@ class MealsDB_Quick_Order_Ajax {
     public static function create_order(): void {
         self::verify_request();
 
-        $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
-        if ($client_id <= 0) {
-            wp_send_json_error([
-                'message' => __('A valid client is required to create an order.', 'meals-db'),
-            ]);
-        }
-
-        $date = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
-        $order_date = self::parse_order_date($date);
-
-        $items = self::normalise_items($_POST['items'] ?? []);
-        if (empty($items)) {
-            wp_send_json_error([
-                'message' => __('At least one product must be supplied.', 'meals-db'),
-            ]);
-        }
-
-        $order = self::create_wc_order($items, $order_date);
-        if (is_wp_error($order)) {
-            wp_send_json_error([
-                'message' => $order->get_error_message(),
-            ]);
-        }
-
-        $order->update_meta_data('mealsdb_client_id', $client_id);
-        $order->save();
-
-        if (!self::log_transaction($order, $client_id, $order_date)) {
-            $order_id = $order->get_id();
-            if ($order_id > 0) {
-                wp_trash_post($order_id);
+        try {
+            $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
+            if ($client_id <= 0) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Invalid client ID.', 'meals-db'),
+                ]);
             }
 
-            wp_send_json_error([
-                'message' => __('Failed to record Meals DB transaction.', 'meals-db'),
+            $date       = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
+            $order_date = self::parse_order_date($date);
+
+            $items = self::normalise_items($_POST['items'] ?? []);
+            if (empty($items)) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('At least one product must be supplied.', 'meals-db'),
+                ]);
+            }
+
+            $order = self::create_wc_order($items, $order_date);
+            if (is_wp_error($order)) {
+                error_log('[MealsDB QuickOrder] create_order failed: ' . $order->get_error_message());
+                wp_send_json([
+                    'success' => false,
+                    'message' => $order->get_error_message(),
+                ]);
+            }
+
+            $order->update_meta_data('mealsdb_client_id', $client_id);
+            $order->save();
+
+            if (!self::log_transaction($order, $client_id, $order_date)) {
+                $order_id = $order->get_id();
+                if ($order_id > 0) {
+                    wp_trash_post($order_id);
+                }
+
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Failed to record Meals DB transaction.', 'meals-db'),
+                ]);
+            }
+
+            wp_send_json([
+                'success' => true,
+                'order_id' => $order->get_id(),
+                'message'  => __('Order created successfully.', 'meals-db'),
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] create_order error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage(),
             ]);
         }
-
-        wp_send_json_success([
-            'order_id' => $order->get_id(),
-            'message'  => __('Order created successfully.', 'meals-db'),
-        ]);
     }
 
     /**
@@ -509,89 +568,101 @@ class MealsDB_Quick_Order_Ajax {
     public static function clone_order(): void {
         self::verify_request();
 
-        $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
-        if ($source_order_id <= 0) {
-            wp_send_json_error([
-                'message' => __('An order to clone must be specified.', 'meals-db'),
+        try {
+            $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
+            if ($source_order_id <= 0) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('An order to clone must be specified.', 'meals-db'),
+                ]);
+            }
+
+            $source_order = wc_get_order($source_order_id);
+            if (!$source_order instanceof WC_Order) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('The specified order could not be found.', 'meals-db'),
+                ]);
+            }
+
+            $items_map = [];
+
+            foreach ($source_order->get_items('line_item') as $item) {
+                if (!$item instanceof WC_Order_Item_Product) {
+                    continue;
+                }
+
+                $quantity = (int) $item->get_quantity();
+                if ($quantity <= 0) {
+                    continue;
+                }
+
+                $product = $item->get_product();
+                if (!$product instanceof WC_Product) {
+                    continue;
+                }
+
+                $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
+                if (empty($payload) || !isset($payload[0]['product_id'])) {
+                    continue;
+                }
+
+                $product_id = (int) $payload[0]['product_id'];
+                if ($product_id <= 0) {
+                    continue;
+                }
+
+                if (isset($items_map[$product_id])) {
+                    $items_map[$product_id]['quantity'] += $quantity;
+                } else {
+                    $items_map[$product_id] = [
+                        'product'  => $payload[0],
+                        'quantity' => $quantity,
+                    ];
+                }
+            }
+
+            if (empty($items_map)) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('No products were found on the source order.', 'meals-db'),
+                ]);
+            }
+
+            $order_date = '';
+            $created = $source_order->get_date_created();
+            if ($created instanceof WC_DateTime) {
+                $date = clone $created;
+                if (function_exists('wp_timezone')) {
+                    $date = $date->setTimezone(wp_timezone());
+                }
+
+                $order_date = $date->format('Y-m-d');
+            }
+
+            $client_id = intval($source_order->get_meta('mealsdb_client_id'));
+            if ($client_id <= 0) {
+                $client_id = null;
+            }
+
+            $order_number = method_exists($source_order, 'get_order_number') ? $source_order->get_order_number() : $source_order_id;
+            $message = sprintf(__('Products from order %s have been loaded into Quick Order.', 'meals-db'), $order_number);
+
+            wp_send_json([
+                'success'    => true,
+                'message'    => $message,
+                'items'      => array_values($items_map),
+                'client_id'  => $client_id,
+                'order_date' => $order_date,
+                'order_id'   => $source_order_id,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] clone_order error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage(),
             ]);
         }
-
-        $source_order = wc_get_order($source_order_id);
-        if (!$source_order instanceof WC_Order) {
-            wp_send_json_error([
-                'message' => __('The specified order could not be found.', 'meals-db'),
-            ]);
-        }
-
-        $items_map = [];
-
-        foreach ($source_order->get_items('line_item') as $item) {
-            if (!$item instanceof WC_Order_Item_Product) {
-                continue;
-            }
-
-            $quantity = (int) $item->get_quantity();
-            if ($quantity <= 0) {
-                continue;
-            }
-
-            $product = $item->get_product();
-            if (!$product instanceof WC_Product) {
-                continue;
-            }
-
-            $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
-            if (empty($payload) || !isset($payload[0]['product_id'])) {
-                continue;
-            }
-
-            $product_id = (int) $payload[0]['product_id'];
-            if ($product_id <= 0) {
-                continue;
-            }
-
-            if (isset($items_map[$product_id])) {
-                $items_map[$product_id]['quantity'] += $quantity;
-            } else {
-                $items_map[$product_id] = [
-                    'product'  => $payload[0],
-                    'quantity' => $quantity,
-                ];
-            }
-        }
-
-        if (empty($items_map)) {
-            wp_send_json_error([
-                'message' => __('No products were found on the source order.', 'meals-db'),
-            ]);
-        }
-
-        $order_date = '';
-        $created = $source_order->get_date_created();
-        if ($created instanceof WC_DateTime) {
-            $date = clone $created;
-            if (function_exists('wp_timezone')) {
-                $date = $date->setTimezone(wp_timezone());
-            }
-
-            $order_date = $date->format('Y-m-d');
-        }
-
-        $client_id = intval($source_order->get_meta('mealsdb_client_id'));
-        if ($client_id <= 0) {
-            $client_id = null;
-        }
-
-        $order_number = method_exists($source_order, 'get_order_number') ? $source_order->get_order_number() : $source_order_id;
-        $message = sprintf(__('Products from order %s have been loaded into Quick Order.', 'meals-db'), $order_number);
-
-        wp_send_json_success([
-            'message'    => $message,
-            'items'      => array_values($items_map),
-            'client_id'  => $client_id,
-            'order_date' => $order_date,
-            'order_id'   => $source_order_id,
-        ]);
     }
 
     /**
@@ -600,97 +671,112 @@ class MealsDB_Quick_Order_Ajax {
     public static function clone_get_order(): void {
         self::verify_request();
 
-        $source_order_id = isset($_POST['order_id']) ? absint(wp_unslash($_POST['order_id'])) : 0;
-        if ($source_order_id <= 0) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('A valid order ID is required.', 'meals-db'),
-            ]);
-        }
-
-        $source_order = wc_get_order($source_order_id);
-        if (!$source_order instanceof WC_Order) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('The specified order could not be found.', 'meals-db'),
-            ]);
-        }
-
-        $items = [];
-        foreach ($source_order->get_items('line_item') as $item) {
-            if (!$item instanceof WC_Order_Item_Product) {
-                continue;
+        try {
+            $source_order_id = isset($_POST['order_id']) ? absint(wp_unslash($_POST['order_id'])) : 0;
+            if ($source_order_id <= 0) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('A valid order ID is required.', 'meals-db'),
+                ]);
             }
 
-            $quantity = (int) $item->get_quantity();
-            if ($quantity <= 0) {
-                continue;
+            $source_order = wc_get_order($source_order_id);
+            if (!$source_order instanceof WC_Order) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('The specified order could not be found.', 'meals-db'),
+                ]);
             }
 
-            $product = $item->get_product();
-            if (!$product instanceof WC_Product) {
-                continue;
+            $items = [];
+            foreach ($source_order->get_items('line_item') as $item) {
+                if (!$item instanceof WC_Order_Item_Product) {
+                    continue;
+                }
+
+                $quantity = (int) $item->get_quantity();
+                if ($quantity <= 0) {
+                    continue;
+                }
+
+                $product = $item->get_product();
+                if (!$product instanceof WC_Product) {
+                    continue;
+                }
+
+                $product_id = $product->get_id();
+                if ($product_id <= 0) {
+                    continue;
+                }
+
+                $existing_product = wc_get_product($product_id);
+                if (!$existing_product instanceof WC_Product) {
+                    continue;
+                }
+
+                $items[$product_id] = ($items[$product_id] ?? 0) + $quantity;
             }
 
-            $product_id = $product->get_id();
-            if ($product_id <= 0) {
-                continue;
+            $order_date = '';
+            $created    = $source_order->get_date_created();
+            if ($created instanceof WC_DateTime) {
+                $date = clone $created;
+                if (function_exists('wp_timezone')) {
+                    $date = $date->setTimezone(wp_timezone());
+                }
+
+                $order_date = $date->format('Y-m-d');
             }
 
-            $existing_product = wc_get_product($product_id);
-            if (!$existing_product instanceof WC_Product) {
-                continue;
+            $client_id = intval($source_order->get_meta('mealsdb_client_id'));
+            if ($client_id <= 0) {
+                $client_id = null;
             }
 
-            $items[$product_id] = ($items[$product_id] ?? 0) + $quantity;
-        }
+            $client_type = '';
+            if ($client_id !== null && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
+                $table = MealsDB_DB::get_table_name('meals_clients');
+                $sql   = $GLOBALS['wpdb']->prepare("SELECT customer_type FROM {$table} WHERE id = %d LIMIT 1", $client_id);
 
-        $order_date = '';
-        $created    = $source_order->get_date_created();
-        if ($created instanceof WC_DateTime) {
-            $date = clone $created;
-            if (function_exists('wp_timezone')) {
-                $date = $date->setTimezone(wp_timezone());
-            }
-
-            $order_date = $date->format('Y-m-d');
-        }
-
-        $client_id = intval($source_order->get_meta('mealsdb_client_id'));
-        if ($client_id <= 0) {
-            $client_id = null;
-        }
-
-        $client_type = '';
-        if ($client_id !== null && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
-            $table = MealsDB_DB::get_table_name('meals_clients');
-            $sql   = $GLOBALS['wpdb']->prepare("SELECT customer_type FROM {$table} WHERE id = %d LIMIT 1", $client_id);
-
-            if (is_string($sql)) {
-                $result = $GLOBALS['wpdb']->get_var($sql);
-                if (is_string($result)) {
-                    $client_type = $result;
+                if (is_string($sql)) {
+                    $result = $GLOBALS['wpdb']->get_var($sql);
+                    if (is_string($result)) {
+                        $client_type = $result;
+                    }
                 }
             }
-        }
 
-        wp_send_json([
-            'success'     => true,
-            'client_id'   => $client_id,
-            'client_type' => $client_type,
-            'order_date'  => $order_date,
-            'items'       => $items,
-        ]);
+            wp_send_json([
+                'success'     => true,
+                'client_id'   => $client_id,
+                'client_type' => $client_type,
+                'order_date'  => $order_date,
+                'items'       => $items,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] clone_get_order error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage(),
+            ]);
+        }
     }
 
     /**
      * Ensure the AJAX request is valid and user is authorised.
      */
     private static function verify_request(): void {
-        check_ajax_referer('mealsdb_nonce', 'nonce');
+        $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
+        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Invalid or missing nonce.', 'meals-db'),
+            ]);
+        }
 
         if (!self::current_user_can_access_quick_order()) {
-            wp_send_json_error([
+            wp_send_json([
+                'success' => false,
                 'message' => __('You are not allowed to perform this action.', 'meals-db'),
             ], 403);
         }
