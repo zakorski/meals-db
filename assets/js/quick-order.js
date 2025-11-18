@@ -225,8 +225,11 @@
             if (this.$createOrder && this.$createOrder.length) {
                 this.$createOrder.on('click', (event) => {
                     event.preventDefault();
+                    const btn = jQuery('#qo-create-order');
+                    btn.addClass('loading');
+                    btn.append('<div class="qo-spinner"></div>');
                     qoShowToast('Submitting order...', 'info');
-                    this.handleCreateOrder();
+                    this.handleCreateOrder(btn);
                 });
             }
 
@@ -1272,7 +1275,7 @@
             });
         },
 
-        handleCreateOrder() {
+        handleCreateOrder(createButton = null) {
             if (!this.$createOrder || !this.$createOrder.length) {
                 return;
             }
@@ -1285,18 +1288,9 @@
             const orderDate = this.$orderDate && this.$orderDate.length ? this.$orderDate.val() : '';
             const items = Object.values(this.state.cart || {}).filter((entry) => entry && entry.quantity > 0);
 
-            if (!Number.isInteger(clientId) || clientId <= 0) {
-                this.addNotice('Please select a client before creating an order.', 'error');
-                return;
-            }
-
-            if (!orderDate) {
-                this.addNotice('Please select an order date before creating an order.', 'error');
-                return;
-            }
-
-            if (!items.length) {
-                this.addNotice('Please add at least one product to the order.', 'error');
+            if (!Number.isInteger(clientId) || clientId <= 0 || !orderDate || !items.length) {
+                qoShowToast('Please select a client, date, and at least one product.', 'error');
+                this.clearCreateOrderLoading(createButton);
                 return;
             }
 
@@ -1306,8 +1300,6 @@
             }));
 
             this.setCreateOrderBusy(true);
-
-            const retryRequest = () => this.handleCreateOrder();
 
             $.ajax({
                 url: this.getAjaxUrl(),
@@ -1322,35 +1314,30 @@
                 },
             }).done((response) => {
                 if (!response || response.success === false || !response.data) {
-                    this.addNotice(response && response.data && response.data.message ? response.data.message : 'Failed to create the order.', 'error');
-                    qoShowToast('Error creating order. Please retry.', 'error');
+                    qoShowToast('Error creating order. Please try again.', 'error');
                     return;
                 }
 
-                const orderId = response.data.order_id ? parseInt(response.data.order_id, 10) : 0;
-                const message = response.data.message || 'Order created successfully.';
-                this.showOrderSuccess(message, orderId);
+                const orderLink =
+                    (response.data && response.data.order_link) || response.order_link || '#';
 
-                this.state.cart = {};
-                this.renderSummary();
-                this.$products.find('.mealsdb-quick-order__qty-input').val(0);
-            }).fail((jqXHR) => {
-                let message = 'Failed to create the order.';
-                if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
-                    message = jqXHR.responseJSON.data.message;
-                }
-                this.addNotice(message, 'error');
-                qoShowToast('Error creating order. Please retry.', 'error');
-                qoShowToast('Network error: could not complete request.', 'error');
-                setLastRequest(retryRequest);
-                jQuery('#mealsdb-qo-toast').one('click', () => {
-                    if (lastRequest) {
-                        lastRequest();
-                    }
-                });
-                qoShowToast('Connection error — click to retry.', 'warning');
+                qoShowToast('Order created successfully!', 'success');
+
+                jQuery('#qo-order-success')
+                    .html(
+                        '<p>Order created successfully! <a href="' +
+                            orderLink +
+                            '" target="_blank">View Order</a></p>' +
+                            '<button id="qo-start-new" class="button">Create Another Order</button>'
+                    )
+                    .show();
+
+                jQuery('html, body').animate({ scrollTop: jQuery('#qo-order-success').offset().top - 30 }, 300);
+            }).fail(() => {
+                qoShowToast('Error creating order. Please try again.', 'error');
             }).always(() => {
                 this.setCreateOrderBusy(false);
+                this.clearCreateOrderLoading(createButton);
             });
         },
 
@@ -1380,17 +1367,16 @@
             }
 
             this.$createOrder.prop('disabled', !!isBusy);
-            this.$createOrder.toggleClass('loading', !!isBusy);
             this.$createOrder.attr('aria-busy', isBusy ? 'true' : 'false');
+        },
 
-            if (this.$createOrderSpinner && this.$createOrderSpinner.length) {
-                this.$createOrderSpinner.toggleClass('is-active', !!isBusy);
-                if (isBusy) {
-                    this.$createOrderSpinner.show();
-                } else {
-                    this.$createOrderSpinner.hide();
-                }
+        clearCreateOrderLoading(createButton) {
+            if (!createButton || !createButton.length) {
+                return;
             }
+
+            createButton.removeClass('loading');
+            createButton.find('.qo-spinner').remove();
         },
 
         clearNotices() {
@@ -1792,6 +1778,25 @@
                 qoShowToast('Connection error — click to retry.', 'warning');
             });
     }
+
+    jQuery(document).on('click', '#qo-start-new', function () {
+        // Clear cart
+        QuickOrder.state.cart = {};
+
+        // Clear tile highlights
+        jQuery('.mealsdb-qo-tile').removeClass('selected');
+
+        // Reset quantities
+        jQuery('.mealsdb-qo-qty').text('0');
+
+        // Reset summary
+        QuickOrder.updateSummaryPanel();
+
+        // Clear success UI
+        jQuery('#qo-order-success').hide().empty();
+
+        qoShowToast('Ready for new order.', 'info');
+    });
 
     const $document = jQuery(document);
     $document.off('input', '#mealsdb-qo-search');
