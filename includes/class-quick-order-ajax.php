@@ -502,35 +502,37 @@ class MealsDB_Quick_Order_Ajax {
      * AJAX endpoint to create a new WooCommerce order for a Meals DB client.
      */
     public static function create_order(): void {
-        self::verify_request();
+        $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
+        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
+            wp_send_json([
+                'success' => false,
+                'message' => 'Invalid order data.',
+            ]);
+        }
+
+        self::verify_request(true);
+
+        $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
+        $date      = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
+        $items     = self::normalise_items($_POST['items'] ?? []);
+        $order_date = self::parse_order_date($date);
+
+        if (
+            $client_id <= 0
+            || !$order_date instanceof DateTimeImmutable
+            || empty($items)
+            || !self::client_is_active($client_id)
+        ) {
+            wp_send_json([
+                'success' => false,
+                'message' => 'Invalid order data.',
+            ]);
+        }
 
         try {
-            $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
-            if ($client_id <= 0) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Invalid client ID.', 'meals-db'),
-                ]);
-            }
-
-            $date       = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
-            $order_date = self::parse_order_date($date);
-
-            $items = self::normalise_items($_POST['items'] ?? []);
-            if (empty($items)) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('At least one product must be supplied.', 'meals-db'),
-                ]);
-            }
-
             $order = self::create_wc_order($items, $order_date);
             if (is_wp_error($order)) {
-                error_log('[MealsDB QuickOrder] create_order failed: ' . $order->get_error_message());
-                wp_send_json([
-                    'success' => false,
-                    'message' => $order->get_error_message(),
-                ]);
+                throw new Exception($order->get_error_message());
             }
 
             $order->update_meta_data('mealsdb_client_id', $client_id);
@@ -542,22 +544,20 @@ class MealsDB_Quick_Order_Ajax {
                     wp_trash_post($order_id);
                 }
 
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Failed to record Meals DB transaction.', 'meals-db'),
-                ]);
+                throw new Exception(__('Failed to record Meals DB transaction.', 'meals-db'));
             }
 
+            $order_id = $order->get_id();
             wp_send_json([
                 'success' => true,
-                'order_id' => $order->get_id(),
-                'message'  => __('Order created successfully.', 'meals-db'),
+                'order_id' => $order_id,
+                'order_link' => get_edit_post_link($order_id),
             ]);
         } catch (Exception $e) {
-            error_log('[MealsDB QuickOrder] create_order error: ' . $e->getMessage());
+            error_log('[MealsDB QuickOrder] Order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
-                'message' => 'Server error: ' . $e->getMessage(),
+                'message' => 'Order creation failed: ' . $e->getMessage(),
             ]);
         }
     }
@@ -765,13 +765,15 @@ class MealsDB_Quick_Order_Ajax {
     /**
      * Ensure the AJAX request is valid and user is authorised.
      */
-    private static function verify_request(): void {
-        $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
-        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('Invalid or missing nonce.', 'meals-db'),
-            ]);
+    private static function verify_request(bool $nonce_already_verified = false): void {
+        if (!$nonce_already_verified) {
+            $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
+            if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Invalid or missing nonce.', 'meals-db'),
+                ]);
+            }
         }
 
         if (!self::current_user_can_access_quick_order()) {
@@ -796,6 +798,49 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         return current_user_can($capability);
+    }
+
+    /**
+     * Determine whether the provided Meals DB client exists and is active.
+     */
+    private static function client_is_active(int $client_id): bool {
+        if ($client_id <= 0) {
+            return false;
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!$conn instanceof mysqli) {
+            return false;
+        }
+
+        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $sql        = sprintf('SELECT active FROM `%s` WHERE id = ? LIMIT 1', str_replace('`', '``', $table_name));
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt instanceof mysqli_stmt) {
+            return false;
+        }
+
+        $stmt->bind_param('i', $client_id);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return false;
+        }
+
+        $result = $stmt->get_result();
+        $active = false;
+
+        if ($result instanceof mysqli_result) {
+            $row = $result->fetch_assoc();
+            if (isset($row['active'])) {
+                $active = (int) $row['active'] === 1;
+            }
+        }
+
+        $stmt->close();
+
+        return $active;
     }
 
     /**
