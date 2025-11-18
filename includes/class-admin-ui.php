@@ -42,6 +42,8 @@ class MealsDB_Admin_UI {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('admin_init', [$this, 'redirect_legacy_quick_order_slug']);
         add_filter('woocommerce_admin_order_actions', [$this, 'add_quick_order_clone_action'], 10, 2);
+        add_filter('woocommerce_admin_order_preview_actions', [$this, 'add_quick_order_clone_preview_action'], 10, 2);
+        add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_quick_order_clone_button']);
     }
 
     /**
@@ -117,28 +119,12 @@ class MealsDB_Admin_UI {
      * @param WC_Order  $order   Order instance provided by WooCommerce.
      */
     public function add_quick_order_clone_action(array $actions, $order): array {
-        if (!is_object($order) || !is_a($order, 'WC_Order')) {
+        $order_id = $this->validate_order_id($order);
+        if ($order_id <= 0 || !MealsDB_Permissions::can_access_plugin()) {
             return $actions;
         }
 
-        if (!MealsDB_Permissions::can_access_plugin()) {
-            return $actions;
-        }
-
-        $order_id = $order->get_id();
-        if (!is_numeric($order_id) || (int) $order_id <= 0) {
-            return $actions;
-        }
-
-        $order_id = (int) $order_id;
-
-        $url = add_query_arg(
-            [
-                'page'           => 'mealsdb_quick_order',
-                'clone_order_id' => $order_id,
-            ],
-            admin_url('admin.php')
-        );
+        $url = $this->build_quick_order_clone_url($order_id);
 
         $actions['mealsdb_clone_quick_order'] = [
             'url'    => $url,
@@ -147,6 +133,84 @@ class MealsDB_Admin_UI {
         ];
 
         return $actions;
+    }
+
+    /**
+     * Add the clone action to the order preview modal.
+     *
+     * @param array    $actions Existing actions for the preview.
+     * @param WC_Order $order   Order instance.
+     */
+    public function add_quick_order_clone_preview_action(array $actions, $order): array
+    {
+        $order_id = $this->validate_order_id($order);
+        if ($order_id <= 0 || !MealsDB_Permissions::can_access_plugin()) {
+            return $actions;
+        }
+
+        $url = $this->build_quick_order_clone_url($order_id);
+
+        $actions['mealsdb_clone_quick_order'] = [
+            'title' => __('Clone to Quick Order', 'meals-db'),
+            'url'   => $url,
+            'class' => 'mealsdb-clone-quick-order',
+        ];
+
+        return $actions;
+    }
+
+    /**
+     * Render the clone button on the order details screen.
+     *
+     * @param WC_Order $order Order instance.
+     */
+    public function render_quick_order_clone_button($order): void
+    {
+        $order_id = $this->validate_order_id($order);
+        if ($order_id <= 0 || !MealsDB_Permissions::can_access_plugin()) {
+            return;
+        }
+
+        $url = $this->build_quick_order_clone_url($order_id);
+
+        printf(
+            '<p class="mealsdb-clone-quick-order"><a class="button" href="%s">%s</a></p>',
+            esc_url($url),
+            esc_html__('Clone to Quick Order', 'meals-db')
+        );
+    }
+
+    /**
+     * Build a Quick Order clone URL for the provided order ID.
+     */
+    private function build_quick_order_clone_url(int $order_id): string
+    {
+        return add_query_arg(
+            [
+                'page'        => 'mealsdb_quick_order',
+                'clone_order' => $order_id,
+            ],
+            admin_url('admin.php')
+        );
+    }
+
+    /**
+     * Validate and sanitise a WooCommerce order ID from multiple sources.
+     *
+     * @param mixed $order The order object or numeric ID.
+     */
+    private function validate_order_id($order): int
+    {
+        if (is_object($order) && is_a($order, 'WC_Order')) {
+            $order = $order->get_id();
+        }
+
+        if (!is_numeric($order)) {
+            return 0;
+        }
+
+        $order_id = (int) $order;
+        return $order_id > 0 ? $order_id : 0;
     }
 
     /**
@@ -1262,8 +1326,8 @@ class MealsDB_Admin_UI {
 
         $client_id = isset($_GET['client_id']) ? absint($_GET['client_id']) : 0;
 
-        if ($client_type === '' && $client_id <= 0 && isset($_GET['clone_order_id'])) {
-            $clone_order_id = absint($_GET['clone_order_id']);
+        if ($client_type === '' && $client_id <= 0) {
+            $clone_order_id = MealsDB_Quick_Order_UI::get_requested_clone_order_id();
             if ($clone_order_id > 0 && function_exists('wc_get_order')) {
                 $order = wc_get_order($clone_order_id);
                 if ($order instanceof WC_Order) {
