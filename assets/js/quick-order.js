@@ -1,10 +1,18 @@
 (function ($) {
     'use strict';
 
+    const preload =
+        typeof window.mealsdb_qo_preload === 'object' && window.mealsdb_qo_preload !== null
+            ? window.mealsdb_qo_preload
+            : { products: [], categories: [] };
+    const QO_PRODUCTS = Array.isArray(preload.products) ? preload.products : [];
+    const QO_CATEGORIES = Array.isArray(preload.categories) ? preload.categories : [];
+
     const QuickOrder = {
             state: {
                 categories: [],
                 activeCategoryId: null,
+                activeCategorySlug: null,
                 categoryProducts: {},
                 cart: {},
                 searchTerm: '',
@@ -31,7 +39,7 @@
             this.bindEvents();
             this.renderSummary();
 
-            this.fetchCategories();
+            this.initialiseCategories();
             this.maybeLoadClonedOrder();
         },
 
@@ -279,6 +287,21 @@
             $('<span class="mealsdb-qo-client-selection__name" />').text(name).appendTo($container);
             $('<span class="mealsdb-qo-client-selection__type" />').text(typeLabel).appendTo($container);
             return $container;
+        },
+
+        initialiseCategories() {
+            if (Array.isArray(QO_CATEGORIES) && QO_CATEGORIES.length) {
+                this.state.categories = QO_CATEGORIES;
+                this.renderCategories();
+
+                if (!this.state.categories.length) {
+                    this.renderProducts([]);
+                }
+
+                return;
+            }
+
+            this.fetchCategories();
         },
 
         fetchCategories() {
@@ -622,17 +645,20 @@
                     return;
                 }
 
+                const categorySlug = this.normaliseCategorySlug(category.slug || categoryId);
+
                 const $button = $('<button>', {
                     type: 'button',
                     class: 'button button-secondary mealsdb-qo-cat-tab',
                     text: category.name || `Category #${categoryId}`,
                 }).attr({
-                    'data-cat': categoryId,
+                    'data-cat': categorySlug,
+                    'data-cat-id': categoryId,
                     role: 'tab',
-                    'aria-selected': this.state.activeCategoryId === categoryId ? 'true' : 'false',
+                    'aria-selected': this.state.activeCategorySlug === categorySlug ? 'true' : 'false',
                 });
 
-                if (this.state.activeCategoryId === categoryId) {
+                if (this.state.activeCategorySlug === categorySlug) {
                     $button.addClass('is-active active');
                 }
 
@@ -651,13 +677,13 @@
             }
         },
 
-        loadCategory(categoryId) {
-            const parsedCategoryId = parseInt(categoryId, 10);
-            if (!Number.isInteger(parsedCategoryId) || parsedCategoryId <= 0) {
+        loadCategory(categorySlug) {
+            const slug = this.normaliseCategorySlug(categorySlug);
+            if (!slug) {
                 return null;
             }
 
-            if (parsedCategoryId === this.state.activeCategoryId && !this.state.isSearching) {
+            if (slug === this.state.activeCategorySlug && !this.state.isSearching) {
                 return null;
             }
 
@@ -680,7 +706,7 @@
                 }
             };
 
-            const request = this.activateCategory(parsedCategoryId);
+            const request = this.activateCategory(slug);
 
             if (request && typeof request.always === 'function') {
                 request.always(finalizeFade);
@@ -699,24 +725,51 @@
             this.$categories.html(`<p class="error">${this.escapeHtml(message || 'Unable to load categories.')}</p>`);
         },
 
-        activateCategory(categoryId) {
-            this.state.activeCategoryId = categoryId;
+        activateCategory(categorySlug) {
+            const slug = this.normaliseCategorySlug(categorySlug);
+            const category = this.getCategoryBySlug(slug);
+            const categoryId = category && typeof category.id !== 'undefined' ? parseInt(category.id, 10) : null;
+
+            this.state.activeCategorySlug = slug;
+            this.state.activeCategoryId = Number.isInteger(categoryId) ? categoryId : null;
             this.state.isSearching = false;
             this.renderCategories();
 
-            if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts[categoryId])) {
-                this.renderProducts(this.state.categoryProducts[categoryId]);
+            const preloadedProducts = this.getPreloadedProductsForCategory(slug, categoryId);
+            if (Array.isArray(preloadedProducts) && preloadedProducts.length) {
+                this.state.categoryProducts = this.state.categoryProducts || {};
+                this.state.categoryProducts[slug] = preloadedProducts;
+                this.renderProducts(preloadedProducts);
                 if ($ && $.Deferred) {
                     return $.Deferred().resolve().promise();
                 }
                 return null;
             }
 
-            return this.fetchProductsByCategory(categoryId);
+            if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts[slug])) {
+                this.renderProducts(this.state.categoryProducts[slug]);
+                if ($ && $.Deferred) {
+                    return $.Deferred().resolve().promise();
+                }
+                return null;
+            }
+
+            if (Number.isInteger(categoryId) && categoryId > 0) {
+                return this.fetchProductsByCategory(categoryId, slug);
+            }
+
+            this.renderProductsError('Unable to load products.');
+            if ($ && $.Deferred) {
+                return $.Deferred().reject().promise();
+            }
+
+            return null;
         },
 
-        fetchProductsByCategory(categoryId) {
+        fetchProductsByCategory(categoryId, categorySlug = null) {
             this.renderProductsLoading();
+
+            const cacheKey = categorySlug || categoryId;
 
             return $.ajax({
                 url: this.getAjaxUrl(),
@@ -734,11 +787,69 @@
                 }
 
                 this.state.categoryProducts = this.state.categoryProducts || {};
-                this.state.categoryProducts[categoryId] = response.data.products;
+                this.state.categoryProducts[cacheKey] = response.data.products;
                 this.renderProducts(response.data.products);
             }).fail(() => {
                 this.renderProductsError('Unable to load products.');
             });
+        },
+
+        normaliseCategorySlug(slug) {
+            if (slug === null || typeof slug === 'undefined') {
+                return '';
+            }
+
+            return String(slug).trim().toLowerCase();
+        },
+
+        getCategoryBySlug(slug) {
+            const normalizedSlug = this.normaliseCategorySlug(slug);
+            if (!normalizedSlug || !Array.isArray(this.state.categories)) {
+                return null;
+            }
+
+            for (let index = 0; index < this.state.categories.length; index += 1) {
+                const category = this.state.categories[index];
+                const categorySlug = this.normaliseCategorySlug(category && (category.slug || category.id));
+                if (categorySlug === normalizedSlug) {
+                    return category;
+                }
+            }
+
+            return null;
+        },
+
+        getPreloadedProductsForCategory(categorySlug, categoryId = null) {
+            const slug = this.normaliseCategorySlug(categorySlug);
+            if (!slug || !Array.isArray(QO_PRODUCTS) || !QO_PRODUCTS.length) {
+                return null;
+            }
+
+            const matches = QO_PRODUCTS.filter((product) => {
+                if (!product || !product.category) {
+                    return false;
+                }
+
+                const productSlug = this.normaliseCategorySlug(product.category.slug || product.category.id);
+                if (productSlug === slug) {
+                    return true;
+                }
+
+                if (Number.isInteger(categoryId)) {
+                    const productCategoryId =
+                        product.category && typeof product.category.id !== 'undefined'
+                            ? parseInt(product.category.id, 10)
+                            : null;
+
+                    if (Number.isInteger(productCategoryId) && productCategoryId === categoryId) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+
+            return matches.length ? matches : null;
         },
 
         renderProductsLoading() {
@@ -759,11 +870,11 @@
 
             if (keyword.length < 2) {
                 this.state.isSearching = false;
-                if (Number.isInteger(this.state.activeCategoryId)) {
-                    if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts[this.state.activeCategoryId])) {
-                        this.renderProducts(this.state.categoryProducts[this.state.activeCategoryId]);
+                if (this.state.activeCategorySlug) {
+                    if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts[this.state.activeCategorySlug])) {
+                        this.renderProducts(this.state.categoryProducts[this.state.activeCategorySlug]);
                     } else if (this.state.activeCategoryId) {
-                        this.fetchProductsByCategory(this.state.activeCategoryId);
+                        this.fetchProductsByCategory(this.state.activeCategoryId, this.state.activeCategorySlug);
                     }
                 }
                 return;
