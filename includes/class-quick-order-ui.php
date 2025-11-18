@@ -29,6 +29,25 @@ class MealsDB_Quick_Order_UI {
         ?>
         <div<?php echo $attribute_string; ?>>
             <h1><?php esc_html_e('Quick Order', 'meals-db'); ?></h1>
+            <?php if ($clone_order_id > 0) : ?>
+                <div
+                    id="qo-clone-banner"
+                    style="
+    background: #eaf4ff; 
+    padding: 10px; 
+    border-left: 4px solid #2271b1;
+    margin-bottom: 15px;
+"
+                >
+                    <?php
+                    printf(
+                        /* translators: %s: WooCommerce order ID. */
+                        esc_html__('Loaded from Order #%s — review and submit.', 'meals-db'),
+                        esc_html($clone_order_id)
+                    );
+                    ?>
+                </div>
+            <?php endif; ?>
             <?php
             if (function_exists('settings_errors')) {
                 settings_errors();

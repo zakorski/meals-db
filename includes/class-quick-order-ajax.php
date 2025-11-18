@@ -14,6 +14,7 @@ class MealsDB_Quick_Order_Ajax {
         add_action('wp_ajax_mealsdb_qo_search_products', [self::class, 'search_products']);
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
         add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
+        add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
     }
 
     /**
@@ -590,6 +591,111 @@ class MealsDB_Quick_Order_Ajax {
             'client_id'  => $client_id,
             'order_date' => $order_date,
             'order_id'   => $source_order_id,
+        ]);
+    }
+
+    /**
+     * AJAX endpoint to retrieve order details and quantities for cloning.
+     */
+    public static function clone_get_order(): void {
+        self::verify_request();
+
+        $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
+        if ($source_order_id <= 0) {
+            wp_send_json_error([
+                'message' => __('An order to clone must be specified.', 'meals-db'),
+            ]);
+        }
+
+        $source_order = wc_get_order($source_order_id);
+        if (!$source_order instanceof WC_Order) {
+            wp_send_json_error([
+                'message' => __('The specified order could not be found.', 'meals-db'),
+            ]);
+        }
+
+        $items    = [];
+        $products = [];
+
+        foreach ($source_order->get_items('line_item') as $item) {
+            if (!$item instanceof WC_Order_Item_Product) {
+                continue;
+            }
+
+            $quantity = (int) $item->get_quantity();
+            if ($quantity <= 0) {
+                continue;
+            }
+
+            $product = $item->get_product();
+            if (!$product instanceof WC_Product) {
+                continue;
+            }
+
+            $product_id = $product->get_id();
+            if ($product_id <= 0) {
+                continue;
+            }
+
+            $items[$product_id] = ($items[$product_id] ?? 0) + $quantity;
+
+            $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
+            if (!empty($payload) && isset($payload[0]['product_id'])) {
+                $products[$product_id] = $payload[0];
+            }
+        }
+
+        if (empty($items)) {
+            wp_send_json_error([
+                'message' => __('No products were found on the source order.', 'meals-db'),
+            ]);
+        }
+
+        $order_date = '';
+        $created    = $source_order->get_date_created();
+        if ($created instanceof WC_DateTime) {
+            $date = clone $created;
+            if (function_exists('wp_timezone')) {
+                $date = $date->setTimezone(wp_timezone());
+            }
+
+            $order_date = $date->format('Y-m-d');
+        }
+
+        $client_id = intval($source_order->get_meta('mealsdb_client_id'));
+        if ($client_id <= 0) {
+            $client_id = null;
+        }
+
+        $client_type = '';
+        $client_name = '';
+        if ($client_id !== null && class_exists('MealsDB_Clients_Repository')) {
+            try {
+                $repository = new MealsDB_Clients_Repository();
+                $record     = $repository->get_client_by_id($client_id);
+            } catch (Throwable $e) {
+                $record = null;
+            }
+
+            if (is_array($record)) {
+                $client_type = isset($record['customer_type']) ? (string) $record['customer_type'] : ($record['client_type'] ?? '');
+                $first_name  = isset($record['first_name']) ? (string) $record['first_name'] : '';
+                $last_name   = isset($record['last_name']) ? (string) $record['last_name'] : '';
+                $client_name = trim($first_name . ' ' . $last_name);
+            }
+        }
+
+        $order_number = method_exists($source_order, 'get_order_number') ? $source_order->get_order_number() : $source_order_id;
+
+        wp_send_json_success([
+            'order_id'     => $source_order_id,
+            'order_number' => $order_number,
+            'client_id'    => $client_id,
+            'client_type'  => $client_type,
+            'client_name'  => $client_name,
+            'order_date'   => $order_date,
+            'items'        => $items,
+            'products'     => $products,
         ]);
     }
 
