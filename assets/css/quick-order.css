@@ -184,6 +184,19 @@
     transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 
+/* ================================
+   Quick Order — Tile Focus State
+   ================================ */
+
+.mealsdb-qo-tile:focus {
+    outline: 3px solid #2271b1;
+    outline-offset: 3px;
+}
+
+.mealsdb-qo-tile {
+    outline: none;
+}
+
 .mealsdb-quick-order__product:hover,
 .mealsdb-qo-tile:hover {
     box-shadow: 0 12px 24px rgba(15, 23, 42, 0.14);
