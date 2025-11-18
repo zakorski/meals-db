@@ -1304,6 +1304,44 @@
         },
     };
 
+    function debounce(func, wait) {
+        let timeout;
+        return function () {
+            window.clearTimeout(timeout);
+            timeout = window.setTimeout(() => func.apply(this, arguments), wait);
+        };
+    }
+
+    function searchProducts(term) {
+        jQuery.post(mealsdb_qo.ajax_url, {
+            action: 'mealsdb_qo_search_products',
+            nonce: mealsdb_qo.nonce,
+            term: term,
+        }, function (response) {
+            if (response && response.html) {
+                jQuery('#mealsdb-qo-grid').html(response.html);
+            }
+        });
+    }
+
+    jQuery(document).on(
+        'input',
+        '#mealsdb-qo-search',
+        debounce(function () {
+            const term = jQuery(this).val().trim().toLowerCase();
+
+            if (!term) {
+                const active = jQuery('.mealsdb-qo-cat-tab.active');
+                if (active.length) {
+                    loadCategory(active.data('cat'));
+                }
+                return;
+            }
+
+            searchProducts(term);
+        }, 150)
+    );
+
     const loadCategory = (categoryId) => {
         if (QuickOrder && typeof QuickOrder.loadCategory === 'function') {
             return QuickOrder.loadCategory(categoryId);
