@@ -114,15 +114,22 @@ class MealsDB_Quick_Order_UI {
      * Retrieve the requested order ID to clone from the current request.
      */
     public static function get_requested_clone_order_id(): int {
-        if (!isset($_GET['clone_order_id'])) {
+        $clone_order = null;
+
+        if (isset($_GET['clone_order'])) {
+            $clone_order = $_GET['clone_order'];
+        } elseif (isset($_GET['clone_order_id'])) {
+            $clone_order = $_GET['clone_order_id'];
+        }
+
+        if ($clone_order === null) {
             return 0;
         }
 
-        $clone_order_id = $_GET['clone_order_id'];
         if (function_exists('wp_unslash')) {
-            $clone_order_id = wp_unslash($clone_order_id);
+            $clone_order = wp_unslash($clone_order);
         }
 
-        return absint($clone_order_id);
+        return absint($clone_order);
     }
 }
