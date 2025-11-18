@@ -143,6 +143,20 @@ class MealsDB_Quick_Order_Products {
     }
 
     /**
+     * Retrieve all products formatted for the Quick Order UI.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function get_all_quick_order_products(): array {
+        $products = self::get_all_products();
+        if (empty($products)) {
+            return [];
+        }
+
+        return self::format_for_quick_order($products);
+    }
+
+    /**
      * Search published products by keyword.
      *
      * @param string $keyword Search keyword.
