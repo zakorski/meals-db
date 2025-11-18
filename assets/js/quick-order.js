@@ -17,6 +17,7 @@
                 taxRate: 0,
                 taxableClientTypes: [],
                 clientSelectEnhanced: false,
+                missingCloneItems: [],
             },
 
         init() {
@@ -339,7 +340,7 @@
                 method: 'GET',
                 dataType: 'json',
                 data: {
-                    action: 'mealsdb_qo_clone_order',
+                    action: 'mealsdb_qo_clone_get_order',
                     nonce: nonce,
                     order_id: orderId,
                 },
@@ -351,21 +352,38 @@
                 }
 
                 const data = response.data;
-                const items = Array.isArray(data.items) ? data.items : [];
-                if (!items.length) {
+                const parsedItems = this.normaliseClonedItems(data.items, data.products);
+                const hasItems = parsedItems.available.length > 0;
+                const hasMissing = parsedItems.missing.length > 0;
+
+                if (!hasItems && !hasMissing) {
                     const emptyMessage = data.message || this.getCloneMessage('cloneNoItems', 'The selected order does not contain any products that can be cloned.');
                     this.addNotice(emptyMessage, 'error');
                     return;
                 }
 
-                this.applyClonedItems(items);
+                if (data.client_id) {
+                    this.applyClonedClient(data.client_id, data.client_type, data.client_name);
+                }
 
-                if (data.order_date && this.$orderDate && this.$orderDate.length && !this.$orderDate.val()) {
+                if (data.order_date && this.$orderDate && this.$orderDate.length) {
                     this.$orderDate.val(data.order_date);
                 }
 
+                if (hasItems) {
+                    this.applyClonedItems(parsedItems.available);
+                }
+
+                this.setMissingCloneItems(hasMissing ? parsedItems.missing : []);
+                this.renderUnavailableTilesFromState();
+
                 const successMessage = data.message || this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.');
-                this.addNotice(successMessage, 'success');
+                const orderLabel = data.order_number || data.order_id || orderId;
+                const bannerMessage = orderLabel
+                    ? this.getCloneMessage('cloneLoaded', `Loaded from order #${orderLabel}.`)
+                    : successMessage;
+                this.addNotice(successMessage || bannerMessage, 'success');
+                this.scrollToSummaryPanel();
             }).fail((jqXHR) => {
                 let message = this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
                 if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
@@ -381,8 +399,165 @@
             });
         },
 
+        applyClonedClient(clientId, clientType = '', clientName = '') {
+            if (!Number.isInteger(clientId) || clientId <= 0 || !this.$clientSelect || !this.$clientSelect.length) {
+                return;
+            }
+
+            const safeName = clientName || this.translate('Client #%s').replace('%s', clientId);
+            const type = this.normaliseClientType(clientType);
+            this.state.currentClientId = clientId;
+            this.state.currentClientType = type;
+
+            if (this.state.clientSelectEnhanced && typeof this.$clientSelect.select2 === 'function') {
+                let $option = this.$clientSelect.find(`option[value="${clientId}"]`);
+                if (!$option.length) {
+                    $option = new Option(safeName, clientId, true, true);
+                    this.$clientSelect.append($option);
+                }
+                this.$clientSelect.val(clientId).trigger('change');
+                this.$clientSelect.trigger({
+                    type: 'select2:select',
+                    params: {
+                        data: {
+                            id: clientId,
+                            name: safeName,
+                            text: safeName,
+                            customer_type: type,
+                        },
+                    },
+                });
+            } else {
+                this.$clientSelect.val(clientId).trigger('change');
+            }
+
+            this.updateSummaryPanel();
+        },
+
+        normaliseClonedItems(rawItems, productData = {}) {
+            const available = [];
+            const missing = [];
+
+            if (!rawItems) {
+                return { available, missing };
+            }
+
+            const isArrayInput = Array.isArray(rawItems);
+            const entries = isArrayInput ? rawItems : Object.entries(rawItems);
+
+            entries.forEach((entry) => {
+                let productId = 0;
+                let quantity = 0;
+                let product = null;
+
+                if (isArrayInput) {
+                    const data = entry || {};
+                    productId = data.product_id ? parseInt(data.product_id, 10) : 0;
+                    quantity = data.quantity ? parseInt(data.quantity, 10) : 0;
+                    product = data.product || (productData && productData[productId] ? productData[productId] : null);
+                } else {
+                    productId = entry && entry[0] ? parseInt(entry[0], 10) : 0;
+                    quantity = entry && entry[1] ? parseInt(entry[1], 10) : 0;
+                    product = productData && productData[productId] ? productData[productId] : null;
+                }
+
+                if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(quantity) || quantity <= 0) {
+                    return;
+                }
+
+                if (product) {
+                    available.push({ product, quantity });
+                } else {
+                    missing.push({ product_id: productId, quantity });
+                }
+            });
+
+            return { available, missing };
+        },
+
+        setMissingCloneItems(missingItems) {
+            if (!Array.isArray(missingItems)) {
+                this.state.missingCloneItems = [];
+            } else {
+                this.state.missingCloneItems = missingItems;
+            }
+            this.renderUnavailableTilesFromState();
+        },
+
+        renderUnavailableTilesFromState() {
+            if (!this.$products || !this.$products.length) {
+                return;
+            }
+
+            const missing = Array.isArray(this.state.missingCloneItems) ? this.state.missingCloneItems : [];
+            let $missingContainer = this.$products.find('#mealsdb-qo-missing');
+
+            if (!missing.length) {
+                $missingContainer.remove();
+                return;
+            }
+
+            if (!$missingContainer.length) {
+                $missingContainer = $('<div id="mealsdb-qo-missing" class="mealsdb-qo-missing" />');
+                this.$products.append($missingContainer);
+            } else {
+                $missingContainer.empty();
+            }
+
+            missing.forEach((item) => {
+                const $tile = this.buildUnavailableTile(item);
+                if ($tile) {
+                    $missingContainer.append($tile);
+                }
+            });
+        },
+
+        buildUnavailableTile(item) {
+            if (!item || !item.product_id) {
+                return null;
+            }
+
+            const productId = parseInt(item.product_id, 10);
+            if (!Number.isInteger(productId) || productId <= 0) {
+                return null;
+            }
+
+            const $tile = $('<div class="mealsdb-qo-tile mealsdb-qo-tile--unavailable selected" />').attr(
+                'data-product-id',
+                productId
+            );
+            const $product = $('<article class="mealsdb-quick-order__product" />').attr('data-product-id', productId);
+            const $content = $('<div class="mealsdb-quick-order__product-content" />');
+            $content.append(
+                $('<h3 class="mealsdb-quick-order__product-title" />').text(
+                    item.name || this.translate('Product #') + productId
+                )
+            );
+            $content.append(
+                $('<div class="mealsdb-quick-order__product-price" />').text(
+                    this.translate('Unavailable')
+                )
+            );
+
+            $product.addClass('is-unavailable');
+            $product.append($content);
+            $tile.append($product);
+            return $tile;
+        },
+
+        scrollToSummaryPanel() {
+            if (this.$summary && this.$summary.length && typeof this.$summary[0].scrollIntoView === 'function') {
+                this.$summary[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        },
+
         getCloneOrderId() {
-            let candidate = this.state.cloneOrderId;
+            let candidate = this.getCloneOrderIdFromUrl();
+            if (Number.isInteger(candidate) && candidate > 0) {
+                return candidate;
+            }
+
+            candidate = this.state.cloneOrderId;
             if (Number.isInteger(candidate) && candidate > 0) {
                 return candidate;
             }
@@ -402,6 +577,19 @@
             }
 
             return 0;
+        },
+
+        getCloneOrderIdFromUrl() {
+            if (typeof window === 'undefined' || !window.location || !window.location.search) {
+                return 0;
+            }
+
+            const params = new URLSearchParams(window.location.search);
+            const value = params.get('clone_order');
+            const fallback = params.get('clone_order_id');
+            const candidate = value !== null ? value : fallback;
+            const parsed = parseInt(candidate, 10);
+            return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
         },
 
         setCategoriesLoadingState(isLoading) {
@@ -678,6 +866,7 @@
 
             this.$products.empty().append($grid);
             this.syncCartToVisibleProducts();
+            this.renderUnavailableTilesFromState();
         },
 
         incrementProduct(productId) {
