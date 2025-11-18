@@ -600,23 +600,23 @@ class MealsDB_Quick_Order_Ajax {
     public static function clone_get_order(): void {
         self::verify_request();
 
-        $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
+        $source_order_id = isset($_POST['order_id']) ? absint(wp_unslash($_POST['order_id'])) : 0;
         if ($source_order_id <= 0) {
-            wp_send_json_error([
-                'message' => __('An order to clone must be specified.', 'meals-db'),
+            wp_send_json([
+                'success' => false,
+                'message' => __('A valid order ID is required.', 'meals-db'),
             ]);
         }
 
         $source_order = wc_get_order($source_order_id);
         if (!$source_order instanceof WC_Order) {
-            wp_send_json_error([
+            wp_send_json([
+                'success' => false,
                 'message' => __('The specified order could not be found.', 'meals-db'),
             ]);
         }
 
-        $items    = [];
-        $products = [];
-
+        $items = [];
         foreach ($source_order->get_items('line_item') as $item) {
             if (!$item instanceof WC_Order_Item_Product) {
                 continue;
@@ -638,17 +638,6 @@ class MealsDB_Quick_Order_Ajax {
             }
 
             $items[$product_id] = ($items[$product_id] ?? 0) + $quantity;
-
-            $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
-            if (!empty($payload) && isset($payload[0]['product_id'])) {
-                $products[$product_id] = $payload[0];
-            }
-        }
-
-        if (empty($items)) {
-            wp_send_json_error([
-                'message' => __('No products were found on the source order.', 'meals-db'),
-            ]);
         }
 
         $order_date = '';
@@ -668,34 +657,24 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         $client_type = '';
-        $client_name = '';
-        if ($client_id !== null && class_exists('MealsDB_Clients_Repository')) {
-            try {
-                $repository = new MealsDB_Clients_Repository();
-                $record     = $repository->get_client_by_id($client_id);
-            } catch (Throwable $e) {
-                $record = null;
-            }
+        if ($client_id !== null && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
+            $table = MealsDB_DB::get_table_name('meals_clients');
+            $sql   = $GLOBALS['wpdb']->prepare("SELECT customer_type FROM {$table} WHERE id = %d LIMIT 1", $client_id);
 
-            if (is_array($record)) {
-                $client_type = isset($record['customer_type']) ? (string) $record['customer_type'] : ($record['client_type'] ?? '');
-                $first_name  = isset($record['first_name']) ? (string) $record['first_name'] : '';
-                $last_name   = isset($record['last_name']) ? (string) $record['last_name'] : '';
-                $client_name = trim($first_name . ' ' . $last_name);
+            if (is_string($sql)) {
+                $result = $GLOBALS['wpdb']->get_var($sql);
+                if (is_string($result)) {
+                    $client_type = $result;
+                }
             }
         }
 
-        $order_number = method_exists($source_order, 'get_order_number') ? $source_order->get_order_number() : $source_order_id;
-
-        wp_send_json_success([
-            'order_id'     => $source_order_id,
-            'order_number' => $order_number,
-            'client_id'    => $client_id,
-            'client_type'  => $client_type,
-            'client_name'  => $client_name,
-            'order_date'   => $order_date,
-            'items'        => $items,
-            'products'     => $products,
+        wp_send_json([
+            'success'     => true,
+            'client_id'   => $client_id,
+            'client_type' => $client_type,
+            'order_date'  => $order_date,
+            'items'       => $items,
         ]);
     }
 
