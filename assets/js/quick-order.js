@@ -1642,6 +1642,27 @@
         };
     }
 
+    function qoShowToast(message, type = 'info') {
+        let toast = jQuery('#mealsdb-qo-toast');
+        if (!toast.length) {
+            jQuery('body').append('<div id="mealsdb-qo-toast"></div>');
+            toast = jQuery('#mealsdb-qo-toast');
+        }
+
+        let bg = '#323232'; // default
+        if (type === 'error') bg = '#d63638'; // WordPress red
+        if (type === 'success') bg = '#00a32a'; // WordPress green
+        if (type === 'warning') bg = '#ffb900';
+
+        toast.css('background', bg);
+        toast.text(message);
+        toast.addClass('show');
+
+        setTimeout(() => {
+            toast.removeClass('show');
+        }, 3000);
+    }
+
     function searchProducts(term) {
         jQuery.post(mealsdb_qo.ajax_url, {
             action: 'mealsdb_qo_search_products',
