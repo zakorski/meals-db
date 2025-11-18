@@ -637,6 +637,11 @@ class MealsDB_Quick_Order_Ajax {
                 continue;
             }
 
+            $existing_product = wc_get_product($product_id);
+            if (!$existing_product instanceof WC_Product) {
+                continue;
+            }
+
             $items[$product_id] = ($items[$product_id] ?? 0) + $quantity;
         }
 
