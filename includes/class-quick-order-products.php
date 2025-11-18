@@ -4,12 +4,79 @@
  */
 
 class MealsDB_Quick_Order_Products {
+    private const PRODUCTS_TRANSIENT_KEY   = 'mealsdb_qo_all_products';
+    private const CATEGORIES_TRANSIENT_KEY = 'mealsdb_qo_all_categories';
+
+    /**
+     * Duration in seconds for cached product and category data.
+     */
+    private const CACHE_TTL = 30 * MINUTE_IN_SECONDS;
+
+    /**
+     * Tracks whether hooks have already been registered.
+     */
+    private static bool $hooks_registered = false;
+
+    /**
+     * Register hooks for keeping Quick Order caches up to date.
+     */
+    public static function init(): void {
+        if (self::$hooks_registered) {
+            return;
+        }
+
+        self::$hooks_registered = true;
+
+        if (function_exists('add_action')) {
+            add_action('save_post_product', [self::class, 'clear_cache_on_product_save'], 10, 2);
+            add_action('edited_product_cat', [self::class, 'clear_cache']);
+            add_action('mealsdb_plugin_updated', [self::class, 'clear_cache']);
+        }
+    }
+
+    /**
+     * Clear all Quick Order product/category caches.
+     */
+    public static function clear_cache(): void {
+        if (function_exists('delete_transient')) {
+            delete_transient(self::PRODUCTS_TRANSIENT_KEY);
+            delete_transient(self::CATEGORIES_TRANSIENT_KEY);
+        }
+    }
+
+    /**
+     * Clear caches when a WooCommerce product is saved.
+     *
+     * @param int          $post_id Post ID.
+     * @param WP_Post|null $post    The post object.
+     */
+    public static function clear_cache_on_product_save(int $post_id, $post = null): void {
+        if ($post instanceof WP_Post && $post->post_type !== 'product') {
+            return;
+        }
+
+        self::clear_cache();
+    }
+
     /**
      * Retrieve product categories that contain published products.
      *
      * @return array<int, array<string, mixed>>
      */
     public static function get_categories(): array {
+        $cached = get_transient(self::CATEGORIES_TRANSIENT_KEY);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $products = self::get_all_products();
+        if (!empty($products)) {
+            $categories = self::extract_categories_from_products($products);
+            self::set_categories_cache($categories);
+
+            return $categories;
+        }
+
         if (!function_exists('get_terms') || !taxonomy_exists('product_cat')) {
             return [];
         }
@@ -43,6 +110,8 @@ class MealsDB_Quick_Order_Products {
             ];
         }
 
+        self::set_categories_cache($categories);
+
         return $categories;
     }
 
@@ -54,34 +123,23 @@ class MealsDB_Quick_Order_Products {
      * @return array<int, array<string, mixed>>
      */
     public static function get_products_by_category(int $cat_id): array {
-        if (!function_exists('wc_get_products')) {
+        $all_products = self::get_all_products();
+        if (empty($all_products)) {
             return [];
         }
 
-        $term = get_term($cat_id, 'product_cat');
-        if (!$term instanceof WP_Term || is_wp_error($term)) {
-            return [];
+        $matches = [];
+        foreach ($all_products as $product) {
+            foreach ($product['categories'] ?? [] as $category) {
+                $category_id = isset($category['id']) ? (int) $category['id'] : 0;
+                if ($category_id === $cat_id) {
+                    $matches[] = $product;
+                    break;
+                }
+            }
         }
 
-        $args = [
-            'status'   => 'publish',
-            'limit'    => -1,
-            'orderby'  => 'title',
-            'order'    => 'ASC',
-            'category' => [$term->slug],
-            'return'   => 'objects',
-        ];
-
-        if (function_exists('apply_filters')) {
-            $args = apply_filters('mealsdb_quick_order_products_by_category_args', $args, $term);
-        }
-
-        $products = wc_get_products($args);
-        if (!is_array($products)) {
-            return [];
-        }
-
-        return self::format_for_quick_order($products);
+        return array_values(array_filter(array_map([self::class, 'product_cache_entry_to_quick_order'], $matches)));
     }
 
     /**
@@ -92,34 +150,47 @@ class MealsDB_Quick_Order_Products {
      * @return array<int, array<string, mixed>>
      */
     public static function search_products(string $keyword): array {
-        if (!function_exists('wc_get_products')) {
-            return [];
-        }
-
         $keyword = self::sanitize_keyword($keyword);
         if ($keyword === '') {
             return [];
         }
 
-        $args = [
-            'status'  => 'publish',
-            'limit'   => 20,
-            'orderby' => 'title',
-            'order'   => 'ASC',
-            'search'  => $keyword,
-            'return'  => 'objects',
-        ];
-
-        if (function_exists('apply_filters')) {
-            $args = apply_filters('mealsdb_quick_order_search_product_args', $args, $keyword);
-        }
-
-        $products = wc_get_products($args);
-        if (!is_array($products)) {
+        $all_products = self::get_all_products();
+        if (empty($all_products)) {
             return [];
         }
 
-        return self::format_for_quick_order($products);
+        $keyword_lower = function_exists('mb_strtolower') ? mb_strtolower($keyword) : strtolower($keyword);
+
+        $matches = [];
+        foreach ($all_products as $product) {
+            $haystacks = [
+                isset($product['name']) ? (string) $product['name'] : '',
+                isset($product['sku']) ? (string) $product['sku'] : '',
+            ];
+
+            foreach ($haystacks as $field) {
+                if ($field === '') {
+                    continue;
+                }
+
+                if (stripos($field, $keyword_lower) !== false) {
+                    $matches[] = $product;
+                    break;
+                }
+            }
+        }
+
+        usort($matches, static function ($a, $b) {
+            $name_a = isset($a['name']) ? (string) $a['name'] : '';
+            $name_b = isset($b['name']) ? (string) $b['name'] : '';
+
+            return strcasecmp($name_a, $name_b);
+        });
+
+        $matches = array_slice($matches, 0, 20);
+
+        return array_values(array_filter(array_map([self::class, 'product_cache_entry_to_quick_order'], $matches)));
     }
 
     /**
@@ -133,13 +204,9 @@ class MealsDB_Quick_Order_Products {
         $formatted = [];
 
         foreach ($products as $product) {
-            if (is_object($product) && is_a($product, 'WC_Product')) {
-                $payload = self::prepare_product_payload($product);
-                if (!empty($payload)) {
-                    $formatted[] = $payload;
-                }
-            } elseif (is_array($product)) {
-                $formatted[] = $product;
+            $payload = self::prepare_product_payload($product);
+            if (!empty($payload)) {
+                $formatted[] = $payload;
             }
         }
 
@@ -152,53 +219,24 @@ class MealsDB_Quick_Order_Products {
      * @param WC_Product $product Product instance.
      */
     private static function prepare_product_payload($product): array {
-        if (!is_object($product) || !is_a($product, 'WC_Product')) {
-            return [];
-        }
-
-        $product_id = $product->get_id();
-
-        $terms = get_the_terms($product_id, 'product_cat');
-        $category = null;
-        if (is_array($terms) && !empty($terms)) {
-            $primary = $terms[0];
-            if ($primary instanceof WP_Term) {
-                $category = [
-                    'id'   => (int) $primary->term_id,
-                    'name' => $primary->name,
-                    'slug' => $primary->slug,
-                ];
+        if (is_object($product) && is_a($product, 'WC_Product')) {
+            $cache_entry = self::build_product_cache_entry_from_wc_product($product);
+            if (empty($cache_entry)) {
+                return [];
             }
+
+            return self::product_cache_entry_to_quick_order($cache_entry);
         }
 
-        $price = $product->get_price();
-        if ($price === '') {
-            $price_value = 0.0;
-        } else {
-            $price_value = (float) $price;
+        if (is_array($product) && self::is_cached_product_entry($product)) {
+            return self::product_cache_entry_to_quick_order($product);
         }
 
-        if (function_exists('wc_get_price_to_display')) {
-            $price_value = (float) wc_get_price_to_display($product);
+        if (is_array($product)) {
+            return $product;
         }
 
-        $image_id = $product->get_image_id();
-        $image_url = '';
-        if ($image_id) {
-            $image_url = wp_get_attachment_image_url($image_id, 'medium');
-        }
-
-        if (!$image_url) {
-            $image_url = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
-        }
-
-        return [
-            'product_id' => $product_id,
-            'name'       => $product->get_name(),
-            'category'   => $category,
-            'price'      => $price_value,
-            'image_url'  => $image_url,
-        ];
+        return [];
     }
 
     /**
@@ -221,4 +259,208 @@ class MealsDB_Quick_Order_Products {
 
         return $keyword;
     }
+
+    /**
+     * Retrieve all products, using a transient cache when available.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function get_all_products(): array {
+        $cached = get_transient(self::PRODUCTS_TRANSIENT_KEY);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        if (!function_exists('wc_get_products')) {
+            return [];
+        }
+
+        $args = [
+            'status'  => 'publish',
+            'limit'   => -1,
+            'orderby' => 'title',
+            'order'   => 'ASC',
+            'return'  => 'objects',
+        ];
+
+        if (function_exists('apply_filters')) {
+            $args = apply_filters('mealsdb_quick_order_all_product_args', $args);
+        }
+
+        $products = wc_get_products($args);
+        if (!is_array($products)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($products as $product) {
+            if (!is_a($product, 'WC_Product')) {
+                continue;
+            }
+
+            $entry = self::build_product_cache_entry_from_wc_product($product);
+            if (!empty($entry)) {
+                $normalized[$entry['id']] = $entry;
+            }
+        }
+
+        set_transient(self::PRODUCTS_TRANSIENT_KEY, $normalized, self::CACHE_TTL);
+
+        $categories = self::extract_categories_from_products($normalized);
+        if (!empty($categories)) {
+            self::set_categories_cache($categories);
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Build a cache entry for a product.
+     */
+    private static function build_product_cache_entry_from_wc_product(WC_Product $product): array {
+        $product_id = $product->get_id();
+
+        $price = $product->get_price();
+        if ($price === '') {
+            $price_value = 0.0;
+        } else {
+            $price_value = (float) $price;
+        }
+
+        if (function_exists('wc_get_price_to_display')) {
+            $price_value = (float) wc_get_price_to_display($product);
+        }
+
+        $image_id = $product->get_image_id();
+        $image_url = '';
+        if ($image_id) {
+            $image_url = wp_get_attachment_image_url($image_id, 'medium');
+        }
+
+        if (!$image_url) {
+            $image_url = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
+        }
+
+        $categories = self::get_product_categories($product_id);
+
+        return [
+            'id'         => $product_id,
+            'name'       => $product->get_name(),
+            'price'      => $price_value,
+            'image'      => $image_url,
+            'sku'        => $product->get_sku(),
+            'categories' => $categories,
+        ];
+    }
+
+    /**
+     * Retrieve categories for a given product ID.
+     *
+     * @param int $product_id Product ID.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function get_product_categories(int $product_id): array {
+        $terms = get_the_terms($product_id, 'product_cat');
+        if (!is_array($terms) || empty($terms)) {
+            return [];
+        }
+
+        $categories = [];
+        foreach ($terms as $term) {
+            if (!$term instanceof WP_Term) {
+                continue;
+            }
+
+            $categories[] = [
+                'id'   => (int) $term->term_id,
+                'name' => $term->name,
+                'slug' => $term->slug,
+            ];
+        }
+
+        return $categories;
+    }
+
+    /**
+     * Determine whether an array matches the cached product schema.
+     */
+    private static function is_cached_product_entry(array $product): bool {
+        return isset($product['id'], $product['name'], $product['price'], $product['image'], $product['categories']);
+    }
+
+    /**
+     * Convert a cached product entry into the payload expected by the UI.
+     */
+    private static function product_cache_entry_to_quick_order(array $product): array {
+        if (!self::is_cached_product_entry($product)) {
+            return [];
+        }
+
+        $category = null;
+        if (!empty($product['categories'])) {
+            $primary = $product['categories'][0];
+            if (is_array($primary)) {
+                $category = [
+                    'id'   => isset($primary['id']) ? (int) $primary['id'] : 0,
+                    'name' => $primary['name'] ?? '',
+                    'slug' => $primary['slug'] ?? '',
+                ];
+            }
+        }
+
+        return [
+            'product_id' => (int) $product['id'],
+            'name'       => (string) $product['name'],
+            'category'   => $category,
+            'price'      => isset($product['price']) ? (float) $product['price'] : 0.0,
+            'image_url'  => isset($product['image']) ? (string) $product['image'] : '',
+            'sku'        => isset($product['sku']) ? (string) $product['sku'] : '',
+        ];
+    }
+
+    /**
+     * Extract unique categories from cached product data.
+     *
+     * @param array<int, array<string, mixed>> $products Cached product map.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function extract_categories_from_products(array $products): array {
+        $categories = [];
+
+        foreach ($products as $product) {
+            foreach ($product['categories'] ?? [] as $category) {
+                $id = isset($category['id']) ? (int) $category['id'] : 0;
+                if ($id <= 0) {
+                    continue;
+                }
+
+                if (!isset($categories[$id])) {
+                    $categories[$id] = [
+                        'id'   => $id,
+                        'name' => $category['name'] ?? '',
+                        'slug' => $category['slug'] ?? '',
+                    ];
+                }
+            }
+        }
+
+        usort($categories, static function ($a, $b) {
+            return strcasecmp($a['name'] ?? '', $b['name'] ?? '');
+        });
+
+        return array_values($categories);
+    }
+
+    /**
+     * Store category data in a transient.
+     *
+     * @param array<int, array<string, mixed>> $categories Category list.
+     */
+    private static function set_categories_cache(array $categories): void {
+        set_transient(self::CATEGORIES_TRANSIENT_KEY, $categories, self::CACHE_TTL);
+    }
 }
+
+MealsDB_Quick_Order_Products::init();
