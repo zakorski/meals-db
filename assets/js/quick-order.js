@@ -225,6 +225,7 @@
             if (this.$createOrder && this.$createOrder.length) {
                 this.$createOrder.on('click', (event) => {
                     event.preventDefault();
+                    qoShowToast('Submitting order...', 'info');
                     this.handleCreateOrder();
                 });
             }
@@ -1811,6 +1812,55 @@
             searchProducts(term);
         }, 150)
     );
+
+    $document.off('keydown.mealsdb-qo-enter-create');
+    $document.on('keydown.mealsdb-qo-enter-create', function (event) {
+        if (event.key !== 'Enter') {
+            return;
+        }
+
+        const $searchBar = jQuery('#mealsdb-qo-search');
+        if ($searchBar.length && $searchBar.is(':focus')) {
+            return;
+        }
+
+        if (jQuery('.select2-search__field').is(':focus')) {
+            return;
+        }
+
+        const tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
+        const isFormField = ['input', 'textarea', 'select', 'button', 'option'].includes(tag);
+        const isEditable = event.target && event.target.isContentEditable;
+
+        if (isFormField || isEditable) {
+            return;
+        }
+
+        const $createOrder = jQuery('#qo-create-order');
+        if ($createOrder.length) {
+            event.preventDefault();
+            $createOrder.trigger('click');
+        }
+    });
+
+    $document.off('keydown.mealsdb-qo-escape');
+    $document.on('keydown.mealsdb-qo-escape', function (event) {
+        if (event.key !== 'Escape') {
+            return;
+        }
+
+        const $search = jQuery('#mealsdb-qo-search');
+        if ($search.length && $search.is(':focus') && $search.val().length > 0) {
+            $search.val('');
+            $search.trigger('input');
+            return;
+        }
+
+        const $cloneBanner = jQuery('#qo-clone-banner');
+        if ($cloneBanner.length && $cloneBanner.is(':visible')) {
+            $cloneBanner.fadeOut();
+        }
+    });
 
     $document.off('keydown.mealsdb-qo-shortcuts');
     $document.on('keydown.mealsdb-qo-shortcuts', function (event) {
