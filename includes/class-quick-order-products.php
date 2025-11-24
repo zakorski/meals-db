@@ -285,37 +285,18 @@ class MealsDB_Quick_Order_Products {
             return $cached;
         }
 
-        if (!function_exists('wc_get_products')) {
-            return [];
-        }
-
-        $args = [
-            'status'  => 'publish',
-            'limit'   => -1,
-            'orderby' => 'title',
-            'order'   => 'ASC',
-            'return'  => 'objects',
-        ];
-
-        if (function_exists('apply_filters')) {
-            $args = apply_filters('mealsdb_quick_order_all_product_args', $args);
-        }
-
-        $products = wc_get_products($args);
+        $products = MealsDB_Products_Loader::load_all_products();
         if (!is_array($products)) {
             return [];
         }
 
         $normalized = [];
         foreach ($products as $product) {
-            if (!is_a($product, 'WC_Product')) {
+            if (!self::is_cached_product_entry($product)) {
                 continue;
             }
 
-            $entry = self::build_product_cache_entry_from_wc_product($product);
-            if (!empty($entry)) {
-                $normalized[$entry['id']] = $entry;
-            }
+            $normalized[$product['id']] = $product;
         }
 
         set_transient(self::PRODUCTS_TRANSIENT_KEY, $normalized, self::CACHE_TTL);
@@ -356,15 +337,19 @@ class MealsDB_Quick_Order_Products {
         }
 
         $categories = self::get_product_categories($product_id);
+        $metadata   = MealsDB_Products::get_product_data($product_id);
 
-        return [
-            'id'         => $product_id,
-            'name'       => $product->get_name(),
-            'price'      => $price_value,
-            'image'      => $image_url,
-            'sku'        => $product->get_sku(),
-            'categories' => $categories,
-        ];
+        return array_merge(
+            [
+                'id'         => $product_id,
+                'name'       => $product->get_name(),
+                'price'      => $price_value,
+                'image'      => $image_url,
+                'sku'        => $product->get_sku(),
+                'categories' => $categories,
+            ],
+            self::normalize_metadata($metadata, $product_id, $product->get_name())
+        );
     }
 
     /**
@@ -404,6 +389,44 @@ class MealsDB_Quick_Order_Products {
     }
 
     /**
+     * Normalise Meals DB product metadata fields for cache entries.
+     *
+     * @param array<string, mixed> $metadata
+     */
+    private static function normalize_metadata(array $metadata, int $product_id, string $product_name): array {
+        $defaults = [
+            'wc_product_id'   => $product_id,
+            'product_name'    => $product_name,
+            'product_type'    => 'meal',
+            'taxable'         => 0,
+            'main_ingredient' => '',
+            'dietary_tags'    => [],
+            'allergen_flags'  => [],
+            'case_size'       => 1,
+            'unit_cost'       => '0.00',
+        ];
+
+        $merged = array_merge($defaults, $metadata);
+
+        $dietary_tags = is_array($merged['dietary_tags']) ? array_values($merged['dietary_tags']) : [];
+        $allergens    = is_array($merged['allergen_flags']) ? array_values($merged['allergen_flags']) : [];
+
+        return [
+            'wc_product_id'   => (int) $merged['wc_product_id'],
+            'product_name'    => (string) $merged['product_name'],
+            'product_type'    => in_array($merged['product_type'], ['meal', 'side'], true)
+                ? (string) $merged['product_type']
+                : 'meal',
+            'taxable'         => (int) (!empty($merged['taxable'])),
+            'main_ingredient' => isset($merged['main_ingredient']) ? (string) $merged['main_ingredient'] : '',
+            'dietary_tags'    => $dietary_tags,
+            'allergen_flags'  => $allergens,
+            'case_size'       => isset($merged['case_size']) ? (int) $merged['case_size'] : 1,
+            'unit_cost'       => isset($merged['unit_cost']) ? (string) $merged['unit_cost'] : '0.00',
+        ];
+    }
+
+    /**
      * Convert a cached product entry into the payload expected by the UI.
      */
     private static function product_cache_entry_to_quick_order(array $product): array {
@@ -430,6 +453,13 @@ class MealsDB_Quick_Order_Products {
             'price'      => isset($product['price']) ? (float) $product['price'] : 0.0,
             'image_url'  => isset($product['image']) ? (string) $product['image'] : '',
             'sku'        => isset($product['sku']) ? (string) $product['sku'] : '',
+            'product_type'    => isset($product['product_type']) ? (string) $product['product_type'] : 'meal',
+            'taxable'         => isset($product['taxable']) ? (int) $product['taxable'] : 0,
+            'main_ingredient' => isset($product['main_ingredient']) ? (string) $product['main_ingredient'] : '',
+            'dietary_tags'    => isset($product['dietary_tags']) && is_array($product['dietary_tags']) ? $product['dietary_tags'] : [],
+            'allergen_flags'  => isset($product['allergen_flags']) && is_array($product['allergen_flags']) ? $product['allergen_flags'] : [],
+            'case_size'       => isset($product['case_size']) ? (int) $product['case_size'] : 1,
+            'unit_cost'       => isset($product['unit_cost']) ? (string) $product['unit_cost'] : '0.00',
         ];
     }
 
