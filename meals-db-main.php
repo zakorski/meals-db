@@ -105,6 +105,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Initials::init();
     MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();
+    MealsDB_WC_Product_Tab::init();
 });
 
 // Register the plugin update checker against the GitHub repository.
