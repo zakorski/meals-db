@@ -9,6 +9,8 @@
 
 class MealsDB_Installer {
 
+    const MEALSDB_PRODUCTS_SCHEMA_VERSION = 1;
+
     /**
      * Run the schema installation/upgrade routine.
      *
@@ -107,6 +109,8 @@ class MealsDB_Installer {
         self::upgrade_meals_clients_table($conn);
 
         self::create_meals_clients_table();
+
+        self::create_meals_products_table();
     }
 
     /**
@@ -239,5 +243,100 @@ class MealsDB_Installer {
         ) {$charset_collate};";
 
         dbDelta($sql);
+    }
+
+    /**
+     * Create or migrate the meals_products table in the external Meals DB.
+     */
+    private static function create_meals_products_table(): void {
+        $conn = MealsDB_DB::get_connection();
+
+        if (!$conn instanceof mysqli) {
+            error_log('[MealsDB Installer] Unable to establish database connection while creating meals_products.');
+            return;
+        }
+
+        $table = 'meals_products';
+        $version_option = 'mealsdb_products_schema_version';
+        $target_version = self::MEALSDB_PRODUCTS_SCHEMA_VERSION;
+
+        $create_sql = "CREATE TABLE IF NOT EXISTS {$table} (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    wc_product_id INT NOT NULL UNIQUE,
+    product_type ENUM('meal','side') NOT NULL DEFAULT 'meal',
+    taxable TINYINT(1) NOT NULL DEFAULT 0,
+    main_ingredient VARCHAR(40) NOT NULL,
+    dietary_tags JSON NULL,
+    allergen_flags JSON NULL,
+    case_size INT NOT NULL DEFAULT 1,
+    unit_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP 
+        ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+
+        if (!$conn->query($create_sql)) {
+            error_log('[MealsDB Installer] Failed creating meals_products table: ' . $conn->error);
+            return;
+        }
+
+        $required_columns = [
+            'id' => 'INT AUTO_INCREMENT PRIMARY KEY',
+            'wc_product_id' => 'INT NOT NULL UNIQUE',
+            "product_type" => "ENUM('meal','side') NOT NULL DEFAULT 'meal'",
+            'taxable' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'main_ingredient' => 'VARCHAR(40) NOT NULL',
+            'dietary_tags' => 'JSON NULL',
+            'allergen_flags' => 'JSON NULL',
+            'case_size' => 'INT NOT NULL DEFAULT 1',
+            'unit_cost' => 'DECIMAL(10,2) NOT NULL DEFAULT 0.00',
+            'last_updated' => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
+        ];
+
+        $existing_columns = [];
+        $columns_result = $conn->query("SHOW COLUMNS FROM `{$table}`");
+
+        if ($columns_result instanceof mysqli_result) {
+            while ($row = $columns_result->fetch_assoc()) {
+                if (isset($row['Field'])) {
+                    $existing_columns[strtolower($row['Field'])] = $row;
+                }
+            }
+            $columns_result->free();
+        } elseif ($columns_result === false) {
+            error_log('[MealsDB Installer] Failed inspecting meals_products columns: ' . $conn->error);
+            return;
+        }
+
+        foreach ($required_columns as $column => $definition) {
+            if (!array_key_exists(strtolower($column), $existing_columns)) {
+                $alter_sql = "ALTER TABLE `{$table}` ADD COLUMN {$column} {$definition}";
+
+                if (!$conn->query($alter_sql)) {
+                    error_log(sprintf('[MealsDB Installer] Failed adding meals_products.%s column: %s', $column, $conn->error));
+                }
+            }
+        }
+
+        if (isset($existing_columns['product_type']) && isset($existing_columns['product_type']['Type'])) {
+            $product_type = strtolower((string) $existing_columns['product_type']['Type']);
+
+            if (strpos($product_type, "enum('meal','side')") === false) {
+                $modify_sql = "ALTER TABLE `{$table}` MODIFY COLUMN product_type ENUM('meal','side') NOT NULL DEFAULT 'meal'";
+
+                if (!$conn->query($modify_sql)) {
+                    error_log('[MealsDB Installer] Failed modifying meals_products.product_type enum: ' . $conn->error);
+                }
+            }
+        }
+
+        $current_version = get_option($version_option, 0);
+
+        if ((int) $current_version !== (int) $target_version) {
+            if (get_option($version_option, null) === null) {
+                add_option($version_option, $target_version);
+            } else {
+                update_option($version_option, $target_version);
+            }
+        }
     }
 }
