@@ -30,6 +30,7 @@
                 cloneOrderId: null,
                 currentClientId: null,
                 currentClientType: '',
+                currentClientAllergens: [],
                 taxRate: 0,
                 taxableClientTypes: [],
                 clientSelectEnhanced: false,
@@ -1039,6 +1040,7 @@
             this.state.searchResultsById = options.isSearchResults ? this.state.renderedProducts : {};
             this.syncCartToVisibleProducts();
             this.renderUnavailableTilesFromState();
+            this.updateProductRestrictionStates();
         },
 
         buildProductTileHTML(product, productId, quantity, formattedPrice) {
@@ -1052,9 +1054,20 @@
                           product.image_url
                       )}" alt="${this.escapeAttribute(product.name || 'Product image')}" class="mealsdb-qo-image" loading="lazy"></div>`
                     : '';
+            const isRestricted = this.isProductRestricted(product);
+            const restrictionClass = isRestricted ? ' mealsdb-qo-tile--restricted' : '';
+            const restrictionTitle = this.translate('Client allergy restricted');
+            const metaHtml = this.buildProductMeta(product);
+
+            const disabledAttr = isRestricted ? ' disabled aria-disabled="true"' : '';
+            const disableTitleAttr = isRestricted ? ` title="${this.escapeAttribute(restrictionTitle)}"` : '';
+            const inputDisabled = isRestricted ? ' disabled aria-disabled="true"' : '';
+            const restrictionNote = isRestricted
+                ? `<div class="mealsdb-qo-restriction" role="status">${this.escapeHtml(restrictionTitle)}</div>`
+                : '';
 
             return `
-                <div class="mealsdb-qo-tile${selectedClass}" tabindex="0">
+                <div class="mealsdb-qo-tile${selectedClass}${restrictionClass}" tabindex="0">
                     <div class="mealsdb-quick-order__product${selectedClass}" data-product-id="${this.escapeAttribute(
                         productId
                     )}">
@@ -1062,16 +1075,123 @@
                         <div class="mealsdb-quick-order__product-content">
                             <h3 class="mealsdb-quick-order__product-title">${safeName}</h3>
                             <div class="mealsdb-quick-order__product-price">${safePrice}</div>
+                            ${metaHtml}
                             <div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls">
                                 <button type="button" class="button mealsdb-quick-order__qty-decrease mealsdb-qo-btn" aria-label="Decrease quantity">-</button>
                                 <input type="number" min="0" class="small-text mealsdb-quick-order__qty-input mealsdb-qo-qty" value="${this.escapeAttribute(
                                     quantity
-                                )}">
-                                <button type="button" class="button mealsdb-quick-order__qty-increase mealsdb-qo-btn" aria-label="Increase quantity">+</button>
+                                )}"${inputDisabled}>
+                                <button type="button" class="button mealsdb-quick-order__qty-increase mealsdb-qo-btn" aria-label="Increase quantity"${disabledAttr}${disableTitleAttr}>+</button>
                             </div>
+                            ${restrictionNote}
                         </div>
                     </div>
                 </div>`;
+        },
+
+        buildProductMeta(product) {
+            const metaParts = [];
+            const mainIngredient = product && product.main_ingredient ? String(product.main_ingredient).trim() : '';
+            const dietaryTags = Array.isArray(product && product.dietary_tags ? product.dietary_tags : [])
+                ? product.dietary_tags.filter((tag) => !!tag)
+                : [];
+
+            if (mainIngredient) {
+                metaParts.push(
+                    `<div class="mealsdb-qo-meta__ingredient">${this.escapeHtml(this.translate('Main ingredient:'))} ${this.escapeHtml(mainIngredient)}</div>`
+                );
+            }
+
+            if (dietaryTags.length) {
+                const badges = dietaryTags
+                    .map((tag) => `<span class="mealsdb-qo-badge">${this.escapeHtml(tag)}</span>`)
+                    .join('');
+                metaParts.push(`<div class="mealsdb-qo-meta__badges">${badges}</div>`);
+            }
+
+            if (!metaParts.length) {
+                return '';
+            }
+
+            return `<div class="mealsdb-qo-meta">${metaParts.join('')}</div>`;
+        },
+
+        isProductRestricted(product, clientAllergens = null) {
+            const clientList = Array.isArray(clientAllergens)
+                ? this.normaliseAllergenList(clientAllergens)
+                : this.normaliseAllergenList(this.state.currentClientAllergens);
+            const productAllergens = this.normaliseAllergenList(
+                product && Array.isArray(product.allergen_flags) ? product.allergen_flags : []
+            );
+
+            if (!clientList.length || !productAllergens.length) {
+                return false;
+            }
+
+            return clientList.some((value) => productAllergens.includes(value));
+        },
+
+        normaliseAllergenList(values) {
+            if (!Array.isArray(values)) {
+                return [];
+            }
+
+            return values
+                .map((value) => (value !== null && typeof value !== 'undefined' ? String(value).trim().toLowerCase() : ''))
+                .filter((value) => value !== '');
+        },
+
+        updateProductRestrictionStates() {
+            if (!this.$products || !this.$products.length) {
+                return;
+            }
+
+            const clientAllergens = this.normaliseAllergenList(this.state.currentClientAllergens);
+
+            Object.keys(this.state.renderedProducts || {}).forEach((key) => {
+                const productId = parseInt(key, 10);
+                if (!Number.isInteger(productId) || productId <= 0) {
+                    return;
+                }
+
+                const product = this.state.renderedProducts[productId];
+                const restricted = this.isProductRestricted(product, clientAllergens);
+
+                if (restricted && this.state.cart[productId]) {
+                    this.setProductQuantity(productId, 0);
+                }
+
+                const $product = this.$products.find(`.mealsdb-quick-order__product[data-product-id="${productId}"]`);
+                if ($product && $product.length) {
+                    this.applyRestrictionState($product, restricted);
+                }
+            });
+        },
+
+        applyRestrictionState($product, restricted) {
+            const restrictionTitle = this.translate('Client allergy restricted');
+            const $tile = $product.closest('.mealsdb-qo-tile');
+            $tile.toggleClass('mealsdb-qo-tile--restricted', !!restricted);
+            $product.toggleClass('is-restricted', !!restricted);
+
+            const $increase = $product.find('.mealsdb-quick-order__qty-increase');
+            const $input = $product.find('.mealsdb-quick-order__qty-input');
+            const $restriction = $product.find('.mealsdb-qo-restriction');
+
+            $increase.prop('disabled', !!restricted);
+            $input.prop('disabled', !!restricted);
+
+            if (restricted) {
+                $increase.attr('title', restrictionTitle);
+                if (!$restriction.length) {
+                    $product.find('.mealsdb-quick-order__product-content').append(
+                        `<div class="mealsdb-qo-restriction" role="status">${this.escapeHtml(restrictionTitle)}</div>`
+                    );
+                }
+            } else {
+                $increase.removeAttr('title');
+                $restriction.remove();
+            }
         },
 
         incrementProduct(productId) {
@@ -1487,11 +1607,18 @@
 
             let clientType = '';
             let clientId = null;
+            let clientAllergens = [];
 
             if (clientData && typeof clientData === 'object') {
                 const parsedId = parseInt(clientData.id, 10);
                 clientId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
                 clientType = clientData.customer_type || clientData.client_type || '';
+
+                if (Array.isArray(clientData.allergens)) {
+                    clientAllergens = clientData.allergens;
+                } else if (Array.isArray(clientData.allergen_flags)) {
+                    clientAllergens = clientData.allergen_flags;
+                }
             } else {
                 const selectedValue = this.$clientSelect.val();
                 const parsedId = parseInt(selectedValue, 10);
@@ -1507,16 +1634,24 @@
                     } else if ($selected.data('clientType')) {
                         clientType = $selected.data('clientType');
                     }
+
+                    if (selectedData && Array.isArray(selectedData.allergens)) {
+                        clientAllergens = selectedData.allergens;
+                    } else if (selectedData && Array.isArray(selectedData.allergen_flags)) {
+                        clientAllergens = selectedData.allergen_flags;
+                    }
                 }
             }
 
             this.state.currentClientId = clientId;
             this.state.currentClientType = this.normaliseClientType(clientType);
+            this.state.currentClientAllergens = this.normaliseAllergenList(clientAllergens);
 
             if (window.mealsdbQuickOrder) {
                 window.mealsdbQuickOrder.clientType = this.state.currentClientType;
             }
 
+            this.updateProductRestrictionStates();
             this.updateSummaryPanel();
         },
 
