@@ -85,14 +85,44 @@ class MealsDB_Products {
             return $defaults;
         }
 
-        $result = $stmt->get_result();
-        if (!$result instanceof mysqli_result) {
-            $stmt->close();
-            return $defaults;
+        $row = null;
+
+        if (method_exists($stmt, 'get_result')) {
+            $result = $stmt->get_result();
+            if ($result instanceof mysqli_result) {
+                $row = $result->fetch_assoc();
+                $result->free();
+            }
+        } else {
+            $statement_row = [
+                'wc_product_id'   => null,
+                'product_type'    => null,
+                'taxable'         => null,
+                'main_ingredient' => null,
+                'dietary_tags'    => null,
+                'allergen_flags'  => null,
+                'case_size'       => null,
+                'unit_cost'       => null,
+                'last_updated'    => null,
+            ];
+
+            $bound = $stmt->bind_result(
+                $statement_row['wc_product_id'],
+                $statement_row['product_type'],
+                $statement_row['taxable'],
+                $statement_row['main_ingredient'],
+                $statement_row['dietary_tags'],
+                $statement_row['allergen_flags'],
+                $statement_row['case_size'],
+                $statement_row['unit_cost'],
+                $statement_row['last_updated']
+            );
+
+            if ($bound && $stmt->fetch()) {
+                $row = $statement_row;
+            }
         }
 
-        $row = $result->fetch_assoc();
-        $result->free();
         $stmt->close();
 
         if (!is_array($row)) {
