@@ -236,13 +236,14 @@ class MealsDB_WC_Product_Tab {
 
         $args = array_merge($defaults, $args);
 
-        echo '<p class="form-field ' . esc_attr($args['id']) . '_field">';
-        echo '<label for="' . esc_attr($args['id']) . '">' . esc_html($args['label']) . '</label>';
-        echo '<input type="checkbox" class="checkbox" name="' . esc_attr($args['id']) . '" id="' . esc_attr($args['id']) . '" value="1" ' . checked(1, (int) $args['value'], false) . ($args['disabled'] ? ' disabled="disabled"' : '') . ' />';
-        if (!empty($args['description'])) {
-            echo '<span class="description">' . esc_html($args['description']) . '</span>';
-        }
-        echo '</p>';
+        woocommerce_wp_checkbox([
+            'id'                => $args['id'],
+            'label'             => $args['label'],
+            'value'             => $args['value'],
+            'cbvalue'           => '1',
+            'description'       => $args['description'],
+            'custom_attributes' => $args['disabled'] ? ['disabled' => 'disabled'] : [],
+        ]);
     }
 
     /**
