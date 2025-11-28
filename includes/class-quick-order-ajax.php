@@ -568,6 +568,13 @@ class MealsDB_Quick_Order_Ajax {
     public static function clone_order(): void {
         self::verify_request();
 
+        if (!self::woocommerce_is_available()) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('WooCommerce is required to clone orders.', 'meals-db'),
+            ]);
+        }
+
         try {
             $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
             if ($source_order_id <= 0) {
@@ -671,8 +678,15 @@ class MealsDB_Quick_Order_Ajax {
     public static function clone_get_order(): void {
         self::verify_request();
 
+        if (!self::woocommerce_is_available()) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('WooCommerce is required to clone orders.', 'meals-db'),
+            ]);
+        }
+
         try {
-            $source_order_id = isset($_POST['order_id']) ? absint(wp_unslash($_POST['order_id'])) : 0;
+            $source_order_id = isset($_REQUEST['order_id']) ? absint(wp_unslash($_REQUEST['order_id'])) : 0;
             if ($source_order_id <= 0) {
                 wp_send_json([
                     'success' => false,
@@ -760,6 +774,17 @@ class MealsDB_Quick_Order_Ajax {
                 'message' => 'Server error: ' . $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Confirm WooCommerce classes and helpers are available before cloning orders.
+     */
+    private static function woocommerce_is_available(): bool
+    {
+        return function_exists('wc_get_order')
+            && class_exists('WC_Order')
+            && class_exists('WC_Order_Item_Product')
+            && class_exists('WC_Product');
     }
 
     /**
