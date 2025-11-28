@@ -278,17 +278,18 @@ class MealsDB_WC_Product_Tab {
             $classes[] = $wrap_class;
         }
 
-        echo '<span class="' . esc_attr(implode(' ', $classes)) . '">';
+        echo '<div class="' . esc_attr(implode(' ', $classes)) . '">';
 
         foreach ($options as $key => $option_label) {
             $field_id   = $id . '_' . $key;
             $is_checked = in_array($key, $selected, true);
             echo '<label class="mealsdb-multi-checkbox" for="' . esc_attr($field_id) . '">';
-            echo '<input type="checkbox" name="' . esc_attr($id) . '[]" id="' . esc_attr($field_id) . '" value="' . esc_attr($key) . '" ' . checked(true, $is_checked, false) . ' /> ' . esc_html($option_label);
+            echo '<input type="checkbox" name="' . esc_attr($id) . '[]" id="' . esc_attr($field_id) . '" value="' . esc_attr($key) . '" ' . checked(true, $is_checked, false) . ' />';
+            echo '<span class="mealsdb-multi-checkbox__label">' . esc_html($option_label) . '</span>';
             echo '</label>';
         }
 
-        echo '</span>';
+        echo '</div>';
         echo '</p>';
         echo '</div>';
     }
