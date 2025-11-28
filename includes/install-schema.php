@@ -256,11 +256,12 @@ class MealsDB_Installer {
             return;
         }
 
-        $table = 'meals_products';
+        $table = MealsDB_DB::get_table_name('meals_products');
+        $table = str_replace('`', '``', $table);
         $version_option = 'mealsdb_products_schema_version';
         $target_version = self::MEALSDB_PRODUCTS_SCHEMA_VERSION;
 
-        $create_sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        $create_sql = "CREATE TABLE IF NOT EXISTS `{$table}` (
     id INT AUTO_INCREMENT PRIMARY KEY,
     wc_product_id INT NOT NULL UNIQUE,
     product_type ENUM('meal','side') NOT NULL DEFAULT 'meal',
