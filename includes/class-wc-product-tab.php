@@ -79,8 +79,13 @@ class MealsDB_WC_Product_Tab {
             return;
         }
 
+        $style = '.mealsdb-checkbox-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 12px; }'
+            . '.mealsdb-checkbox-grid .mealsdb-multi-checkbox { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; line-height: 1.4; }'
+            . '.mealsdb-checkbox-grid .mealsdb-multi-checkbox input[type="checkbox"] { margin: 0; }';
+
         $script = "jQuery(function($){\n            var productType = $('#_mealsdb_product_type');\n            var taxableCheckbox = $('#_mealsdb_taxable');\n\n            function toggleTaxable(){\n                if(productType.val() === 'meal'){\n                    taxableCheckbox.prop('checked', false).prop('disabled', true);\n                } else {\n                    taxableCheckbox.prop('disabled', false);\n                }\n            }\n\n            toggleTaxable();\n            productType.on('change', toggleTaxable);\n        });";
 
+        wp_add_inline_style('woocommerce_admin_styles', $style);
         wp_add_inline_script('wc-admin-product-meta-boxes', $script);
     }
 
@@ -117,21 +122,6 @@ class MealsDB_WC_Product_Tab {
             'disabled'    => $data['product_type'] === 'meal',
         ]);
 
-        woocommerce_wp_select([
-            'id'      => '_mealsdb_main_ingredient',
-            'label'   => __('Main Ingredient', 'meals-db'),
-            'value'   => $data['main_ingredient'],
-            'options' => [
-                ''           => __('Select an ingredient', 'meals-db'),
-                'chicken'    => __('Chicken', 'meals-db'),
-                'beef'       => __('Beef', 'meals-db'),
-                'pork'       => __('Pork', 'meals-db'),
-                'seafood'    => __('Seafood', 'meals-db'),
-                'vegetarian' => __('Vegetarian', 'meals-db'),
-                'vegan'      => __('Vegan', 'meals-db'),
-            ],
-        ]);
-
         $this->render_multi_checkbox_field(
             '_mealsdb_dietary_tags',
             __('Dietary Tags', 'meals-db'),
@@ -143,7 +133,8 @@ class MealsDB_WC_Product_Tab {
             '_mealsdb_allergen_flags',
             __('Allergen Flags', 'meals-db'),
             $this->allergen_flags,
-            $data['allergen_flags']
+            $data['allergen_flags'],
+            'mealsdb-checkbox-grid'
         );
 
         woocommerce_wp_text_input([
@@ -189,8 +180,9 @@ class MealsDB_WC_Product_Tab {
             $taxable = 1;
         }
 
-        $main_ingredient = isset($_POST['_mealsdb_main_ingredient'])
-            ? sanitize_text_field(wp_unslash($_POST['_mealsdb_main_ingredient']))
+        $existing_data  = MealsDB_Products::get_product_data($product_id);
+        $main_ingredient = is_array($existing_data) && isset($existing_data['main_ingredient'])
+            ? $existing_data['main_ingredient']
             : '';
 
         $dietary_tags = isset($_POST['_mealsdb_dietary_tags']) && is_array($_POST['_mealsdb_dietary_tags'])
@@ -254,16 +246,21 @@ class MealsDB_WC_Product_Tab {
      * @param array<string,string> $options
      * @param array                $selected
      */
-    private function render_multi_checkbox_field(string $id, string $label, array $options, array $selected): void {
+    private function render_multi_checkbox_field(string $id, string $label, array $options, array $selected, string $wrap_class = ''): void {
         echo '<div class="options_group">';
         echo '<p class="form-field ' . esc_attr($id) . '_field">';
         echo '<label>' . esc_html($label) . '</label>';
-        echo '<span class="wrap">';
+        $classes = ['wrap'];
+        if ($wrap_class !== '') {
+            $classes[] = $wrap_class;
+        }
+
+        echo '<span class="' . esc_attr(implode(' ', $classes)) . '">';
 
         foreach ($options as $key => $option_label) {
             $field_id = $id . '_' . $key;
             $is_checked = in_array($key, $selected, true);
-            echo '<label class="mealsdb-multi-checkbox" style="display:block; margin-bottom:4px;">';
+            echo '<label class="mealsdb-multi-checkbox">';
             echo '<input type="checkbox" name="' . esc_attr($id) . '[]" id="' . esc_attr($field_id) . '" value="' . esc_attr($key) . '" ' . checked(true, $is_checked, false) . ' /> ' . esc_html($option_label);
             echo '</label>';
         }
