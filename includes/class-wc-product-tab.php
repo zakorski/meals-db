@@ -79,13 +79,17 @@ class MealsDB_WC_Product_Tab {
             return;
         }
 
-        $style = '.mealsdb-checkbox-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 12px; }'
-            . '.mealsdb-checkbox-grid .mealsdb-multi-checkbox { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; line-height: 1.4; }'
-            . '.mealsdb-checkbox-grid .mealsdb-multi-checkbox input[type="checkbox"] { margin: 0; }';
+        $style_path    = MEALS_DB_PLUGIN_DIR . 'assets/css/product-tab.css';
+        $style_version = file_exists($style_path) ? filemtime($style_path) : MEALS_DB_VERSION;
+
+        wp_enqueue_style(
+            'mealsdb-wc-product-tab',
+            MEALS_DB_PLUGIN_URL . 'assets/css/product-tab.css',
+            ['woocommerce_admin_styles'],
+            $style_version
+        );
 
         $script = "jQuery(function($){\n            var productType = $('#_mealsdb_product_type');\n            var taxableCheckbox = $('#_mealsdb_taxable');\n\n            function toggleTaxable(){\n                if(productType.val() === 'meal'){\n                    taxableCheckbox.prop('checked', false).prop('disabled', true);\n                } else {\n                    taxableCheckbox.prop('disabled', false);\n                }\n            }\n\n            toggleTaxable();\n            productType.on('change', toggleTaxable);\n        });";
-
-        wp_add_inline_style('woocommerce_admin_styles', $style);
         wp_add_inline_script('wc-admin-product-meta-boxes', $script);
     }
 
