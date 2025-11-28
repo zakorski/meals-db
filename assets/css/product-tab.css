@@ -1,20 +1,25 @@
 /* Meals DB WooCommerce product tab styles */
 
-.mealsdb-checkbox-grid {
+#mealsdb_product_data_panel .form-field {
+    align-items: flex-start;
+}
+
+.mealsdb-checkbox-wrapper {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
     gap: 8px 12px;
     align-items: flex-start;
 }
 
-.mealsdb-checkbox-grid .mealsdb-multi-checkbox {
+.mealsdb-multi-checkbox {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     font-weight: 400;
     line-height: 1.4;
+    margin: 0;
 }
 
-.mealsdb-checkbox-grid .mealsdb-multi-checkbox input[type="checkbox"] {
+.mealsdb-multi-checkbox input[type="checkbox"] {
     margin: 0;
 }

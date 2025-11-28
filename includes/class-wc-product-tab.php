@@ -264,8 +264,16 @@ class MealsDB_WC_Product_Tab {
     private function render_multi_checkbox_field(string $id, string $label, array $options, array $selected, string $wrap_class = ''): void {
         echo '<div class="options_group">';
         echo '<p class="form-field ' . esc_attr($id) . '_field">';
-        echo '<label>' . esc_html($label) . '</label>';
-        $classes = ['wrap'];
+
+        $first_field_for = '';
+        if ($options !== []) {
+            $first_key       = array_key_first($options);
+            $first_field_for = $id . '_' . $first_key;
+        }
+
+        echo '<label' . ($first_field_for ? ' for="' . esc_attr($first_field_for) . '"' : '') . '>' . esc_html($label) . '</label>';
+
+        $classes = ['woocommerce-input-wrapper', 'mealsdb-checkbox-wrapper'];
         if ($wrap_class !== '') {
             $classes[] = $wrap_class;
         }
@@ -273,9 +281,9 @@ class MealsDB_WC_Product_Tab {
         echo '<span class="' . esc_attr(implode(' ', $classes)) . '">';
 
         foreach ($options as $key => $option_label) {
-            $field_id = $id . '_' . $key;
+            $field_id   = $id . '_' . $key;
             $is_checked = in_array($key, $selected, true);
-            echo '<label class="mealsdb-multi-checkbox">';
+            echo '<label class="mealsdb-multi-checkbox" for="' . esc_attr($field_id) . '">';
             echo '<input type="checkbox" name="' . esc_attr($id) . '[]" id="' . esc_attr($field_id) . '" value="' . esc_attr($key) . '" ' . checked(true, $is_checked, false) . ' /> ' . esc_html($option_label);
             echo '</label>';
         }
