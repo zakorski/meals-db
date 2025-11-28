@@ -89,7 +89,7 @@ class MealsDB_WC_Product_Tab {
             $style_version
         );
 
-        $script = "jQuery(function($){\n            var productType = $('#_mealsdb_product_type');\n            var taxableCheckbox = $('#_mealsdb_taxable');\n\n            function toggleTaxable(){\n                if(productType.val() === 'meal'){\n                    taxableCheckbox.prop('checked', false).prop('disabled', true);\n                } else {\n                    taxableCheckbox.prop('disabled', false);\n                }\n            }\n\n            toggleTaxable();\n            productType.on('change', toggleTaxable);\n        });";
+        $script = "jQuery(function($){\n            var productType = $('#_mealsdb_product_type');\n            var taxableCheckbox = $('#_mealsdb_taxable');\n            var taxStatus = $('#_tax_status');\n            var taxClass = $('#_tax_class');\n\n            function syncTaxFields(){\n                var isMeal = productType.val() === 'meal';\n                var isTaxable = taxableCheckbox.is(':checked');\n\n                taxableCheckbox.prop('disabled', isMeal);\n\n                if(isMeal){\n                    taxableCheckbox.prop('checked', false);\n                }\n\n                taxStatus.prop('disabled', isMeal);\n                taxClass.prop('disabled', isMeal);\n\n                if(isMeal){\n                    taxStatus.val('none').trigger('change');\n                    taxClass.val('').trigger('change');\n                    return;\n                }\n\n                taxStatus.val(isTaxable ? 'taxable' : 'none').trigger('change');\n            }\n\n            syncTaxFields();\n            productType.on('change', syncTaxFields);\n            taxableCheckbox.on('change', syncTaxFields);\n        });";
         wp_add_inline_script('wc-admin-product-meta-boxes', $script);
     }
 
@@ -204,6 +204,17 @@ class MealsDB_WC_Product_Tab {
         $unit_cost = isset($_POST['_mealsdb_unit_cost'])
             ? wc_format_decimal(wp_unslash($_POST['_mealsdb_unit_cost']))
             : '0.00';
+
+        if ($product_type === 'meal') {
+            $product->set_tax_status('none');
+            $product->set_tax_class('');
+        } else {
+            $product->set_tax_status($taxable ? 'taxable' : 'none');
+
+            if ($taxable === 0) {
+                $product->set_tax_class('');
+            }
+        }
 
         MealsDB_Products::save_product_data($product_id, [
             'product_type'    => $product_type,
