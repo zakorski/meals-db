@@ -59,7 +59,7 @@
             this.$grid = $('#mealsdb-qo-grid');
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
-            this.$search = $('#mealsdb-quick-order-search');
+            this.$search = $('#mealsdb-qo-search');
             this.$clientSelect = $('#mealsdb-qo-client');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#qo-create-order');
@@ -104,6 +104,31 @@
             this.state.currentClientType = this.normaliseClientType(initialType);
         },
 
+        isSuccessfulResponse(response) {
+            return response && response.success !== false;
+        },
+
+        getResponsePayload(response) {
+            if (response && typeof response === 'object' && response.data && typeof response.data === 'object') {
+                return response.data;
+            }
+
+            return response || {};
+        },
+
+        getResponseMessage(response, fallback = '') {
+            const payload = this.getResponsePayload(response);
+            if (payload && payload.message) {
+                return payload.message;
+            }
+
+            if (response && response.message) {
+                return response.message;
+            }
+
+            return fallback;
+        },
+
         initialiseClientSelect() {
             if (!this.$clientSelect || !this.$clientSelect.length) {
                 return;
@@ -133,10 +158,12 @@
                         nonce: this.getSecurityNonce(),
                     }),
                     processResults: (response) => {
-                        const clients =
-                            response && response.success && response.data && Array.isArray(response.data.clients)
-                                ? response.data.clients
-                                : [];
+                        if (!this.isSuccessfulResponse(response)) {
+                            return { results: [] };
+                        }
+
+                        const payload = this.getResponsePayload(response);
+                        const clients = Array.isArray(payload.clients) ? payload.clients : [];
 
                         const results = clients.map((client) => ({
                             id: client.id,
@@ -145,7 +172,7 @@
                             first_name: client.first_name || '',
                             last_name: client.last_name || '',
                             email: client.email || '',
-                            customer_type: client.customer_type || client.client_type || '',
+                            customer_type: client.customer_type || client.client_type || client.type || '',
                         }));
 
                         return { results };
@@ -226,11 +253,9 @@
             if (this.$createOrder && this.$createOrder.length) {
                 this.$createOrder.on('click', (event) => {
                     event.preventDefault();
-                    const btn = jQuery('#qo-create-order');
-                    btn.addClass('loading');
-                    btn.append('<div class="qo-spinner"></div>');
+                    this.showCreateOrderSpinner();
                     qoShowToast('Submitting order...', 'info');
-                    this.handleCreateOrder(btn);
+                    this.handleCreateOrder(this.$createOrder);
                 });
             }
 
@@ -337,17 +362,16 @@
                     nonce: this.getSecurityNonce(),
                 },
             }).done((response) => {
-                if (!response || response.success === false || !response.data || !Array.isArray(response.data.categories)) {
-                    const message =
-                        response && response.data && response.data.message
-                            ? response.data.message
-                            : 'Unable to load categories.';
+                const payload = this.getResponsePayload(response);
+
+                if (!this.isSuccessfulResponse(response) || !Array.isArray(payload.categories)) {
+                    const message = this.getResponseMessage(response, 'Unable to load categories.');
                     this.renderCategoriesError(message);
                     qoShowToast(response && response.success === false ? message || 'An error occurred.' : message, 'error');
                     return;
                 }
 
-                this.state.categories = response.data.categories;
+                this.state.categories = payload.categories;
                 this.renderCategories();
 
                 if (!this.state.categories.length) {
@@ -405,33 +429,39 @@
                     order_id: orderId,
                 },
             }).done((response) => {
-                if (!response || response.success === false || !response.data) {
-                    const message =
-                        response && response.data && response.data.message
-                            ? response.data.message
-                            : this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
+                const payload = this.getResponsePayload(response);
+
+                if (!this.isSuccessfulResponse(response) || !payload) {
+                    const message = this.getResponseMessage(
+                        response,
+                        this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.')
+                    );
                     this.addNotice(message, 'error');
                     qoShowToast(response && response.success === false ? message || 'An error occurred.' : message, 'error');
                     return;
                 }
 
-                const data = response.data;
-                const parsedItems = this.normaliseClonedItems(data.items, data.products);
+                const parsedItems = this.normaliseClonedItems(payload.items, payload.products);
                 const hasItems = parsedItems.available.length > 0;
                 const hasMissing = parsedItems.missing.length > 0;
 
                 if (!hasItems && !hasMissing) {
-                    const emptyMessage = data.message || this.getCloneMessage('cloneNoItems', 'The selected order does not contain any products that can be cloned.');
+                    const emptyMessage =
+                        payload.message ||
+                        this.getCloneMessage(
+                            'cloneNoItems',
+                            'The selected order does not contain any products that can be cloned.'
+                        );
                     this.addNotice(emptyMessage, 'error');
                     return;
                 }
 
-                if (data.client_id) {
-                    this.applyClonedClient(data.client_id, data.client_type, data.client_name);
+                if (payload.client_id) {
+                    this.applyClonedClient(payload.client_id, payload.client_type, payload.client_name);
                 }
 
-                if (data.order_date && this.$orderDate && this.$orderDate.length) {
-                    this.$orderDate.val(data.order_date);
+                if (payload.order_date && this.$orderDate && this.$orderDate.length) {
+                    this.$orderDate.val(payload.order_date);
                 }
 
                 if (hasItems) {
@@ -441,8 +471,10 @@
                 this.setMissingCloneItems(hasMissing ? parsedItems.missing : []);
                 this.renderUnavailableTilesFromState();
 
-                const successMessage = data.message || this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.');
-                const orderLabel = data.order_number || data.order_id || orderId;
+                const successMessage =
+                    payload.message ||
+                    this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.');
+                const orderLabel = payload.order_number || payload.order_id || orderId;
                 const bannerMessage = orderLabel
                     ? this.getCloneMessage('cloneLoaded', `Loaded from order #${orderLabel}.`)
                     : successMessage;
@@ -450,8 +482,12 @@
                 this.scrollToSummaryPanel();
             }).fail((jqXHR) => {
                 let message = this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
-                if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
-                    message = jqXHR.responseJSON.data.message;
+                if (jqXHR && jqXHR.responseJSON) {
+                    if (jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
+                        message = jqXHR.responseJSON.data.message;
+                    } else if (jqXHR.responseJSON.message) {
+                        message = jqXHR.responseJSON.message;
+                    }
                 }
                 this.addNotice(message, 'error');
                 qoShowToast(message, 'error');
@@ -833,19 +869,18 @@
                     nonce: this.getSecurityNonce(),
                 },
             }).done((response) => {
-                if (!response || response.success === false || !response.data || !Array.isArray(response.data.products)) {
-                    const message =
-                        response && response.data && response.data.message
-                            ? response.data.message
-                            : 'Unable to load products.';
+                const payload = this.getResponsePayload(response);
+
+                if (!this.isSuccessfulResponse(response) || !Array.isArray(payload.products)) {
+                    const message = this.getResponseMessage(response, 'Unable to load products.');
                     this.renderProductsError(message);
                     qoShowToast(response && response.success === false ? message || 'An error occurred.' : message, 'error');
                     return;
                 }
 
                 this.state.categoryProducts = this.state.categoryProducts || {};
-                this.state.categoryProducts[cacheKey] = response.data.products;
-                this.renderProducts(response.data.products);
+                this.state.categoryProducts[cacheKey] = payload.products;
+                this.renderProducts(payload.products);
             }).fail(() => {
                 this.renderProductsError('Unable to load products.');
                 qoShowToast('Unable to load category. Check connection.', 'error');
@@ -969,11 +1004,10 @@
                     return;
                 }
 
-                if (!response || response.success === false || !response.data || !Array.isArray(response.data.products)) {
-                    const message =
-                        response && response.data && response.data.message
-                            ? response.data.message
-                            : 'No products found.';
+                const payload = this.getResponsePayload(response);
+
+                if (!this.isSuccessfulResponse(response) || !Array.isArray(payload.products)) {
+                    const message = this.getResponseMessage(response, 'No products found.');
                     this.renderProductsError(message);
                     if (response && response.success === false) {
                         qoShowToast(response.message || 'An error occurred.', 'error');
@@ -983,13 +1017,13 @@
                     return;
                 }
 
-                if (!response.data.products.length) {
+                if (!payload.products.length) {
                     this.renderProductsError('No products found.');
                     qoShowToast('No products found.', 'warning');
                     return;
                 }
 
-                this.renderProducts(response.data.products, { isSearchResults: true });
+                this.renderProducts(payload.products, { isSearchResults: true });
             }).fail(() => {
                 if (this.state.searchTerm === keyword) {
                     this.renderProductsError('Unable to search for products.');
@@ -1433,24 +1467,27 @@
                     items: payloadItems,
                 },
             }).done((response) => {
-                if (!response || response.success === false || !response.data) {
-                    qoShowToast('Error creating order. Please try again.', 'error');
+                if (!this.isSuccessfulResponse(response)) {
+                    const message = this.getResponseMessage(response, 'Error creating order. Please try again.');
+                    qoShowToast(message, 'error');
                     return;
                 }
 
+                const payload = this.getResponsePayload(response);
+                const orderIdRaw =
+                    (payload && (payload.order_id || payload.orderId)) ||
+                    response.order_id ||
+                    response.orderId;
+                const orderId = parseInt(orderIdRaw, 10);
                 const orderLink =
-                    (response.data && response.data.order_link) || response.order_link || '#';
+                    (payload && (payload.order_link || payload.orderLink)) ||
+                    response.order_link ||
+                    response.orderLink ||
+                    '';
+                const successMessage = this.getResponseMessage(response, 'Order created successfully!');
 
-                qoShowToast('Order created successfully!', 'success');
-
-                jQuery('#qo-order-success')
-                    .html(
-                        '<p>Order created successfully! <a href="' +
-                            orderLink +
-                            '" target="_blank">View Order</a></p>' +
-                            '<button id="qo-start-new" class="button">Create Another Order</button>'
-                    )
-                    .show();
+                qoShowToast(successMessage, 'success');
+                this.showOrderSuccess(successMessage, orderId, orderLink);
 
                 jQuery('html, body').animate({ scrollTop: jQuery('#qo-order-success').offset().top - 30 }, 300);
             }).fail(() => {
@@ -1490,13 +1527,22 @@
             this.$createOrder.attr('aria-busy', isBusy ? 'true' : 'false');
         },
 
-        clearCreateOrderLoading(createButton) {
-            if (!createButton || !createButton.length) {
+        showCreateOrderSpinner() {
+            if (!this.$createOrder || !this.$createOrder.length || !this.$createOrderSpinner) {
                 return;
             }
 
-            createButton.removeClass('loading');
-            createButton.find('.qo-spinner').remove();
+            this.$createOrder.addClass('loading');
+            this.$createOrderSpinner.show();
+        },
+
+        clearCreateOrderLoading(createButton) {
+            if (!this.$createOrder || !this.$createOrderSpinner) {
+                return;
+            }
+
+            this.$createOrder.removeClass('loading');
+            this.$createOrderSpinner.hide();
         },
 
         clearNotices() {
@@ -1511,7 +1557,7 @@
             }
         },
 
-        showOrderSuccess(message, orderId) {
+        showOrderSuccess(message, orderId, orderLink = '') {
             if (!this.$orderSuccess || !this.$orderSuccess.length) {
                 this.addNotice(this.createOrderSuccessMessage(message, orderId), 'success', true);
                 return;
@@ -1527,10 +1573,13 @@
                 safeMessage = trimmedMessage;
             }
             let orderLinkHtml = '';
-            if (Number.isInteger(orderId) && orderId > 0) {
-                const orderUrl = this.escapeAttribute(this.buildOrderAdminLink(orderId));
+            const resolvedOrderLink =
+                orderLink && typeof orderLink === 'string' ? orderLink.trim() : this.buildOrderAdminLink(orderId);
+
+            if (resolvedOrderLink) {
+                const orderUrl = this.escapeAttribute(resolvedOrderLink);
                 const viewOrderText = this.translate('View order #%s');
-                const orderText = this.escapeHtml(viewOrderText.replace('%s', orderId));
+                const orderText = this.escapeHtml(viewOrderText.replace('%s', orderId || ''));
                 orderLinkHtml = ` <a href="${orderUrl}" target="_blank" rel="noopener noreferrer">${orderText}</a>`;
             }
 
