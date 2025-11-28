@@ -96,7 +96,7 @@ class MealsDB_Initials {
     public static function exists_in_db(string $code, ?int $exclude_client_id = null): bool {
         $connection = MealsDB_DB::get_connection();
 
-        if (!($connection instanceof mysqli)) {
+        if (!MealsDB_DB::is_mysqli($connection)) {
             error_log('[MealsDB] Unable to obtain database connection for initials lookup.');
             return false;
         }
@@ -109,7 +109,7 @@ class MealsDB_Initials {
 
         $statement = $connection->prepare($sql);
 
-        if (!($statement instanceof mysqli_stmt)) {
+        if (!MealsDB_DB::is_mysqli_stmt($statement)) {
             error_log('[MealsDB] Failed to prepare initials lookup query.');
             return false;
         }

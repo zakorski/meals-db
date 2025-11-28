@@ -26,12 +26,20 @@ class MealsDB_Autoloader {
     private $directories = [];
 
     /**
+     * Explicit class map for loading known classes from fixed paths.
+     *
+     * @var array<string, string>
+     */
+    private $class_map = [];
+
+    /**
      * Register the Meals DB autoloader.
      *
-     * @param string $base_dir
-     * @param string[] $directories
+     * @param string                 $base_dir
+     * @param string[]               $directories
+     * @param array<string, string>  $class_map
      */
-    public static function register(string $base_dir, array $directories = []): void {
+    public static function register(string $base_dir, array $directories = [], array $class_map = []): void {
         $directories = !empty($directories) ? $directories : [
             'includes',
             'includes/ajax',
@@ -39,24 +47,31 @@ class MealsDB_Autoloader {
             'includes/services/sync',
         ];
 
+        $class_map = array_merge([
+            'MealsDB_Products'         => 'includes/class-products.php',
+            'MealsDB_Products_Loader'  => 'includes/class-products-loader.php',
+        ], $class_map);
+
         if (function_exists('apply_filters')) {
             $directories = apply_filters('mealsdb_autoloader_directories', $directories, $base_dir);
         }
 
-        self::$instance = new self($base_dir, $directories);
+        self::$instance = new self($base_dir, $directories, $class_map);
         spl_autoload_register([self::$instance, 'autoload']);
     }
 
     /**
-     * @param string $base_dir
-     * @param string[] $directories
+     * @param string                 $base_dir
+     * @param string[]               $directories
+     * @param array<string, string>  $class_map
      */
-    private function __construct(string $base_dir, array $directories) {
+    private function __construct(string $base_dir, array $directories, array $class_map) {
         $this->base_dir = rtrim($base_dir, '/\\') . DIRECTORY_SEPARATOR;
         $this->directories = array_map([
             $this,
             'normalise_directory',
         ], $directories);
+        $this->class_map = $class_map;
     }
 
     /**
@@ -67,6 +82,15 @@ class MealsDB_Autoloader {
     private function autoload(string $class_name): void {
         if (strpos($class_name, 'MealsDB_') !== 0) {
             return;
+        }
+
+        $mapped = $this->class_map[$class_name] ?? null;
+        if (is_string($mapped)) {
+            $this->load_mapped_class($class_name, $mapped);
+
+            if (class_exists($class_name, false) || interface_exists($class_name, false) || trait_exists($class_name, false)) {
+                return;
+            }
         }
 
         $slug = strtolower(str_replace('_', '-', substr($class_name, 8)));
@@ -84,6 +108,17 @@ class MealsDB_Autoloader {
                     return;
                 }
             }
+        }
+    }
+
+    /**
+     * Load a class from a predefined map entry.
+     */
+    private function load_mapped_class(string $class_name, string $mapped_path): void {
+        $file = $this->base_dir . ltrim($mapped_path, '/\\');
+
+        if (is_readable($file)) {
+            require_once $file;
         }
     }
 

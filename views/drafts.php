@@ -8,7 +8,7 @@ $draft_error = null;
 if ($conn) {
     $res = $conn->query("SELECT id, data, created_at FROM meals_drafts ORDER BY created_at DESC");
 
-    if ($res instanceof mysqli_result) {
+    if (MealsDB_DB::is_mysqli_result($res)) {
         while ($row = $res->fetch_assoc()) {
             $decoded = json_decode($row['data'], true);
             if (!is_array($decoded)) {

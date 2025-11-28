@@ -12,7 +12,7 @@ class MealsDB_Products {
     public static function install_table(): void {
         $conn = MealsDB_DB::get_connection();
 
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             error_log('[MealsDB Products] Unable to establish database connection.');
             return;
         }
@@ -64,7 +64,7 @@ class MealsDB_Products {
         $defaults = self::get_default_row($product_id);
 
         $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return $defaults;
         }
 
@@ -74,7 +74,7 @@ class MealsDB_Products {
         $sql = "SELECT wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost, last_updated FROM `{$table}` WHERE wc_product_id = ? LIMIT 1";
         $stmt = $conn->prepare($sql);
 
-        if (!$stmt instanceof mysqli_stmt) {
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
             return $defaults;
         }
 
@@ -89,7 +89,7 @@ class MealsDB_Products {
 
         if (method_exists($stmt, 'get_result')) {
             $result = $stmt->get_result();
-            if ($result instanceof mysqli_result) {
+            if (MealsDB_DB::is_mysqli_result($result)) {
                 $row = $result->fetch_assoc();
                 $result->free();
             }
@@ -152,7 +152,7 @@ class MealsDB_Products {
      */
     public static function save_product_data(int $product_id, array $data): bool {
         $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return false;
         }
 
@@ -173,7 +173,7 @@ class MealsDB_Products {
                     unit_cost = VALUES(unit_cost)";
 
         $stmt = $conn->prepare($sql);
-        if (!$stmt instanceof mysqli_stmt) {
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
             return false;
         }
 
