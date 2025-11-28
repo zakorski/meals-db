@@ -21,7 +21,7 @@ class MealsDB_Transactions {
      */
     public static function record_order($order_id, $client_id, $items, $totals) {
         $connection = MealsDB_DB::get_connection();
-        if (!$connection instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($connection)) {
             return false;
         }
 
@@ -43,7 +43,7 @@ class MealsDB_Transactions {
         );
 
         $statement = $connection->prepare($sql);
-        if (!$statement instanceof mysqli_stmt) {
+        if (!MealsDB_DB::is_mysqli_stmt($statement)) {
             return false;
         }
 
