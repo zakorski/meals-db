@@ -425,6 +425,7 @@ jQuery(document).ready(function($) {
         const $checkButton = $('#mealsdb-check-updates');
         const $pullButton = $('#mealsdb-run-update');
         const $dbButton = $('#mealsdb-update-database');
+        const $fetchProductsButton = $('#mealsdb-fetch-products');
         let hasCheckedUpdates = false;
         let lastCheckData = null;
 
@@ -670,6 +671,50 @@ jQuery(document).ready(function($) {
                 showNotice('error', 'Failed to communicate with the server.');
             }).always(() => {
                 toggleLoading($dbButton, false);
+            });
+        });
+
+        $fetchProductsButton.on('click', function (event) {
+            event.preventDefault();
+
+            if (!$fetchProductsButton.length) {
+                return;
+            }
+
+            toggleLoading($fetchProductsButton, true);
+            showNotice('info', 'Fetching WooCommerce products...');
+            setLog('');
+
+            $.post(ajaxurl, {
+                action: 'mealsdb_fetch_products',
+                nonce: mealsdb.nonce
+            }).done((res) => {
+                if (res.success) {
+                    const data = res.data || {};
+                    const summaryParts = [];
+
+                    if (typeof data.created !== 'undefined') {
+                        summaryParts.push(`Created: ${data.created}`);
+                    }
+                    if (typeof data.missing_count !== 'undefined') {
+                        summaryParts.push(`Missing products: ${data.missing_count}`);
+                    }
+                    if (typeof data.woocommerce_count !== 'undefined') {
+                        summaryParts.push(`WooCommerce products: ${data.woocommerce_count}`);
+                    }
+                    if (typeof data.existing_count !== 'undefined') {
+                        summaryParts.push(`Existing plugin products: ${data.existing_count}`);
+                    }
+
+                    setLog(summaryParts.join('\n'));
+                    showNotice('success', data.message || 'Products fetched.');
+                } else {
+                    handleErrorResponse(res);
+                }
+            }).fail(() => {
+                showNotice('error', 'Failed to communicate with the server.');
+            }).always(() => {
+                toggleLoading($fetchProductsButton, false);
             });
         });
     }

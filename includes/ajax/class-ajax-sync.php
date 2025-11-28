@@ -19,6 +19,7 @@ class MealsDB_Ajax_Sync {
         add_action('wp_ajax_mealsdb_check_updates', [self::class, 'check_updates']);
         add_action('wp_ajax_mealsdb_run_update', [self::class, 'run_update']);
         add_action('wp_ajax_mealsdb_update_database', [self::class, 'update_database']);
+        add_action('wp_ajax_mealsdb_fetch_products', [self::class, 'fetch_products']);
     }
 
     /**
@@ -192,6 +193,27 @@ class MealsDB_Ajax_Sync {
         }
 
         $result = MealsDB_Updates::run_database_maintenance();
+
+        wp_send_json_success($result);
+    }
+
+    /**
+     * Ensure plugin products exist for every WooCommerce product.
+     */
+    public static function fetch_products(): void {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        $result = MealsDB_Updates::fetch_products_from_woocommerce();
+
+        if (is_wp_error($result)) {
+            wp_send_json_error([
+                'message' => $result->get_error_message(),
+            ]);
+        }
 
         wp_send_json_success($result);
     }

@@ -193,6 +193,117 @@ class MealsDB_Updates {
     }
 
     /**
+     * Ensure every WooCommerce product has a corresponding Meals DB record.
+     *
+     * @return array<string, mixed>|WP_Error
+     */
+    public static function fetch_products_from_woocommerce() {
+        if (!function_exists('wc_get_products')) {
+            return new WP_Error(
+                'mealsdb_woocommerce_missing',
+                __('WooCommerce is not available.', 'meals-db')
+            );
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!$conn instanceof mysqli) {
+            return new WP_Error(
+                'mealsdb_db_connection_failed',
+                __('Unable to connect to the Meals DB database.', 'meals-db')
+            );
+        }
+
+        $table = MealsDB_DB::get_table_name('meals_products');
+        $table = str_replace('`', '``', $table);
+
+        $existing_ids = [];
+        $existing_result = $conn->query("SELECT wc_product_id FROM `{$table}`");
+
+        if ($existing_result instanceof mysqli_result) {
+            while ($row = $existing_result->fetch_assoc()) {
+                if (isset($row['wc_product_id'])) {
+                    $existing_ids[] = (int) $row['wc_product_id'];
+                }
+            }
+            $existing_result->free();
+        } else {
+            return new WP_Error(
+                'mealsdb_products_query_failed',
+                __('Unable to read existing products from the plugin table.', 'meals-db')
+            );
+        }
+
+        $product_args = [
+            'status' => ['publish', 'private', 'draft'],
+            'limit'  => -1,
+            'return' => 'ids',
+        ];
+
+        if (function_exists('apply_filters')) {
+            $product_args = apply_filters('mealsdb_fetch_products_args', $product_args);
+        }
+
+        $woo_product_ids = wc_get_products($product_args);
+        if (!is_array($woo_product_ids)) {
+            return new WP_Error(
+                'mealsdb_woocommerce_query_failed',
+                __('Unable to retrieve WooCommerce products.', 'meals-db')
+            );
+        }
+
+        $woo_product_ids = array_values(array_unique(array_map('intval', array_filter($woo_product_ids, 'is_numeric'))));
+        $existing_ids     = array_values(array_unique(array_map('intval', $existing_ids)));
+
+        $missing_ids = array_diff($woo_product_ids, $existing_ids);
+
+        $created = 0;
+
+        if (!empty($missing_ids)) {
+            $sql = "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
+                    VALUES (?, 'meal', 0, '', NULL, NULL, 1, 0.00)
+                    ON DUPLICATE KEY UPDATE wc_product_id = wc_product_id";
+
+            $stmt = $conn->prepare($sql);
+
+            if (!$stmt instanceof mysqli_stmt) {
+                return new WP_Error(
+                    'mealsdb_products_insert_prepare_failed',
+                    __('Failed to prepare insert for missing products.', 'meals-db')
+                );
+            }
+
+            foreach ($missing_ids as $product_id) {
+                $product_id = (int) $product_id;
+
+                if (!$stmt->bind_param('i', $product_id)) {
+                    continue;
+                }
+
+                if ($stmt->execute()) {
+                    $created++;
+                }
+            }
+
+            $stmt->close();
+        }
+
+        $message = $created > 0
+            ? sprintf(
+                _n('Added %d missing product from WooCommerce.', 'Added %d missing products from WooCommerce.', $created, 'meals-db'),
+                $created
+            )
+            : __('All WooCommerce products already exist in the plugin table.', 'meals-db');
+
+        return [
+            'message'             => $message,
+            'created'             => $created,
+            'missing_count'       => count($missing_ids),
+            'woocommerce_count'   => count($woo_product_ids),
+            'existing_count'      => count($existing_ids),
+        ];
+    }
+
+    /**
      * Determine if the plugin directory is a Git repository.
      *
      * @return bool
