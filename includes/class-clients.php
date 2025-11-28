@@ -23,7 +23,7 @@ class MealsDB_Clients {
         $types = [];
         $sql = 'SELECT DISTINCT customer_type FROM meals_clients WHERE customer_type <> "" ORDER BY customer_type ASC';
         $result = $conn->query($sql);
-        if ($result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($result)) {
             while ($row = $result->fetch_assoc()) {
                 $types[] = $row['customer_type'];
             }
@@ -104,7 +104,7 @@ class MealsDB_Clients {
 
         $records = [];
         $result = $stmt->get_result();
-        if ($result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($result)) {
             while ($row = $result->fetch_assoc()) {
                 $records[] = $row;
             }
@@ -183,7 +183,7 @@ class MealsDB_Clients {
             $sql = sprintf('DELETE FROM `%s` WHERE `%s` = ?', $escaped_table, $escaped_column);
 
             $stmt = $conn->prepare($sql);
-            if (!$stmt instanceof mysqli_stmt) {
+            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
                 error_log(sprintf('[MealsDB] Failed to prepare cleanup delete for %s.', $cleanup['table']));
                 $success = false;
                 break;
@@ -269,7 +269,7 @@ class MealsDB_Clients {
     /**
      * Check if a table contains a specific column.
      */
-    private static function table_has_column(mysqli $conn, string $table_name, string $column): bool {
+    private static function table_has_column($conn, string $table_name, string $column): bool {
         $escaped_table = str_replace('`', '``', $table_name);
         $escaped_column = $column;
 
@@ -280,7 +280,7 @@ class MealsDB_Clients {
         $sql = sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $escaped_table, $escaped_column);
         $result = $conn->query($sql);
 
-        if ($result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($result)) {
             $exists = $result->num_rows > 0;
             $result->free();
             return $exists;

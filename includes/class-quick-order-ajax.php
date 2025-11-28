@@ -36,7 +36,7 @@ class MealsDB_Quick_Order_Ajax {
             }
 
             $conn = MealsDB_DB::get_connection();
-            if (!$conn instanceof mysqli) {
+            if (!MealsDB_DB::is_mysqli($conn)) {
                 wp_send_json([
                     'success' => false,
                     'message' => __('Unable to connect to the Meals DB database.', 'meals-db'),
@@ -73,7 +73,7 @@ class MealsDB_Quick_Order_Ajax {
             $sql = "SELECT id, first_name, last_name, phone_primary, customer_type, initials_delivery, active, client_email FROM meals_clients WHERE active = 1 AND ({$where}) ORDER BY last_name ASC, first_name ASC LIMIT 20";
 
             $stmt = $conn->prepare($sql);
-            if (!$stmt instanceof mysqli_stmt) {
+            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
                 wp_send_json([
                     'success' => false,
                     'message' => __('Failed to prepare client lookup.', 'meals-db'),
@@ -103,7 +103,7 @@ class MealsDB_Quick_Order_Ajax {
 
             $result = $stmt->get_result();
             $clients = [];
-            if ($result instanceof mysqli_result) {
+            if (MealsDB_DB::is_mysqli_result($result)) {
                 while ($row = $result->fetch_assoc()) {
                     $client_id = isset($row['id']) ? (int) $row['id'] : 0;
                     if ($client_id <= 0) {
@@ -834,7 +834,7 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return false;
         }
 
@@ -842,7 +842,7 @@ class MealsDB_Quick_Order_Ajax {
         $sql        = sprintf('SELECT active FROM `%s` WHERE id = ? LIMIT 1', str_replace('`', '``', $table_name));
 
         $stmt = $conn->prepare($sql);
-        if (!$stmt instanceof mysqli_stmt) {
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
             return false;
         }
 
@@ -856,7 +856,7 @@ class MealsDB_Quick_Order_Ajax {
         $result = $stmt->get_result();
         $active = false;
 
-        if ($result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($result)) {
             $row = $result->fetch_assoc();
             if (isset($row['active'])) {
                 $active = (int) $row['active'] === 1;
@@ -990,7 +990,7 @@ class MealsDB_Quick_Order_Ajax {
      */
     private static function log_transaction(WC_Order $order, int $client_id, ?DateTimeImmutable $order_date): bool {
         $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return false;
         }
 
@@ -1001,7 +1001,7 @@ class MealsDB_Quick_Order_Ajax {
         );
 
         $stmt = $conn->prepare($sql);
-        if (!$stmt instanceof mysqli_stmt) {
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
             return false;
         }
 

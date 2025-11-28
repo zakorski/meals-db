@@ -25,8 +25,13 @@ class MealsDB_DB {
      * @return mysqli|null
      */
     public static function get_connection() {
-        if (self::$connection instanceof mysqli) {
+        if (self::is_mysqli(self::$connection)) {
             return self::$connection;
+        }
+
+        if (!self::has_mysqli()) {
+            error_log('[MealsDB DB] mysqli extension is missing; Meals DB features are disabled.');
+            return null;
         }
 
         $config = new MealsDB_Config();
@@ -62,10 +67,10 @@ class MealsDB_DB {
             }
         }
 
-        if (self::$connection instanceof mysqli && self::$connection->connect_error) {
+        if (self::is_mysqli(self::$connection) && self::$connection->connect_error) {
             error_log('[MealsDB] Database connection failed: ' . self::$connection->connect_error);
             self::$connection = null;
-        } elseif (self::$connection instanceof mysqli) {
+        } elseif (self::is_mysqli(self::$connection)) {
             self::$connection->set_charset('utf8mb4');
         }
 
@@ -76,7 +81,7 @@ class MealsDB_DB {
      * Close the DB connection manually if needed.
      */
     public static function close_connection() {
-        if (self::$connection instanceof mysqli) {
+        if (self::is_mysqli(self::$connection)) {
             self::$connection->close();
             self::$connection = null;
         }
@@ -115,5 +120,39 @@ class MealsDB_DB {
         self::$table_prefix = $prefix;
 
         return self::$table_prefix;
+    }
+
+    /**
+     * Determine if the mysqli extension is available.
+     */
+    public static function has_mysqli(): bool {
+        return class_exists('mysqli');
+    }
+
+    /**
+     * Safely verify a mysqli connection instance.
+     *
+     * @param mixed $value Potential mysqli connection.
+     */
+    public static function is_mysqli($value): bool {
+        return self::has_mysqli() && $value instanceof mysqli;
+    }
+
+    /**
+     * Safely verify a mysqli statement instance.
+     *
+     * @param mixed $value Potential mysqli_stmt instance.
+     */
+    public static function is_mysqli_stmt($value): bool {
+        return class_exists('mysqli_stmt') && $value instanceof mysqli_stmt;
+    }
+
+    /**
+     * Safely verify a mysqli result instance.
+     *
+     * @param mixed $value Potential mysqli_result instance.
+     */
+    public static function is_mysqli_result($value): bool {
+        return class_exists('mysqli_result') && $value instanceof mysqli_result;
     }
 }

@@ -9,8 +9,8 @@ class MealsDB_Clients_Repository {
      */
     private $connection;
 
-    public function __construct(?mysqli $connection = null) {
-        if ($connection instanceof mysqli) {
+    public function __construct($connection = null) {
+        if (MealsDB_DB::is_mysqli($connection)) {
             $this->connection = $connection;
         } else {
             $this->connection = null;
@@ -282,14 +282,14 @@ class MealsDB_Clients_Repository {
         }
     }
 
-    private function get_or_fetch_connection(): ?mysqli {
-        if ($this->connection instanceof mysqli) {
+    private function get_or_fetch_connection() {
+        if (MealsDB_DB::is_mysqli($this->connection)) {
             return $this->connection;
         }
 
         $this->connection = MealsDB_DB::get_connection();
 
-        return $this->connection instanceof mysqli ? $this->connection : null;
+        return MealsDB_DB::is_mysqli($this->connection) ? $this->connection : null;
     }
 
     /**
@@ -341,10 +341,10 @@ class MealsDB_Clients_Repository {
      *
      * @return array<int, array<string, mixed>>
      */
-    private function fetch_all_assoc(mysqli_stmt $stmt): array {
+    private function fetch_all_assoc($stmt): array {
         if (method_exists($stmt, 'get_result')) {
             $result = $stmt->get_result();
-            if ($result instanceof mysqli_result) {
+            if (MealsDB_DB::is_mysqli_result($result)) {
                 $rows = [];
                 while ($row = $result->fetch_assoc()) {
                     if ($row === null) {

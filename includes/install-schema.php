@@ -25,7 +25,7 @@ class MealsDB_Installer {
             return;
         }
 
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             error_log('[MealsDB Installer] Unable to establish database connection.');
             return;
         }
@@ -116,7 +116,7 @@ class MealsDB_Installer {
     /**
      * Apply schema updates required for the meals_clients table.
      */
-    private static function upgrade_meals_clients_table(mysqli $conn): void {
+    private static function upgrade_meals_clients_table($conn): void {
         $table = MealsDB_DB::get_table_name('meals_clients');
 
         $tableName = method_exists($conn, 'real_escape_string')
@@ -134,7 +134,7 @@ class MealsDB_Installer {
         $columnSql    = "SHOW COLUMNS FROM `{$tableName}` LIKE '{$escapedColumn}'";
         $result       = $conn->query($columnSql);
 
-        if ($result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($result)) {
             $columnExists = $result->num_rows > 0;
             $result->free();
         } elseif ($result && isset($result->num_rows)) {
@@ -251,7 +251,7 @@ class MealsDB_Installer {
     private static function create_meals_products_table(): void {
         $conn = MealsDB_DB::get_connection();
 
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             error_log('[MealsDB Installer] Unable to establish database connection while creating meals_products.');
             return;
         }
@@ -296,7 +296,7 @@ class MealsDB_Installer {
         $existing_columns = [];
         $columns_result = $conn->query("SHOW COLUMNS FROM `{$table}`");
 
-        if ($columns_result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($columns_result)) {
             while ($row = $columns_result->fetch_assoc()) {
                 if (isset($row['Field'])) {
                     $existing_columns[strtolower($row['Field'])] = $row;
