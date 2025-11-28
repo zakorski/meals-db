@@ -90,7 +90,7 @@ class MealsDB_Logger {
         $result = $stmt->get_result();
         $logs = [];
 
-        if ($result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($result)) {
             while ($row = $result->fetch_assoc()) {
                 $logs[] = $row;
             }

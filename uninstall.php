@@ -31,7 +31,7 @@ if (!defined('MEALS_DB_HOST') || !defined('MEALS_DB_USER') || !defined('MEALS_DB
 // Connect to external Meals DB using the same logic as the runtime plugin.
 $conn = MealsDB_DB::get_connection();
 
-if (!$conn instanceof mysqli) {
+if (!MealsDB_DB::is_mysqli($conn)) {
     error_log('Meals DB uninstall: failed to connect to database.');
     return;
 }

@@ -311,7 +311,7 @@ class MealsDB_Staff {
 
         $sql = 'SELECT id, first_name, last_name, email, phone, wordpress_user_id FROM meals_staff ORDER BY last_name ASC, first_name ASC';
         $result = $conn->query($sql);
-        if (!$result instanceof mysqli_result) {
+        if (!MealsDB_DB::is_mysqli_result($result)) {
             self::add_notice('error', __('Failed to load staff records.', 'meals-db'));
             return [];
         }
@@ -346,8 +346,8 @@ class MealsDB_Staff {
         }
 
         $result = $stmt->get_result();
-        $record = $result instanceof mysqli_result ? $result->fetch_assoc() : null;
-        if ($result instanceof mysqli_result) {
+        $record = MealsDB_DB::is_mysqli_result($result) ? $result->fetch_assoc() : null;
+        if (MealsDB_DB::is_mysqli_result($result)) {
             $result->free();
         }
         $stmt->close();

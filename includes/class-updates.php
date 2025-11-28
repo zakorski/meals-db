@@ -206,7 +206,7 @@ class MealsDB_Updates {
         }
 
         $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return new WP_Error(
                 'mealsdb_db_connection_failed',
                 __('Unable to connect to the Meals DB database.', 'meals-db')
@@ -219,7 +219,7 @@ class MealsDB_Updates {
         $existing_ids = [];
         $existing_result = $conn->query("SELECT wc_product_id FROM `{$table}`");
 
-        if ($existing_result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($existing_result)) {
             while ($row = $existing_result->fetch_assoc()) {
                 if (isset($row['wc_product_id'])) {
                     $existing_ids[] = (int) $row['wc_product_id'];
@@ -265,7 +265,7 @@ class MealsDB_Updates {
 
             $stmt = $conn->prepare($sql);
 
-            if (!$stmt instanceof mysqli_stmt) {
+            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
                 return new WP_Error(
                     'mealsdb_products_insert_prepare_failed',
                     __('Failed to prepare insert for missing products.', 'meals-db')

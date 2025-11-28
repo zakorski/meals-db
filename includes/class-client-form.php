@@ -1325,7 +1325,7 @@ class MealsDB_Client_Form {
 
             $columnExists = false;
             $result = $conn->query("SHOW COLUMNS FROM meals_clients LIKE '{$escapedColumn}'");
-            if ($result instanceof mysqli_result) {
+            if (MealsDB_DB::is_mysqli_result($result)) {
                 $columnExists = $result->num_rows > 0;
                 $result->free();
             } elseif ($result && isset($result->num_rows)) {
@@ -1362,7 +1362,7 @@ class MealsDB_Client_Form {
 
             $legacyIndexResult = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedLegacy}'");
             $legacyIndexExists = false;
-            if ($legacyIndexResult instanceof mysqli_result) {
+            if (MealsDB_DB::is_mysqli_result($legacyIndexResult)) {
                 $legacyIndexExists = $legacyIndexResult->num_rows > 0;
                 $legacyIndexResult->free();
             } elseif ($legacyIndexResult && isset($legacyIndexResult->num_rows)) {
@@ -1388,7 +1388,7 @@ class MealsDB_Client_Form {
             $indexExists = false;
             $indexIsUnique = false;
             $indexResult = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedIndex}'");
-            if ($indexResult instanceof mysqli_result) {
+            if (MealsDB_DB::is_mysqli_result($indexResult)) {
                 while ($row = $indexResult->fetch_assoc()) {
                     $indexExists = true;
                     if (isset($row['Non_unique']) && intval($row['Non_unique']) === 0) {
@@ -1474,7 +1474,7 @@ class MealsDB_Client_Form {
                 continue;
             }
 
-            if (!($result instanceof mysqli_result)) {
+            if (!MealsDB_DB::is_mysqli_result($result)) {
                 // Nothing to backfill or using a mock result set without rows.
                 continue;
             }
@@ -1575,7 +1575,7 @@ class MealsDB_Client_Form {
         $isUnique = false;
 
         $result = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedIndex}'");
-        if ($result instanceof mysqli_result) {
+        if (MealsDB_DB::is_mysqli_result($result)) {
             while ($row = $result->fetch_assoc()) {
                 $exists = true;
                 if (isset($row['Non_unique']) && intval($row['Non_unique']) === 0) {

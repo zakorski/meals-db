@@ -7,7 +7,7 @@ $conn = MealsDB_DB::get_connection();
 $ignored = [];
 $ignored_error = null;
 
-if ($conn) {
+if (MealsDB_DB::is_mysqli($conn)) {
     $sql = 'SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at
             FROM meals_ignored_conflicts
             ORDER BY created_at DESC';
@@ -17,7 +17,7 @@ if ($conn) {
             if (method_exists($stmt, 'get_result')) {
                 $res = $stmt->get_result();
 
-                if ($res instanceof mysqli_result) {
+                if (MealsDB_DB::is_mysqli_result($res)) {
                     while ($row = $res->fetch_assoc()) {
                         $ignored[] = $row;
                     }
