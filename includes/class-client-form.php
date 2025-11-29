@@ -266,12 +266,22 @@ class MealsDB_Client_Form {
         };
 
         // Postal Code
-        $postal_code = $sanitized['address_postal'] ?? '';
-        if ($postal_code !== '' && !preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/i', $postal_code)) {
+        $postal_pattern = '/^[A-Z]\d[A-Z]\d[A-Z]\d$/';
+
+        $normalize_postal = static function ($value): string {
+            $normalized = strtoupper((string) $value);
+            $normalized = preg_replace('/[^A-Z0-9]/', '', $normalized ?? '');
+
+            return substr($normalized, 0, 6);
+        };
+
+        $sanitized['address_postal'] = $normalize_postal($sanitized['address_postal'] ?? '');
+        if ($sanitized['address_postal'] !== '' && !preg_match($postal_pattern, $sanitized['address_postal'])) {
             $record_format_error('address_postal', 'Postal code must be in A1A1A1 format.');
         }
 
-        if (!empty($sanitized['delivery_address_postal']) && !preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/i', $sanitized['delivery_address_postal'])) {
+        $sanitized['delivery_address_postal'] = $normalize_postal($sanitized['delivery_address_postal'] ?? '');
+        if ($sanitized['delivery_address_postal'] !== '' && !preg_match($postal_pattern, $sanitized['delivery_address_postal'])) {
             $record_format_error('delivery_address_postal', 'Delivery postal code must be in A1A1A1 format.');
         }
 
