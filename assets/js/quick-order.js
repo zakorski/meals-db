@@ -1,6 +1,10 @@
 (function ($) {
     'use strict';
 
+    if (typeof $.fn.select2 !== 'function' && typeof $.fn.selectWoo === 'function') {
+        $.fn.select2 = $.fn.selectWoo;
+    }
+
     const preload =
         typeof window.mealsdb_qo_preload === 'object' && window.mealsdb_qo_preload !== null
             ? window.mealsdb_qo_preload

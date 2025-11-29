@@ -243,6 +243,11 @@ class MealsDB_Admin_UI {
         if ($is_quick_order_page) {
             $quick_order_style_path = MEALS_DB_PLUGIN_DIR . 'assets/css/quick-order.css';
             $quick_order_style_version = file_exists($quick_order_style_path) ? filemtime($quick_order_style_path) : MEALS_DB_VERSION;
+
+            if (wp_style_is('select2', 'registered')) {
+                wp_enqueue_style('select2');
+            }
+
             wp_enqueue_style(
                 'mealsdb-quick-order',
                 MEALS_DB_PLUGIN_URL . 'assets/css/quick-order.css',
@@ -252,10 +257,20 @@ class MealsDB_Admin_UI {
 
             $quick_order_script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/quick-order.js';
             $quick_order_script_version = file_exists($quick_order_script_path) ? filemtime($quick_order_script_path) : MEALS_DB_VERSION;
+
+            $quick_order_script_deps = ['jquery'];
+            if (wp_script_is('selectWoo', 'registered')) {
+                $quick_order_script_deps[] = 'selectWoo';
+                wp_enqueue_script('selectWoo');
+            } elseif (wp_script_is('select2', 'registered')) {
+                $quick_order_script_deps[] = 'select2';
+                wp_enqueue_script('select2');
+            }
+
             wp_enqueue_script(
                 'mealsdb-quick-order',
                 MEALS_DB_PLUGIN_URL . 'assets/js/quick-order.js',
-                ['jquery'],
+                $quick_order_script_deps,
                 $quick_order_script_version,
                 true
             );
