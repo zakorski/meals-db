@@ -154,8 +154,9 @@
                     delay: 250,
                     data: (params) => ({
                         action: 'mealsdb_qo_find_clients',
+                        term: params && params.term ? params.term.trim() : '',
                         search: params && params.term ? params.term.trim() : '',
-                        nonce: this.getSecurityNonce(),
+                        nonce: this.getSecurityNonce('findClients'),
                     }),
                     processResults: (response) => {
                         if (!this.isSuccessfulResponse(response)) {
@@ -1837,6 +1838,10 @@
 
             if (type === 'cloneOrder' && quickOrderNonces.cloneOrder) {
                 return quickOrderNonces.cloneOrder;
+            }
+
+            if (type === 'findClients' && quickOrderNonces.findClients) {
+                return quickOrderNonces.findClients;
             }
 
             if (globalNonce) {
