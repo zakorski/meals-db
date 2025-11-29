@@ -39,13 +39,13 @@ class MealsDB_Quick_Order_Ajax {
                 'number'         => 20,
                 'orderby'        => 'display_name',
                 'order'          => 'ASC',
-                'search'         => $search !== '' ? '*' . $search . '*' : '*',
-                'search_columns' => ['user_login', 'user_nicename', 'user_email', 'display_name'],
                 'fields'         => ['ID', 'display_name', 'user_email', 'user_nicename'],
             ];
 
             if ($search !== '') {
-                $user_query_args['meta_query'] = [
+                $user_query_args['search']         = '*' . $search . '*';
+                $user_query_args['search_columns'] = ['user_login', 'user_nicename', 'user_email', 'display_name'];
+                $user_query_args['meta_query']     = [
                     'relation' => 'OR',
                     [
                         'key'     => 'first_name',
@@ -67,40 +67,6 @@ class MealsDB_Quick_Order_Ajax {
                 $users = [];
             }
 
-            $user_ids = array_map(static function ($user) {
-                return $user instanceof WP_User ? (int) $user->ID : 0;
-            }, $users);
-            $user_ids = array_values(array_filter($user_ids));
-
-            $clients_by_user = [];
-            if (!empty($user_ids) && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
-                $table_name   = MealsDB_DB::get_table_name('meals_clients');
-                $placeholders = implode(',', array_fill(0, count($user_ids), '%d'));
-                $sql          = sprintf(
-                    'SELECT id, wordpress_user_id, customer_type, initials_delivery FROM `%s` WHERE active = 1 AND wordpress_user_id IN (%s)',
-                    str_replace('`', '``', $table_name),
-                    $placeholders
-                );
-
-                $prepared = $GLOBALS['wpdb']->prepare($sql, $user_ids);
-                $rows     = $prepared ? $GLOBALS['wpdb']->get_results($prepared, ARRAY_A) : [];
-
-                if (is_array($rows)) {
-                    foreach ($rows as $row) {
-                        $user_id = isset($row['wordpress_user_id']) ? (int) $row['wordpress_user_id'] : 0;
-                        if ($user_id <= 0) {
-                            continue;
-                        }
-
-                        $clients_by_user[$user_id] = [
-                            'id'            => isset($row['id']) ? (int) $row['id'] : 0,
-                            'customer_type' => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
-                            'initials'      => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
-                        ];
-                    }
-                }
-            }
-
             $clients = [];
 
             foreach ($users as $user) {
@@ -120,7 +86,8 @@ class MealsDB_Quick_Order_Ajax {
                     $name = sprintf(__('Client #%d', 'meals-db'), (int) $user->ID);
                 }
 
-                $client_row = $clients_by_user[$user->ID] ?? [];
+                $customer_type = (string) get_user_meta($user->ID, 'customer_type', true);
+                $initials      = (string) get_user_meta($user->ID, 'initials_delivery', true);
 
                 $clients[] = [
                     'id'            => (int) $user->ID,
@@ -128,8 +95,8 @@ class MealsDB_Quick_Order_Ajax {
                     'first_name'    => $first_name,
                     'last_name'     => $last_name,
                     'email'         => (string) $user->user_email,
-                    'customer_type' => (string) ($client_row['customer_type'] ?? ''),
-                    'initials'      => (string) ($client_row['initials'] ?? ''),
+                    'customer_type' => $customer_type,
+                    'initials'      => $initials,
                 ];
             }
 

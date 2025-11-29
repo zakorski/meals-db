@@ -167,20 +167,17 @@
                             return { results: [] };
                         }
 
-                        const payload = this.getResponsePayload(response);
-                        const clients = Array.isArray(payload.clients) ? payload.clients : [];
+                        const results = this.normalizeClientResults(response);
 
-                        const results = clients.map((client) => ({
+                        return { results: results.map((client) => ({
                             id: client.id,
-                            text: client.name || `Client #${client.id}`,
-                            name: client.name || `Client #${client.id}`,
+                            text: client.name,
+                            name: client.name,
                             first_name: client.first_name || '',
                             last_name: client.last_name || '',
                             email: client.email || '',
-                            customer_type: client.customer_type || client.client_type || client.type || '',
-                        }));
-
-                        return { results };
+                            customer_type: client.customer_type || '',
+                        })) };
                     },
                     cache: true,
                 },
@@ -188,6 +185,8 @@
                 templateSelection: (data) => this.renderClientSelection(data),
                 escapeMarkup: (markup) => markup,
             });
+
+            this.prefetchInitialClients();
 
             this.$clientSelect.on('select2:select', (event) => {
                 const clientData = event && event.params ? event.params.data : null;
@@ -336,6 +335,87 @@
             $('<span class="mealsdb-qo-client-selection__name" />').text(name).appendTo($container);
             $('<span class="mealsdb-qo-client-selection__type" />').text(typeLabel).appendTo($container);
             return $container;
+        },
+
+        prefetchInitialClients() {
+            if (!this.$clientSelect || !this.$clientSelect.length) {
+                return;
+            }
+
+            const request = {
+                url: this.getAjaxUrl(),
+                dataType: 'json',
+                method: 'GET',
+                data: {
+                    action: 'mealsdb_qo_find_clients',
+                    nonce: this.getSecurityNonce('findClients'),
+                    term: '',
+                    search: '',
+                },
+            };
+
+            $.ajax(request)
+                .done((response) => {
+                    const clients = this.normalizeClientResults(response);
+                    this.injectClientOptions(clients);
+                })
+                .fail(() => {
+                    // Failing silently keeps the UI usable; Select2 will still fetch on search.
+                });
+        },
+
+        injectClientOptions(clients) {
+            if (!Array.isArray(clients) || !clients.length || !this.$clientSelect || !this.$clientSelect.length) {
+                return;
+            }
+
+            clients.forEach((client) => {
+                if (!client || !client.id) {
+                    return;
+                }
+
+                const label = client.name || `Client #${client.id}`;
+                const existing = this.$clientSelect.find(`option[value="${client.id}"]`);
+                if (existing.length) {
+                    return;
+                }
+
+                const option = new Option(label, client.id, false, false);
+                this.$clientSelect.append(option);
+            });
+        },
+
+        normalizeClientResults(response) {
+            if (!this.isSuccessfulResponse(response)) {
+                return [];
+            }
+
+            const payload = this.getResponsePayload(response);
+            const clients = Array.isArray(payload.clients) ? payload.clients : [];
+
+            return clients
+                .map((client) => {
+                    if (!client || typeof client !== 'object') {
+                        return null;
+                    }
+
+                    const id = parseInt(client.id, 10);
+                    if (!Number.isInteger(id) || id <= 0) {
+                        return null;
+                    }
+
+                    const name = client.name || client.text || `Client #${id}`;
+
+                    return {
+                        id,
+                        name,
+                        first_name: client.first_name || '',
+                        last_name: client.last_name || '',
+                        email: client.email || '',
+                        customer_type: client.customer_type || client.client_type || client.type || '',
+                    };
+                })
+                .filter(Boolean);
         },
 
         initialiseCategories() {
