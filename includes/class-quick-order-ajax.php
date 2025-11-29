@@ -35,21 +35,17 @@ class MealsDB_Quick_Order_Ajax {
                 ]);
             }
 
-            if (!isset($GLOBALS['wpdb']) || !$GLOBALS['wpdb'] instanceof wpdb) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Unable to query WordPress users.', 'meals-db'),
-                ]);
-            }
-
             $user_query_args = [
-                'number'          => 20,
-                'orderby'         => 'display_name',
-                'order'           => 'ASC',
-                'search'          => $search !== '' ? '*' . $search . '*' : '*',
-                'search_columns'  => ['user_login', 'user_nicename', 'user_email', 'display_name'],
-                'fields'          => ['ID', 'display_name', 'user_email', 'user_nicename'],
-                'meta_query'      => [
+                'number'         => 20,
+                'orderby'        => 'display_name',
+                'order'          => 'ASC',
+                'search'         => $search !== '' ? '*' . $search . '*' : '*',
+                'search_columns' => ['user_login', 'user_nicename', 'user_email', 'display_name'],
+                'fields'         => ['ID', 'display_name', 'user_email', 'user_nicename'],
+            ];
+
+            if ($search !== '') {
+                $user_query_args['meta_query'] = [
                     'relation' => 'OR',
                     [
                         'key'     => 'first_name',
@@ -61,8 +57,8 @@ class MealsDB_Quick_Order_Ajax {
                         'value'   => $search,
                         'compare' => 'LIKE',
                     ],
-                ],
-            ];
+                ];
+            }
 
             $user_query = new WP_User_Query($user_query_args);
             $users      = $user_query->get_results();
@@ -76,12 +72,11 @@ class MealsDB_Quick_Order_Ajax {
             }, $users);
             $user_ids = array_values(array_filter($user_ids));
 
-            $clients = [];
-
-            if (!empty($user_ids)) {
-                $table_name = MealsDB_DB::get_table_name('meals_clients');
+            $clients_by_user = [];
+            if (!empty($user_ids) && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
+                $table_name   = MealsDB_DB::get_table_name('meals_clients');
                 $placeholders = implode(',', array_fill(0, count($user_ids), '%d'));
-                $sql = sprintf(
+                $sql          = sprintf(
                     'SELECT id, wordpress_user_id, customer_type, initials_delivery FROM `%s` WHERE active = 1 AND wordpress_user_id IN (%s)',
                     str_replace('`', '``', $table_name),
                     $placeholders
@@ -90,7 +85,6 @@ class MealsDB_Quick_Order_Ajax {
                 $prepared = $GLOBALS['wpdb']->prepare($sql, $user_ids);
                 $rows     = $prepared ? $GLOBALS['wpdb']->get_results($prepared, ARRAY_A) : [];
 
-                $clients_by_user = [];
                 if (is_array($rows)) {
                     foreach ($rows as $row) {
                         $user_id = isset($row['wordpress_user_id']) ? (int) $row['wordpress_user_id'] : 0;
@@ -99,45 +93,44 @@ class MealsDB_Quick_Order_Ajax {
                         }
 
                         $clients_by_user[$user_id] = [
-                            'id'             => isset($row['id']) ? (int) $row['id'] : 0,
-                            'customer_type'  => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
-                            'initials'       => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
+                            'id'            => isset($row['id']) ? (int) $row['id'] : 0,
+                            'customer_type' => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
+                            'initials'      => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
                         ];
                     }
                 }
+            }
 
-                foreach ($users as $user) {
-                    if (!$user instanceof WP_User) {
-                        continue;
-                    }
+            $clients = [];
 
-                    $client_row = $clients_by_user[$user->ID] ?? null;
-                    if (!$client_row || empty($client_row['id'])) {
-                        continue;
-                    }
-
-                    $first_name = (string) get_user_meta($user->ID, 'first_name', true);
-                    $last_name  = (string) get_user_meta($user->ID, 'last_name', true);
-                    $name       = trim($first_name . ' ' . $last_name);
-
-                    if ($name === '') {
-                        $name = $user->display_name ?: $user->user_nicename;
-                    }
-
-                    if ($name === '') {
-                        $name = sprintf(__('Client #%d', 'meals-db'), (int) $client_row['id']);
-                    }
-
-                    $clients[] = [
-                        'id'            => (int) $client_row['id'],
-                        'name'          => $name,
-                        'first_name'    => $first_name,
-                        'last_name'     => $last_name,
-                        'email'         => (string) $user->user_email,
-                        'customer_type' => (string) ($client_row['customer_type'] ?? ''),
-                        'initials'      => (string) ($client_row['initials'] ?? ''),
-                    ];
+            foreach ($users as $user) {
+                if (!$user instanceof WP_User) {
+                    continue;
                 }
+
+                $first_name = (string) get_user_meta($user->ID, 'first_name', true);
+                $last_name  = (string) get_user_meta($user->ID, 'last_name', true);
+                $name       = trim($first_name . ' ' . $last_name);
+
+                if ($name === '') {
+                    $name = $user->display_name ?: $user->user_nicename;
+                }
+
+                if ($name === '') {
+                    $name = sprintf(__('Client #%d', 'meals-db'), (int) $user->ID);
+                }
+
+                $client_row = $clients_by_user[$user->ID] ?? [];
+
+                $clients[] = [
+                    'id'            => (int) $user->ID,
+                    'name'          => $name,
+                    'first_name'    => $first_name,
+                    'last_name'     => $last_name,
+                    'email'         => (string) $user->user_email,
+                    'customer_type' => (string) ($client_row['customer_type'] ?? ''),
+                    'initials'      => (string) ($client_row['initials'] ?? ''),
+                ];
             }
 
             wp_send_json([
@@ -498,7 +491,7 @@ class MealsDB_Quick_Order_Ajax {
             $client_id <= 0
             || !$order_date instanceof DateTimeImmutable
             || empty($items)
-            || !self::client_is_active($client_id)
+            || !self::user_exists($client_id)
         ) {
             wp_send_json([
                 'success' => false,
@@ -512,10 +505,15 @@ class MealsDB_Quick_Order_Ajax {
                 throw new Exception($order->get_error_message());
             }
 
-            $order->update_meta_data('mealsdb_client_id', $client_id);
+            $order->update_meta_data('mealsdb_client_user_id', $client_id);
+
+            $client_db_id = self::get_active_client_id_for_user($client_id);
+            if ($client_db_id > 0) {
+                $order->update_meta_data('mealsdb_client_id', $client_db_id);
+            }
             $order->save();
 
-            if (!self::log_transaction($order, $client_id, $order_date)) {
+            if ($client_db_id > 0 && !self::log_transaction($order, $client_db_id, $order_date)) {
                 $order_id = $order->get_id();
                 if ($order_id > 0) {
                     wp_trash_post($order_id);
@@ -719,15 +717,25 @@ class MealsDB_Quick_Order_Ajax {
                 $order_date = $date->format('Y-m-d');
             }
 
-            $client_id = intval($source_order->get_meta('mealsdb_client_id'));
+            $client_id    = intval($source_order->get_meta('mealsdb_client_user_id'));
+            $client_db_id = intval($source_order->get_meta('mealsdb_client_id'));
+
+            if ($client_id <= 0 && $client_db_id > 0) {
+                $client_id = self::get_user_id_for_client($client_db_id);
+            }
+
+            if ($client_db_id <= 0 && $client_id > 0) {
+                $client_db_id = self::get_active_client_id_for_user($client_id);
+            }
+
             if ($client_id <= 0) {
                 $client_id = null;
             }
 
             $client_type = '';
-            if ($client_id !== null && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
+            if ($client_db_id > 0 && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
                 $table = MealsDB_DB::get_table_name('meals_clients');
-                $sql   = $GLOBALS['wpdb']->prepare("SELECT customer_type FROM {$table} WHERE id = %d LIMIT 1", $client_id);
+                $sql   = $GLOBALS['wpdb']->prepare("SELECT customer_type FROM {$table} WHERE id = %d LIMIT 1", $client_db_id);
 
                 if (is_string($sql)) {
                     $result = $GLOBALS['wpdb']->get_var($sql);
@@ -803,6 +811,17 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
+     * Confirm the provided WordPress user exists.
+     */
+    private static function user_exists(int $user_id): bool {
+        if ($user_id <= 0) {
+            return false;
+        }
+
+        return (bool) get_userdata($user_id);
+    }
+
+    /**
      * Determine whether the provided Meals DB client exists and is active.
      */
     private static function client_is_active(int $client_id): bool {
@@ -843,6 +862,98 @@ class MealsDB_Quick_Order_Ajax {
         $stmt->close();
 
         return $active;
+    }
+
+    /**
+     * Lookup an active Meals DB client ID for a given WordPress user.
+     */
+    private static function get_active_client_id_for_user(int $user_id): int {
+        if ($user_id <= 0) {
+            return 0;
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return 0;
+        }
+
+        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $sql        = sprintf(
+            'SELECT id FROM `%s` WHERE wordpress_user_id = ? AND active = 1 LIMIT 1',
+            str_replace('`', '``', $table_name)
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return 0;
+        }
+
+        $stmt->bind_param('i', $user_id);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return 0;
+        }
+
+        $result = $stmt->get_result();
+        $stmt->close();
+
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return 0;
+        }
+
+        $row = $result->fetch_assoc();
+        if (!is_array($row) || !isset($row['id'])) {
+            return 0;
+        }
+
+        return (int) $row['id'];
+    }
+
+    /**
+     * Resolve a WordPress user ID for an existing Meals DB client record.
+     */
+    private static function get_user_id_for_client(int $client_id): int {
+        if ($client_id <= 0) {
+            return 0;
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return 0;
+        }
+
+        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $sql        = sprintf(
+            'SELECT wordpress_user_id FROM `%s` WHERE id = ? AND active = 1 LIMIT 1',
+            str_replace('`', '``', $table_name)
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return 0;
+        }
+
+        $stmt->bind_param('i', $client_id);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return 0;
+        }
+
+        $result = $stmt->get_result();
+        $stmt->close();
+
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return 0;
+        }
+
+        $row = $result->fetch_assoc();
+        if (!is_array($row) || !isset($row['wordpress_user_id'])) {
+            return 0;
+        }
+
+        return (int) $row['wordpress_user_id'];
     }
 
     /**
