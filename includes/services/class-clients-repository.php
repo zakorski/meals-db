@@ -9,12 +9,19 @@ class MealsDB_Clients_Repository {
      */
     private $connection;
 
+    /**
+     * @var string
+     */
+    private $table_name;
+
     public function __construct($connection = null) {
         if (MealsDB_DB::is_mysqli($connection)) {
             $this->connection = $connection;
         } else {
             $this->connection = null;
         }
+
+        $this->table_name = MealsDB_DB::get_table_name('meals_clients');
     }
 
     /**
@@ -30,7 +37,8 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $stmt = $conn->prepare('SELECT * FROM meals_clients');
+            $sql = sprintf('SELECT * FROM `%s`', $this->escape_table_name());
+            $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client list query: ' . ($conn->error ?? 'unknown error'));
                 return [];
@@ -67,7 +75,8 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $stmt = $conn->prepare('SELECT * FROM meals_clients WHERE id = ? LIMIT 1');
+            $sql = sprintf('SELECT * FROM `%s` WHERE id = ? LIMIT 1', $this->escape_table_name());
+            $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client lookup query: ' . ($conn->error ?? 'unknown error'));
                 return null;
@@ -120,7 +129,7 @@ class MealsDB_Clients_Repository {
             $columns = array_keys($data);
             $placeholders = implode(', ', array_fill(0, count($columns), '?'));
             $column_list = '`' . implode('`, `', $columns) . '`';
-            $sql = sprintf('INSERT INTO meals_clients (%s) VALUES (%s)', $column_list, $placeholders);
+            $sql = sprintf('INSERT INTO `%s` (%s) VALUES (%s)', $this->escape_table_name(), $column_list, $placeholders);
 
             $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
@@ -185,7 +194,7 @@ class MealsDB_Clients_Repository {
                 $set_parts[] = sprintf('`%s` = ?', $column);
             }
 
-            $sql = sprintf('UPDATE meals_clients SET %s WHERE id = ? LIMIT 1', implode(', ', $set_parts));
+            $sql = sprintf('UPDATE `%s` SET %s WHERE id = ? LIMIT 1', $this->escape_table_name(), implode(', ', $set_parts));
             $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client update statement: ' . ($conn->error ?? 'unknown error'));
@@ -240,7 +249,8 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $stmt = $conn->prepare('DELETE FROM meals_clients WHERE id = ?');
+            $sql = sprintf('DELETE FROM `%s` WHERE id = ?', $this->escape_table_name());
+            $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client delete statement: ' . ($conn->error ?? 'unknown error'));
                 return false;
@@ -334,6 +344,13 @@ class MealsDB_Clients_Repository {
         }
 
         return $params;
+    }
+
+    /**
+     * Get the sanitized table name for meals clients.
+     */
+    private function escape_table_name(): string {
+        return str_replace('`', '``', $this->table_name);
     }
 
     /**

@@ -21,7 +21,9 @@ class MealsDB_Clients {
         }
 
         $types = [];
-        $sql = 'SELECT DISTINCT customer_type FROM meals_clients WHERE customer_type <> "" ORDER BY customer_type ASC';
+        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $escaped_table = str_replace('`', '``', $table_name);
+        $sql = sprintf('SELECT DISTINCT customer_type FROM `%s` WHERE customer_type <> "" ORDER BY customer_type ASC', $escaped_table);
         $result = $conn->query($sql);
         if (MealsDB_DB::is_mysqli_result($result)) {
             while ($row = $result->fetch_assoc()) {
