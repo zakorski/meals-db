@@ -1839,6 +1839,10 @@
                 return quickOrderNonces.cloneOrder;
             }
 
+            if (globalNonce) {
+                return globalNonce;
+            }
+
             if (type === 'createOrder' && quickOrderNonces.createOrder) {
                 return quickOrderNonces.createOrder;
             }
@@ -1847,7 +1851,7 @@
                 return quickOrderNonces.searchProducts;
             }
 
-            return globalNonce;
+            return '';
         },
 
         formatPrice(amount) {
