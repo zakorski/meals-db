@@ -47,12 +47,22 @@ class MealsDB_Clients {
             return [];
         }
 
-        $sql = 'SELECT id, first_name, last_name, customer_type, phone_primary, client_email, active FROM meals_clients';
+        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $escaped_table = str_replace('`', '``', $table_name);
+
+        $columns = ['id', 'first_name', 'last_name', 'customer_type', 'phone_primary', 'client_email'];
+        $has_active_column = self::table_has_column($conn, $table_name, 'active');
+
+        if ($has_active_column) {
+            $columns[] = 'active';
+        }
+
+        $sql = sprintf('SELECT %s FROM `%s`', implode(', ', $columns), $escaped_table);
         $conditions = [];
         $types = '';
         $params = [];
 
-        if (!$show_inactive) {
+        if (!$show_inactive && $has_active_column) {
             $conditions[] = 'active = 1';
         }
 
