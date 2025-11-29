@@ -20,6 +20,13 @@ class MealsDB_DB {
     private static $table_prefix = null;
 
     /**
+     * Cache of resolved table names keyed by base table.
+     *
+     * @var array<string, string>
+     */
+    private static $table_name_cache = [];
+
+    /**
      * Get the existing DB connection, or establish one if it doesn't exist.
      *
      * @return mysqli|null
@@ -91,13 +98,27 @@ class MealsDB_DB {
      * Retrieve the table name prefixed with the active WordPress prefix.
      */
     public static function get_table_name(string $table): string {
-        $prefix = self::get_table_prefix();
-
-        if ($prefix !== '' && strpos($table, $prefix) === 0) {
-            return $table;
+        if (isset(self::$table_name_cache[$table])) {
+            return self::$table_name_cache[$table];
         }
 
-        return $prefix . $table;
+        $prefix         = self::get_table_prefix();
+        $prefixed_table = $prefix !== '' && strpos($table, $prefix) !== 0 ? $prefix . $table : $table;
+
+        $resolved_table = $prefixed_table;
+
+        $connection = self::get_connection();
+        if (self::is_mysqli($connection)) {
+            if ($prefixed_table !== $table && self::table_exists($connection, $prefixed_table)) {
+                $resolved_table = $prefixed_table;
+            } elseif (self::table_exists($connection, $table)) {
+                $resolved_table = $table;
+            }
+        }
+
+        self::$table_name_cache[$table] = $resolved_table;
+
+        return $resolved_table;
     }
 
     /**
@@ -163,5 +184,30 @@ class MealsDB_DB {
      */
     public static function is_mysqli_result($value): bool {
         return class_exists('mysqli_result') && $value instanceof mysqli_result;
+    }
+
+    /**
+     * Determine if a given table exists in the active database.
+     */
+    private static function table_exists(mysqli $connection, string $table_name): bool {
+        if (!method_exists($connection, 'real_escape_string') || !method_exists($connection, 'query')) {
+            return false;
+        }
+
+        $escaped_table = $connection->real_escape_string($table_name);
+        $sql           = sprintf(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '%s' LIMIT 1",
+            $escaped_table
+        );
+
+        $result = $connection->query($sql);
+        if (self::is_mysqli_result($result)) {
+            $exists = $result->num_rows > 0;
+            $result->free();
+
+            return $exists;
+        }
+
+        return false;
     }
 }
