@@ -22,6 +22,10 @@ class MealsDB_Clients {
 
         $types = [];
         $table_name = MealsDB_DB::get_table_name('meals_clients');
+        if (!self::table_exists($conn, $table_name)) {
+            error_log('[MealsDB] meals_clients table is missing; cannot fetch client types.');
+            return [];
+        }
         $escaped_table = str_replace('`', '``', $table_name);
         $sql = sprintf('SELECT DISTINCT customer_type FROM `%s` WHERE customer_type <> "" ORDER BY customer_type ASC', $escaped_table);
         $result = $conn->query($sql);
@@ -50,6 +54,10 @@ class MealsDB_Clients {
         }
 
         $table_name = MealsDB_DB::get_table_name('meals_clients');
+        if (!self::table_exists($conn, $table_name)) {
+            error_log('[MealsDB] meals_clients table is missing; cannot fetch client list.');
+            return [];
+        }
         $escaped_table = str_replace('`', '``', $table_name);
 
         $columns = ['id', 'first_name', 'last_name', 'customer_type', 'phone_primary', 'client_email'];
@@ -282,6 +290,10 @@ class MealsDB_Clients {
      * Check if a table contains a specific column.
      */
     private static function table_has_column($conn, string $table_name, string $column): bool {
+        if (!self::table_exists($conn, $table_name)) {
+            return false;
+        }
+
         $escaped_table = str_replace('`', '``', $table_name);
         $escaped_column = $column;
 
@@ -307,5 +319,31 @@ class MealsDB_Clients {
         }
 
         return false;
+    }
+
+    /**
+     * Determine if the target table exists in the configured database.
+     */
+    private static function table_exists($conn, string $table_name): bool {
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return false;
+        }
+
+        $sql = 'SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1';
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return false;
+        }
+
+        if (!$stmt->bind_param('s', $table_name) || !$stmt->execute()) {
+            $stmt->close();
+            return false;
+        }
+
+        $stmt->store_result();
+        $exists = $stmt->num_rows > 0;
+        $stmt->close();
+
+        return $exists;
     }
 }
