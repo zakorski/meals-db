@@ -28,140 +28,117 @@ class MealsDB_Quick_Order_Ajax {
             $search = sanitize_text_field(wp_unslash($search));
             $search = trim($search);
 
-            if ($search === '') {
-                wp_send_json([
-                    'success' => true,
-                    'clients' => [],
-                ]);
-            }
-
-            $conn = MealsDB_DB::get_connection();
-            if (!MealsDB_DB::is_mysqli($conn)) {
+            if (!class_exists('WP_User_Query')) {
                 wp_send_json([
                     'success' => false,
-                    'message' => __('Unable to connect to the Meals DB database.', 'meals-db'),
+                    'message' => __('User search is unavailable.', 'meals-db'),
                 ]);
             }
 
-            $term_lower       = strtolower($search);
-            $normalized_name  = self::normalize_name($search);
-            $normalized_phone = self::normalize_phone($search);
+            if (!isset($GLOBALS['wpdb']) || !$GLOBALS['wpdb'] instanceof wpdb) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Unable to query WordPress users.', 'meals-db'),
+                ]);
+            }
 
-            $conditions = [
-                'LOWER(first_name) LIKE ?',
-                'LOWER(last_name) LIKE ?',
-                'LOWER(CONCAT(first_name, " ", last_name)) LIKE ?',
-                'LOWER(client_email) LIKE ?',
-                'LOWER(initials_delivery) LIKE ?',
+            $user_query_args = [
+                'number'          => 20,
+                'orderby'         => 'display_name',
+                'order'           => 'ASC',
+                'search'          => $search !== '' ? '*' . $search . '*' : '*',
+                'search_columns'  => ['user_login', 'user_nicename', 'user_email', 'display_name'],
+                'fields'          => ['ID', 'display_name', 'user_email', 'user_nicename'],
+                'meta_query'      => [
+                    'relation' => 'OR',
+                    [
+                        'key'     => 'first_name',
+                        'value'   => $search,
+                        'compare' => 'LIKE',
+                    ],
+                    [
+                        'key'     => 'last_name',
+                        'value'   => $search,
+                        'compare' => 'LIKE',
+                    ],
+                ],
             ];
 
-            $params = [];
-            $types  = '';
-            $like   = '%' . $term_lower . '%';
-            foreach (range(1, 5) as $_) {
-                $params[] = $like;
-                $types   .= 's';
+            $user_query = new WP_User_Query($user_query_args);
+            $users      = $user_query->get_results();
+
+            if (!is_array($users)) {
+                $users = [];
             }
 
-            if ($normalized_phone !== '') {
-                $conditions[] = 'REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone_primary, " ", ""), "-", ""), "(", ""), ")", ""), ".", "") LIKE ?';
-                $params[] = '%' . $normalized_phone . '%';
-                $types   .= 's';
-            }
+            $user_ids = array_map(static function ($user) {
+                return $user instanceof WP_User ? (int) $user->ID : 0;
+            }, $users);
+            $user_ids = array_values(array_filter($user_ids));
 
-            $where = implode(' OR ', $conditions);
-            $sql = "SELECT id, first_name, last_name, phone_primary, customer_type, initials_delivery, active, client_email FROM meals_clients WHERE active = 1 AND ({$where}) ORDER BY last_name ASC, first_name ASC LIMIT 20";
-
-            $stmt = $conn->prepare($sql);
-            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Failed to prepare client lookup.', 'meals-db'),
-                ]);
-            }
-
-            $bind_params = [$types];
-            foreach ($params as $index => $value) {
-                $bind_params[] =& $params[$index];
-            }
-
-            if (!call_user_func_array([$stmt, 'bind_param'], $bind_params)) {
-                $stmt->close();
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Failed to bind parameters for client lookup.', 'meals-db'),
-                ]);
-            }
-
-            if (!$stmt->execute()) {
-                $stmt->close();
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Failed to execute client lookup.', 'meals-db'),
-                ]);
-            }
-
-            $result = $stmt->get_result();
             $clients = [];
-            if (MealsDB_DB::is_mysqli_result($result)) {
-                while ($row = $result->fetch_assoc()) {
-                    $client_id = isset($row['id']) ? (int) $row['id'] : 0;
-                    if ($client_id <= 0) {
+
+            if (!empty($user_ids)) {
+                $table_name = MealsDB_DB::get_table_name('meals_clients');
+                $placeholders = implode(',', array_fill(0, count($user_ids), '%d'));
+                $sql = sprintf(
+                    'SELECT id, wordpress_user_id, customer_type, initials_delivery FROM `%s` WHERE active = 1 AND wordpress_user_id IN (%s)',
+                    str_replace('`', '``', $table_name),
+                    $placeholders
+                );
+
+                $prepared = $GLOBALS['wpdb']->prepare($sql, $user_ids);
+                $rows     = $prepared ? $GLOBALS['wpdb']->get_results($prepared, ARRAY_A) : [];
+
+                $clients_by_user = [];
+                if (is_array($rows)) {
+                    foreach ($rows as $row) {
+                        $user_id = isset($row['wordpress_user_id']) ? (int) $row['wordpress_user_id'] : 0;
+                        if ($user_id <= 0) {
+                            continue;
+                        }
+
+                        $clients_by_user[$user_id] = [
+                            'id'             => isset($row['id']) ? (int) $row['id'] : 0,
+                            'customer_type'  => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
+                            'initials'       => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
+                        ];
+                    }
+                }
+
+                foreach ($users as $user) {
+                    if (!$user instanceof WP_User) {
                         continue;
                     }
 
-                    $first_name = isset($row['first_name']) ? (string) $row['first_name'] : '';
-                    $last_name  = isset($row['last_name']) ? (string) $row['last_name'] : '';
+                    $client_row = $clients_by_user[$user->ID] ?? null;
+                    if (!$client_row || empty($client_row['id'])) {
+                        continue;
+                    }
+
+                    $first_name = (string) get_user_meta($user->ID, 'first_name', true);
+                    $last_name  = (string) get_user_meta($user->ID, 'last_name', true);
                     $name       = trim($first_name . ' ' . $last_name);
+
                     if ($name === '') {
-                        $name = sprintf(__('Client #%d', 'meals-db'), $client_id);
+                        $name = $user->display_name ?: $user->user_nicename;
                     }
 
-                    $row_name_normalized  = self::normalize_name($name);
-                    $row_phone_normalized = self::normalize_phone($row['phone_primary'] ?? '');
-                    $include = false;
-
-                    if ($normalized_phone !== '' && $row_phone_normalized !== '' && strpos($row_phone_normalized, $normalized_phone) !== false) {
-                        $include = true;
-                    }
-
-                    if (!$include && $normalized_name !== '' && $row_name_normalized !== '') {
-                        if (strpos($row_name_normalized, $normalized_name) !== false) {
-                            $include = true;
-                        } elseif (function_exists('levenshtein') && levenshtein($row_name_normalized, $normalized_name) <= 2) {
-                            $include = true;
-                        }
-                    }
-
-                    if (!$include && $term_lower !== '') {
-                        $email    = strtolower((string) ($row['client_email'] ?? ''));
-                        $initials = strtolower((string) ($row['initials_delivery'] ?? ''));
-                        $type     = strtolower((string) ($row['customer_type'] ?? ''));
-                        if (strpos($email, $term_lower) !== false || strpos($initials, $term_lower) !== false || strpos($type, $term_lower) !== false) {
-                            $include = true;
-                        }
-                    }
-
-                    if (!$include) {
-                        continue;
+                    if ($name === '') {
+                        $name = sprintf(__('Client #%d', 'meals-db'), (int) $client_row['id']);
                     }
 
                     $clients[] = [
-                        'id'       => $client_id,
-                        'name'     => $name,
-                        'phone'    => isset($row['phone_primary']) ? (string) $row['phone_primary'] : '',
-                        'initials' => isset($row['initials_delivery']) ? (string) $row['initials_delivery'] : '',
-                        'type'     => isset($row['customer_type']) ? (string) $row['customer_type'] : '',
-                        'active'   => isset($row['active']) ? (int) $row['active'] : 0,
+                        'id'            => (int) $client_row['id'],
+                        'name'          => $name,
+                        'first_name'    => $first_name,
+                        'last_name'     => $last_name,
+                        'email'         => (string) $user->user_email,
+                        'customer_type' => (string) ($client_row['customer_type'] ?? ''),
+                        'initials'      => (string) ($client_row['initials'] ?? ''),
                     ];
-
-                    if (count($clients) >= 20) {
-                        break;
-                    }
                 }
             }
-
-            $stmt->close();
 
             wp_send_json([
                 'success' => true,

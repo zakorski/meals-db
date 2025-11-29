@@ -150,7 +150,7 @@
             this.$clientSelect.select2({
                 width: '100%',
                 placeholder,
-                minimumInputLength: 2,
+                minimumInputLength: 0,
                 allowClear: true,
                 ajax: {
                     url: this.getAjaxUrl(),
