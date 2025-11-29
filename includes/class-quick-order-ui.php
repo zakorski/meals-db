@@ -74,7 +74,7 @@ class MealsDB_Quick_Order_UI {
 
             <div class="mealsdb-quick-order__control">
                 <label for="mealsdb-qo-client"><?php esc_html_e('Client', 'meals-db'); ?></label>
-                <select id="mealsdb-qo-client" style="width: 100%;" placeholder="Search clients..."></select>
+                <select id="mealsdb-qo-client" style="width: 100%;"></select>
             </div>
 
             <div class="mealsdb-quick-order__controls">
