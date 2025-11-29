@@ -145,7 +145,7 @@
             const placeholder =
                 this.$clientSelect.attr('placeholder') ||
                 this.$clientSelect.data('placeholder') ||
-                (window.wp && window.wp.i18n ? window.wp.i18n.__('Search clients…', 'meals-db') : 'Search clients…');
+                '';
 
             this.$clientSelect.select2({
                 width: '100%',
