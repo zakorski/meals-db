@@ -21,11 +21,12 @@ class MealsDB_Clients {
         }
 
         $types = [];
-        $table_name = MealsDB_DB::get_table_name('meals_clients');
-        if (!self::table_exists($conn, $table_name)) {
+        $table_name = self::resolve_client_table($conn);
+        if ($table_name === null) {
             error_log('[MealsDB] meals_clients table is missing; cannot fetch client types.');
             return [];
         }
+
         $escaped_table = str_replace('`', '``', $table_name);
         $sql = sprintf('SELECT DISTINCT customer_type FROM `%s` WHERE customer_type <> "" ORDER BY customer_type ASC', $escaped_table);
         $result = $conn->query($sql);
@@ -53,11 +54,12 @@ class MealsDB_Clients {
             return [];
         }
 
-        $table_name = MealsDB_DB::get_table_name('meals_clients');
-        if (!self::table_exists($conn, $table_name)) {
+        $table_name = self::resolve_client_table($conn);
+        if ($table_name === null) {
             error_log('[MealsDB] meals_clients table is missing; cannot fetch client list.');
             return [];
         }
+
         $escaped_table = str_replace('`', '``', $table_name);
 
         $columns = ['id', 'first_name', 'last_name', 'customer_type', 'phone_primary', 'client_email'];
@@ -284,6 +286,24 @@ class MealsDB_Clients {
         MealsDB_Logger::log($action, $client_id, 'active', $old_value, (string) $active);
 
         return true;
+    }
+
+    /**
+     * Resolve the meals_clients table name, falling back to an unprefixed table
+     * if the prefixed name is missing.
+     */
+    private static function resolve_client_table($conn): ?string {
+        $prefixed = MealsDB_DB::get_table_name('meals_clients');
+        if (self::table_exists($conn, $prefixed)) {
+            return $prefixed;
+        }
+
+        $unprefixed = 'meals_clients';
+        if ($prefixed !== $unprefixed && self::table_exists($conn, $unprefixed)) {
+            return $unprefixed;
+        }
+
+        return null;
     }
 
     /**
