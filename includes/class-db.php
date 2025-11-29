@@ -108,6 +108,15 @@ class MealsDB_DB {
             return self::$table_prefix;
         }
 
+        $config = new MealsDB_Config();
+
+        $prefix_override = $config->get_table_prefix();
+        if ($prefix_override !== null) {
+            self::$table_prefix = $prefix_override;
+
+            return self::$table_prefix;
+        }
+
         $prefix = '';
 
         if (isset($GLOBALS['wpdb']) && is_object($GLOBALS['wpdb']) && property_exists($GLOBALS['wpdb'], 'prefix')) {
