@@ -33,6 +33,41 @@ class MealsDB_Config {
     }
 
     /**
+     * Retrieve the Meals DB table prefix override.
+     *
+     * Allows deployments using an external database (with tables that do not share
+     * the WordPress prefix) to opt-in to a custom prefix, including an empty
+     * prefix when needed.
+     */
+    public function get_table_prefix(): ?string {
+        $env_value = getenv('MEALSDB_TABLE_PREFIX');
+        if ($env_value !== false) {
+            return (string) $env_value;
+        }
+
+        $legacy_env_value = getenv('MEALS_DB_TABLE_PREFIX');
+        if ($legacy_env_value !== false) {
+            return (string) $legacy_env_value;
+        }
+
+        if (defined('MEALSDB_TABLE_PREFIX')) {
+            $value = constant('MEALSDB_TABLE_PREFIX');
+            if (is_string($value) || is_numeric($value)) {
+                return (string) $value;
+            }
+        }
+
+        if (defined('MEALS_DB_TABLE_PREFIX')) {
+            $value = constant('MEALS_DB_TABLE_PREFIX');
+            if (is_string($value) || is_numeric($value)) {
+                return (string) $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Determine if the Meals DB connection details are fully configured.
      */
     public static function is_db_configured(): bool {
