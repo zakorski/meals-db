@@ -271,6 +271,7 @@ class MealsDB_Admin_UI {
                     'searchProducts' => wp_create_nonce('mealsdb_quick_order_search_products'),
                     'createOrder'    => wp_create_nonce('mealsdb_quick_order_create_order'),
                     'cloneOrder'     => wp_create_nonce('mealsdb_nonce'),
+                    'findClients'    => wp_create_nonce('mealsdb_nonce'),
                 ],
                 'messages'      => [
                     'cloneLoading' => __('Loading products from the selected order…', 'meals-db'),
