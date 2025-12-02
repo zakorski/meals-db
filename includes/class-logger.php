@@ -10,6 +10,13 @@
 class MealsDB_Logger {
 
     /**
+     * Log an error message to the error log with a Meals DB prefix.
+     */
+    public static function error(string $message): void {
+        error_log('[MealsDB] ' . $message);
+    }
+
+    /**
      * Logs a change or action to the audit trail.
      *
      * @param string $action Action name (e.g. sync_override)

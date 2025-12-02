@@ -199,7 +199,16 @@ class MealsDB_Sync_Query {
         }
 
         $staff_ids = [];
-        $sql = 'SELECT wordpress_user_id FROM meals_staff WHERE wordpress_user_id IS NOT NULL AND wordpress_user_id > 0';
+        $table_name = MealsDB_DB::get_table_name('meals_staff');
+
+        if (method_exists($connection, 'real_escape_string')) {
+            $table_name = $connection->real_escape_string($table_name);
+        }
+
+        $escaped_table = str_replace('`', '``', $table_name);
+        $table        = '`' . $escaped_table . '`';
+
+        $sql = "SELECT wordpress_user_id FROM {$table} WHERE wordpress_user_id IS NOT NULL AND wordpress_user_id > 0";
         $result = $connection->query($sql);
 
         if ($result instanceof \mysqli_result) {
