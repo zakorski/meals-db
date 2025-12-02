@@ -9,6 +9,12 @@
 
 class MealsDB_Ajax {
 
+    /*
+     * NOTE: This class is retained solely for backward compatibility.
+     * All AJAX actions are registered through the domain-specific handlers in
+     * includes/ajax/. New code should call those classes directly.
+     */
+
     /**
      * Instantiate all AJAX handlers.
      *
