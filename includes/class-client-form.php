@@ -996,6 +996,7 @@ class MealsDB_Client_Form {
         }
 
         $errors = [];
+        $repository = new MealsDB_Clients_Repository($conn);
 
         foreach (self::$unique_fields as $field) {
             if (!array_key_exists($field, $data)) {
@@ -1025,45 +1026,11 @@ class MealsDB_Client_Form {
                 $value_for_query = self::deterministic_hash((string) $value);
             }
 
-            $sql = "SELECT id FROM meals_clients WHERE $column = ?";
-            if ($exclude_id !== null) {
-                $sql .= ' AND id <> ?';
-            }
-            $sql .= ' LIMIT 1';
+            $exists = $repository->column_value_exists($column, $value_for_query, $exclude_id);
 
-            $stmt = $conn->prepare($sql);
-            if (!$stmt) {
-                error_log('[MealsDB] Duplicate check failed to prepare statement for column ' . $column . ': ' . ($conn->error ?? 'unknown error'));
-                continue;
-            }
-
-            if ($exclude_id !== null) {
-                if (!$stmt->bind_param('si', $value_for_query, $exclude_id)) {
-                    error_log('[MealsDB] Duplicate check failed to bind parameters for column ' . $column . '.');
-                    $stmt->close();
-                    continue;
-                }
-            } elseif (!$stmt->bind_param('s', $value_for_query)) {
-                error_log('[MealsDB] Duplicate check failed to bind parameter for column ' . $column . '.');
-                $stmt->close();
-                continue;
-            }
-
-            if (!$stmt->execute()) {
-                error_log('[MealsDB] Duplicate check failed to execute for column ' . $column . ': ' . ($stmt->error ?? 'unknown error'));
-                $stmt->close();
-                continue;
-            }
-
-            if (method_exists($stmt, 'store_result')) {
-                $stmt->store_result();
-            }
-
-            if ($stmt->num_rows > 0) {
+            if ($exists) {
                 $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' already exists in another client.';
             }
-
-            $stmt->close();
         }
 
         return $errors;

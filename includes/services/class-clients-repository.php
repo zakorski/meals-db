@@ -10,18 +10,23 @@ class MealsDB_Clients_Repository {
     private $connection;
 
     /**
-     * @var string
+     * @var string|null
      */
     private $table_name;
 
+    /**
+     * Create a new repository instance.
+     *
+     * @param mysqli|null $connection Optional mysqli connection to reuse.
+     */
     public function __construct($connection = null) {
         if (MealsDB_DB::is_mysqli($connection)) {
             $this->connection = $connection;
+            $this->ensure_table_name($connection);
         } else {
             $this->connection = null;
+            $this->table_name = null;
         }
-
-        $this->table_name = MealsDB_DB::get_table_name('meals_clients');
     }
 
     /**
@@ -31,7 +36,7 @@ class MealsDB_Clients_Repository {
      */
     public function get_all_clients(): array {
         $conn = $this->get_or_fetch_connection();
-        if (!$conn) {
+        if (!$conn || !$this->ensure_table_name($conn)) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when fetching clients.');
             return [];
         }
@@ -66,10 +71,13 @@ class MealsDB_Clients_Repository {
 
     /**
      * Fetch a single client by ID.
+     *
+     * @param int $client_id Client primary key.
+     * @return array<string, mixed>|null
      */
     public function get_client_by_id(int $client_id): ?array {
         $conn = $this->get_or_fetch_connection();
-        if (!$conn) {
+        if (!$conn || !$this->ensure_table_name($conn)) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when fetching client by ID.');
             return null;
         }
@@ -112,10 +120,12 @@ class MealsDB_Clients_Repository {
 
     /**
      * Create a new client record.
+     *
+     * @param array<string, mixed> $data Column values to insert.
      */
     public function create_client(array $data): bool {
         $conn = $this->get_or_fetch_connection();
-        if (!$conn) {
+        if (!$conn || !$this->ensure_table_name($conn)) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when creating client.');
             return false;
         }
@@ -170,6 +180,9 @@ class MealsDB_Clients_Repository {
 
     /**
      * Update an existing client record.
+     *
+     * @param int                  $client_id Client primary key.
+     * @param array<string, mixed> $data      Column values to update.
      */
     public function update_client(int $client_id, array $data): bool {
         if ($client_id <= 0) {
@@ -178,7 +191,7 @@ class MealsDB_Clients_Repository {
         }
 
         $conn = $this->get_or_fetch_connection();
-        if (!$conn) {
+        if (!$conn || !$this->ensure_table_name($conn)) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when updating client.');
             return false;
         }
@@ -235,6 +248,8 @@ class MealsDB_Clients_Repository {
 
     /**
      * Delete a client record.
+     *
+     * @param int $client_id Client primary key.
      */
     public function delete_client(int $client_id): bool {
         if ($client_id <= 0) {
@@ -243,7 +258,7 @@ class MealsDB_Clients_Repository {
         }
 
         $conn = $this->get_or_fetch_connection();
-        if (!$conn) {
+        if (!$conn || !$this->ensure_table_name($conn)) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when deleting client.');
             return false;
         }
@@ -292,6 +307,203 @@ class MealsDB_Clients_Repository {
         }
     }
 
+    /**
+     * Retrieve distinct client types.
+     *
+     * @return string[]
+     */
+    public function get_client_types(): array {
+        $conn = $this->get_or_fetch_connection();
+        if (!$conn || !$this->ensure_table_name($conn)) {
+            error_log('[MealsDB Clients Repository] Database connection unavailable when fetching client types.');
+            return [];
+        }
+
+        try {
+            $sql = sprintf(
+                'SELECT DISTINCT customer_type FROM `%s` WHERE customer_type <> "" ORDER BY customer_type ASC',
+                $this->escape_table_name()
+            );
+
+            $result = $conn->query($sql);
+            if (!MealsDB_DB::is_mysqli_result($result)) {
+                return [];
+            }
+
+            $types = [];
+            while ($row = $result->fetch_assoc()) {
+                if ($row === null) {
+                    break;
+                }
+                $types[] = $row['customer_type'];
+            }
+
+            $result->free();
+
+            return $types;
+        } catch (Throwable $e) {
+            error_log('[MealsDB Clients Repository] Exception while fetching client types: ' . $e->getMessage());
+
+            return [];
+        }
+    }
+
+    /**
+     * Search clients with optional filters.
+     *
+     * @param string|null $client_type   Optional client type filter.
+     * @param string|null $search        Optional search string that matches first or last name.
+     * @param bool        $show_inactive Whether inactive clients should be included in the results.
+     * @return array<int, array<string, string|null>>
+     */
+    public function search_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): array {
+        $conn = $this->get_or_fetch_connection();
+        if (!$conn || !$this->ensure_table_name($conn)) {
+            error_log('[MealsDB Clients Repository] Database connection unavailable when searching clients.');
+            return [];
+        }
+
+        try {
+            $columns = ['id', 'first_name', 'last_name', 'customer_type', 'phone_primary', 'client_email'];
+            $has_active_column = $this->table_has_column($conn, 'active');
+
+            if ($has_active_column) {
+                $columns[] = 'active';
+            }
+
+            $sql = sprintf('SELECT %s FROM `%s`', implode(', ', $columns), $this->escape_table_name());
+            $conditions = [];
+            $types = '';
+            $params = [];
+
+            if (!$show_inactive && $has_active_column) {
+                $conditions[] = 'active = 1';
+            }
+
+            if ($client_type !== null && $client_type !== '') {
+                $conditions[] = 'UPPER(customer_type) = ?';
+                $types .= 's';
+                $params[] = strtoupper($client_type);
+            }
+
+            if ($search !== null && $search !== '') {
+                $conditions[] = '(LOWER(first_name) LIKE ? OR LOWER(last_name) LIKE ? OR LOWER(CONCAT(first_name, " ", last_name)) LIKE ?)';
+                $types .= 'sss';
+                $like = '%' . strtolower($search) . '%';
+                $params[] = $like;
+                $params[] = $like;
+                $params[] = $like;
+            }
+
+            if (!empty($conditions)) {
+                $sql .= ' WHERE ' . implode(' AND ', $conditions);
+            }
+
+            $sql .= ' ORDER BY last_name ASC, first_name ASC';
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                error_log('[MealsDB Clients Repository] Failed to prepare client search query: ' . ($conn->error ?? 'unknown error'));
+                return [];
+            }
+
+            if (!empty($params)) {
+                $bind_params = [$types];
+                foreach ($params as $index => $value) {
+                    $bind_params[] =& $params[$index];
+                }
+
+                if (call_user_func_array([$stmt, 'bind_param'], $bind_params) === false) {
+                    error_log('[MealsDB Clients Repository] Failed to bind parameters for client search query.');
+                    $stmt->close();
+                    return [];
+                }
+            }
+
+            if (!$stmt->execute()) {
+                error_log('[MealsDB Clients Repository] Failed to execute client search query: ' . ($stmt->error ?? 'unknown error'));
+                $stmt->close();
+                return [];
+            }
+
+            $records = [];
+            $result = $stmt->get_result();
+            if (MealsDB_DB::is_mysqli_result($result)) {
+                while ($row = $result->fetch_assoc()) {
+                    $records[] = $row;
+                }
+            }
+
+            $stmt->close();
+
+            return $records;
+        } catch (Throwable $e) {
+            error_log('[MealsDB Clients Repository] Exception while searching clients: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Determine whether a given column contains a matching value.
+     *
+     * @param string   $column      Column name to check.
+     * @param mixed    $value       Value to search for.
+     * @param int|null $exclude_id  Optional client ID to exclude from the check.
+     * @return bool True if a match exists, false otherwise.
+     */
+    public function column_value_exists(string $column, $value, ?int $exclude_id = null): bool {
+        $conn = $this->get_or_fetch_connection();
+        if (!$conn || !$this->ensure_table_name($conn)) {
+            error_log('[MealsDB Clients Repository] Database connection unavailable when checking unique fields.');
+            return false;
+        }
+
+        try {
+            $escaped_column = str_replace('`', '``', $column);
+            $sql = sprintf('SELECT id FROM `%s` WHERE `%s` = ?', $this->escape_table_name(), $escaped_column);
+            if ($exclude_id !== null) {
+                $sql .= ' AND id <> ?';
+            }
+            $sql .= ' LIMIT 1';
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                error_log('[MealsDB Clients Repository] Failed to prepare unique field check for column ' . $column . ': ' . ($conn->error ?? 'unknown error'));
+                return false;
+            }
+
+            if ($exclude_id !== null) {
+                if (!$stmt->bind_param('si', $value, $exclude_id)) {
+                    error_log('[MealsDB Clients Repository] Failed to bind parameters for unique field check on column ' . $column . '.');
+                    $stmt->close();
+                    return false;
+                }
+            } elseif (!$stmt->bind_param('s', $value)) {
+                error_log('[MealsDB Clients Repository] Failed to bind parameter for unique field check on column ' . $column . '.');
+                $stmt->close();
+                return false;
+            }
+
+            if (!$stmt->execute()) {
+                error_log('[MealsDB Clients Repository] Failed to execute unique field check for column ' . $column . ': ' . ($stmt->error ?? 'unknown error'));
+                $stmt->close();
+                return false;
+            }
+
+            if (method_exists($stmt, 'store_result')) {
+                $stmt->store_result();
+            }
+
+            $exists = $stmt->num_rows > 0;
+            $stmt->close();
+
+            return $exists;
+        } catch (Throwable $e) {
+            error_log('[MealsDB Clients Repository] Exception while checking unique field for column ' . $column . ': ' . $e->getMessage());
+            return false;
+        }
+    }
+
     private function get_or_fetch_connection() {
         if (MealsDB_DB::is_mysqli($this->connection)) {
             return $this->connection;
@@ -299,7 +511,15 @@ class MealsDB_Clients_Repository {
 
         $this->connection = MealsDB_DB::get_connection();
 
-        return MealsDB_DB::is_mysqli($this->connection) ? $this->connection : null;
+        if (!MealsDB_DB::is_mysqli($this->connection)) {
+            return null;
+        }
+
+        if (!$this->ensure_table_name($this->connection)) {
+            return null;
+        }
+
+        return $this->connection;
     }
 
     /**
@@ -350,7 +570,7 @@ class MealsDB_Clients_Repository {
      * Get the sanitized table name for meals clients.
      */
     private function escape_table_name(): string {
-        return str_replace('`', '``', $this->table_name);
+        return str_replace('`', '``', (string) $this->table_name);
     }
 
     /**
@@ -412,5 +632,90 @@ class MealsDB_Clients_Repository {
         }
 
         return $rows;
+    }
+
+    private function ensure_table_name($conn): bool {
+        if ($this->table_name !== null) {
+            return true;
+        }
+
+        $resolved = $this->resolve_client_table($conn);
+        if ($resolved === null) {
+            error_log('[MealsDB Clients Repository] meals_clients table is missing; cannot continue.');
+            return false;
+        }
+
+        $this->table_name = $resolved;
+
+        return true;
+    }
+
+    private function resolve_client_table($conn): ?string {
+        $prefixed = MealsDB_DB::get_table_name('meals_clients');
+        if ($this->table_exists($conn, $prefixed)) {
+            return $prefixed;
+        }
+
+        $unprefixed = 'meals_clients';
+        if ($prefixed !== $unprefixed && $this->table_exists($conn, $unprefixed)) {
+            return $unprefixed;
+        }
+
+        return null;
+    }
+
+    private function table_has_column($conn, string $column): bool {
+        if (!$this->table_exists($conn, (string) $this->table_name)) {
+            return false;
+        }
+
+        $escaped_table = str_replace('`', '``', (string) $this->table_name);
+        $escaped_column = $column;
+
+        if (method_exists($conn, 'real_escape_string')) {
+            $escaped_column = $conn->real_escape_string($escaped_column);
+        }
+
+        $sql = sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $escaped_table, $escaped_column);
+        $result = $conn->query($sql);
+
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            $exists = $result->num_rows > 0;
+            $result->free();
+            return $exists;
+        }
+
+        if ($result && isset($result->num_rows)) {
+            $exists = $result->num_rows > 0;
+            if (method_exists($result, 'free')) {
+                $result->free();
+            }
+            return $exists;
+        }
+
+        return false;
+    }
+
+    private function table_exists($conn, string $table_name): bool {
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return false;
+        }
+
+        $sql = 'SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1';
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return false;
+        }
+
+        if (!$stmt->bind_param('s', $table_name) || !$stmt->execute()) {
+            $stmt->close();
+            return false;
+        }
+
+        $stmt->store_result();
+        $exists = $stmt->num_rows > 0;
+        $stmt->close();
+
+        return $exists;
     }
 }
