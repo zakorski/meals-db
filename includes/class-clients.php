@@ -79,7 +79,7 @@ class MealsDB_Clients {
             $client_snapshot = [
                 'first_name' => $client_record['first_name'] ?? null,
                 'last_name' => $client_record['last_name'] ?? null,
-                'customer_type' => $client_record['customer_type'] ?? null,
+                'client_type' => $client_record['client_type'] ?? null,
                 'client_email' => $client_record['client_email'] ?? null,
             ];
         }

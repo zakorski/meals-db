@@ -513,7 +513,7 @@ class MealsDB_Admin_UI {
         $client_id = intval($args['client_id']);
         $form_values = is_array($args['form_values']) ? $args['form_values'] : [];
 
-        $client_type = strtoupper($form_values['customer_type'] ?? '');
+        $client_type = strtoupper($form_values['client_type'] ?? '');
 
         $delivery_day_options = MealsDB_Client_Form::get_allowed_options('delivery_day');
         $ordering_contact_method_options = MealsDB_Client_Form::get_allowed_options('ordering_contact_method');
@@ -576,10 +576,10 @@ class MealsDB_Admin_UI {
             static function (array $client) use ($client_type) {
                 ?>
                 <tr>
-                    <th><label for="customer_type"><?php esc_html_e('Client Type *', 'meals-db'); ?></label></th>
+                    <th><label for="client_type"><?php esc_html_e('Client Type *', 'meals-db'); ?></label></th>
                     <td>
                         <?php $current_type = $client_type; ?>
-                        <select name="customer_type" id="customer_type" required data-base-required="1">
+                        <select name="client_type" id="client_type" required data-base-required="1">
                             <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
                             <option value="SDNB" <?php selected($current_type, 'SDNB'); ?>>SDNB</option>
                             <option value="Veteran" <?php selected($current_type, 'Veteran'); ?>>Veteran</option>
@@ -1386,7 +1386,7 @@ class MealsDB_Admin_UI {
             return '';
         }
 
-        $type = $record['customer_type'] ?? ($record['client_type'] ?? '');
+        $type = $record['client_type'] ?? ($record['customer_type'] ?? '');
 
         return $this->sanitise_client_type_value($type);
     }

@@ -321,7 +321,7 @@ class MealsDB_Clients_Repository {
 
         try {
             $sql = sprintf(
-                'SELECT DISTINCT customer_type FROM `%s` WHERE customer_type <> "" ORDER BY customer_type ASC',
+                'SELECT DISTINCT client_type FROM `%s` WHERE client_type <> "" ORDER BY client_type ASC',
                 $this->escape_table_name()
             );
 
@@ -335,7 +335,7 @@ class MealsDB_Clients_Repository {
                 if ($row === null) {
                     break;
                 }
-                $types[] = $row['customer_type'];
+                $types[] = $row['client_type'];
             }
 
             $result->free();
@@ -364,7 +364,7 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $columns = ['id', 'first_name', 'last_name', 'customer_type', 'phone_primary', 'client_email'];
+            $columns = ['id', 'first_name', 'last_name', 'client_type', 'phone_primary', 'client_email'];
             $has_active_column = $this->table_has_column($conn, 'active');
 
             if ($has_active_column) {
@@ -381,7 +381,7 @@ class MealsDB_Clients_Repository {
             }
 
             if ($client_type !== null && $client_type !== '') {
-                $conditions[] = 'UPPER(customer_type) = ?';
+                $conditions[] = 'UPPER(client_type) = ?';
                 $types .= 's';
                 $params[] = strtoupper($client_type);
             }

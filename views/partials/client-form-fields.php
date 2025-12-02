@@ -29,13 +29,13 @@
     <td><input type="text" name="address_postal" required placeholder="A1A1A1" maxlength="6" class="regular-text postal-mask" value="<?= esc_attr($_POST['address_postal'] ?? '') ?>" /></td>
 </tr>
 <tr>
-    <th><label for="customer_type">Customer Type *</label></th>
+    <th><label for="client_type">Client Type *</label></th>
     <td>
-        <select name="customer_type" required>
+        <select name="client_type" required>
             <option value="">Select...</option>
-            <option value="SDNB" <?= selected($_POST['customer_type'] ?? '', 'SDNB') ?>>SDNB</option>
-            <option value="Veteran" <?= selected($_POST['customer_type'] ?? '', 'Veteran') ?>>Veteran</option>
-            <option value="Private" <?= selected($_POST['customer_type'] ?? '', 'Private') ?>>Private</option>
+            <option value="SDNB" <?= selected($_POST['client_type'] ?? '', 'SDNB') ?>>SDNB</option>
+            <option value="Veteran" <?= selected($_POST['client_type'] ?? '', 'Veteran') ?>>Veteran</option>
+            <option value="Private" <?= selected($_POST['client_type'] ?? '', 'Private') ?>>Private</option>
         </select>
     </td>
 </tr>
