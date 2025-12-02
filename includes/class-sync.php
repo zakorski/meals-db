@@ -31,7 +31,20 @@ class MealsDB_Sync {
     public static function link_client_to_wordpress_user(int $client_id, int $wp_user_id) {
         $mutate = new MealsDB_Sync_Mutate();
 
-        return $mutate->link_client_to_wordpress_user($client_id, $wp_user_id);
+        return $mutate->link_meals_client_to_wc_user($client_id, $wp_user_id);
+    }
+
+    /**
+     * Link a Meals DB client to a WooCommerce user.
+     *
+     * @param int $client_id
+     * @param int $user_id
+     * @return true|WP_Error
+     */
+    public static function link_client_to_user(int $client_id, int $user_id) {
+        $mutate = new MealsDB_Sync_Mutate();
+
+        return $mutate->link_meals_client_to_wc_user($client_id, $user_id);
     }
 
     /**

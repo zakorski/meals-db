@@ -231,6 +231,128 @@ class MealsDB_Sync_Query {
     }
 
     /**
+     * Find candidate WooCommerce customers that may match a given Meals DB client
+     * based on first name, last name, and phone number.
+     *
+     * @param array $meals_client Row from meals_clients including at least first_name, last_name, phone_primary, and wordpress_user_id.
+     * @return array<int,array<string,mixed>>|WP_Error
+     */
+    public function find_candidate_wc_matches_for_client(array $meals_client) {
+        if (!empty($meals_client['wordpress_user_id'])) {
+            return [];
+        }
+
+        global $wpdb;
+
+        if (!$wpdb instanceof wpdb) {
+            return [];
+        }
+
+        $first_name = isset($meals_client['first_name']) ? (string) $meals_client['first_name'] : '';
+        $last_name  = isset($meals_client['last_name']) ? (string) $meals_client['last_name'] : '';
+        $phone_raw  = isset($meals_client['phone_primary']) ? (string) $meals_client['phone_primary'] : '';
+
+        $normalized_phone = preg_replace('/\D+/', '', $phone_raw);
+
+        $conditions = [];
+        $params     = [];
+
+        if ($first_name !== '' || $last_name !== '') {
+            $first_like = '%' . $wpdb->esc_like(strtolower($first_name)) . '%';
+            $last_like  = '%' . $wpdb->esc_like(strtolower($last_name)) . '%';
+
+            if ($first_name !== '' && $last_name !== '') {
+                $conditions[] = '((LOWER(IFNULL(um_first.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_first.meta_value, "")) LIKE %s) AND (LOWER(IFNULL(um_last.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_last.meta_value, "")) LIKE %s))';
+                $params[]     = $first_like;
+                $params[]     = $first_like;
+                $params[]     = $last_like;
+                $params[]     = $last_like;
+            } elseif ($first_name !== '') {
+                $conditions[] = '(LOWER(IFNULL(um_first.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_first.meta_value, "")) LIKE %s)';
+                $params[]     = $first_like;
+                $params[]     = $first_like;
+            } elseif ($last_name !== '') {
+                $conditions[] = '(LOWER(IFNULL(um_last.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_last.meta_value, "")) LIKE %s)';
+                $params[]     = $last_like;
+                $params[]     = $last_like;
+            }
+        }
+
+        if ($normalized_phone !== '') {
+            $phone_like = '%' . $wpdb->esc_like($normalized_phone) . '%';
+            $conditions[] = 'um_phone.meta_value LIKE %s';
+            $params[]     = $phone_like;
+        }
+
+        if (empty($conditions)) {
+            return [];
+        }
+
+        $users_table = $wpdb->users;
+        $meta_table  = $wpdb->usermeta;
+
+        $sql = "
+            SELECT
+                u.ID AS user_id,
+                COALESCE(um_first.meta_value, um_billing_first.meta_value) AS first_name,
+                COALESCE(um_last.meta_value, um_billing_last.meta_value)  AS last_name,
+                u.user_email AS email,
+                um_phone.meta_value AS billing_phone,
+                um_billing_first.meta_value AS billing_first_name,
+                um_billing_last.meta_value AS billing_last_name
+            FROM {$users_table} AS u
+            LEFT JOIN {$meta_table} AS um_first ON (um_first.user_id = u.ID AND um_first.meta_key = 'first_name')
+            LEFT JOIN {$meta_table} AS um_last ON (um_last.user_id = u.ID AND um_last.meta_key = 'last_name')
+            LEFT JOIN {$meta_table} AS um_billing_first ON (um_billing_first.user_id = u.ID AND um_billing_first.meta_key = 'billing_first_name')
+            LEFT JOIN {$meta_table} AS um_billing_last ON (um_billing_last.user_id = u.ID AND um_billing_last.meta_key = 'billing_last_name')
+            LEFT JOIN {$meta_table} AS um_phone ON (um_phone.user_id = u.ID AND um_phone.meta_key = 'billing_phone')
+            WHERE (
+                " . implode(' OR ', $conditions) . "
+            )
+            LIMIT 20
+        ";
+
+        $prepared = $wpdb->prepare($sql, $params);
+
+        if ($prepared === false) {
+            return [];
+        }
+
+        $results = $wpdb->get_results($prepared, ARRAY_A);
+
+        if (!is_array($results)) {
+            return [];
+        }
+
+        $candidates = [];
+        foreach ($results as $row) {
+            $candidate_phone = isset($row['billing_phone']) ? preg_replace('/\D+/', '', (string) $row['billing_phone']) : '';
+
+            if ($normalized_phone !== '' && $candidate_phone !== '') {
+                $compare_length = min(7, strlen($normalized_phone));
+                $target_tail    = substr($normalized_phone, -$compare_length);
+                $candidate_tail = substr($candidate_phone, -$compare_length);
+
+                if ($target_tail === '' || $target_tail !== $candidate_tail) {
+                    continue;
+                }
+            }
+
+            $candidates[] = [
+                'user_id'            => isset($row['user_id']) ? (int) $row['user_id'] : 0,
+                'first_name'         => (string) ($row['first_name'] ?? ''),
+                'last_name'          => (string) ($row['last_name'] ?? ''),
+                'email'              => (string) ($row['email'] ?? ''),
+                'billing_phone'      => (string) ($row['billing_phone'] ?? ''),
+                'billing_first_name' => (string) ($row['billing_first_name'] ?? ''),
+                'billing_last_name'  => (string) ($row['billing_last_name'] ?? ''),
+            ];
+        }
+
+        return $candidates;
+    }
+
+    /**
      * Execute batched callbacks until the dataset is fully retrieved.
      *
      * @param callable $callback   Callback invoked with (int $batch_size, int $page, int $offset).

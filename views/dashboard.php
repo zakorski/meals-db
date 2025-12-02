@@ -4,6 +4,8 @@ MealsDB_Permissions::enforce();
 $sync_error        = null;
 $mismatches        = [];
 $compare_requested = false;
+$success           = null;
+$errors            = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['mealsdb_action'] ?? '';
@@ -16,7 +18,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = sanitize_text_field($action);
     }
 
-    if ($action === 'compare_databases') {
+    if ($action === 'link_client_to_user') {
+        if (function_exists('check_admin_referer')) {
+            check_admin_referer('mealsdb_nonce', 'mealsdb_nonce_field');
+        }
+
+        $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
+        $user_id   = isset($_POST['user_id']) ? intval($_POST['user_id']) : 0;
+
+        $result = MealsDB_Sync::link_client_to_user($client_id, $user_id);
+
+        if (is_wp_error($result)) {
+            $errors[] = $result->get_error_message();
+        } else {
+            $success = __('Meals DB client linked to WooCommerce customer.', 'meals-db');
+        }
+
+        $compare_requested = true;
+        $mismatches        = MealsDB_Sync::get_mismatches();
+
+        if (is_wp_error($mismatches)) {
+            $sync_error = $mismatches;
+            $mismatches = [];
+        }
+    } elseif ($action === 'compare_databases') {
         $compare_requested = true;
 
         if (function_exists('check_admin_referer')) {
@@ -94,6 +119,7 @@ $field_labels = [
                 $notice_text = isset($mismatch['notice']) ? $mismatch['notice'] : '';
                 $client_data = is_array($mismatch['meals_client'] ?? null) ? $mismatch['meals_client'] : [];
                 $user_data   = is_array($mismatch['wp_user'] ?? null) ? $mismatch['wp_user'] : [];
+                $suggestions = is_array($mismatch['suggested_matches'] ?? null) ? $mismatch['suggested_matches'] : [];
 
                 $meals_first = $client_data['first_name'] ?? ($fields['first_name']['meals_db'] ?? '');
                 $meals_last  = $client_data['last_name'] ?? ($fields['last_name']['meals_db'] ?? '');
@@ -200,6 +226,39 @@ $field_labels = [
                         MealsDB_Admin_UI::render_unlinked_client_matches($client_data);
                     }
                     ?>
+
+                    <?php if (!empty($suggestions)) : ?>
+                        <div class="mealsdb-suggested-matches">
+                            <h4><?php esc_html_e('Suggested matches', 'meals-db'); ?></h4>
+                            <?php foreach ($suggestions as $suggestion) :
+                                $suggested_name  = trim(($suggestion['first_name'] ?? '') . ' ' . ($suggestion['last_name'] ?? ''));
+                                $suggested_name  = $suggested_name !== '' ? $suggested_name : sprintf(__('User #%d', 'meals-db'), intval($suggestion['user_id'] ?? 0));
+                                $suggested_email = $suggestion['email'] ?? '';
+                                $suggested_phone = $suggestion['billing_phone'] ?? '';
+                            ?>
+                                <div class="mealsdb-suggested-match">
+                                    <p>
+                                        <strong><?php echo esc_html($suggested_name); ?></strong><br />
+                                        <?php if (!empty($suggested_email)) : ?>
+                                            <span><?php echo esc_html($suggested_email); ?></span><br />
+                                        <?php endif; ?>
+                                        <?php if (!empty($suggested_phone)) : ?>
+                                            <span><?php echo esc_html($suggested_phone); ?></span><br />
+                                        <?php endif; ?>
+                                    </p>
+                                    <form method="post" class="mealsdb-link-form">
+                                        <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
+                                        <input type="hidden" name="mealsdb_action" value="link_client_to_user" />
+                                        <input type="hidden" name="client_id" value="<?php echo esc_attr($client_id); ?>" />
+                                        <input type="hidden" name="user_id" value="<?php echo esc_attr((int) ($suggestion['user_id'] ?? 0)); ?>" />
+                                        <button type="submit" class="button button-secondary">
+                                            <?php esc_html_e('Link to this WooCommerce customer', 'meals-db'); ?>
+                                        </button>
+                                    </form>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
             <?php endforeach; ?>
         </form>
