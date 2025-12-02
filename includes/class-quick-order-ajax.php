@@ -449,6 +449,7 @@ class MealsDB_Quick_Order_Ajax {
 
         self::verify_request(true);
 
+        // WordPress user ID for the client placing the order.
         $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
         $date      = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
         $items     = self::normalise_items($_POST['items'] ?? []);
@@ -474,6 +475,7 @@ class MealsDB_Quick_Order_Ajax {
 
             $order->update_meta_data('mealsdb_client_user_id', $client_id);
 
+            // Meals DB client_id from wp_meals_clients for this WordPress user.
             $client_db_id = self::get_active_client_id_for_user($client_id);
             if ($client_db_id > 0) {
                 $order->update_meta_data('mealsdb_client_id', $client_db_id);
@@ -702,7 +704,7 @@ class MealsDB_Quick_Order_Ajax {
             $client_type = '';
             if ($client_db_id > 0 && isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
                 $table = MealsDB_DB::get_table_name('meals_clients');
-                $sql   = $GLOBALS['wpdb']->prepare("SELECT customer_type FROM {$table} WHERE id = %d LIMIT 1", $client_db_id);
+                $sql   = $GLOBALS['wpdb']->prepare("SELECT client_type FROM {$table} WHERE client_id = %d LIMIT 1", $client_db_id);
 
                 if (is_string($sql)) {
                     $result = $GLOBALS['wpdb']->get_var($sql);
@@ -802,7 +804,7 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         $table_name = MealsDB_DB::get_table_name('meals_clients');
-        $sql        = sprintf('SELECT active FROM `%s` WHERE id = ? LIMIT 1', str_replace('`', '``', $table_name));
+        $sql        = sprintf('SELECT active FROM `%s` WHERE client_id = ? LIMIT 1', str_replace('`', '``', $table_name));
 
         $stmt = $conn->prepare($sql);
         if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
@@ -846,7 +848,7 @@ class MealsDB_Quick_Order_Ajax {
 
         $table_name = MealsDB_DB::get_table_name('meals_clients');
         $sql        = sprintf(
-            'SELECT id FROM `%s` WHERE wordpress_user_id = ? AND active = 1 LIMIT 1',
+            'SELECT client_id FROM `%s` WHERE wp_user_id = ? AND active = 1 LIMIT 1',
             str_replace('`', '``', $table_name)
         );
 
@@ -870,11 +872,11 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         $row = $result->fetch_assoc();
-        if (!is_array($row) || !isset($row['id'])) {
+        if (!is_array($row) || !isset($row['client_id'])) {
             return 0;
         }
 
-        return (int) $row['id'];
+        return (int) $row['client_id'];
     }
 
     /**
@@ -892,7 +894,7 @@ class MealsDB_Quick_Order_Ajax {
 
         $table_name = MealsDB_DB::get_table_name('meals_clients');
         $sql        = sprintf(
-            'SELECT wordpress_user_id FROM `%s` WHERE id = ? AND active = 1 LIMIT 1',
+            'SELECT wp_user_id FROM `%s` WHERE client_id = ? AND active = 1 LIMIT 1',
             str_replace('`', '``', $table_name)
         );
 
@@ -916,11 +918,11 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         $row = $result->fetch_assoc();
-        if (!is_array($row) || !isset($row['wordpress_user_id'])) {
+        if (!is_array($row) || !isset($row['wp_user_id'])) {
             return 0;
         }
 
-        return (int) $row['wordpress_user_id'];
+        return (int) $row['wp_user_id'];
     }
 
     /**
