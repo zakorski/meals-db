@@ -274,12 +274,14 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
-     * Link a Meals DB client to a WordPress user account.
+     * Link a Meals DB client to a WooCommerce user.
      *
+     * @param int $client_id
+     * @param int $user_id
      * @return true|WP_Error
      */
-    public function link_client_to_wordpress_user(int $client_id, int $wp_user_id) {
-        if ($client_id <= 0 || $wp_user_id <= 0) {
+    public function link_meals_client_to_wc_user(int $client_id, int $user_id) {
+        if ($client_id <= 0 || $user_id <= 0) {
             return new WP_Error(
                 'mealsdb_invalid_link_request',
                 __('A valid client ID and WordPress user ID are required to create a link.', 'meals-db')
@@ -292,7 +294,7 @@ class MealsDB_Sync_Mutate {
             return $connection;
         }
 
-        $wp_user = get_userdata($wp_user_id);
+        $wp_user = get_userdata($user_id);
         if (!$wp_user instanceof WP_User) {
             return new WP_Error(
                 'mealsdb_sync_user_missing',
@@ -300,49 +302,35 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        $current_id = null;
-        $check_stmt = $connection->prepare('SELECT wordpress_user_id FROM meals_clients WHERE id = ? LIMIT 1');
-        if ($check_stmt) {
-            if ($check_stmt->bind_param('i', $client_id) && $check_stmt->execute()) {
-                $result = $check_stmt->get_result();
-                if ($result instanceof \mysqli_result && ($row = $result->fetch_assoc())) {
-                    $raw = $row['wordpress_user_id'] ?? null;
-                    if ($raw !== null && $raw !== '') {
-                        $current_id = (int) $raw;
-                    }
-                }
-                if ($result instanceof \mysqli_result) {
-                    $result->free();
-                }
+        $transaction_started = false;
+
+        if (method_exists($connection, 'begin_transaction')) {
+            $transaction_started = $connection->begin_transaction();
+        }
+
+        $update_stmt = $connection->prepare('UPDATE meals_clients SET wordpress_user_id = ? WHERE id = ?');
+
+        if (!$update_stmt) {
+            if ($transaction_started) {
+                $connection->rollback();
             }
-            $check_stmt->close();
-        }
 
-        if ($current_id === $wp_user_id) {
-            return true;
-        }
-
-        $stmt = $connection->prepare('UPDATE meals_clients SET wordpress_user_id = ? WHERE id = ?');
-        if (!$stmt) {
             error_log('[MealsDB Sync] Failed to prepare client link statement: ' . ($connection->error ?? 'unknown error'));
+
             return new WP_Error(
                 'mealsdb_link_prepare_failed',
                 __('Failed to prepare the database statement to link the client.', 'meals-db')
             );
         }
 
-        if (!$stmt->bind_param('ii', $wp_user_id, $client_id)) {
-            $stmt->close();
-            error_log('[MealsDB Sync] Failed binding parameters for client link statement.');
-            return new WP_Error(
-                'mealsdb_link_bind_failed',
-                __('Failed to bind parameters for the link request.', 'meals-db')
-            );
-        }
+        if (!$update_stmt->bind_param('ii', $user_id, $client_id) || !$update_stmt->execute()) {
+            $message = $update_stmt->error ?: __('Unknown database error.', 'meals-db');
+            $update_stmt->close();
 
-        if (!$stmt->execute()) {
-            $message = $stmt->error ?: __('Unknown database error.', 'meals-db');
-            $stmt->close();
+            if ($transaction_started) {
+                $connection->rollback();
+            }
+
             error_log('[MealsDB Sync] Failed executing client link statement: ' . $message);
 
             return new WP_Error(
@@ -351,17 +339,72 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        $affected = $stmt->affected_rows;
-        $stmt->close();
+        $affected = $update_stmt->affected_rows;
+        $update_stmt->close();
 
         if ($affected === 0) {
+            if ($transaction_started) {
+                $connection->rollback();
+            }
+
             return new WP_Error(
                 'mealsdb_link_no_rows',
                 __('No Meals DB client record was updated. The client may not exist.', 'meals-db')
             );
         }
 
+        $local_updated = true;
+        global $wpdb;
+
+        if ($wpdb instanceof wpdb) {
+            $local_table = $wpdb->prefix . 'meals_clients';
+            $table_check = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $local_table));
+
+            if ($table_check === $local_table) {
+                $local_result = $wpdb->update(
+                    $local_table,
+                    ['wp_user_id' => $user_id],
+                    ['client_id' => $client_id],
+                    ['%d'],
+                    ['%d']
+                );
+
+                if ($local_result === false) {
+                    $local_updated = false;
+                }
+            }
+        }
+
+        if (!$local_updated) {
+            if ($transaction_started) {
+                $connection->rollback();
+            }
+
+            return new WP_Error(
+                'mealsdb_local_link_failed',
+                __('Failed to update the local Meals DB client record.', 'meals-db')
+            );
+        }
+
+        if ($transaction_started && !$connection->commit()) {
+            $connection->rollback();
+
+            return new WP_Error(
+                'mealsdb_link_commit_failed',
+                __('Failed to finalize the client link transaction.', 'meals-db')
+            );
+        }
+
         return true;
+    }
+
+    /**
+     * Link a Meals DB client to a WordPress user account.
+     *
+     * @return true|WP_Error
+     */
+    public function link_client_to_wordpress_user(int $client_id, int $wp_user_id) {
+        return $this->link_meals_client_to_wc_user($client_id, $wp_user_id);
     }
 
     /**

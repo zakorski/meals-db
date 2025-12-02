@@ -34,7 +34,9 @@ class MealsDB_Sync_Compare {
             is_array($staff_wp_ids) ? $staff_wp_ids : []
         );
 
-        return $this->filter_ignored($mismatches, is_array($ignored_keys) ? $ignored_keys : []);
+        $mismatches = $this->filter_ignored($mismatches, is_array($ignored_keys) ? $ignored_keys : []);
+
+        return $this->attach_suggested_matches($mismatches, $query);
     }
 
     /**
@@ -152,6 +154,41 @@ class MealsDB_Sync_Compare {
         }
 
         return $filtered;
+    }
+
+    /**
+     * Enrich mismatches with suggested WordPress customer links for unlinked clients.
+     *
+     * @param array<int, array<string, mixed>> $mismatches
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function attach_suggested_matches(array $mismatches, MealsDB_Sync_Query $query): array {
+        foreach ($mismatches as $index => $mismatch) {
+            $client = $mismatch['meals_client'] ?? null;
+
+            if (!is_array($client)) {
+                continue;
+            }
+
+            $has_linked_user = !empty($mismatch['wp_user']);
+
+            if ($has_linked_user) {
+                continue;
+            }
+
+            $matches = $query->find_candidate_wc_matches_for_client($client);
+
+            if (is_wp_error($matches)) {
+                continue;
+            }
+
+            if (!empty($matches)) {
+                $mismatches[$index]['suggested_matches'] = $matches;
+            }
+        }
+
+        return $mismatches;
     }
 
     /**
