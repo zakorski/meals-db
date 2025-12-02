@@ -387,7 +387,7 @@ run_test('validation rejects invalid enumerated and numeric inputs', function ()
     $payload = [
         'first_name' => 'Jamie',
         'last_name' => 'Client',
-        'customer_type' => 'Type A',
+        'client_type' => 'Type A',
         'client_email' => 'jamie@example.com',
         'phone_primary' => '(123)-456-7890',
         'address_postal' => 'A1A1A1',
@@ -439,7 +439,7 @@ run_test('validation accepts enumerated selections', function () {
     $payload = [
         'first_name' => 'Morgan',
         'last_name' => 'Valid',
-        'customer_type' => 'Type B',
+        'client_type' => 'Type B',
         'client_email' => 'morgan@example.com',
         'phone_primary' => '(555)-123-4567',
         'address_postal' => 'B2B2B2',
@@ -503,7 +503,7 @@ run_test('staff client submissions are rejected in favor of staff directory', fu
     set_db_connection(new StubMysqli());
 
     $payload = [
-        'customer_type' => 'Staff',
+        'client_type' => 'Staff',
         'first_name' => 'Alex',
         'last_name' => 'Smith',
         'delivery_initials' => 'ASS',
@@ -526,7 +526,7 @@ run_test('non-staff clients require delivery initials', function () {
     set_db_connection(new StubMysqli());
 
     $payload = [
-        'customer_type' => 'Private',
+        'client_type' => 'Private',
         'first_name' => 'Jamie',
         'last_name' => 'Doe',
         'phone_primary' => '(506)-555-1111',
@@ -555,7 +555,7 @@ run_test('non-staff delivery initials must pass server-side validation', functio
     set_db_connection(new StubMysqli());
 
     $payload = [
-        'customer_type' => 'Private',
+        'client_type' => 'Private',
         'first_name' => 'Jamie',
         'last_name' => 'Doe',
         'phone_primary' => '(506)-555-1111',
@@ -596,7 +596,7 @@ run_test('private clients enforce configured required fields', function () {
     set_db_connection(new StubMysqli());
 
     $payload = [
-        'customer_type' => 'Private',
+        'client_type' => 'Private',
         'first_name' => 'River',
         'last_name' => 'Stone',
     ];
@@ -635,7 +635,7 @@ run_test('sdnb clients require service identifiers and payment info', function (
     set_db_connection(new StubMysqli());
 
     $payload = [
-        'customer_type' => 'SDNB',
+        'client_type' => 'SDNB',
         'first_name' => 'Morgan',
         'last_name' => 'Quill',
     ];
@@ -674,7 +674,7 @@ run_test('veteran clients require requisition and health identifiers', function 
     set_db_connection(new StubMysqli());
 
     $payload = [
-        'customer_type' => 'Veteran',
+        'client_type' => 'Veteran',
         'first_name' => 'Robin',
         'last_name' => 'Vale',
     ];
@@ -710,7 +710,7 @@ run_test('builds a helpful summary for missing and invalid fields', function () 
     set_db_connection(new StubMysqli());
 
     $payload = [
-        'customer_type' => 'Private',
+        'client_type' => 'Private',
         'first_name' => '',
         'last_name' => 'Tester',
         'address_street_number' => '123',
@@ -864,7 +864,7 @@ run_test('save omits empty wordpress user id values', function () {
     $data = [
         'first_name' => 'Sam',
         'last_name' => 'Client',
-        'customer_type' => 'Private',
+        'client_type' => 'Private',
         'phone_primary' => '(506)-555-1234',
         'address_street_name' => 'Main',
         'address_city' => 'Moncton',
@@ -896,7 +896,7 @@ run_test('sdnb client save populates defaults for required database columns', fu
     $payload = [
         'first_name'                => 'Jordan',
         'last_name'                 => 'Client',
-        'customer_type'             => 'SDNB',
+        'client_type'             => 'SDNB',
         'phone_primary'             => '(506)-555-0000',
         'vendor_number'             => 'VN-001',
         'service_center_charged'    => 'Center 1',
@@ -940,7 +940,7 @@ run_test('private client submission succeeds with all fields populated', functio
     set_db_connection($conn);
 
     $payload = [
-        'customer_type'                 => 'Private',
+        'client_type'                 => 'Private',
         'first_name'                    => 'Alex',
         'last_name'                     => 'Client',
         'client_email'                  => 'alex.private@example.com',
@@ -1024,7 +1024,7 @@ run_test('sdnb client submission succeeds with all fields populated', function (
     set_db_connection($conn);
 
     $payload = [
-        'customer_type'                 => 'SDNB',
+        'client_type'                 => 'SDNB',
         'first_name'                    => 'Morgan',
         'last_name'                     => 'Support',
         'client_email'                  => 'morgan.sdnb@example.com',
@@ -1109,7 +1109,7 @@ run_test('veteran client submission succeeds with all fields populated', functio
     set_db_connection($conn);
 
     $payload = [
-        'customer_type'                 => 'Veteran',
+        'client_type'                 => 'Veteran',
         'first_name'                    => 'Sam',
         'last_name'                     => 'Service',
         'client_email'                  => 'sam.veteran@example.com',

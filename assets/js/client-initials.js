@@ -22,7 +22,7 @@
         const ajaxUrl = localized.ajaxUrl || shared.ajaxUrl || window.ajaxurl || '';
         const nonces = localized.nonces || {};
         const messages = localized.messages || {};
-        const $customerType = $('#customer_type');
+        const $customerType = $('#client_type');
 
         let validationRequest = null;
         let validatedValue = null;

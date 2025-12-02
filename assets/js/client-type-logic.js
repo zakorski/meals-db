@@ -19,7 +19,7 @@
             return;
         }
 
-        const $clientType = $form.find('#customer_type');
+        const $clientType = $form.find('#client_type');
         if ($clientType.length === 0) {
             return;
         }

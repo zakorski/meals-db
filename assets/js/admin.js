@@ -114,7 +114,7 @@ jQuery(document).ready(function($) {
     // -----------------------------
     const $clientForm = $('#mealsdb-client-form');
     if ($clientForm.length) {
-        const $customerTypeSelect = $('#customer_type');
+        const $customerTypeSelect = $('#client_type');
         const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
 
         const toggleInteractiveState = ($container, shouldEnable) => {

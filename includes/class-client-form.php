@@ -35,7 +35,7 @@ class MealsDB_Client_Form {
         'delivery_initials',
         'first_name',
         'last_name',
-        'customer_type',
+        'client_type',
         'open_date',
         'assigned_social_worker',
         'social_worker_email',
@@ -146,7 +146,7 @@ class MealsDB_Client_Form {
         'delivery_initials'              => 'Initials for delivery',
         'first_name'                     => 'First Name',
         'last_name'                      => 'Last Name',
-        'customer_type'                  => 'Customer Type',
+        'client_type'                  => 'Client Type',
         'open_date'                      => 'Open Date',
         'assigned_social_worker'         => 'Social Worker Name',
         'social_worker_email'            => 'Social Worker Email Address',
@@ -317,10 +317,10 @@ class MealsDB_Client_Form {
         }
 
         // Required fields based on client type configuration.
-        $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
+        $client_type = strtoupper(trim($sanitized['client_type'] ?? ''));
 
         if ($client_type === 'STAFF') {
-            $record_format_error('customer_type', __('Staff clients are managed via the Staff Directory.', 'meals-db'));
+            $record_format_error('client_type', __('Staff clients are managed via the Staff Directory.', 'meals-db'));
         }
 
         $required_fields = self::get_required_fields_for_type($client_type);
@@ -461,7 +461,7 @@ class MealsDB_Client_Form {
     private static function get_required_fields_for_type(string $client_type): array {
         $client_type = strtoupper(trim($client_type));
 
-        $base_required = ['customer_type'];
+        $base_required = ['client_type'];
 
         $type_specific = [
             'PRIVATE' => [

@@ -86,7 +86,10 @@ class MealsDB_Quick_Order_Ajax {
                     $name = sprintf(__('Client #%d', 'meals-db'), (int) $user->ID);
                 }
 
-                $customer_type = (string) get_user_meta($user->ID, 'customer_type', true);
+                $client_type = (string) get_user_meta($user->ID, 'client_type', true);
+                if ($client_type === '') {
+                    $client_type = (string) get_user_meta($user->ID, 'customer_type', true);
+                }
                 $initials      = (string) get_user_meta($user->ID, 'initials_delivery', true);
 
                 $clients[] = [
@@ -95,7 +98,7 @@ class MealsDB_Quick_Order_Ajax {
                     'first_name'    => $first_name,
                     'last_name'     => $last_name,
                     'email'         => (string) $user->user_email,
-                    'customer_type' => $customer_type,
+                    'client_type' => $client_type,
                     'initials'      => $initials,
                 ];
             }

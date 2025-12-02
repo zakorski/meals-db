@@ -176,7 +176,7 @@
                             first_name: client.first_name || '',
                             last_name: client.last_name || '',
                             email: client.email || '',
-                            customer_type: client.customer_type || '',
+                            client_type: client.client_type || '',
                         })) };
                     },
                     cache: true,
@@ -194,7 +194,7 @@
             });
 
             this.$clientSelect.on('select2:clear', () => {
-                this.handleClientSelectionChange({ id: null, customer_type: '' });
+                this.handleClientSelectionChange({ id: null, client_type: '' });
             });
 
             this.state.clientSelectEnhanced = true;
@@ -300,7 +300,7 @@
                 metaItems.push({ className: 'mealsdb-qo-client-option__email', value: data.email });
             }
 
-            const typeLabel = this.normaliseClientType(data.customer_type || data.client_type);
+            const typeLabel = this.normaliseClientType(data.client_type || data.client_type);
             if (typeLabel) {
                 metaItems.push({ className: 'mealsdb-qo-client-option__type', value: typeLabel });
             }
@@ -325,7 +325,7 @@
             }
 
             const name = data.name || data.text || '';
-            const typeLabel = this.normaliseClientType(data.customer_type || data.client_type);
+            const typeLabel = this.normaliseClientType(data.client_type || data.client_type);
 
             if (!typeLabel) {
                 return name;
@@ -412,7 +412,7 @@
                         first_name: client.first_name || '',
                         last_name: client.last_name || '',
                         email: client.email || '',
-                        customer_type: client.customer_type || client.client_type || client.type || '',
+                        client_type: client.client_type || client.client_type || client.type || '',
                     };
                 })
                 .filter(Boolean);
@@ -617,7 +617,7 @@
                             id: clientId,
                             name: safeName,
                             text: safeName,
-                            customer_type: type,
+                            client_type: type,
                         },
                     },
                 });
@@ -1746,7 +1746,7 @@
             if (clientData && typeof clientData === 'object') {
                 const parsedId = parseInt(clientData.id, 10);
                 clientId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
-                clientType = clientData.customer_type || clientData.client_type || '';
+                clientType = clientData.client_type || clientData.client_type || '';
 
                 if (Array.isArray(clientData.allergens)) {
                     clientAllergens = clientData.allergens;
@@ -1761,8 +1761,8 @@
                 const $selected = this.$clientSelect.find('option:selected');
                 if ($selected.length) {
                     const selectedData = $selected.data('client');
-                    if (selectedData && selectedData.customer_type) {
-                        clientType = selectedData.customer_type;
+                    if (selectedData && selectedData.client_type) {
+                        clientType = selectedData.client_type;
                     } else if (selectedData && selectedData.client_type) {
                         clientType = selectedData.client_type;
                     } else if ($selected.data('clientType')) {

@@ -81,7 +81,7 @@ $edit_base = admin_url('admin.php?page=meals-db&tab=clients&action=edit');
                     <tr class="<?php echo esc_attr($row_class_attr); ?>" data-client-id="<?php echo esc_attr($client_id); ?>">
                         <td><?php echo esc_html($client['first_name'] ?? ''); ?></td>
                         <td><?php echo esc_html($client['last_name'] ?? ''); ?></td>
-                        <td><?php echo esc_html($client['customer_type'] ?? ''); ?></td>
+                        <td><?php echo esc_html($client['client_type'] ?? ''); ?></td>
                         <td><?php echo esc_html($client['phone_primary'] ?? ''); ?></td>
                         <td>
                             <?php if (!empty($client['client_email'])) : ?>
