@@ -147,14 +147,60 @@ class MealsDB_Installer {
             return;
         }
 
-        if ($columnExists) {
+        if (!$columnExists) {
+            $alterSql = "ALTER TABLE `{$tableName}` ADD COLUMN `{$columnName}` TINYINT(1) NOT NULL DEFAULT 1";
+
+            if (!$conn->query($alterSql)) {
+                error_log('[MealsDB Installer] Failed adding meals_clients.active column: ' . $conn->error);
+            }
+        }
+
+        $clientTypeColumn    = 'client_type';
+        $escapedClientColumn = method_exists($conn, 'real_escape_string')
+            ? $conn->real_escape_string($clientTypeColumn)
+            : $clientTypeColumn;
+        $escapedClientColumn = str_replace('`', '``', $escapedClientColumn);
+
+        $clientTypeSql    = "SHOW COLUMNS FROM `{$tableName}` LIKE '{$escapedClientColumn}'";
+        $clientTypeResult = $conn->query($clientTypeSql);
+        $clientTypeExists = false;
+        $clientTypeIncludesStaff = false;
+
+        if (MealsDB_DB::is_mysqli_result($clientTypeResult)) {
+            $clientTypeExists = $clientTypeResult->num_rows > 0;
+            if ($clientTypeExists) {
+                $row = $clientTypeResult->fetch_assoc();
+                if (isset($row['Type']) && stripos((string) $row['Type'], "'staff'") !== false) {
+                    $clientTypeIncludesStaff = true;
+                }
+            }
+            $clientTypeResult->free();
+        } elseif ($clientTypeResult && isset($clientTypeResult->num_rows)) {
+            $clientTypeExists = $clientTypeResult->num_rows > 0;
+            if ($clientTypeExists && method_exists($clientTypeResult, 'fetch_assoc')) {
+                $row = $clientTypeResult->fetch_assoc();
+                if (isset($row['Type']) && stripos((string) $row['Type'], "'staff'") !== false) {
+                    $clientTypeIncludesStaff = true;
+                }
+            }
+            if (method_exists($clientTypeResult, 'free')) {
+                $clientTypeResult->free();
+            }
+        } elseif ($clientTypeResult === false) {
+            error_log('[MealsDB Installer] Failed inspecting meals_clients.client_type column: ' . $conn->error);
             return;
         }
 
-        $alterSql = "ALTER TABLE `{$tableName}` ADD COLUMN `{$columnName}` TINYINT(1) NOT NULL DEFAULT 1";
+        if ($clientTypeExists && $clientTypeIncludesStaff) {
+            $migrationSql = "UPDATE `{$tableName}` SET `{$clientTypeColumn}` = 'Private' WHERE `{$clientTypeColumn}` = 'Staff'";
+            if (!$conn->query($migrationSql)) {
+                error_log('[MealsDB Installer] Failed migrating Staff client types: ' . $conn->error);
+            }
 
-        if (!$conn->query($alterSql)) {
-            error_log('[MealsDB Installer] Failed adding meals_clients.active column: ' . $conn->error);
+            $modifySql = "ALTER TABLE `{$tableName}` MODIFY COLUMN `{$clientTypeColumn}` ENUM('Private','SDNB','Veteran') NOT NULL";
+            if (!$conn->query($modifySql)) {
+                error_log('[MealsDB Installer] Failed updating meals_clients.client_type enum: ' . $conn->error);
+            }
         }
     }
 
@@ -177,7 +223,7 @@ class MealsDB_Installer {
         $sql = "CREATE TABLE {$table_name} (
             client_id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
             wp_user_id BIGINT(20) UNSIGNED NOT NULL,
-            client_type ENUM('Private','SDNB','Veteran','Staff') NOT NULL,
+            client_type ENUM('Private','SDNB','Veteran') NOT NULL,
             first_name VARCHAR(100) NOT NULL,
             last_name VARCHAR(100) NOT NULL,
             client_email VARCHAR(255) NULL,

@@ -57,7 +57,7 @@ class StubStmt {
     public function execute(): bool {
         $sql = $this->sql;
 
-        if (stripos($sql, 'SELECT id FROM meals_clients') === 0) {
+        if (stripos($sql, 'SELECT id FROM') === 0 && stripos($sql, 'meals_clients') !== false) {
             if (preg_match('/WHERE\s+`?([a-z_]+)`?\s*=\s*\?/i', $sql, $matches)) {
                 $column = $matches[1];
                 $value = $this->params[0] ?? null;
@@ -67,26 +67,34 @@ class StubStmt {
             return true;
         }
 
-        if (stripos($sql, 'INSERT INTO meals_clients') === 0) {
+        if (stripos($sql, 'INSERT INTO') === 0 && stripos($sql, 'meals_clients') !== false) {
+            $columns = [];
+
             if (preg_match('/\(([^\)]+)\)\s*VALUES/i', $sql, $matches)) {
                 $columns = array_map('trim', explode(',', $matches[1]));
                 $columns = array_map(static function ($col) {
                     return trim($col, "` ");
                 }, $columns);
-                $missing = array_diff($this->conn->requiredInsertColumns(), $columns);
-                if (!empty($missing)) {
-                    $missingColumn = reset($missing);
-                    $this->error = sprintf("Field '%s' cannot be null", $missingColumn);
-                    $this->conn->error = $this->error;
-                    return false;
-                }
-                $this->conn->lastInsert = array_combine($columns, $this->params);
             }
+
+            if (empty($columns) && preg_match_all('/`([^`]+)`/', $sql, $columnMatches)) {
+                $columns = array_values(array_slice($columnMatches[1], 1));
+            }
+
+            $missing = array_diff($this->conn->requiredInsertColumns(), $columns);
+            if (!empty($missing)) {
+                $missingColumn = reset($missing);
+                $this->error = sprintf("Field '%s' cannot be null", $missingColumn);
+                $this->conn->error = $this->error;
+                return false;
+            }
+
+            $this->conn->lastInsert = array_combine($columns, $this->params);
 
             return true;
         }
 
-        if (stripos($sql, 'UPDATE meals_clients SET') === 0) {
+        if (stripos($sql, 'UPDATE') === 0 && stripos($sql, 'meals_clients') !== false) {
             if (preg_match('/SET\s+(.+)\s+WHERE/i', $sql, $matches)) {
                 $assignments = explode(',', $matches[1]);
                 $columns = [];
@@ -490,7 +498,7 @@ run_test('validation accepts enumerated selections', function () {
     set_db_connection(null);
 });
 
-run_test('staff client allows minimal required fields without wordpress id', function () {
+run_test('staff client submissions are rejected in favor of staff directory', function () {
     reset_index_flag();
     set_db_connection(new StubMysqli());
 
@@ -498,29 +506,16 @@ run_test('staff client allows minimal required fields without wordpress id', fun
         'customer_type' => 'Staff',
         'first_name' => 'Alex',
         'last_name' => 'Smith',
-        'client_email' => 'alex@example.com',
+        'delivery_initials' => 'ASS',
     ];
 
     $result = MealsDB_Client_Form::validate($payload);
-    if (!$result['valid']) {
-        throw new Exception('Expected Staff clients to validate with minimal fields.');
+    if ($result['valid']) {
+        throw new Exception('Staff clients should no longer be accepted through the client form.');
     }
 
-    $sanitized = $result['sanitized'];
-    if (!empty($sanitized['wordpress_user_id'] ?? '')) {
-        throw new Exception('WordPress user ID should remain optional for Staff clients.');
-    }
-
-    if (($sanitized['client_email'] ?? null) !== 'alex@example.com') {
-        throw new Exception('Client email should be preserved for Staff clients.');
-    }
-
-    if (!array_key_exists('delivery_initials', $sanitized)) {
-        throw new Exception('Staff clients should include delivery_initials key in sanitized data.');
-    }
-
-    if ($sanitized['delivery_initials'] !== null) {
-        throw new Exception('Staff clients should have delivery_initials forced to null.');
+    if (!in_array('Staff clients are managed via the Staff Directory.', $result['errors'], true)) {
+        throw new Exception('Expected staff submissions to report Staff Directory enforcement.');
     }
 
     set_db_connection(null);
@@ -591,64 +586,6 @@ run_test('non-staff delivery initials must pass server-side validation', functio
     $sanitized = $result['sanitized'];
     if (($sanitized['delivery_initials'] ?? null) !== 'ABC') {
         throw new Exception('Sanitized delivery initials should preserve validated code.');
-    }
-
-    set_db_connection(null);
-});
-
-run_test('staff client accepts optional WordPress user id', function () {
-    reset_index_flag();
-    set_db_connection(new StubMysqli());
-
-    $payload = [
-        'customer_type' => 'Staff',
-        'first_name' => 'Jamie',
-        'last_name' => 'Lee',
-        'client_email' => 'jamie@example.com',
-        'wordpress_user_id' => '0042',
-    ];
-
-    $result = MealsDB_Client_Form::validate($payload);
-    if (!$result['valid']) {
-        throw new Exception('Expected Staff clients to allow providing an optional WordPress user ID.');
-    }
-
-    $sanitized = $result['sanitized'];
-    if (($sanitized['wordpress_user_id'] ?? null) !== '42') {
-        throw new Exception('WordPress user ID should be sanitized to digits when provided.');
-    }
-
-    set_db_connection(null);
-});
-
-run_test('staff client requires email but not WordPress user id', function () {
-    reset_index_flag();
-    set_db_connection(new StubMysqli());
-
-    $payload = [
-        'customer_type' => 'Staff',
-        'first_name' => 'Taylor',
-        'last_name' => 'Jones',
-        'client_email' => '',
-        'wordpress_user_id' => '',
-    ];
-
-    $result = MealsDB_Client_Form::validate($payload);
-    if ($result['valid']) {
-        throw new Exception('Expected Staff validation to fail when email is missing.');
-    }
-
-    $missing = $result['error_details']['missing_required'] ?? [];
-    if (!isset($missing['client_email']['message'])) {
-        throw new Exception('Expected missing email error for Staff client.');
-    }
-
-    if (isset($missing['wordpress_user_id'])) {
-        throw new Exception('WordPress user ID should not be required for Staff clients.');
-    }
-
-    if (isset($missing['phone_primary'])) {
-        throw new Exception('Staff clients should not require primary phone numbers.');
     }
 
     set_db_connection(null);
@@ -926,8 +863,16 @@ run_test('save omits empty wordpress user id values', function () {
 
     $data = [
         'first_name' => 'Sam',
-        'last_name' => 'Staff',
-        'customer_type' => 'Staff',
+        'last_name' => 'Client',
+        'customer_type' => 'Private',
+        'phone_primary' => '(506)-555-1234',
+        'address_street_name' => 'Main',
+        'address_city' => 'Moncton',
+        'address_province' => 'NB',
+        'address_postal' => 'E1E1E1',
+        'delivery_day' => 'MONDAY AM',
+        'payment_method' => 'Cheque',
+        'delivery_initials' => 'SCL',
         'client_email' => 'sam@example.com',
         'wordpress_user_id' => '',
     ];
@@ -942,26 +887,33 @@ run_test('save omits empty wordpress user id values', function () {
     }
 });
 
-run_test('staff client save populates defaults for required database columns', function () {
+run_test('sdnb client save populates defaults for required database columns', function () {
     reset_index_flag();
     $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
     $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
     set_db_connection($conn);
 
     $payload = [
-        'first_name'    => 'Jordan',
-        'last_name'     => 'Staff',
-        'customer_type' => 'Staff',
-        'client_email'  => 'jordan@example.com',
+        'first_name'                => 'Jordan',
+        'last_name'                 => 'Client',
+        'customer_type'             => 'SDNB',
+        'phone_primary'             => '(506)-555-0000',
+        'vendor_number'             => 'VN-001',
+        'service_center_charged'    => 'Center 1',
+        'service_id'                => 'SID-1',
+        'requisition_period'        => 'WEEK',
+        'rate'                      => '10',
+        'payment_method'            => 'Cheque',
+        'delivery_initials'         => 'JDC',
     ];
 
     $validation = MealsDB_Client_Form::validate($payload);
     if (!$validation['valid']) {
-        throw new Exception('Staff payload should validate successfully.');
+        throw new Exception('SDNB payload should validate successfully.');
     }
 
     if (!MealsDB_Client_Form::save($payload)) {
-        throw new Exception('Staff save should succeed with defaults for required columns.');
+        throw new Exception('SDNB save should succeed with defaults for required columns.');
     }
 
     foreach ($requiredColumns as $column) {
@@ -970,16 +922,12 @@ run_test('staff client save populates defaults for required database columns', f
         }
     }
 
-    if ($conn->lastInsert['client_email'] !== 'jordan@example.com') {
-        throw new Exception('Client email should be preserved when saving Staff clients.');
-    }
-
-    if ($conn->lastInsert['phone_primary'] !== '') {
-        throw new Exception('Phone primary should default to an empty string for Staff clients.');
+    if ($conn->lastInsert['client_email'] !== '') {
+        throw new Exception('Client email should default to an empty string when not provided.');
     }
 
     if ($conn->lastInsert['address_postal'] !== '') {
-        throw new Exception('Address postal should default to an empty string for Staff clients.');
+        throw new Exception('Address postal should default to an empty string when not provided.');
     }
 
     set_db_connection(null);

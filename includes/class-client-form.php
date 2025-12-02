@@ -318,10 +318,15 @@ class MealsDB_Client_Form {
 
         // Required fields based on client type configuration.
         $client_type = strtoupper(trim($sanitized['customer_type'] ?? ''));
+
+        if ($client_type === 'STAFF') {
+            $record_format_error('customer_type', __('Staff clients are managed via the Staff Directory.', 'meals-db'));
+        }
+
         $required_fields = self::get_required_fields_for_type($client_type);
 
         $initials_value = strtoupper(trim((string) ($sanitized['delivery_initials'] ?? '')));
-        $requires_delivery_initials = $client_type !== 'STAFF';
+        $requires_delivery_initials = true;
 
         if ($initials_value === '') {
             if ($requires_delivery_initials) {
@@ -337,10 +342,6 @@ class MealsDB_Client_Form {
             } else {
                 $sanitized['delivery_initials'] = $initials_value;
             }
-        }
-
-        if ($client_type === 'STAFF' && ($sanitized['client_email'] ?? '') === '') {
-            $record_required_error('client_email');
         }
 
         foreach ($required_fields as $field) {
