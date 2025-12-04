@@ -5,12 +5,30 @@
 
 class MealsDB_Quick_Order_UI {
     /**
+     * Enqueue Quick Order scripts and styles.
+     */
+    public static function enqueue_scripts(): void {
+        if (!wp_style_is('select2', 'registered')) {
+            wp_register_style('select2', includes_url('js/select2/css/select2.min.css'));
+        }
+
+        if (!wp_script_is('select2', 'registered')) {
+            wp_register_script('select2', includes_url('js/select2/select2.full.min.js'), ['jquery'], null, true);
+        }
+
+        wp_enqueue_style('select2');
+        wp_enqueue_script('select2');
+        wp_enqueue_script('mealsdb-quick-order');
+    }
+    /**
      * Render the Quick Order admin page.
      */
     public static function render_quick_order_page(): void {
         if (!MealsDB_Permissions::can_access_plugin()) {
             wp_die(esc_html__('You do not have permission to access this page.', 'meals-db'));
         }
+
+        self::enqueue_scripts();
 
         $clone_order_id = self::get_requested_clone_order_id();
         $products_array  = [];
@@ -73,7 +91,7 @@ class MealsDB_Quick_Order_UI {
             ?>
 
             <div class="mealsdb-quick-order__control">
-                <label for="mealsdb-qo-client"><?php esc_html_e('Client', 'meals-db'); ?></label>
+                <label for="mealsdb_qo_client"><?php esc_html_e('Client', 'meals-db'); ?></label>
                 <select id="mealsdb_qo_client" style="width: 100%;"></select>
             </div>
 

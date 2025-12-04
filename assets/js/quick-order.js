@@ -1,10 +1,6 @@
 (function ($) {
     'use strict';
 
-    if (typeof $.fn.select2 !== 'function' && typeof $.fn.selectWoo === 'function') {
-        $.fn.select2 = $.fn.selectWoo;
-    }
-
     const preload =
         typeof window.mealsdb_qo_preload === 'object' && window.mealsdb_qo_preload !== null
             ? window.mealsdb_qo_preload
@@ -64,7 +60,7 @@
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
             this.$search = $('#mealsdb-qo-search');
-            this.$clientSelect = $('#mealsdb-qo-client');
+            this.$clientSelect = $('#mealsdb_qo_client');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#qo-create-order');
             this.$orderSuccess = $('#qo-order-success');
@@ -142,51 +138,36 @@
                 return;
             }
 
-            const placeholder =
-                this.$clientSelect.attr('placeholder') ||
-                this.$clientSelect.data('placeholder') ||
-                '';
+            const ajaxConfig = window.mealsdb || {};
+            const ajaxUrl = ajaxConfig.ajaxurl || ajaxConfig.ajaxUrl || '';
+
+            if (!ajaxUrl) {
+                return;
+            }
 
             this.$clientSelect.select2({
                 width: '100%',
-                placeholder,
-                minimumInputLength: 0,
+                placeholder: 'Select client...',
                 allowClear: true,
                 ajax: {
-                    url: this.getAjaxUrl(),
+                    url: ajaxUrl,
                     dataType: 'json',
                     delay: 250,
-                    data: (params) => ({
-                        action: 'mealsdb_qo_find_clients',
-                        term: params && params.term ? params.term.trim() : '',
-                        search: params && params.term ? params.term.trim() : '',
-                        nonce: this.getSecurityNonce('findClients'),
-                    }),
-                    processResults: (response) => {
-                        if (!this.isSuccessfulResponse(response)) {
-                            return { results: [] };
-                        }
-
-                        const results = this.normalizeClientResults(response);
-
-                        return { results: results.map((client) => ({
-                            id: client.id,
-                            text: client.name,
-                            name: client.name,
-                            first_name: client.first_name || '',
-                            last_name: client.last_name || '',
-                            email: client.email || '',
-                            client_type: client.client_type || '',
-                        })) };
+                    type: 'POST',
+                    data(params) {
+                        return {
+                            action: 'mealsdb_qo_find_clients',
+                            search: params.term || '',
+                            nonce: ajaxConfig.nonce,
+                        };
                     },
-                    cache: true,
+                    processResults(data) {
+                        return {
+                            results: data,
+                        };
+                    },
                 },
-                templateResult: (data) => this.renderClientTemplate(data),
-                templateSelection: (data) => this.renderClientSelection(data),
-                escapeMarkup: (markup) => markup,
             });
-
-            this.prefetchInitialClients();
 
             this.$clientSelect.on('select2:select', (event) => {
                 const clientData = event && event.params ? event.params.data : null;
