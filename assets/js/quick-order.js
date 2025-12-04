@@ -56,6 +56,10 @@
             this.$grid = $('#mealsdb-qo-grid');
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
+            this.$summaryEmpty = $('#mealsdb-quick-order-summary-empty');
+            this.$summaryContent = $('#mealsdb-quick-order-summary-content');
+            this.$summaryClient = $('#mealsdb-quick-order-summary-client');
+            this.$summaryDate = $('#mealsdb-quick-order-summary-date');
             this.$search = $('#mealsdb_qo_search');
             this.$clientSearch = $('#mealsdb_qo_client_search');
             this.$clientDropdown = $('#mealsdb_qo_client_dropdown');
@@ -63,10 +67,10 @@
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#qo-create-order');
             this.$orderSuccess = $('#qo-order-success');
-            this.$qoItemsCount = $('#qo-items-count');
-            this.$qoSubtotal = $('#qo-subtotal');
-            this.$qoTax = $('#qo-tax');
-            this.$qoTotal = $('#qo-total');
+            this.$qoItemsCount = $('#mealsdb-quick-order-summary-items');
+            this.$qoSubtotal = $();
+            this.$qoTax = $();
+            this.$qoTotal = $('#mealsdb-quick-order-summary-total');
 
             this.$notices = $('<div class="mealsdb-quick-order__notices" />');
             this.$summary.prepend(this.$notices);
@@ -189,6 +193,15 @@
                 this.$orderSuccess.on('click', '.qo-order-return', (event) => {
                     event.preventDefault();
                     this.handleReturnToQuickOrder();
+                });
+            }
+
+            if (this.$orderDate && this.$orderDate.length) {
+                this.$orderDate.on('change', () => {
+                    const value = this.$orderDate.val();
+                    if (this.$summaryDate && this.$summaryDate.length) {
+                        this.$summaryDate.text(value ? value : this.translate('Not set'));
+                    }
                 });
             }
         },
@@ -1141,8 +1154,21 @@
             const items = Object.keys(this.state.cart).map((productId) => this.state.cart[productId]);
 
             if (!items.length) {
-                this.$summaryContent.html('<p>No products have been added to this order yet.</p>');
+                if (this.$summaryContent && this.$summaryContent.length) {
+                    this.$summaryContent.empty().attr('hidden', 'hidden').hide();
+                }
+                if (this.$summaryEmpty && this.$summaryEmpty.length) {
+                    this.$summaryEmpty.removeAttr('hidden').show();
+                }
+                this.updateSummaryPanel();
                 return;
+            }
+
+            if (this.$summaryEmpty && this.$summaryEmpty.length) {
+                this.$summaryEmpty.attr('hidden', 'hidden').hide();
+            }
+            if (this.$summaryContent && this.$summaryContent.length) {
+                this.$summaryContent.removeAttr('hidden').show();
             }
 
             let totalQuantity = 0;
@@ -1454,6 +1480,24 @@
             this.state.currentClientId = clientId;
             this.state.currentClientType = this.normaliseClientType(clientType);
             this.state.currentClientAllergens = this.normaliseAllergenList(clientAllergens);
+
+            if (this.$summaryClient && this.$summaryClient.length) {
+                let label = 'Not selected';
+
+                if (clientId) {
+                    let name = '';
+                    if (this.$clientSearch && this.$clientSearch.length) {
+                        name = this.$clientSearch.val();
+                    }
+                    if (name && name.trim().length) {
+                        label = name;
+                    } else {
+                        label = this.translate('Client #%s').replace('%s', clientId);
+                    }
+                }
+
+                this.$summaryClient.text(label);
+            }
 
             if (window.mealsdbQuickOrder) {
                 window.mealsdbQuickOrder.clientType = this.state.currentClientType;
@@ -1869,12 +1913,17 @@
 
         $(document).on('mealsdb_update_summary', function() {
             const clientName = $('#mealsdb_qo_client_search').val();
-            const clientId = $('#client_id').val();
+            const clientId   = $('#client_id').val();
+            const $clientLabel = $('#mealsdb-quick-order-summary-client');
+
+            if (!$clientLabel.length) {
+                return;
+            }
 
             if (clientId && clientName) {
-                $('#summary-client').text(clientName);
+                $clientLabel.text(clientName);
             } else {
-                $('#summary-client').text('Not selected');
+                $clientLabel.text('Not selected');
             }
         });
 
