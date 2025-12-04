@@ -69,7 +69,7 @@ if ($conn) {
                         <td><?= esc_html($data['phone_primary'] ?? '') ?></td>
                         <td><?= esc_html(date('Y-m-d H:i', strtotime($draft['created_at']))) ?></td>
                         <td>
-                            <form method="post" action="<?php echo admin_url('admin.php?page=meals-db&tab=add'); ?>">
+                            <form method="post" action="<?php echo admin_url('admin.php?page=mealsdb&tab=add'); ?>">
                                 <?php foreach ($data as $key => $value): ?>
                                     <?php
                                     $serialized_value = is_scalar($value)
