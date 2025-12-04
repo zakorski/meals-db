@@ -1461,6 +1461,8 @@
 
             this.updateProductRestrictionStates();
             this.updateSummaryPanel();
+
+            $(document).trigger('mealsdb_update_summary');
         },
 
         normaliseClientType(value) {
@@ -1865,6 +1867,17 @@
         const dropdown = $('#mealsdb_qo_client_dropdown');
         const hidden = $('#client_id');
 
+        $(document).on('mealsdb_update_summary', function() {
+            const clientName = $('#mealsdb_qo_client_search').val();
+            const clientId = $('#client_id').val();
+
+            if (clientId && clientName) {
+                $('#summary-client').text(clientName);
+            } else {
+                $('#summary-client').text('Not selected');
+            }
+        });
+
         // Show dropdown on focus/click
         search.on('focus click', function() {
             dropdown.show();
@@ -1893,10 +1906,12 @@
             const name = $(this).data('name');
 
             search.val(name);
-            $('#client_id').val(id);
+            hidden.val(id);
             hidden.data('clientType', '');
 
             dropdown.hide();
+
+            $(document).trigger('mealsdb_update_summary');
             hidden.trigger('change');
         });
     });
