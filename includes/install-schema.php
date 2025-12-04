@@ -106,11 +106,111 @@ class MealsDB_Installer {
             }
         }
 
+        self::create_table_transactions($conn);
+        self::create_table_transaction_items($conn);
+
         self::upgrade_meals_clients_table($conn);
 
         self::create_meals_clients_table();
 
         self::create_meals_products_table();
+    }
+
+    /**
+     * Create the mealsdb_transactions table in the external Meals DB.
+     */
+    private static function create_table_transactions($conn): void {
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            error_log('[MealsDB Installer] Unable to establish database connection while creating mealsdb_transactions.');
+            return;
+        }
+
+        $charset_sql = 'DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+
+        $charset   = $conn->character_set_name();
+        $collation = method_exists($conn, 'get_charset') ? $conn->get_charset() : null;
+
+        if (!empty($charset)) {
+            $collation_name = 'utf8mb4_unicode_ci';
+
+            if (is_object($collation) && property_exists($collation, 'collation') && !empty($collation->collation)) {
+                $collation_name = $collation->collation;
+            }
+
+            $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
+        }
+
+        $transactions_table = MealsDB_DB::get_table_name('mealsdb_transactions');
+        $clients_table      = MealsDB_DB::get_table_name('mealsdb_clients');
+
+        $transactions_table = str_replace('`', '``', $transactions_table);
+        $clients_table      = str_replace('`', '``', $clients_table);
+
+        $sql = "CREATE TABLE IF NOT EXISTS `{$transactions_table}` (
+            transaction_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            client_id INT UNSIGNED NOT NULL,
+            order_date DATE NOT NULL,
+            delivery_date DATE NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            KEY idx_client_id (client_id),
+            CONSTRAINT fk_mealsdb_transactions_client FOREIGN KEY (client_id) REFERENCES `{$clients_table}`(client_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB {$charset_sql};";
+
+        if (!$conn->query($sql)) {
+            error_log('[MealsDB Installer] Failed creating mealsdb_transactions table: ' . $conn->error);
+        }
+    }
+
+    /**
+     * Create the mealsdb_transaction_items table in the external Meals DB.
+     */
+    private static function create_table_transaction_items($conn): void {
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            error_log('[MealsDB Installer] Unable to establish database connection while creating mealsdb_transaction_items.');
+            return;
+        }
+
+        $charset_sql = 'DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+
+        $charset   = $conn->character_set_name();
+        $collation = method_exists($conn, 'get_charset') ? $conn->get_charset() : null;
+
+        if (!empty($charset)) {
+            $collation_name = 'utf8mb4_unicode_ci';
+
+            if (is_object($collation) && property_exists($collation, 'collation') && !empty($collation->collation)) {
+                $collation_name = $collation->collation;
+            }
+
+            $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
+        }
+
+        $transaction_items_table = MealsDB_DB::get_table_name('mealsdb_transaction_items');
+        $transactions_table      = MealsDB_DB::get_table_name('mealsdb_transactions');
+        $products_table          = MealsDB_DB::get_table_name('mealsdb_products');
+
+        $transaction_items_table = str_replace('`', '``', $transaction_items_table);
+        $transactions_table      = str_replace('`', '``', $transactions_table);
+        $products_table          = str_replace('`', '``', $products_table);
+
+        $sql = "CREATE TABLE IF NOT EXISTS `{$transaction_items_table}` (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            transaction_id INT UNSIGNED NOT NULL,
+            item_id INT UNSIGNED NOT NULL,
+            quantity INT UNSIGNED NOT NULL DEFAULT 1,
+            KEY idx_transaction_id (transaction_id),
+            KEY idx_item_id (item_id),
+            CONSTRAINT fk_mealsdb_transaction_items_transaction FOREIGN KEY (transaction_id)
+                REFERENCES `{$transactions_table}`(transaction_id) ON DELETE CASCADE,
+            CONSTRAINT fk_mealsdb_transaction_items_product FOREIGN KEY (item_id)
+                REFERENCES `{$products_table}`(product_id) ON DELETE CASCADE
+        ) ENGINE=InnoDB {$charset_sql};";
+
+        if (!$conn->query($sql)) {
+            error_log('[MealsDB Installer] Failed creating mealsdb_transaction_items table: ' . $conn->error);
+        }
     }
 
     /**
