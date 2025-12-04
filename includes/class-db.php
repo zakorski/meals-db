@@ -187,6 +187,25 @@ class MealsDB_DB {
     }
 
     /**
+     * Retrieve all clients ordered alphabetically by last name.
+     *
+     * @param mysqli $conn Active database connection.
+     * @return mysqli_result|false
+     */
+    public static function get_all_clients($conn) {
+        if (!self::is_mysqli($conn)) {
+            return false;
+        }
+
+        $clients_table = self::get_table_name('mealsdb_clients');
+        $clients_table = str_replace('`', '``', $clients_table);
+
+        $sql = "SELECT client_id, first_name, last_name, client_type FROM `{$clients_table}` ORDER BY last_name ASC";
+
+        return $conn->query($sql);
+    }
+
+    /**
      * Determine if a given table exists in the active database.
      */
     private static function table_exists(mysqli $connection, string $table_name): bool {
