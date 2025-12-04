@@ -21,10 +21,7 @@
                 activeCategorySlug: null,
                 categoryProducts: {},
                 renderedProducts: {},
-                searchResultsById: {},
                 cart: {},
-                searchTerm: '',
-                isSearching: false,
                 hasLoadedClone: false,
                 isCloning: false,
                 cloneOrderId: null,
@@ -59,7 +56,7 @@
             this.$grid = $('#mealsdb-qo-grid');
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
-            this.$search = $('#mealsdb-qo-search');
+            this.$search = $('#mealsdb_qo_search');
             this.$clientSelect = $('#mealsdb_qo_client');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#qo-create-order');
@@ -136,15 +133,6 @@
                 });
             }
 
-            const debouncedProductSearch = this.debounce((event) => {
-                const term = $(event.target).val().trim();
-                this.handleProductSearch(term);
-            }, 150);
-
-            if (this.$search && this.$search.length) {
-                this.$search.on('input', debouncedProductSearch);
-            }
-
             $(document)
                 .off('click', '.mealsdb-qo-tile')
                 .on('click', '.mealsdb-qo-tile', function () {
@@ -201,17 +189,6 @@
                     this.handleReturnToQuickOrder();
                 });
             }
-        },
-
-        debounce(callback, delay) {
-            let timeoutId;
-            return function (...args) {
-                const context = this;
-                window.clearTimeout(timeoutId);
-                timeoutId = window.setTimeout(() => {
-                    callback.apply(context, args);
-                }, delay);
-            };
         },
 
         initialiseCategories() {
@@ -641,11 +618,10 @@
                 return null;
             }
 
-            if (slug === this.state.activeCategorySlug && !this.state.isSearching) {
+            if (slug === this.state.activeCategorySlug) {
                 return null;
             }
 
-            this.state.searchTerm = '';
             if (this.$search && this.$search.length) {
                 this.$search.val('');
             }
@@ -690,7 +666,6 @@
 
             this.state.activeCategorySlug = slug;
             this.state.activeCategoryId = Number.isInteger(categoryId) ? categoryId : null;
-            this.state.isSearching = false;
             this.renderCategories();
 
             const preloadedProducts = this.getPreloadedProductsForCategory(slug, categoryId);
@@ -837,75 +812,7 @@
             }
         },
 
-        handleProductSearch(term) {
-            const keyword = term || '';
-            this.state.searchTerm = keyword;
-
-            if (keyword.length < 2) {
-                this.state.isSearching = false;
-                this.renderProducts(QO_PRODUCTS);
-                return;
-            }
-
-            this.state.isSearching = true;
-            this.renderProductsLoading();
-
-            if (this.pendingSearchRequest && typeof this.pendingSearchRequest.abort === 'function') {
-                this.pendingSearchRequest.abort();
-            }
-
-            const retryRequest = () => this.handleProductSearch(keyword);
-
-            this.pendingSearchRequest = $.ajax({
-                url: this.getAjaxUrl(),
-                method: 'GET',
-                dataType: 'json',
-                data: {
-                    action: 'mealsdb_qo_search_products',
-                    keyword: keyword,
-                    nonce: this.getSecurityNonce(),
-                },
-            }).done((response) => {
-                if (this.state.searchTerm !== keyword) {
-                    return;
-                }
-
-                const payload = this.getResponsePayload(response);
-
-                if (!this.isSuccessfulResponse(response) || !Array.isArray(payload.products)) {
-                    const message = this.getResponseMessage(response, 'No products found.');
-                    this.renderProductsError(message);
-                    if (response && response.success === false) {
-                        qoShowToast(response.message || 'An error occurred.', 'error');
-                    } else {
-                        qoShowToast(message, 'warning');
-                    }
-                    return;
-                }
-
-                if (!payload.products.length) {
-                    this.renderProductsError('No products found.');
-                    qoShowToast('No products found.', 'warning');
-                    return;
-                }
-
-                this.renderProducts(payload.products, { isSearchResults: true });
-            }).fail(() => {
-                if (this.state.searchTerm === keyword) {
-                    this.renderProductsError('Unable to search for products.');
-                    qoShowToast('Network error: could not complete request.', 'error');
-                    setLastRequest(retryRequest);
-                    jQuery('#mealsdb-qo-toast').one('click', () => {
-                        if (lastRequest) {
-                            lastRequest();
-                        }
-                    });
-                    qoShowToast('Connection error — click to retry.', 'warning');
-                }
-            });
-        },
-
-        renderProducts(products, options = {}) {
+        renderProducts(products) {
             if (!this.$products || !this.$products.length) {
                 return;
             }
@@ -914,7 +821,7 @@
             const list = Array.isArray(products) ? products : [];
 
             if (!list.length) {
-                const message = options.isSearchResults ? 'No products matched your search.' : 'No products found in this category.';
+                const message = 'No products found in this category.';
                 this.$products.html(`<p>${this.escapeHtml(message)}</p>`);
                 return;
             }
@@ -937,7 +844,6 @@
 
             this.$products.html(gridHtml);
             this.$grid = this.$products.find('#mealsdb-qo-grid');
-            this.state.searchResultsById = options.isSearchResults ? this.state.renderedProducts : {};
             this.syncCartToVisibleProducts();
             this.renderUnavailableTilesFromState();
             this.updateProductRestrictionStates();
@@ -985,7 +891,7 @@
                     )}">
                         ${imageHtml}
                         <div class="mealsdb-quick-order__product-content">
-                            <h3 class="mealsdb-quick-order__product-title">${safeName}</h3>
+                            <h3 class="mealsdb-quick-order__product-title qo-product-name">${safeName}</h3>
                             <div class="mealsdb-quick-order__product-price">${safePrice}</div>
                             ${metaHtml}
                             <div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls">
@@ -1202,19 +1108,8 @@
                 return this.state.cart[productId].product;
             }
 
-            if (this.state.searchResultsById && this.state.searchResultsById[productId]) {
-                return this.state.searchResultsById[productId];
-            }
-
             if (this.state.renderedProducts && this.state.renderedProducts[productId]) {
                 return this.state.renderedProducts[productId];
-            }
-
-            if (this.state.isSearching && this.$products) {
-                const $product = this.$products.find(`.mealsdb-quick-order__product[data-product-id="${productId}"]`);
-                if ($product.length) {
-                    return $product.data('product');
-                }
             }
 
             if (this.state.categoryProducts) {
@@ -1725,10 +1620,6 @@
                 return quickOrderNonces.createOrder;
             }
 
-            if (type === 'searchProducts' && quickOrderNonces.searchProducts) {
-                return quickOrderNonces.searchProducts;
-            }
-
             return '';
         },
 
@@ -1783,14 +1674,6 @@
         },
     };
 
-    function debounce(func, wait) {
-        let timeout;
-        return function () {
-            window.clearTimeout(timeout);
-            timeout = window.setTimeout(() => func.apply(this, arguments), wait);
-        };
-    }
-
     function qoShowToast(message, type = 'info') {
         let toast = jQuery('#mealsdb-qo-toast');
         if (!toast.length) {
@@ -1810,39 +1693,6 @@
         setTimeout(() => {
             toast.removeClass('show');
         }, 3000);
-    }
-
-    function searchProducts(term) {
-        const retryRequest = () => searchProducts(term);
-
-        jQuery
-            .post(mealsdb_qo.ajax_url, {
-                action: 'mealsdb_qo_search_products',
-                nonce: mealsdb_qo.nonce,
-                term: term,
-            })
-            .done((response) => {
-                if (response && response.success === false) {
-                    qoShowToast(response.message || 'An error occurred.', 'error');
-                    return;
-                }
-
-                if (response && response.html) {
-                    jQuery('#mealsdb-qo-grid').html(response.html);
-                } else {
-                    qoShowToast('No products found.', 'warning');
-                }
-            })
-            .fail(() => {
-                qoShowToast('Network error: could not complete request.', 'error');
-                setLastRequest(retryRequest);
-                jQuery('#mealsdb-qo-toast').one('click', () => {
-                    if (lastRequest) {
-                        lastRequest();
-                    }
-                });
-                qoShowToast('Connection error — click to retry.', 'warning');
-            });
     }
 
     jQuery(document).on('click', '#qo-start-new', function () {
@@ -1871,7 +1721,7 @@
             return;
         }
 
-        const $searchBar = jQuery('#mealsdb-qo-search');
+        const $searchBar = jQuery('#mealsdb_qo_search');
         if ($searchBar.length && $searchBar.is(':focus')) {
             return;
         }
@@ -1897,7 +1747,7 @@
             return;
         }
 
-        const $search = jQuery('#mealsdb-qo-search');
+        const $search = jQuery('#mealsdb_qo_search');
         if ($search.length && $search.is(':focus') && $search.val().length > 0) {
             $search.val('');
             $search.trigger('input');
@@ -1921,7 +1771,7 @@
             return;
         }
 
-        const $search = jQuery('#mealsdb-qo-search');
+        const $search = jQuery('#mealsdb_qo_search');
         if (event.key === '/' && $search.length && !$search.is(':focus')) {
             event.preventDefault();
             $search.focus().select();
@@ -2004,6 +1854,23 @@
                 $('.qo-product').hide();
                 $('.qo-product[data-cat~="' + cat + '"]').show();
             }
+        });
+    });
+
+    jQuery(function ($) {
+        const search = $('#mealsdb_qo_search');
+
+        search.on('keyup', function () {
+            const term = search.val().toLowerCase();
+
+            $('.qo-product').each(function () {
+                const text = $(this).text().toLowerCase();
+                if (text.includes(term)) {
+                    $(this).show();
+                } else {
+                    $(this).hide();
+                }
+            });
         });
     });
 

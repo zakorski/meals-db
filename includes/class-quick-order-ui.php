@@ -145,10 +145,10 @@ class MealsDB_Quick_Order_UI {
             </div>
 
             <div id="mealsdb-qo-search-container" style="margin-bottom: 15px;">
-                <input 
-                    type="text" 
-                    id="mealsdb-qo-search" 
-                    class="regular-text" 
+                <input
+                    type="text"
+                    id="mealsdb_qo_search"
+                    class="regular-text"
                     placeholder="Search products..."
                     autocomplete="off"
                     style="width: 100%; max-width: 400px;"
