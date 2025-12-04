@@ -126,8 +126,8 @@ class MealsDB_Quick_Order_UI {
                     </div>
 
                     <input type="hidden"
-                           id="mealsdb_qo_client"
-                           name="mealsdb_qo_client">
+                           id="client_id"
+                           name="client_id">
                 </div>
             </div>
 
