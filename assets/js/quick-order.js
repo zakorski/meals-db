@@ -33,7 +33,6 @@
                 currentClientAllergens: [],
                 taxRate: 0,
                 taxableClientTypes: [],
-                clientSelectEnhanced: false,
                 missingCloneItems: [],
             },
 
@@ -44,7 +43,6 @@
                 return;
             }
 
-            this.initialiseClientSelect();
             this.bindEvents();
             this.renderSummary();
 
@@ -129,65 +127,11 @@
             return fallback;
         },
 
-        initialiseClientSelect() {
-            if (!this.$clientSelect || !this.$clientSelect.length) {
-                return;
-            }
-
-            if (typeof this.$clientSelect.select2 !== 'function') {
-                return;
-            }
-
-            const ajaxConfig = window.mealsdb || {};
-            const ajaxUrl = ajaxConfig.ajaxurl || ajaxConfig.ajaxUrl || '';
-
-            if (!ajaxUrl) {
-                return;
-            }
-
-            this.$clientSelect.select2({
-                width: '100%',
-                placeholder: 'Select client...',
-                allowClear: true,
-                ajax: {
-                    url: ajaxUrl,
-                    dataType: 'json',
-                    delay: 250,
-                    type: 'POST',
-                    data(params) {
-                        return {
-                            action: 'mealsdb_qo_find_clients',
-                            search: params.term || '',
-                            nonce: ajaxConfig.nonce,
-                        };
-                    },
-                    processResults(data) {
-                        return {
-                            results: data,
-                        };
-                    },
-                },
-            });
-
-            this.$clientSelect.on('select2:select', (event) => {
-                const clientData = event && event.params ? event.params.data : null;
-                this.handleClientSelectionChange(clientData);
-            });
-
-            this.$clientSelect.on('select2:clear', () => {
-                this.handleClientSelectionChange({ id: null, client_type: '' });
-            });
-
-            this.state.clientSelectEnhanced = true;
-        },
-
         bindEvents() {
             if (this.$clientSelect && this.$clientSelect.length) {
-                if (!this.state.clientSelectEnhanced) {
-                    this.$clientSelect.on('change', () => {
-                        this.handleClientSelectionChange();
-                    });
-                }
+                this.$clientSelect.on('change', () => {
+                    this.handleClientSelectionChange();
+                });
             }
 
             const debouncedProductSearch = this.debounce((event) => {
@@ -266,137 +210,6 @@
                     callback.apply(context, args);
                 }, delay);
             };
-        },
-
-        renderClientTemplate(data) {
-            if (!data || data.loading) {
-                return data && data.text ? data.text : '';
-            }
-
-            const $container = $('<div class="mealsdb-qo-client-option" />');
-            $('<div class="mealsdb-qo-client-option__name" />').text(data.name || data.text || '').appendTo($container);
-
-            const metaItems = [];
-            if (data.email) {
-                metaItems.push({ className: 'mealsdb-qo-client-option__email', value: data.email });
-            }
-
-            const typeLabel = this.normaliseClientType(data.client_type || data.client_type);
-            if (typeLabel) {
-                metaItems.push({ className: 'mealsdb-qo-client-option__type', value: typeLabel });
-            }
-
-            if (metaItems.length) {
-                const $meta = $('<div class="mealsdb-qo-client-option__meta" />');
-                metaItems.forEach((item, index) => {
-                    if (index > 0) {
-                        $('<span class="mealsdb-qo-client-option__separator" />').text('·').appendTo($meta);
-                    }
-                    $('<span />', { class: item.className }).text(item.value).appendTo($meta);
-                });
-                $container.append($meta);
-            }
-
-            return $container;
-        },
-
-        renderClientSelection(data) {
-            if (!data) {
-                return '';
-            }
-
-            const name = data.name || data.text || '';
-            const typeLabel = this.normaliseClientType(data.client_type || data.client_type);
-
-            if (!typeLabel) {
-                return name;
-            }
-
-            const $container = $('<span class="mealsdb-qo-client-selection" />');
-            $('<span class="mealsdb-qo-client-selection__name" />').text(name).appendTo($container);
-            $('<span class="mealsdb-qo-client-selection__type" />').text(typeLabel).appendTo($container);
-            return $container;
-        },
-
-        prefetchInitialClients() {
-            if (!this.$clientSelect || !this.$clientSelect.length) {
-                return;
-            }
-
-            const request = {
-                url: this.getAjaxUrl(),
-                dataType: 'json',
-                method: 'GET',
-                data: {
-                    action: 'mealsdb_qo_find_clients',
-                    nonce: this.getSecurityNonce('findClients'),
-                    term: '',
-                    search: '',
-                },
-            };
-
-            $.ajax(request)
-                .done((response) => {
-                    const clients = this.normalizeClientResults(response);
-                    this.injectClientOptions(clients);
-                })
-                .fail(() => {
-                    // Failing silently keeps the UI usable; Select2 will still fetch on search.
-                });
-        },
-
-        injectClientOptions(clients) {
-            if (!Array.isArray(clients) || !clients.length || !this.$clientSelect || !this.$clientSelect.length) {
-                return;
-            }
-
-            clients.forEach((client) => {
-                if (!client || !client.id) {
-                    return;
-                }
-
-                const label = client.name || `Client #${client.id}`;
-                const existing = this.$clientSelect.find(`option[value="${client.id}"]`);
-                if (existing.length) {
-                    return;
-                }
-
-                const option = new Option(label, client.id, false, false);
-                this.$clientSelect.append(option);
-            });
-        },
-
-        normalizeClientResults(response) {
-            if (!this.isSuccessfulResponse(response)) {
-                return [];
-            }
-
-            const payload = this.getResponsePayload(response);
-            const clients = Array.isArray(payload.clients) ? payload.clients : [];
-
-            return clients
-                .map((client) => {
-                    if (!client || typeof client !== 'object') {
-                        return null;
-                    }
-
-                    const id = parseInt(client.id, 10);
-                    if (!Number.isInteger(id) || id <= 0) {
-                        return null;
-                    }
-
-                    const name = client.name || client.text || `Client #${id}`;
-
-                    return {
-                        id,
-                        name,
-                        first_name: client.first_name || '',
-                        last_name: client.last_name || '',
-                        email: client.email || '',
-                        client_type: client.client_type || client.client_type || client.type || '',
-                    };
-                })
-                .filter(Boolean);
         },
 
         initialiseCategories() {
@@ -584,27 +397,18 @@
             this.state.currentClientId = clientId;
             this.state.currentClientType = type;
 
-            if (this.state.clientSelectEnhanced && typeof this.$clientSelect.select2 === 'function') {
-                let $option = this.$clientSelect.find(`option[value="${clientId}"]`);
-                if (!$option.length) {
-                    $option = new Option(safeName, clientId, true, true);
-                    this.$clientSelect.append($option);
-                }
-                this.$clientSelect.val(clientId).trigger('change');
-                this.$clientSelect.trigger({
-                    type: 'select2:select',
-                    params: {
-                        data: {
-                            id: clientId,
-                            name: safeName,
-                            text: safeName,
-                            client_type: type,
-                        },
-                    },
+            let $option = this.$clientSelect.find(`option[value="${clientId}"]`);
+            if (!$option.length) {
+                $option = $('<option>', {
+                    value: clientId,
+                    text: safeName,
+                    'data-client-id': clientId,
+                    'data-client-type': type,
                 });
-            } else {
-                this.$clientSelect.val(clientId).trigger('change');
+                this.$clientSelect.append($option);
             }
+
+            this.$clientSelect.val(clientId).trigger('change');
 
             this.updateSummaryPanel();
         },
@@ -1905,10 +1709,6 @@
                 return quickOrderNonces.cloneOrder;
             }
 
-            if (type === 'findClients' && quickOrderNonces.findClients) {
-                return quickOrderNonces.findClients;
-            }
-
             if (globalNonce) {
                 return globalNonce;
             }
@@ -1917,7 +1717,7 @@
                 return quickOrderNonces.createOrder;
             }
 
-            if (quickOrderNonces.searchProducts) {
+            if (type === 'searchProducts' && quickOrderNonces.searchProducts) {
                 return quickOrderNonces.searchProducts;
             }
 
@@ -2087,10 +1887,6 @@
             return;
         }
 
-        if (jQuery('.select2-search__field').is(':focus')) {
-            return;
-        }
-
         const tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
         const isFormField = ['input', 'textarea', 'select', 'button', 'option'].includes(tag);
         const isEditable = event.target && event.target.isContentEditable;
@@ -2131,9 +1927,8 @@
         const tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
         const isFormField = ['input', 'textarea', 'select', 'button', 'option'].includes(tag);
         const isEditable = event.target && event.target.isContentEditable;
-        const isSelect2Field = $target.closest('.select2-container').length > 0;
 
-        if (isFormField || isEditable || isSelect2Field) {
+        if (isFormField || isEditable) {
             return;
         }
 
@@ -2258,3 +2053,22 @@
         QuickOrder.init();
     });
 })(jQuery);
+
+(function () {
+    const search = document.getElementById('mealsdb_qo_client_search');
+    const select = document.getElementById('mealsdb_qo_client');
+
+    if (!search || !select) {
+        return;
+    }
+
+    search.addEventListener('keyup', function () {
+        const filter = search.value.toLowerCase();
+        const options = select.querySelectorAll('option');
+
+        options.forEach((option) => {
+            const text = option.textContent.toLowerCase();
+            option.style.display = text.includes(filter) ? '' : 'none';
+        });
+    });
+})();

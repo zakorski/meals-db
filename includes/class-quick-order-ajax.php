@@ -8,90 +8,12 @@ class MealsDB_Quick_Order_Ajax {
      * Register AJAX actions related to the Quick Order UI.
      */
     public static function init(): void {
-        add_action('wp_ajax_mealsdb_qo_find_clients', [self::class, 'find_clients']);
         add_action('wp_ajax_mealsdb_qo_get_categories', [self::class, 'get_categories']);
         add_action('wp_ajax_mealsdb_qo_get_products_by_category', [self::class, 'get_products_by_category']);
         add_action('wp_ajax_mealsdb_qo_search_products', [self::class, 'search_products']);
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
         add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
-    }
-
-    /**
-     * AJAX endpoint for finding clients.
-     */
-    public static function find_clients(): void {
-        self::verify_request();
-
-        try {
-            $search = isset($_REQUEST['term']) ? (string) $_REQUEST['term'] : ($_REQUEST['search'] ?? '');
-            $search = sanitize_text_field(wp_unslash($search));
-            $search = trim($search);
-
-            $conn = MealsDB_DB::get_connection();
-            if (!MealsDB_DB::is_mysqli($conn)) {
-                wp_send_json([]);
-            }
-
-            $table_name = MealsDB_DB::get_table_name('meals_clients');
-            $sql        = sprintf(
-                'SELECT client_id, wp_user_id, first_name, last_name, client_type FROM `%s` WHERE active = 1 ORDER BY last_name ASC',
-                str_replace('`', '``', $table_name)
-            );
-
-            $result = $conn->query($sql);
-            if (!MealsDB_DB::is_mysqli_result($result)) {
-                wp_send_json([
-                    'success' => true,
-                    'clients' => [],
-                ]);
-            }
-
-            $clients           = [];
-            $normalized_search = strtolower($search);
-
-            while ($row = $result->fetch_assoc()) {
-                if (!is_array($row)) {
-                    continue;
-                }
-
-                $wp_user_id = isset($row['wp_user_id']) ? (int) $row['wp_user_id'] : 0;
-                $client_id  = isset($row['client_id']) ? (int) $row['client_id'] : 0;
-                $first_name = isset($row['first_name']) ? (string) $row['first_name'] : '';
-                $last_name  = isset($row['last_name']) ? (string) $row['last_name'] : '';
-                $client_type = isset($row['client_type']) ? (string) $row['client_type'] : '';
-
-                $name = trim($first_name . ' ' . $last_name);
-                if ($name === '') {
-                    $name = sprintf(__('Client #%d', 'meals-db'), $client_id ?: $wp_user_id);
-                }
-
-                if ($normalized_search !== '') {
-                    $haystack = strtolower($name . ' ' . $client_type);
-                    if (strpos($haystack, $normalized_search) === false) {
-                        continue;
-                    }
-                }
-
-                $clients[] = [
-                    'id'        => $wp_user_id,
-                    'client_id' => $client_id,
-                    'name'      => $name,
-                    'type'      => $client_type,
-                ];
-            }
-
-            wp_send_json([
-                'success' => true,
-                'clients' => $clients,
-            ]);
-        } catch (Exception $e) {
-            error_log('[MealsDB QuickOrder] find_clients error: ' . $e->getMessage());
-            wp_send_json([
-                'success' => false,
-                'message' => 'Server error: ' . $e->getMessage(),
-            ]);
-        }
     }
 
     private static function normalize_phone(string $value): string {
