@@ -506,7 +506,15 @@ class MealsDB_Quick_Order_Products {
 
         $category = null;
         $product_categories = self::filter_allowed_categories($product['categories'] ?? []);
+        $category_slugs = [];
         if (!empty($product_categories)) {
+            foreach ($product_categories as $category_entry) {
+                $slug = isset($category_entry['slug']) ? (string) $category_entry['slug'] : '';
+                if ($slug !== '') {
+                    $category_slugs[] = $slug;
+                }
+            }
+
             $primary = $product_categories[0];
             $category = [
                 'id'   => isset($primary['id']) ? (int) $primary['id'] : 0,
@@ -519,6 +527,7 @@ class MealsDB_Quick_Order_Products {
             'product_id' => (int) $product['id'],
             'name'       => (string) $product['name'],
             'category'   => $category,
+            'category_slugs' => $category_slugs,
             'price'      => isset($product['price']) ? (float) $product['price'] : 0.0,
             'image_url'  => isset($product['image']) ? (string) $product['image'] : '',
             'sku'        => isset($product['sku']) ? (string) $product['sku'] : '',

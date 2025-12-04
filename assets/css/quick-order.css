@@ -15,46 +15,25 @@
     margin-bottom: 1.5rem;
 }
 
-/* ================================
-   QUICK ORDER — CATEGORY TAB STYLES
-   ================================ */
-
-.mealsdb-qo-categories {
+.mealsdb-qo-tabs {
     display: flex;
-    gap: 10px;
-    overflow-x: auto;
-    padding-bottom: 10px;
-    margin-bottom: 15px;
-    scrollbar-width: thin;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
 }
 
-/* Category Tab Buttons */
-.mealsdb-qo-cat-tab {
-    background: #f7f7f7;
+.mealsdb-qo-tabs .qo-tab {
+    background: #f0f0f0;
     border: 1px solid #ccc;
-    padding: 8px 15px;
-    border-radius: 6px;
+    padding: 6px 12px;
+    border-radius: 4px;
     cursor: pointer;
-    white-space: nowrap;
     font-size: 14px;
-    transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.mealsdb-qo-cat-tab:hover {
-    background: #eee;
-}
-
-/* Active Tab */
-.mealsdb-qo-cat-tab.active {
-    background: #2271b1;        /* WP Admin Blue */
-    border-color: #1e5a94;
-    color: white;
-    font-weight: bold;
-}
-
-.mealsdb-qo-cat-tab.is-active {
-    background-color: #2271b1;
-    border-color: #0a4b78;
+.mealsdb-qo-tabs .qo-tab.active {
+    background: #007cba;
+    border-color: #007cba;
     color: #fff;
 }
 
