@@ -1,38 +1,39 @@
 <?php
 $transaction_id = isset($_GET['transaction_id']) ? intval($_GET['transaction_id']) : 0;
-
 if ($transaction_id <= 0) {
-    echo '<div class="wrap"><p>Invalid transaction ID.</p></div>';
+    echo '<div class="notice notice-error"><p>Invalid or missing transaction ID.</p></div>';
     return;
 }
 
 $transaction = MealsDB_Transactions::get_transaction($transaction_id);
 
 if (empty($transaction)) {
-    echo '<div class="wrap"><p>Transaction not found.</p></div>';
+    echo '<div class="notice notice-error"><p>Transaction not found.</p></div>';
     return;
 }
 
 $items = MealsDB_Transactions::get_transaction_items($transaction_id);
 
-$status          = isset($transaction['status']) ? (string) $transaction['status'] : '';
+$status          = $transaction['status'] ?? 'Ordered';
 $allowed_status  = ['Ordered', 'Delivered', 'Cancelled'];
 if (!in_array($status, $allowed_status, true)) {
     $status = 'Ordered';
 }
 $status_lower = strtolower($status);
 
-$client_first_name = isset($transaction['first_name']) ? trim((string) $transaction['first_name']) : '';
-$client_last_name  = isset($transaction['last_name']) ? trim((string) $transaction['last_name']) : '';
-$client_name       = trim($client_first_name . ' ' . $client_last_name);
+$client_name   = trim(($transaction['first_name'] ?? '') . ' ' . ($transaction['last_name'] ?? ''));
 if ($client_name === '') {
     $client_name = sprintf(__('Client #%d', 'meals-db'), intval($transaction['client_id'] ?? 0));
 }
 
-$order_date    = !empty($transaction['order_date']) ? date('Y-m-d', strtotime($transaction['order_date'])) : '';
-$delivery_date = !empty($transaction['delivery_date']) ? date('Y-m-d', strtotime($transaction['delivery_date'])) : '';
-$created_at    = !empty($transaction['created_at']) ? date('Y-m-d', strtotime($transaction['created_at'])) : '';
-$updated_at    = !empty($transaction['updated_at']) ? date('Y-m-d', strtotime($transaction['updated_at'])) : '';
+$order_date     = $transaction['order_date'] ?? '';
+$delivery_date  = $transaction['delivery_date'] ?? '';
+$created_at     = $transaction['created_at'] ?? '';
+$updated_at     = $transaction['updated_at'] ?? '';
+$order_date     = $order_date !== '' ? date('Y-m-d', strtotime($order_date)) : '';
+$delivery_date  = $delivery_date !== '' ? date('Y-m-d', strtotime($delivery_date)) : '';
+$created_at     = $created_at !== '' ? date('Y-m-d', strtotime($created_at)) : '';
+$updated_at     = $updated_at !== '' ? date('Y-m-d', strtotime($updated_at)) : '';
 ?>
 
 <div class="wrap mealsdb-transaction-details">

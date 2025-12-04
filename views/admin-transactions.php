@@ -1,4 +1,10 @@
 <?php
+$transaction_id = isset($_GET['transaction_id']) ? intval($_GET['transaction_id']) : 0;
+if (isset($_GET['transaction_id']) && $transaction_id <= 0) {
+    echo '<div class="notice notice-error"><p>Invalid or missing transaction ID.</p></div>';
+    return;
+}
+
 $client_id   = isset($_GET['client_id']) ? intval($_GET['client_id']) : 0;
 $client_type = isset($_GET['client_type']) ? $_GET['client_type'] : '';
 $status      = isset($_GET['status']) ? $_GET['status'] : '';
@@ -65,11 +71,11 @@ $total_pages        = $total_transactions > 0 ? (int) ceil($total_transactions /
 
 $query_args = [
     'page'        => 'mealsdb-transactions',
-    'client_id'   => $client_id > 0 ? $client_id : null,
-    'client_type' => $client_type !== '' ? $client_type : null,
-    'status'      => $status !== '' ? $status : null,
-    'start_date'  => $start_date !== '' ? $start_date : null,
-    'end_date'    => $end_date !== '' ? $end_date : null,
+    'client_id'   => $client_id > 0 ? $client_id : '',
+    'client_type' => $client_type !== '' ? $client_type : '',
+    'status'      => $status !== '' ? $status : '',
+    'start_date'  => $start_date !== '' ? $start_date : '',
+    'end_date'    => $end_date !== '' ? $end_date : '',
 ];
 $query_args = array_filter(
     $query_args,

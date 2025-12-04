@@ -44,6 +44,8 @@ class MealsDB_Admin_UI {
         add_filter('woocommerce_admin_order_actions', [$this, 'add_quick_order_clone_action'], 10, 2);
         add_filter('woocommerce_admin_order_preview_actions', [$this, 'add_quick_order_clone_preview_action'], 10, 2);
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_quick_order_clone_button']);
+        add_filter('submenu_file', [$this, 'highlight_transactions_parent']);
+        add_filter('admin_title', [$this, 'filter_transaction_admin_title'], 10, 2);
     }
 
     /**
@@ -54,18 +56,24 @@ class MealsDB_Admin_UI {
             return;
         }
 
+        $page_title = 'Meals DB';
+        $menu_title = 'Meals DB';
+        $menu_slug  = 'mealsdb';
+        $capability = 'manage_options';
+        $callback   = array('MealsDB_Admin_UI', 'render_main_page');
+
         add_menu_page(
-            'Meals DB',
-            'Meals DB',
-            MealsDB_Permissions::required_capability(),
-            'meals-db',
-            [$this, 'render_main_page'],
+            $page_title,
+            $menu_title,
+            $capability,
+            $menu_slug,
+            $callback,
             'dashicons-clipboard',
-            56
+            30
         );
 
         add_submenu_page(
-            'meals-db',
+            'mealsdb',
             __('Staff Directory', 'meals-db'),
             __('Staff Directory', 'meals-db'),
             MealsDB_Permissions::required_capability(),
@@ -74,7 +82,7 @@ class MealsDB_Admin_UI {
         );
 
         add_submenu_page(
-            'meals-db',
+            'mealsdb',
             __('Quick Order', 'meals-db'),
             __('Quick Order', 'meals-db'),
             MealsDB_Permissions::required_capability(),
@@ -92,13 +100,15 @@ class MealsDB_Admin_UI {
         );
 
         add_submenu_page(
-            null,
+            'mealsdb',
             'Transaction Details',
             'Transaction Details',
             'manage_options',
             'mealsdb-transaction',
             array('MealsDB_Admin_UI', 'render_transaction_details_page')
         );
+
+        remove_submenu_page('mealsdb', 'mealsdb-transaction');
     }
 
     /**
@@ -114,20 +124,55 @@ class MealsDB_Admin_UI {
             $page = wp_unslash($page);
         }
 
-        if ($page !== 'meals-db-quick-order') {
-            return;
+        if ($page === 'meals-db-quick-order') {
+            $args = $_GET;
+            $args['page'] = 'mealsdb_quick_order';
+
+            if (function_exists('wp_safe_redirect')) {
+                wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
+            } else {
+                wp_redirect(add_query_arg($args, admin_url('admin.php')));
+            }
+
+            exit;
         }
 
-        $args = $_GET;
-        $args['page'] = 'mealsdb_quick_order';
+        if ($page === 'meals-db') {
+            $args = $_GET;
+            $args['page'] = 'mealsdb';
 
-        if (function_exists('wp_safe_redirect')) {
-            wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
-        } else {
-            wp_redirect(add_query_arg($args, admin_url('admin.php')));
+            if (function_exists('wp_safe_redirect')) {
+                wp_safe_redirect(add_query_arg($args, admin_url('admin.php')));
+            } else {
+                wp_redirect(add_query_arg($args, admin_url('admin.php')));
+            }
+
+            exit;
+        }
+    }
+
+    /**
+     * Keep the Transactions menu highlighted while viewing hidden transaction details.
+     */
+    public function highlight_transactions_parent($submenu_file)
+    {
+        if (isset($_GET['page']) && $_GET['page'] === 'mealsdb-transaction') {
+            return 'mealsdb-transactions';
         }
 
-        exit;
+        return $submenu_file;
+    }
+
+    /**
+     * Override the admin title for the transaction details page to avoid null values.
+     */
+    public function filter_transaction_admin_title($admin_title, $title)
+    {
+        if (isset($_GET['page']) && $_GET['page'] === 'mealsdb-transaction') {
+            return 'Transaction Details – Meals DB';
+        }
+
+        return $admin_title;
     }
 
     /**
@@ -253,9 +298,9 @@ class MealsDB_Admin_UI {
      * @param string $hook
      */
     public function enqueue_assets(string $hook): void {
-        $is_main_page        = ($hook === 'toplevel_page_meals-db');
-        $is_staff_page       = ($hook === 'meals-db_page_meals-db-staff');
-        $is_quick_order_page = ($hook === 'meals-db_page_mealsdb_quick_order' || $hook === 'meals-db_page_meals-db-quick-order');
+        $is_main_page        = in_array($hook, ['toplevel_page_mealsdb', 'toplevel_page_meals-db'], true);
+        $is_staff_page       = in_array($hook, ['mealsdb_page_meals-db-staff', 'meals-db_page_meals-db-staff'], true);
+        $is_quick_order_page = in_array($hook, ['mealsdb_page_mealsdb_quick_order', 'meals-db_page_mealsdb_quick_order', 'meals-db_page_meals-db-quick-order'], true);
 
         if (!$is_main_page && !$is_staff_page && !$is_quick_order_page) {
             return;
