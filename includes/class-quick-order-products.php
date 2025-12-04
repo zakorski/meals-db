@@ -4,6 +4,28 @@
  */
 
 class MealsDB_Quick_Order_Products {
+    private const ALLOWED_CATEGORY_SLUGS = [
+        'main',
+        'cereal',
+        'dessert',
+        'beef',
+        'chicken-turkey',
+        'diabetic',
+        'fish',
+        'gluten-free',
+        'low-calorie',
+        'low-fat',
+        'low-sodium',
+        'minced',
+        'pork',
+        'pureed',
+        'special-diet',
+        'vegan',
+        'vegetarian',
+        'muffin',
+        'soup',
+        'thickened',
+    ];
     private const PRODUCTS_TRANSIENT_KEY   = 'mealsdb_qo_all_products';
     private const CATEGORIES_TRANSIENT_KEY = 'mealsdb_qo_all_categories';
 
@@ -16,6 +38,48 @@ class MealsDB_Quick_Order_Products {
      * Tracks whether hooks have already been registered.
      */
     private static bool $hooks_registered = false;
+
+    /**
+     * Retrieve the allowed category slugs for Quick Order filtering.
+     *
+     * @return array<int, string>
+     */
+    public static function get_allowed_category_slugs(): array {
+        return self::ALLOWED_CATEGORY_SLUGS;
+    }
+
+    /**
+     * Filter a category list to only include allowed slugs, in the configured order.
+     *
+     * @param array<int, array<string, mixed>> $categories
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function filter_allowed_categories(array $categories): array {
+        $allowed = self::get_allowed_category_slugs();
+        $filtered = [];
+
+        foreach ($allowed as $slug) {
+            foreach ($categories as $category) {
+                if (!is_array($category)) {
+                    continue;
+                }
+
+                $category_slug = isset($category['slug']) ? (string) $category['slug'] : '';
+                if ($category_slug !== $slug) {
+                    continue;
+                }
+
+                $filtered[$slug] = [
+                    'id'   => isset($category['id']) ? (int) $category['id'] : 0,
+                    'name' => isset($category['name']) ? (string) $category['name'] : '',
+                    'slug' => $slug,
+                ];
+            }
+        }
+
+        return array_values($filtered);
+    }
 
     /**
      * Register hooks for keeping Quick Order caches up to date.
@@ -81,11 +145,13 @@ class MealsDB_Quick_Order_Products {
             return [];
         }
 
+        $allowed_slugs = self::get_allowed_category_slugs();
         $args = [
             'taxonomy'   => 'product_cat',
             'hide_empty' => true,
             'orderby'    => 'name',
             'order'      => 'ASC',
+            'slug'       => $allowed_slugs,
         ];
 
         if (function_exists('apply_filters')) {
@@ -100,6 +166,10 @@ class MealsDB_Quick_Order_Products {
         $categories = [];
         foreach ($terms as $term) {
             if (!$term instanceof WP_Term) {
+                continue;
+            }
+
+            if (!in_array($term->slug, $allowed_slugs, true)) {
                 continue;
             }
 
@@ -378,7 +448,7 @@ class MealsDB_Quick_Order_Products {
             ];
         }
 
-        return $categories;
+        return self::filter_allowed_categories($categories);
     }
 
     /**
@@ -435,15 +505,14 @@ class MealsDB_Quick_Order_Products {
         }
 
         $category = null;
-        if (!empty($product['categories'])) {
-            $primary = $product['categories'][0];
-            if (is_array($primary)) {
-                $category = [
-                    'id'   => isset($primary['id']) ? (int) $primary['id'] : 0,
-                    'name' => $primary['name'] ?? '',
-                    'slug' => $primary['slug'] ?? '',
-                ];
-            }
+        $product_categories = self::filter_allowed_categories($product['categories'] ?? []);
+        if (!empty($product_categories)) {
+            $primary = $product_categories[0];
+            $category = [
+                'id'   => isset($primary['id']) ? (int) $primary['id'] : 0,
+                'name' => isset($primary['name']) ? (string) $primary['name'] : '',
+                'slug' => isset($primary['slug']) ? (string) $primary['slug'] : '',
+            ];
         }
 
         return [
@@ -474,7 +543,8 @@ class MealsDB_Quick_Order_Products {
         $categories = [];
 
         foreach ($products as $product) {
-            foreach ($product['categories'] ?? [] as $category) {
+            $product_categories = self::filter_allowed_categories($product['categories'] ?? []);
+            foreach ($product_categories as $category) {
                 $id = isset($category['id']) ? (int) $category['id'] : 0;
                 if ($id <= 0) {
                     continue;

@@ -23,6 +23,9 @@ class MealsDB_Quick_Order_UI {
         $clone_order_id = self::get_requested_clone_order_id();
         $products_array  = [];
         $categories_array = [];
+        $allowed_slugs = method_exists('MealsDB_Quick_Order_Products', 'get_allowed_category_slugs')
+            ? MealsDB_Quick_Order_Products::get_allowed_category_slugs()
+            : [];
 
         if (class_exists('MealsDB_Quick_Order_Products')) {
             $products_array   = MealsDB_Quick_Order_Products::get_all_quick_order_products();
@@ -131,9 +134,14 @@ class MealsDB_Quick_Order_UI {
             </div>
 
             <div id="mealsdb-qo-categories" class="mealsdb-qo-categories">
-                <!-- Category buttons should be inserted here dynamically or in PHP -->
-                <!-- Example structure: -->
-                <!-- <button class="mealsdb-qo-cat-tab" data-cat="CATEGORY_SLUG">Category Name</button> -->
+                <ul class="mealsdb-qo-tabs">
+                    <li class="active" data-cat="all">All</li>
+                    <?php foreach ($allowed_slugs as $slug): ?>
+                        <li data-cat="<?php echo esc_attr($slug); ?>">
+                            <?php echo esc_html(ucwords(str_replace('-', ' ', $slug))); ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
             </div>
 
             <div id="mealsdb-qo-search-container" style="margin-bottom: 15px;">

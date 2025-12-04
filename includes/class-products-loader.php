@@ -14,12 +14,36 @@ class MealsDB_Products_Loader {
             return [];
         }
 
+        $allowed_slugs = [
+            'main',
+            'cereal',
+            'dessert',
+            'beef',
+            'chicken-turkey',
+            'diabetic',
+            'fish',
+            'gluten-free',
+            'low-calorie',
+            'low-fat',
+            'low-sodium',
+            'minced',
+            'pork',
+            'pureed',
+            'special-diet',
+            'vegan',
+            'vegetarian',
+            'muffin',
+            'soup',
+            'thickened',
+        ];
+
         $args = [
-            'status'  => 'publish',
-            'limit'   => -1,
-            'orderby' => 'title',
-            'order'   => 'ASC',
-            'return'  => 'objects',
+            'status'   => 'publish',
+            'limit'    => -1,
+            'orderby'  => 'title',
+            'order'    => 'ASC',
+            'return'   => 'objects',
+            'category' => $allowed_slugs,
         ];
 
         if (function_exists('apply_filters')) {
