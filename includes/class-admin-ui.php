@@ -244,10 +244,6 @@ class MealsDB_Admin_UI {
             $quick_order_style_path = MEALS_DB_PLUGIN_DIR . 'assets/css/quick-order.css';
             $quick_order_style_version = file_exists($quick_order_style_path) ? filemtime($quick_order_style_path) : MEALS_DB_VERSION;
 
-            if (wp_style_is('select2', 'registered')) {
-                wp_enqueue_style('select2');
-            }
-
             wp_enqueue_style(
                 'mealsdb-quick-order',
                 MEALS_DB_PLUGIN_URL . 'assets/css/quick-order.css',
@@ -258,19 +254,10 @@ class MealsDB_Admin_UI {
             $quick_order_script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/quick-order.js';
             $quick_order_script_version = file_exists($quick_order_script_path) ? filemtime($quick_order_script_path) : MEALS_DB_VERSION;
 
-            $quick_order_script_deps = ['jquery'];
-            if (wp_script_is('selectWoo', 'registered')) {
-                $quick_order_script_deps[] = 'selectWoo';
-                wp_enqueue_script('selectWoo');
-            } elseif (wp_script_is('select2', 'registered')) {
-                $quick_order_script_deps[] = 'select2';
-                wp_enqueue_script('select2');
-            }
-
             wp_enqueue_script(
                 'mealsdb-quick-order',
                 MEALS_DB_PLUGIN_URL . 'assets/js/quick-order.js',
-                $quick_order_script_deps,
+                ['jquery'],
                 $quick_order_script_version,
                 true
             );
@@ -286,7 +273,6 @@ class MealsDB_Admin_UI {
                     'searchProducts' => wp_create_nonce('mealsdb_quick_order_search_products'),
                     'createOrder'    => wp_create_nonce('mealsdb_quick_order_create_order'),
                     'cloneOrder'     => wp_create_nonce('mealsdb_nonce'),
-                    'findClients'    => wp_create_nonce('mealsdb_nonce'),
                 ],
                 'messages'      => [
                     'cloneLoading' => __('Loading products from the selected order…', 'meals-db'),

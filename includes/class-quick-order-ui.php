@@ -8,16 +8,6 @@ class MealsDB_Quick_Order_UI {
      * Enqueue Quick Order scripts and styles.
      */
     public static function enqueue_scripts(): void {
-        if (!wp_style_is('select2', 'registered')) {
-            wp_register_style('select2', includes_url('js/select2/css/select2.min.css'));
-        }
-
-        if (!wp_script_is('select2', 'registered')) {
-            wp_register_script('select2', includes_url('js/select2/select2.full.min.js'), ['jquery'], null, true);
-        }
-
-        wp_enqueue_style('select2');
-        wp_enqueue_script('select2');
         wp_enqueue_script('mealsdb-quick-order');
     }
     /**
@@ -62,6 +52,29 @@ class MealsDB_Quick_Order_UI {
             $attribute_string .= sprintf(' %s="%s"', esc_attr($name), esc_attr($value));
         }
 
+        $client_options = [];
+        $conn = MealsDB_DB::get_connection();
+        if (MealsDB_DB::is_mysqli($conn)) {
+            $table  = MealsDB_DB::get_table_name('meals_clients');
+            $sql    = "
+                SELECT client_id, wp_user_id, first_name, last_name
+                FROM `$table`
+                WHERE active = 1
+                ORDER BY last_name ASC, first_name ASC
+            ";
+            $result = $conn->query($sql);
+
+            if (MealsDB_DB::is_mysqli_result($result)) {
+                while ($row = $result->fetch_assoc()) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+
+                    $client_options[] = $row;
+                }
+            }
+        }
+
         ?>
         <div<?php echo $attribute_string; ?>>
             <h1><?php esc_html_e('Quick Order', 'meals-db'); ?></h1>
@@ -92,7 +105,22 @@ class MealsDB_Quick_Order_UI {
 
             <div class="mealsdb-quick-order__control">
                 <label for="mealsdb_qo_client"><?php esc_html_e('Client', 'meals-db'); ?></label>
-                <select id="mealsdb_qo_client" style="width: 100%;"></select>
+                <input
+                    type="text"
+                    id="mealsdb_qo_client_search"
+                    placeholder="<?php echo esc_attr__('Search clients...', 'meals-db'); ?>"
+                    style="width: 100%; margin-bottom: 6px;"
+                >
+                <select id="mealsdb_qo_client" name="mealsdb_qo_client" style="width: 100%;">
+                    <?php foreach ($client_options as $row) : ?>
+                        <option
+                            value="<?php echo esc_attr($row['wp_user_id']); ?>"
+                            data-client-id="<?php echo esc_attr($row['client_id']); ?>"
+                        >
+                            <?php echo esc_html($row['last_name'] . ', ' . $row['first_name']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
             </div>
 
             <div class="mealsdb-quick-order__controls">
