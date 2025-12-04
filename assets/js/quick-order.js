@@ -948,9 +948,18 @@
             const safePrice = this.escapeHtml(formattedPrice);
             const isSelected = quantity > 0;
             const selectedClass = isSelected ? ' selected' : '';
-            const categorySlug = this.escapeAttribute(
-                this.normaliseCategorySlug(product && product.category ? product.category.slug : '')
-            );
+            const categorySlugs = Array.isArray(product && product.category_slugs)
+                ? product.category_slugs
+                      .map((slug) => this.normaliseCategorySlug(slug))
+                      .filter((slug) => slug !== '')
+                : [];
+            if (!categorySlugs.length) {
+                const fallbackSlug = this.normaliseCategorySlug(product && product.category ? product.category.slug : '');
+                if (fallbackSlug) {
+                    categorySlugs.push(fallbackSlug);
+                }
+            }
+            const dataCategories = this.escapeAttribute(categorySlugs.join(' ').trim());
             const imageHtml =
                 product.image_url && typeof product.image_url === 'string'
                     ? `<div class="mealsdb-quick-order__product-image"><img src="${this.escapeAttribute(
@@ -970,7 +979,7 @@
                 : '';
 
             return `
-                <div class="mealsdb-qo-tile qo-product${selectedClass}${restrictionClass}" tabindex="0" data-cat="${categorySlug}">
+                <div class="mealsdb-qo-tile qo-product${selectedClass}${restrictionClass}" tabindex="0" data-cat="${dataCategories}">
                     <div class="mealsdb-quick-order__product${selectedClass}" data-product-id="${this.escapeAttribute(
                         productId
                     )}">
@@ -1980,43 +1989,20 @@
         }
     });
 
-    $document.off('keydown.mealsdb-qo-tabs');
-    $document.on('keydown.mealsdb-qo-tabs', function (event) {
-        const $tabs = $('.mealsdb-qo-cat-tab');
-        if (!$tabs.length) {
-            return;
-        }
-
-        const $activeTab = $tabs.filter('.active, .is-active').first();
-        const currentIndex = $tabs.index($activeTab);
-
-        if (event.key === 'ArrowRight') {
-            const $next = $tabs.eq(currentIndex + 1);
-            if ($next.length) {
-                $next.trigger('click');
-            }
-        }
-
-        if (event.key === 'ArrowLeft') {
-            const $prev = $tabs.eq(currentIndex - 1);
-            if ($prev.length) {
-                $prev.trigger('click');
-            }
-        }
-    });
-
     jQuery(function ($) {
-        $('.mealsdb-qo-tabs li').on('click', function () {
-            let cat = $(this).data('cat');
+        $('.mealsdb-qo-tabs').on('click', '.qo-tab', function () {
+            const cat = $(this).data('cat');
 
-            $('.mealsdb-qo-tabs li').removeClass('active');
+            // Highlight the selected tab
+            $('.qo-tab').removeClass('active');
             $(this).addClass('active');
 
+            // Filter products based on data-cat attribute
             if (cat === 'all') {
                 $('.qo-product').show();
             } else {
                 $('.qo-product').hide();
-                $('.qo-product[data-cat="' + cat + '"]').show();
+                $('.qo-product[data-cat~="' + cat + '"]').show();
             }
         });
     });

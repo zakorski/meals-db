@@ -134,14 +134,14 @@ class MealsDB_Quick_Order_UI {
             </div>
 
             <div id="mealsdb-qo-categories" class="mealsdb-qo-categories">
-                <ul class="mealsdb-qo-tabs">
-                    <li class="active" data-cat="all">All</li>
+                <div class="mealsdb-qo-tabs">
+                    <button class="qo-tab active" data-cat="all">All</button>
                     <?php foreach ($allowed_slugs as $slug): ?>
-                        <li data-cat="<?php echo esc_attr($slug); ?>">
-                            <?php echo esc_html(ucwords(str_replace('-', ' ', $slug))); ?>
-                        </li>
+                        <button class="qo-tab" data-cat="<?php echo esc_attr($slug); ?>">
+                            <?php echo esc_html( ucwords(str_replace('-', ' ', $slug)) ); ?>
+                        </button>
                     <?php endforeach; ?>
-                </ul>
+                </div>
             </div>
 
             <div id="mealsdb-qo-search-container" style="margin-bottom: 15px;">
