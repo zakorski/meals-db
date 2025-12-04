@@ -262,7 +262,7 @@ class MealsDB_Admin_UI {
      */
     public static function render_transactions_page(): void
     {
-        include MEALSDB_PLUGIN_DIR . 'views/admin-transactions.php';
+        include MEALSDB_PLUGIN_PATH . 'views/admin-transactions.php';
     }
 
     /**
@@ -270,7 +270,7 @@ class MealsDB_Admin_UI {
      */
     public static function render_transaction_details_page(): void
     {
-        include MEALSDB_PLUGIN_DIR . 'views/admin-transaction-details.php';
+        include MEALSDB_PLUGIN_PATH . 'views/admin-transaction-details.php';
     }
 
     /**
@@ -507,11 +507,11 @@ class MealsDB_Admin_UI {
 
         switch ($tab) {
             case 'sync':
-                include plugin_dir_path(__FILE__) . '/../views/dashboard.php';
+                include MEALSDB_PLUGIN_PATH . 'views/dashboard.php';
                 break;
 
             case 'add':
-                include plugin_dir_path(__FILE__) . '/../views/add-client.php';
+                include MEALSDB_PLUGIN_PATH . 'views/add-client.php';
                 break;
 
             case 'clients':
@@ -525,22 +525,22 @@ class MealsDB_Admin_UI {
                     $action = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $action));
                 }
                 if ($action === 'edit') {
-                    include plugin_dir_path(__FILE__) . '/../views/edit-client.php';
+                    include MEALSDB_PLUGIN_PATH . 'views/edit-client.php';
                 } else {
-                    include plugin_dir_path(__FILE__) . '/../views/view-clients.php';
+                    include MEALSDB_PLUGIN_PATH . 'views/view-clients.php';
                 }
                 break;
 
             case 'drafts':
-                include plugin_dir_path(__FILE__) . '/../views/drafts.php';
+                include MEALSDB_PLUGIN_PATH . 'views/drafts.php';
                 break;
 
             case 'ignored':
-                include plugin_dir_path(__FILE__) . '/../views/ignored.php';
+                include MEALSDB_PLUGIN_PATH . 'views/ignored.php';
                 break;
 
             case 'updates':
-                include plugin_dir_path(__FILE__) . '/../views/updates.php';
+                include MEALSDB_PLUGIN_PATH . 'views/updates.php';
                 break;
 
             default:
@@ -566,7 +566,7 @@ class MealsDB_Admin_UI {
             'updates' => __('Updates', 'meals-db'),
         ];
 
-        include MEALS_DB_PLUGIN_DIR . 'views/partials/tabs.php';
+        include MEALSDB_PLUGIN_PATH . 'views/partials/tabs.php';
     }
 
     /**
