@@ -270,7 +270,6 @@ class MealsDB_Admin_UI {
                 'ajaxUrl'       => admin_url('admin-ajax.php'),
                 'cloneOrderId'  => $clone_order_id,
                 'nonces'        => [
-                    'searchProducts' => wp_create_nonce('mealsdb_quick_order_search_products'),
                     'createOrder'    => wp_create_nonce('mealsdb_quick_order_create_order'),
                     'cloneOrder'     => wp_create_nonce('mealsdb_nonce'),
                 ],
