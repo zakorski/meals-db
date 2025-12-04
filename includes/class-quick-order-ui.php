@@ -107,23 +107,28 @@ class MealsDB_Quick_Order_UI {
             ?>
 
             <div class="mealsdb-quick-order__control">
-                <label for="mealsdb_qo_client"><?php esc_html_e('Client', 'meals-db'); ?></label>
-                <input
-                    type="text"
-                    id="mealsdb_qo_client_search"
-                    placeholder="<?php echo esc_attr__('Search clients...', 'meals-db'); ?>"
-                    style="width: 100%; margin-bottom: 6px;"
-                >
-                <select id="mealsdb_qo_client" name="mealsdb_qo_client" style="width: 100%;">
-                    <?php foreach ($client_options as $row) : ?>
-                        <option
-                            value="<?php echo esc_attr($row['wp_user_id']); ?>"
-                            data-client-id="<?php echo esc_attr($row['client_id']); ?>"
-                        >
-                            <?php echo esc_html($row['last_name'] . ', ' . $row['first_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
+                <label for="mealsdb_qo_client_search">Client</label>
+
+                <div class="mealsdb-client-combobox">
+                    <input type="text"
+                           id="mealsdb_qo_client_search"
+                           placeholder="Search clients..."
+                           autocomplete="off">
+
+                    <div id="mealsdb_qo_client_dropdown" class="client-dropdown">
+                        <?php foreach ($client_options as $row) : ?>
+                            <div class="client-option"
+                                 data-id="<?php echo esc_attr($row['wp_user_id']); ?>"
+                                 data-name="<?php echo esc_attr($row['first_name'] . ' ' . $row['last_name']); ?>">
+                                <?php echo esc_html($row['first_name'] . ' ' . $row['last_name']); ?>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+
+                    <input type="hidden"
+                           id="mealsdb_qo_client"
+                           name="mealsdb_qo_client">
+                </div>
             </div>
 
             <div class="mealsdb-quick-order__controls">
