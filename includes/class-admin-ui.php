@@ -81,6 +81,15 @@ class MealsDB_Admin_UI {
             'mealsdb_quick_order',
             ['MealsDB_Quick_Order_UI', 'render_quick_order_page']
         );
+
+        add_submenu_page(
+            'mealsdb',
+            'Transactions',
+            'Transactions',
+            'manage_options',
+            'mealsdb-transactions',
+            array('MealsDB_Admin_UI', 'render_transactions_page')
+        );
     }
 
     /**
@@ -192,6 +201,14 @@ class MealsDB_Admin_UI {
             ],
             admin_url('admin.php')
         );
+    }
+
+    /**
+     * Render the transactions admin page.
+     */
+    public static function render_transactions_page(): void
+    {
+        include MEALSDB_PLUGIN_DIR . 'views/admin-transactions.php';
     }
 
     /**

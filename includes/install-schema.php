@@ -107,6 +107,7 @@ class MealsDB_Installer {
         }
 
         self::create_table_transactions($conn);
+        self::alter_transactions_add_status($conn);
         self::create_table_transaction_items($conn);
 
         self::upgrade_meals_clients_table($conn);
@@ -151,6 +152,7 @@ class MealsDB_Installer {
             client_id INT UNSIGNED NOT NULL,
             order_date DATE NOT NULL,
             delivery_date DATE NOT NULL,
+            status ENUM('Ordered','Delivered','Cancelled') NOT NULL DEFAULT 'Ordered',
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             KEY idx_client_id (client_id),
@@ -160,6 +162,49 @@ class MealsDB_Installer {
 
         if (!$conn->query($sql)) {
             error_log('[MealsDB Installer] Failed creating mealsdb_transactions table: ' . $conn->error);
+        }
+    }
+
+    /**
+     * Ensure the status column exists on mealsdb_transactions.
+     */
+    private static function alter_transactions_add_status($conn): void {
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            error_log('[MealsDB Installer] Unable to establish database connection while altering mealsdb_transactions.');
+            return;
+        }
+
+        $transactions_table = MealsDB_DB::get_table_name('mealsdb_transactions');
+        $transactions_table = str_replace('`', '``', $transactions_table);
+
+        $column_name    = 'status';
+        $escaped_column = str_replace('`', '``', $column_name);
+
+        $column_exists = false;
+        $column_sql    = "SHOW COLUMNS FROM `{$transactions_table}` LIKE '{$escaped_column}'";
+        $column_result = $conn->query($column_sql);
+
+        if (MealsDB_DB::is_mysqli_result($column_result)) {
+            $column_exists = $column_result->num_rows > 0;
+            $column_result->free();
+        } elseif ($column_result && isset($column_result->num_rows)) {
+            $column_exists = $column_result->num_rows > 0;
+            if (method_exists($column_result, 'free')) {
+                $column_result->free();
+            }
+        } elseif ($column_result === false) {
+            error_log('[MealsDB Installer] Failed inspecting mealsdb_transactions.status column: ' . $conn->error);
+            return;
+        }
+
+        if ($column_exists) {
+            return;
+        }
+
+        $alter_sql = "ALTER TABLE `{$transactions_table}` ADD COLUMN `{$column_name}` ENUM('Ordered','Delivered','Cancelled') NOT NULL DEFAULT 'Ordered'";
+
+        if (!$conn->query($alter_sql)) {
+            error_log('[MealsDB Installer] Failed adding mealsdb_transactions.status column: ' . $conn->error);
         }
     }
 
