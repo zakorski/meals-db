@@ -59,7 +59,7 @@
             this.$search = $('#mealsdb_qo_search');
             this.$clientSearch = $('#mealsdb_qo_client_search');
             this.$clientDropdown = $('#mealsdb_qo_client_dropdown');
-            this.$clientSelect = $('#mealsdb_qo_client');
+            this.$clientSelect = $('#client_id');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#qo-create-order');
             this.$orderSuccess = $('#qo-order-success');
@@ -1863,7 +1863,7 @@
     jQuery(function ($) {
         const search = $('#mealsdb_qo_client_search');
         const dropdown = $('#mealsdb_qo_client_dropdown');
-        const hidden = $('#mealsdb_qo_client');
+        const hidden = $('#client_id');
 
         // Show dropdown on focus/click
         search.on('focus click', function() {
@@ -1893,7 +1893,7 @@
             const name = $(this).data('name');
 
             search.val(name);
-            hidden.val(id);
+            $('#client_id').val(id);
             hidden.data('clientType', '');
 
             dropdown.hide();
