@@ -59,7 +59,7 @@ class MealsDB_Admin_UI {
         $page_title = 'Meals DB';
         $menu_title = 'Meals DB';
         $menu_slug  = 'mealsdb';
-        $capability = 'manage_options';
+        $capability = MealsDB_Permissions::required_capability();
         $callback   = array('MealsDB_Admin_UI', 'render_main_page');
 
         add_menu_page(
@@ -92,20 +92,20 @@ class MealsDB_Admin_UI {
 
         add_submenu_page(
             'mealsdb',
-            'Transactions',
-            'Transactions',
-            'manage_options',
+            __('Transactions', 'meals-db'),
+            __('Transactions', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
             'mealsdb-transactions',
-            array('MealsDB_Admin_UI', 'render_transactions_page')
+            ['MealsDB_Admin_UI', 'render_transactions_page']
         );
 
         add_submenu_page(
             'mealsdb',
-            'Transaction Details',
-            'Transaction Details',
-            'manage_options',
+            __('Transaction Details', 'meals-db'),
+            __('Transaction Details', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
             'mealsdb-transaction',
-            array('MealsDB_Admin_UI', 'render_transaction_details_page')
+            ['MealsDB_Admin_UI', 'render_transaction_details_page']
         );
 
         remove_submenu_page('mealsdb', 'mealsdb-transaction');

@@ -13,7 +13,7 @@ if (!isset($tabs) || !is_array($tabs)) {
 echo '<nav class="nav-tab-wrapper">';
 foreach ($tabs as $key => $label) {
     $class = ($active_tab === $key) ? 'nav-tab nav-tab-active' : 'nav-tab';
-    $url = admin_url('admin.php?page=meals-db&tab=' . $key);
+    $url = admin_url('admin.php?page=mealsdb&tab=' . $key);
     echo '<a href="' . esc_url($url) . '" class="' . esc_attr($class) . '">' . esc_html($label) . '</a>';
 }
 echo '</nav>';

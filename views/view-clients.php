@@ -18,15 +18,15 @@ if (function_exists('sanitize_text_field')) {
 $client_types = MealsDB_Clients::get_client_types();
 $clients = MealsDB_Clients::get_clients($selected_type, $search_term);
 
-$base_url = admin_url('admin.php?page=meals-db&tab=clients');
-$edit_base = admin_url('admin.php?page=meals-db&tab=clients&action=edit');
+$base_url = admin_url('admin.php?page=mealsdb&tab=clients');
+$edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
 ?>
 
 <div class="wrap mealsdb-view-clients">
     <h2><?php esc_html_e('View Clients', 'meals-db'); ?></h2>
 
     <form method="get" class="mealsdb-client-filters">
-        <input type="hidden" name="page" value="meals-db" />
+        <input type="hidden" name="page" value="mealsdb" />
         <input type="hidden" name="tab" value="clients" />
 
         <label for="mealsdb-filter-client-type" class="screen-reader-text"><?php esc_html_e('Filter by client type', 'meals-db'); ?></label>
