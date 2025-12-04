@@ -101,16 +101,22 @@ class MealsDB_Schema_Sync {
             ],
         ];
 
+        // 1) Migrate legacy schema if present
+        self::migrate_legacy_meals_clients_schema($conn, $expected_clients_table);
+
+        // 2) Ensure table exists (for fresh installs)
         $result = self::ensure_table_exists($conn, $expected_clients_table);
         if (is_wp_error($result)) {
             return $result;
         }
 
+        // 3) Ensure all required columns exist
         $result = self::ensure_columns($conn, $expected_clients_table);
         if (is_wp_error($result)) {
             return $result;
         }
 
+        // 4) Ensure primary key exists
         $result = self::ensure_primary_key($conn, $expected_clients_table);
         if (is_wp_error($result)) {
             return $result;
@@ -124,35 +130,93 @@ class MealsDB_Schema_Sync {
         return true;
     }
 
+    private static function column_exists(mysqli $conn, string $table, string $column): bool {
+        $sql = sprintf(
+            "SHOW COLUMNS FROM `%s` LIKE '%s'",
+            str_replace('`', '``', $table),
+            $conn->real_escape_string($column)
+        );
+        $res = $conn->query($sql);
+        return ($res && $res->num_rows > 0);
+    }
+
+    private static function get_primary_key_column(mysqli $conn, string $table): ?string {
+        $sql = sprintf(
+            "SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'",
+            str_replace('`', '``', $table)
+        );
+        $res = $conn->query($sql);
+        if ($res && $row = $res->fetch_assoc()) {
+            return $row['Column_name'] ?? null;
+        }
+        return null;
+    }
+
+    private static function migrate_legacy_meals_clients_schema(mysqli $conn, array $schema): void {
+        $table = MealsDB_DB::get_table_name($schema['table']);
+
+        // If table does not exist, nothing to migrate
+        $res = $conn->query("SHOW TABLES LIKE '{$table}'");
+        if (!$res || $res->num_rows === 0) {
+            return;
+        }
+
+        // Detect legacy columns
+        $has_id          = self::column_exists($conn, $table, 'id');
+        $has_client_id   = self::column_exists($conn, $table, 'client_id');
+        $has_wp_user_id  = self::column_exists($conn, $table, 'wp_user_id');
+        $has_wp_legacy   = self::column_exists($conn, $table, 'wordpress_user_id');
+        $has_client_type = self::column_exists($conn, $table, 'client_type');
+        $has_legacy_type = self::column_exists($conn, $table, 'customer_type');
+
+        // 1) If we have legacy "id" and no "client_id", rename it.
+        //    This preserves AUTO_INCREMENT + PRIMARY KEY.
+        if ($has_id && !$has_client_id) {
+            $sql = "ALTER TABLE `{$table}` CHANGE `id` `client_id` BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT";
+            $conn->query($sql);
+        }
+
+        // 2) If we have legacy "wordpress_user_id" and no "wp_user_id", rename it.
+        if ($has_wp_legacy && !$has_wp_user_id) {
+            $sql = "ALTER TABLE `{$table}` CHANGE `wordpress_user_id` `wp_user_id` BIGINT(20) UNSIGNED NOT NULL";
+            $conn->query($sql);
+        }
+
+        // 3) If we have legacy "customer_type" and no "client_type", rename it.
+        if ($has_legacy_type && !$has_client_type) {
+            $sql = "ALTER TABLE `{$table}` CHANGE `customer_type` `client_type` ENUM('Private','SDNB','Veteran') NOT NULL";
+            $conn->query($sql);
+        }
+
+        // At this point, the table should have "client_id", "wp_user_id",
+        // and "client_type" if it had the legacy equivalents.
+        // Any remaining columns (first_name, last_name, active, etc.)
+        // will be created by ensure_columns().
+    }
+
     /**
      * Ensure the table exists with the base schema.
      */
     private static function ensure_table_exists(mysqli $conn, array $schema) {
-        $table          = MealsDB_DB::get_table_name($schema['table']);
-        $escaped_table  = $conn->real_escape_string($table);
-        $res            = $conn->query("SHOW TABLES LIKE '{$escaped_table}'");
+        $table = MealsDB_DB::get_table_name($schema['table']);
 
+        $res = $conn->query("SHOW TABLES LIKE '{$table}'");
         if ($res === false) {
             return new WP_Error('db_error', $conn->error);
         }
 
         if ($res && $res->num_rows > 0) {
+            // Table already exists; do not attempt to recreate or alter here.
             return true;
         }
 
         $cols = [];
         foreach ($schema['columns'] as $name => $definition) {
-            $cols[] = sprintf('`%s` %s', $name, $definition);
-        }
-        $cols[] = sprintf('PRIMARY KEY (`%s`)', $schema['primary_key']);
-
-        if (!empty($schema['indexes']) && is_array($schema['indexes'])) {
-            foreach ($schema['indexes'] as $index) {
-                $cols[] = self::build_index_definition($index);
-            }
+            $cols[] = "`{$name}` {$definition}";
         }
 
-        $ddl = sprintf('CREATE TABLE `%s` (%s) ENGINE=InnoDB;', $table, implode(',', $cols));
+        $cols[] = "PRIMARY KEY (`{$schema['primary_key']}`)";
+        $ddl    = "CREATE TABLE `{$table}` (" . implode(',', $cols) . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
 
         $create_result = $conn->query($ddl);
         if ($create_result === false) {
@@ -181,11 +245,22 @@ class MealsDB_Schema_Sync {
         }
 
         foreach ($schema['columns'] as $name => $definition) {
-            if (!isset($existing[$name])) {
-                $sql = sprintf('ALTER TABLE `%s` ADD `%s` %s', $table, $name, $definition);
-                if ($conn->query($sql) === false) {
-                    return new WP_Error('db_error', $conn->error);
-                }
+            if (isset($existing[$name])) {
+                continue;
+            }
+
+            // Do not try to add a second AUTO_INCREMENT primary key column;
+            // migration step handles renaming legacy id -> client_id.
+            if ($name === $schema['primary_key']) {
+                // If we reach here, and there is no legacy id, it means the table
+                // was freshly created and this path won't be hit, or something is
+                // very unusual. To be safe, just add a non-AI column instead.
+                $definition = preg_replace('/AUTO_INCREMENT/i', '', $definition);
+            }
+
+            $sql = sprintf('ALTER TABLE `%s` ADD `%s` %s', $table, $name, $definition);
+            if ($conn->query($sql) === false) {
+                return new WP_Error('db_error', $conn->error);
             }
         }
 
@@ -199,18 +274,22 @@ class MealsDB_Schema_Sync {
         $table  = MealsDB_DB::get_table_name($schema['table']);
         $pkname = $schema['primary_key'];
 
-        $res = $conn->query(sprintf('SHOW KEYS FROM `%s` WHERE Key_name = "PRIMARY"', str_replace('`', '``', $table)));
-        if ($res === false) {
-            return new WP_Error('db_error', $conn->error);
-        }
-
-        if ($res && $res->num_rows > 0) {
+        $pk_column = self::get_primary_key_column($conn, $table);
+        if (!empty($pk_column)) {
+            // Primary key already exists; do not change it.
             return true;
         }
 
-        $alter = sprintf('ALTER TABLE `%s` ADD PRIMARY KEY (`%s`)', $table, $pkname);
-        if ($conn->query($alter) === false) {
-            return new WP_Error('db_error', $conn->error);
+        // If there is no primary key, but the primary_key column exists, add PK.
+        if (self::column_exists($conn, $table, $schema['primary_key'])) {
+            $sql = sprintf(
+                'ALTER TABLE `%s` ADD PRIMARY KEY (`%s`)',
+                str_replace('`', '``', $table),
+                $pkname
+            );
+            if ($conn->query($sql) === false) {
+                return new WP_Error('db_error', $conn->error);
+            }
         }
 
         return true;
