@@ -20,9 +20,11 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     </table>
 
     <div class="mealsdb-update-actions">
-        <button type="button" class="button button-primary" id="mealsdb-update-database">
-            <?php echo esc_html__('Update Database', 'meals-db'); ?>
-        </button>
+        <form method="post" class="mealsdb-update-schema">
+            <?php wp_nonce_field('mealsdb_update_schema', 'mealsdb_update_schema_nonce'); ?>
+            <input type="hidden" name="mealsdb_action" value="update_schema">
+            <button class="button button-primary"><?php echo esc_html__('Update Database Schema', 'meals-db'); ?></button>
+        </form>
         <button type="button" class="button" id="mealsdb-fetch-products">
             <?php echo esc_html__('Fetch Products', 'meals-db'); ?>
         </button>

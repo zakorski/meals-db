@@ -400,6 +400,24 @@ class MealsDB_Admin_UI {
     public function render_main_page() {
         MealsDB_Permissions::enforce();
 
+        if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'update_schema') {
+            check_admin_referer('mealsdb_update_schema', 'mealsdb_update_schema_nonce');
+
+            require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-sync.php';
+
+            $result = MealsDB_Schema_Sync::run_full_sync();
+
+            if (is_wp_error($result)) {
+                add_action('admin_notices', function() use ($result) {
+                    echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
+                });
+            } else {
+                add_action('admin_notices', function() {
+                    echo '<div class="notice notice-success"><p>External database schema updated successfully.</p></div>';
+                });
+            }
+        }
+
         $tab = $_GET['tab'] ?? 'sync';
 
         echo '<div class="wrap">';
