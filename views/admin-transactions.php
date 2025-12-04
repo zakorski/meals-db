@@ -162,6 +162,13 @@ $query_args = array_filter(
                         ? $transaction['status']
                         : 'Ordered';
                     $status_class = 'mealsdb-status-label mealsdb-status-' . strtolower($transaction_status);
+                    $details_link = add_query_arg(
+                        [
+                            'page'            => 'mealsdb-transaction',
+                            'transaction_id'  => $transaction_id,
+                        ],
+                        admin_url('admin.php')
+                    );
                 ?>
                     <tr>
                         <td><?php echo esc_html($transaction_id); ?></td>
@@ -170,7 +177,7 @@ $query_args = array_filter(
                         <td><?php echo esc_html(!empty($transaction['order_date']) ? date('Y-m-d', strtotime($transaction['order_date'])) : ''); ?></td>
                         <td><?php echo esc_html(!empty($transaction['delivery_date']) ? date('Y-m-d', strtotime($transaction['delivery_date'])) : ''); ?></td>
                         <td><span class="<?php echo esc_attr($status_class); ?>"><?php echo esc_html($transaction_status); ?></span></td>
-                        <td><a class="button button-small" href="#"><?php esc_html_e('View Details', 'meals-db'); ?></a></td>
+                        <td><a class="button button-small" href="<?php echo esc_url($details_link); ?>"><?php esc_html_e('View Details', 'meals-db'); ?></a></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
