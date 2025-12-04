@@ -90,6 +90,15 @@ class MealsDB_Admin_UI {
             'mealsdb-transactions',
             array('MealsDB_Admin_UI', 'render_transactions_page')
         );
+
+        add_submenu_page(
+            null,
+            'Transaction Details',
+            'Transaction Details',
+            'manage_options',
+            'mealsdb-transaction',
+            array('MealsDB_Admin_UI', 'render_transaction_details_page')
+        );
     }
 
     /**
@@ -209,6 +218,14 @@ class MealsDB_Admin_UI {
     public static function render_transactions_page(): void
     {
         include MEALSDB_PLUGIN_DIR . 'views/admin-transactions.php';
+    }
+
+    /**
+     * Render the transaction details admin page.
+     */
+    public static function render_transaction_details_page(): void
+    {
+        include MEALSDB_PLUGIN_DIR . 'views/admin-transaction-details.php';
     }
 
     /**

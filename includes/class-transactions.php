@@ -60,6 +60,193 @@ class MealsDB_Transactions {
     }
 
     /**
+     * Retrieve a single transaction and its client summary by ID.
+     *
+     * @param int $transaction_id
+     * @return array<string, mixed>
+     */
+    public static function get_transaction($transaction_id): array {
+        $connection = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($connection)) {
+            return [];
+        }
+
+        $transactions_table = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_transactions'));
+        $clients_table      = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_clients'));
+
+        $sql = "SELECT t.*, c.first_name, c.last_name, c.client_type, c.phone, c.email"
+            . " FROM `{$transactions_table}` t"
+            . " LEFT JOIN `{$clients_table}` c ON c.client_id = t.client_id"
+            . ' WHERE t.transaction_id = ?'
+            . ' LIMIT 1';
+
+        $stmt = $connection->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return [];
+        }
+
+        $transaction_id = (int) $transaction_id;
+        if (!$stmt->bind_param('i', $transaction_id)) {
+            $stmt->close();
+            return [];
+        }
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+
+        $row = [];
+
+        if (method_exists($stmt, 'get_result')) {
+            $result = $stmt->get_result();
+            if (MealsDB_DB::is_mysqli_result($result)) {
+                $row = $result->fetch_assoc() ?: [];
+                $result->free();
+            }
+        } else {
+            $statement_row = [
+                'transaction_id' => null,
+                'client_id'      => null,
+                'order_date'     => null,
+                'delivery_date'  => null,
+                'status'         => null,
+                'created_at'     => null,
+                'updated_at'     => null,
+                'first_name'     => null,
+                'last_name'      => null,
+                'client_type'    => null,
+                'phone'          => null,
+                'email'          => null,
+            ];
+
+            $bound = $stmt->bind_result(
+                $statement_row['transaction_id'],
+                $statement_row['client_id'],
+                $statement_row['order_date'],
+                $statement_row['delivery_date'],
+                $statement_row['status'],
+                $statement_row['created_at'],
+                $statement_row['updated_at'],
+                $statement_row['first_name'],
+                $statement_row['last_name'],
+                $statement_row['client_type'],
+                $statement_row['phone'],
+                $statement_row['email']
+            );
+
+            if ($bound && $stmt->fetch()) {
+                $row = [
+                    'transaction_id' => $statement_row['transaction_id'],
+                    'client_id'      => $statement_row['client_id'],
+                    'order_date'     => $statement_row['order_date'],
+                    'delivery_date'  => $statement_row['delivery_date'],
+                    'status'         => $statement_row['status'],
+                    'created_at'     => $statement_row['created_at'],
+                    'updated_at'     => $statement_row['updated_at'],
+                    'first_name'     => $statement_row['first_name'],
+                    'last_name'      => $statement_row['last_name'],
+                    'client_type'    => $statement_row['client_type'],
+                    'phone'          => $statement_row['phone'],
+                    'email'          => $statement_row['email'],
+                ];
+            }
+        }
+
+        $stmt->close();
+
+        return $row;
+    }
+
+    /**
+     * Retrieve items associated with a transaction.
+     *
+     * @param int $transaction_id
+     * @return array<int, array<string, mixed>>
+     */
+    public static function get_transaction_items($transaction_id): array {
+        $connection = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($connection)) {
+            return [];
+        }
+
+        $items_table    = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_transaction_items'));
+        $products_table = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_products'));
+
+        $sql = "SELECT ti.*, p.product_name, p.category, p.main_ingredient"
+            . " FROM `{$items_table}` ti"
+            . " LEFT JOIN `{$products_table}` p ON p.product_id = ti.item_id"
+            . ' WHERE ti.transaction_id = ?'
+            . ' ORDER BY p.product_name ASC';
+
+        $stmt = $connection->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return [];
+        }
+
+        $transaction_id = (int) $transaction_id;
+        if (!$stmt->bind_param('i', $transaction_id)) {
+            $stmt->close();
+            return [];
+        }
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+
+        $rows = [];
+
+        if (method_exists($stmt, 'get_result')) {
+            $result = $stmt->get_result();
+            if (MealsDB_DB::is_mysqli_result($result)) {
+                while ($row = $result->fetch_assoc()) {
+                    $rows[] = $row;
+                }
+                $result->free();
+            }
+        } else {
+            $statement_row = [
+                'transaction_item_id' => null,
+                'transaction_id'      => null,
+                'item_id'             => null,
+                'quantity'            => null,
+                'product_name'        => null,
+                'category'            => null,
+                'main_ingredient'     => null,
+            ];
+
+            $bound = $stmt->bind_result(
+                $statement_row['transaction_item_id'],
+                $statement_row['transaction_id'],
+                $statement_row['item_id'],
+                $statement_row['quantity'],
+                $statement_row['product_name'],
+                $statement_row['category'],
+                $statement_row['main_ingredient']
+            );
+
+            if ($bound) {
+                while ($stmt->fetch()) {
+                    $rows[] = [
+                        'transaction_item_id' => $statement_row['transaction_item_id'],
+                        'transaction_id'      => $statement_row['transaction_id'],
+                        'item_id'             => $statement_row['item_id'],
+                        'quantity'            => $statement_row['quantity'],
+                        'product_name'        => $statement_row['product_name'],
+                        'category'            => $statement_row['category'],
+                        'main_ingredient'     => $statement_row['main_ingredient'],
+                    ];
+                }
+            }
+        }
+
+        $stmt->close();
+
+        return $rows;
+    }
+
+    /**
      * Fetch transactions from the external Meals DB with optional filters.
      *
      * @param array<string, mixed> $filters
