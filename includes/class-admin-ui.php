@@ -475,7 +475,7 @@ class MealsDB_Admin_UI {
     /**
      * Render the main admin page, routing to correct tab.
      */
-    public function render_main_page() {
+    public static function render_main_page() {
         MealsDB_Permissions::enforce();
 
         if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'update_schema') {
@@ -501,7 +501,7 @@ class MealsDB_Admin_UI {
         echo '<div class="wrap">';
         echo '<h1>Meals DB</h1>';
 
-        $this->render_tabs($tab);
+        self::render_tabs($tab);
 
         echo '<div class="mealsdb-tab-content">';
 
@@ -555,7 +555,7 @@ class MealsDB_Admin_UI {
      *
      * @param string $active
      */
-    private function render_tabs(string $active = 'sync') {
+    private static function render_tabs(string $active = 'sync') {
         $active_tab = $active;
         $tabs = [
             'sync'    => __('Sync Dashboard', 'meals-db'),
