@@ -361,3 +361,38 @@
     opacity: 1;
     pointer-events: auto;
 }
+
+.mealsdb-client-combobox {
+    position: relative;
+    max-width: 350px;
+}
+
+#mealsdb_qo_client_search {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+#mealsdb_qo_client_dropdown {
+    position: absolute;
+    top: 42px;
+    width: 100%;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    display: none;
+    z-index: 9999;
+}
+
+.client-option {
+    padding: 8px;
+    cursor: pointer;
+}
+
+.client-option:hover {
+    background: #007cba;
+    color: #fff;
+}

@@ -57,6 +57,8 @@
             this.$summary = $('#mealsdb-quick-order-summary');
             this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
             this.$search = $('#mealsdb_qo_search');
+            this.$clientSearch = $('#mealsdb_qo_client_search');
+            this.$clientDropdown = $('#mealsdb_qo_client_dropdown');
             this.$clientSelect = $('#mealsdb_qo_client');
             this.$orderDate = $('#mealsdb-quick-order-date');
             this.$createOrder = $('#qo-create-order');
@@ -376,18 +378,14 @@
             this.state.currentClientId = clientId;
             this.state.currentClientType = type;
 
-            let $option = this.$clientSelect.find(`option[value="${clientId}"]`);
-            if (!$option.length) {
-                $option = $('<option>', {
-                    value: clientId,
-                    text: safeName,
-                    'data-client-id': clientId,
-                    'data-client-type': type,
-                });
-                this.$clientSelect.append($option);
+            this.$clientSelect.val(clientId);
+            this.$clientSelect.data('clientType', type);
+
+            if (this.$clientSearch && this.$clientSearch.length) {
+                this.$clientSearch.val(safeName);
             }
 
-            this.$clientSelect.val(clientId).trigger('change');
+            this.$clientSelect.trigger('change');
 
             this.updateSummaryPanel();
         },
@@ -1446,22 +1444,10 @@
                 const parsedId = parseInt(selectedValue, 10);
                 clientId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
 
-                const $selected = this.$clientSelect.find('option:selected');
-                if ($selected.length) {
-                    const selectedData = $selected.data('client');
-                    if (selectedData && selectedData.client_type) {
-                        clientType = selectedData.client_type;
-                    } else if (selectedData && selectedData.client_type) {
-                        clientType = selectedData.client_type;
-                    } else if ($selected.data('clientType')) {
-                        clientType = $selected.data('clientType');
-                    }
-
-                    if (selectedData && Array.isArray(selectedData.allergens)) {
-                        clientAllergens = selectedData.allergens;
-                    } else if (selectedData && Array.isArray(selectedData.allergen_flags)) {
-                        clientAllergens = selectedData.allergen_flags;
-                    }
+                clientType = this.$clientSelect.data('clientType') || '';
+                const selectedAllergens = this.$clientSelect.data('clientAllergens');
+                if (Array.isArray(selectedAllergens)) {
+                    clientAllergens = selectedAllergens;
                 }
             }
 
@@ -1874,6 +1860,47 @@
         });
     });
 
+    jQuery(function ($) {
+        const search = $('#mealsdb_qo_client_search');
+        const dropdown = $('#mealsdb_qo_client_dropdown');
+        const hidden = $('#mealsdb_qo_client');
+
+        // Show dropdown on focus/click
+        search.on('focus click', function() {
+            dropdown.show();
+        });
+
+        // Hide dropdown when clicking outside
+        $(document).on('click', function(e) {
+            if (!$(e.target).closest('.mealsdb-client-combobox').length) {
+                dropdown.hide();
+            }
+        });
+
+        // Filter clients as user types
+        search.on('keyup', function() {
+            const term = search.val().toLowerCase();
+
+            dropdown.children('.client-option').each(function() {
+                const name = $(this).data('name').toLowerCase();
+                $(this).toggle(name.includes(term));
+            });
+        });
+
+        // When selecting a client
+        dropdown.on('click', '.client-option', function() {
+            const id = $(this).data('id');
+            const name = $(this).data('name');
+
+            search.val(name);
+            hidden.val(id);
+            hidden.data('clientType', '');
+
+            dropdown.hide();
+            hidden.trigger('change');
+        });
+    });
+
     $(function () {
         if (typeof mealsdbQuickOrder === 'undefined') {
             return;
@@ -1882,22 +1909,3 @@
         QuickOrder.init();
     });
 })(jQuery);
-
-(function () {
-    const search = document.getElementById('mealsdb_qo_client_search');
-    const select = document.getElementById('mealsdb_qo_client');
-
-    if (!search || !select) {
-        return;
-    }
-
-    search.addEventListener('keyup', function () {
-        const filter = search.value.toLowerCase();
-        const options = select.querySelectorAll('option');
-
-        options.forEach((option) => {
-            const text = option.textContent.toLowerCase();
-            option.style.display = text.includes(filter) ? '' : 'none';
-        });
-    });
-})();
