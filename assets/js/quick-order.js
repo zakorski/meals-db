@@ -43,10 +43,12 @@
                 return;
             }
 
+            this.state.categoryProducts = { all: QO_PRODUCTS };
+            this.state.activeCategorySlug = 'all';
+
             this.bindEvents();
             this.renderSummary();
-
-            this.initialiseCategories();
+            this.renderProducts(QO_PRODUCTS);
             this.maybeLoadClonedOrder();
         },
 
@@ -841,13 +843,7 @@
 
             if (keyword.length < 2) {
                 this.state.isSearching = false;
-                if (this.state.activeCategorySlug) {
-                    if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts[this.state.activeCategorySlug])) {
-                        this.renderProducts(this.state.categoryProducts[this.state.activeCategorySlug]);
-                    } else if (this.state.activeCategoryId) {
-                        this.fetchProductsByCategory(this.state.activeCategoryId, this.state.activeCategorySlug);
-                    }
-                }
+                this.renderProducts(QO_PRODUCTS);
                 return;
             }
 
@@ -952,6 +948,9 @@
             const safePrice = this.escapeHtml(formattedPrice);
             const isSelected = quantity > 0;
             const selectedClass = isSelected ? ' selected' : '';
+            const categorySlug = this.escapeAttribute(
+                this.normaliseCategorySlug(product && product.category ? product.category.slug : '')
+            );
             const imageHtml =
                 product.image_url && typeof product.image_url === 'string'
                     ? `<div class="mealsdb-quick-order__product-image"><img src="${this.escapeAttribute(
@@ -971,7 +970,7 @@
                 : '';
 
             return `
-                <div class="mealsdb-qo-tile${selectedClass}${restrictionClass}" tabindex="0">
+                <div class="mealsdb-qo-tile qo-product${selectedClass}${restrictionClass}" tabindex="0" data-cat="${categorySlug}">
                     <div class="mealsdb-quick-order__product${selectedClass}" data-product-id="${this.escapeAttribute(
                         productId
                     )}">
@@ -1857,25 +1856,6 @@
     });
 
     const $document = jQuery(document);
-    $document.off('input', '#mealsdb-qo-search');
-    $document.on(
-        'input',
-        '#mealsdb-qo-search',
-        debounce(function () {
-            const term = jQuery(this).val().trim().toLowerCase();
-
-            if (!term) {
-                const active = jQuery('.mealsdb-qo-cat-tab.active');
-                if (active.length) {
-                    loadCategory(active.data('cat'));
-                }
-                return;
-            }
-
-            searchProducts(term);
-        }, 150)
-    );
-
     $document.off('keydown.mealsdb-qo-enter-create');
     $document.on('keydown.mealsdb-qo-enter-create', function (event) {
         if (event.key !== 'Enter') {
@@ -1937,26 +1917,6 @@
             event.preventDefault();
             $search.focus().select();
         }
-    });
-
-    const loadCategory = (categoryId) => {
-        if (QuickOrder && typeof QuickOrder.loadCategory === 'function') {
-            return QuickOrder.loadCategory(categoryId);
-        }
-
-        return null;
-    };
-
-    $document.off('click', '.mealsdb-qo-cat-tab');
-    $document.on('click', '.mealsdb-qo-cat-tab', function () {
-        const $tab = $(this);
-        if ($tab.hasClass('active') || $tab.hasClass('is-active')) {
-            return;
-        }
-
-        $('.mealsdb-qo-cat-tab').removeClass('active is-active');
-        $tab.addClass('active is-active');
-        loadCategory($tab.data('cat'));
     });
 
     $document.off('keydown.mealsdb-qo-tiles');
@@ -2043,6 +2003,22 @@
                 $prev.trigger('click');
             }
         }
+    });
+
+    jQuery(function ($) {
+        $('.mealsdb-qo-tabs li').on('click', function () {
+            let cat = $(this).data('cat');
+
+            $('.mealsdb-qo-tabs li').removeClass('active');
+            $(this).addClass('active');
+
+            if (cat === 'all') {
+                $('.qo-product').show();
+            } else {
+                $('.qo-product').hide();
+                $('.qo-product[data-cat="' + cat + '"]').show();
+            }
+        });
     });
 
     $(function () {
