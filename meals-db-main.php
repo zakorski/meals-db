@@ -33,8 +33,15 @@ if (!defined('MEALS_DB_VERSION')) {
     define('MEALS_DB_VERSION', '1.0.0');
 }
 
+// Old Autoloader - Deprecated.
+
 require_once plugin_dir_path(__FILE__) . 'includes/class-autoloader.php';
 MealsDB_Autoloader::register(MEALS_DB_PLUGIN_DIR);
+
+// New loader for cleaner plugin interface.
+
+require_once __DIR__ . '/includes/class-plugin.php';
+MealsDB_Plugin::init();
 
 // Abort early if wp-config.php constants have not been configured.
 if (!defined('MEALS_DB_KEY')) {
