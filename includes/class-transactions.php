@@ -71,8 +71,8 @@ class MealsDB_Transactions {
             return [];
         }
 
-        $transactions_table = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_transactions'));
-        $clients_table      = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_clients'));
+        $transactions_table = str_replace('`', '``', MealsDB_DB::get_table_name('meals_transactions'));
+        $clients_table      = str_replace('`', '``', MealsDB_DB::get_table_name('meals_clients'));
 
         $sql = "SELECT t.*, c.first_name, c.last_name, c.client_type, c.phone, c.email"
             . " FROM `{$transactions_table}` t"
@@ -170,8 +170,8 @@ class MealsDB_Transactions {
             return [];
         }
 
-        $items_table    = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_transaction_items'));
-        $products_table = str_replace('`', '``', MealsDB_DB::get_table_name('mealsdb_products'));
+        $items_table    = str_replace('`', '``', MealsDB_DB::get_table_name('meals_transaction_items'));
+        $products_table = str_replace('`', '``', MealsDB_DB::get_table_name('meals_products'));
 
         $sql = "SELECT ti.*, p.product_name, p.category, p.main_ingredient"
             . " FROM `{$items_table}` ti"
@@ -258,8 +258,8 @@ class MealsDB_Transactions {
             return [];
         }
 
-        $transactions_table = MealsDB_DB::get_table_name('mealsdb_transactions');
-        $clients_table      = MealsDB_DB::get_table_name('mealsdb_clients');
+        $transactions_table = MealsDB_DB::get_table_name('meals_transactions');
+        $clients_table      = MealsDB_DB::get_table_name('meals_clients');
 
         $transactions_table = str_replace('`', '``', $transactions_table);
         $clients_table      = str_replace('`', '``', $clients_table);
@@ -365,8 +365,8 @@ class MealsDB_Transactions {
             return 0;
         }
 
-        $transactions_table = MealsDB_DB::get_table_name('mealsdb_transactions');
-        $clients_table      = MealsDB_DB::get_table_name('mealsdb_clients');
+        $transactions_table = MealsDB_DB::get_table_name('meals_transactions');
+        $clients_table      = MealsDB_DB::get_table_name('meals_clients');
 
         $transactions_table = str_replace('`', '``', $transactions_table);
         $clients_table      = str_replace('`', '``', $clients_table);
