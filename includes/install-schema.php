@@ -45,6 +45,8 @@ class MealsDB_Installer {
             $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
         }
 
+        $transactions_table = str_replace('`', '``', MealsDB_DB::get_table_name('meals_transactions'));
+
         $tables = [
             'meals_drafts' => "CREATE TABLE IF NOT EXISTS meals_drafts (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -77,16 +79,21 @@ class MealsDB_Installer {
                 KEY idx_user_id (user_id),
                 KEY idx_target_id (target_id)
             ) ENGINE=InnoDB $charset_sql;",
-            'meals_transactions' => "CREATE TABLE IF NOT EXISTS meals_transactions (
-                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            'meals_transactions' => "CREATE TABLE IF NOT EXISTS `{$transactions_table}` (
+                transaction_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 client_id INT UNSIGNED NOT NULL,
-                wp_order_id BIGINT UNSIGNED NOT NULL,
+                wp_order_id BIGINT UNSIGNED NULL,
+                wp_order_item_id BIGINT UNSIGNED NULL,
                 order_date DATE NOT NULL,
-                subtotal DECIMAL(10,2),
-                total DECIMAL(10,2),
-                metadata JSON,
-                created_at DATETIME,
-                updated_at DATETIME
+                delivery_date DATE NOT NULL,
+                subtotal DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+                taxes DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+                total DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+                metadata JSON NULL,
+                status ENUM('Ordered','Delivered','Cancelled') NOT NULL DEFAULT 'Ordered',
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                KEY idx_client_id (client_id)
             ) ENGINE=InnoDB $charset_sql;",
             'meals_staff' => "CREATE TABLE IF NOT EXISTS meals_staff (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -118,11 +125,11 @@ class MealsDB_Installer {
     }
 
     /**
-     * Create the mealsdb_transactions table in the external Meals DB.
+     * Create the meals_transactions table in the external Meals DB.
      */
     private static function create_table_transactions($conn): void {
         if (!MealsDB_DB::is_mysqli($conn)) {
-            error_log('[MealsDB Installer] Unable to establish database connection while creating mealsdb_transactions.');
+            error_log('[MealsDB Installer] Unable to establish database connection while creating meals_transactions.');
             return;
         }
 
@@ -141,8 +148,8 @@ class MealsDB_Installer {
             $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
         }
 
-        $transactions_table = MealsDB_DB::get_table_name('mealsdb_transactions');
-        $clients_table      = MealsDB_DB::get_table_name('mealsdb_clients');
+        $transactions_table = MealsDB_DB::get_table_name('meals_transactions');
+        $clients_table      = MealsDB_DB::get_table_name('meals_clients');
 
         $transactions_table = str_replace('`', '``', $transactions_table);
         $clients_table      = str_replace('`', '``', $clients_table);
@@ -150,31 +157,37 @@ class MealsDB_Installer {
         $sql = "CREATE TABLE IF NOT EXISTS `{$transactions_table}` (
             transaction_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             client_id INT UNSIGNED NOT NULL,
+            wp_order_id BIGINT UNSIGNED NULL,
+            wp_order_item_id BIGINT UNSIGNED NULL,
             order_date DATE NOT NULL,
             delivery_date DATE NOT NULL,
+            subtotal DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            taxes DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            total DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            metadata JSON NULL,
             status ENUM('Ordered','Delivered','Cancelled') NOT NULL DEFAULT 'Ordered',
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             KEY idx_client_id (client_id),
-            CONSTRAINT fk_mealsdb_transactions_client FOREIGN KEY (client_id) REFERENCES `{$clients_table}`(client_id)
+            CONSTRAINT fk_meals_transactions_client FOREIGN KEY (client_id) REFERENCES `{$clients_table}`(client_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB {$charset_sql};";
 
         if (!$conn->query($sql)) {
-            error_log('[MealsDB Installer] Failed creating mealsdb_transactions table: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed creating meals_transactions table: ' . $conn->error);
         }
     }
 
     /**
-     * Ensure the status column exists on mealsdb_transactions.
+     * Ensure the status column exists on meals_transactions.
      */
     private static function alter_transactions_add_status($conn): void {
         if (!MealsDB_DB::is_mysqli($conn)) {
-            error_log('[MealsDB Installer] Unable to establish database connection while altering mealsdb_transactions.');
+            error_log('[MealsDB Installer] Unable to establish database connection while altering meals_transactions.');
             return;
         }
 
-        $transactions_table = MealsDB_DB::get_table_name('mealsdb_transactions');
+        $transactions_table = MealsDB_DB::get_table_name('meals_transactions');
         $transactions_table = str_replace('`', '``', $transactions_table);
 
         $column_name    = 'status';
@@ -193,7 +206,7 @@ class MealsDB_Installer {
                 $column_result->free();
             }
         } elseif ($column_result === false) {
-            error_log('[MealsDB Installer] Failed inspecting mealsdb_transactions.status column: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed inspecting meals_transactions.status column: ' . $conn->error);
             return;
         }
 
@@ -204,16 +217,16 @@ class MealsDB_Installer {
         $alter_sql = "ALTER TABLE `{$transactions_table}` ADD COLUMN `{$column_name}` ENUM('Ordered','Delivered','Cancelled') NOT NULL DEFAULT 'Ordered'";
 
         if (!$conn->query($alter_sql)) {
-            error_log('[MealsDB Installer] Failed adding mealsdb_transactions.status column: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed adding meals_transactions.status column: ' . $conn->error);
         }
     }
 
     /**
-     * Create the mealsdb_transaction_items table in the external Meals DB.
+     * Create the meals_transaction_items table in the external Meals DB.
      */
     private static function create_table_transaction_items($conn): void {
         if (!MealsDB_DB::is_mysqli($conn)) {
-            error_log('[MealsDB Installer] Unable to establish database connection while creating mealsdb_transaction_items.');
+            error_log('[MealsDB Installer] Unable to establish database connection while creating meals_transaction_items.');
             return;
         }
 
@@ -232,29 +245,32 @@ class MealsDB_Installer {
             $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
         }
 
-        $transaction_items_table = MealsDB_DB::get_table_name('mealsdb_transaction_items');
-        $transactions_table      = MealsDB_DB::get_table_name('mealsdb_transactions');
-        $products_table          = MealsDB_DB::get_table_name('mealsdb_products');
+        $transaction_items_table = MealsDB_DB::get_table_name('meals_transaction_items');
+        $transactions_table      = MealsDB_DB::get_table_name('meals_transactions');
+        $products_table          = MealsDB_DB::get_table_name('meals_products');
 
         $transaction_items_table = str_replace('`', '``', $transaction_items_table);
         $transactions_table      = str_replace('`', '``', $transactions_table);
         $products_table          = str_replace('`', '``', $products_table);
 
         $sql = "CREATE TABLE IF NOT EXISTS `{$transaction_items_table}` (
-            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            transaction_item_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             transaction_id INT UNSIGNED NOT NULL,
-            item_id INT UNSIGNED NOT NULL,
+            product_id INT UNSIGNED NOT NULL,
             quantity INT UNSIGNED NOT NULL DEFAULT 1,
+            line_subtotal DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            line_taxes DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            line_total DECIMAL(10,2) NOT NULL DEFAULT 0.00,
             KEY idx_transaction_id (transaction_id),
-            KEY idx_item_id (item_id),
-            CONSTRAINT fk_mealsdb_transaction_items_transaction FOREIGN KEY (transaction_id)
+            KEY idx_product_id (product_id),
+            CONSTRAINT fk_meals_transaction_items_transaction FOREIGN KEY (transaction_id)
                 REFERENCES `{$transactions_table}`(transaction_id) ON DELETE CASCADE,
-            CONSTRAINT fk_mealsdb_transaction_items_product FOREIGN KEY (item_id)
+            CONSTRAINT fk_meals_transaction_items_product FOREIGN KEY (product_id)
                 REFERENCES `{$products_table}`(product_id) ON DELETE CASCADE
         ) ENGINE=InnoDB {$charset_sql};";
 
         if (!$conn->query($sql)) {
-            error_log('[MealsDB Installer] Failed creating mealsdb_transaction_items table: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed creating meals_transaction_items table: ' . $conn->error);
         }
     }
 

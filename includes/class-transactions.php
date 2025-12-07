@@ -25,7 +25,7 @@ class MealsDB_Transactions {
             return false;
         }
 
-        $table_name = MealsDB_DB::get_table_name('meals_transactions');
+        $table_name   = MealsDB_DB::get_table_name('meals_transactions');
         $escaped_table = str_replace('`', '``', $table_name);
 
         $metadata = json_encode($items);
@@ -36,9 +36,17 @@ class MealsDB_Transactions {
         $subtotal = isset($totals['subtotal']) ? (float) $totals['subtotal'] : 0.0;
         $total    = isset($totals['total']) ? (float) $totals['total'] : 0.0;
         $taxes    = isset($totals['taxes']) ? (float) $totals['taxes'] : 0.0;
+        $status   = 'Ordered';
+
+        $order_date    = isset($totals['order_date']) ? (string) $totals['order_date'] : date('Y-m-d');
+        $delivery_date = isset($totals['delivery_date']) ? (string) $totals['delivery_date'] : $order_date;
+
+        $wp_order_id       = (int) $order_id;
+        $wp_order_item_id  = isset($totals['wp_order_item_id']) ? (int) $totals['wp_order_item_id'] : null;
+        $client_identifier = (int) $client_id;
 
         $sql = sprintf(
-            'INSERT INTO `%s` (order_id, client_id, metadata, subtotal, total, taxes, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+            'INSERT INTO `%s` (client_id, wp_order_id, wp_order_item_id, order_date, delivery_date, subtotal, taxes, total, metadata, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())',
             $escaped_table
         );
 
@@ -48,7 +56,19 @@ class MealsDB_Transactions {
         }
 
         $metadata_param = $metadata;
-        if (!$statement->bind_param('iisddd', $order_id, $client_id, $metadata_param, $subtotal, $total, $taxes)) {
+        if (!$statement->bind_param(
+            'iiissdddsss',
+            $client_identifier,
+            $wp_order_id,
+            $wp_order_item_id,
+            $order_date,
+            $delivery_date,
+            $subtotal,
+            $taxes,
+            $total,
+            $metadata_param,
+            $status
+        )) {
             $statement->close();
             return false;
         }
@@ -74,7 +94,9 @@ class MealsDB_Transactions {
         $transactions_table = str_replace('`', '``', MealsDB_DB::get_table_name('meals_transactions'));
         $clients_table      = str_replace('`', '``', MealsDB_DB::get_table_name('meals_clients'));
 
-        $sql = "SELECT t.*, c.first_name, c.last_name, c.client_type, c.phone, c.email"
+        $sql = "SELECT ".
+            " t.transaction_id, t.client_id, t.wp_order_id, t.wp_order_item_id, t.order_date, t.delivery_date, t.subtotal, t.taxes, t.total, t.metadata, t.status, t.created_at, t.updated_at,"
+            . " c.first_name, c.last_name, c.client_type, c.phone, c.email"
             . " FROM `{$transactions_table}` t"
             . " LEFT JOIN `{$clients_table}` c ON c.client_id = t.client_id"
             . ' WHERE t.transaction_id = ?'
@@ -106,25 +128,37 @@ class MealsDB_Transactions {
             }
         } else {
             $statement_row = [
-                'transaction_id' => null,
-                'client_id'      => null,
-                'order_date'     => null,
-                'delivery_date'  => null,
-                'status'         => null,
-                'created_at'     => null,
-                'updated_at'     => null,
-                'first_name'     => null,
-                'last_name'      => null,
-                'client_type'    => null,
-                'phone'          => null,
-                'email'          => null,
+                'transaction_id'   => null,
+                'client_id'         => null,
+                'wp_order_id'       => null,
+                'wp_order_item_id'  => null,
+                'order_date'        => null,
+                'delivery_date'     => null,
+                'subtotal'          => null,
+                'taxes'             => null,
+                'total'             => null,
+                'metadata'          => null,
+                'status'            => null,
+                'created_at'        => null,
+                'updated_at'        => null,
+                'first_name'        => null,
+                'last_name'         => null,
+                'client_type'       => null,
+                'phone'             => null,
+                'email'             => null,
             ];
 
             $bound = $stmt->bind_result(
                 $statement_row['transaction_id'],
                 $statement_row['client_id'],
+                $statement_row['wp_order_id'],
+                $statement_row['wp_order_item_id'],
                 $statement_row['order_date'],
                 $statement_row['delivery_date'],
+                $statement_row['subtotal'],
+                $statement_row['taxes'],
+                $statement_row['total'],
+                $statement_row['metadata'],
                 $statement_row['status'],
                 $statement_row['created_at'],
                 $statement_row['updated_at'],
@@ -137,18 +171,24 @@ class MealsDB_Transactions {
 
             if ($bound && $stmt->fetch()) {
                 $row = [
-                    'transaction_id' => $statement_row['transaction_id'],
-                    'client_id'      => $statement_row['client_id'],
-                    'order_date'     => $statement_row['order_date'],
-                    'delivery_date'  => $statement_row['delivery_date'],
-                    'status'         => $statement_row['status'],
-                    'created_at'     => $statement_row['created_at'],
-                    'updated_at'     => $statement_row['updated_at'],
-                    'first_name'     => $statement_row['first_name'],
-                    'last_name'      => $statement_row['last_name'],
-                    'client_type'    => $statement_row['client_type'],
-                    'phone'          => $statement_row['phone'],
-                    'email'          => $statement_row['email'],
+                    'transaction_id'  => $statement_row['transaction_id'],
+                    'client_id'       => $statement_row['client_id'],
+                    'wp_order_id'     => $statement_row['wp_order_id'],
+                    'wp_order_item_id'=> $statement_row['wp_order_item_id'],
+                    'order_date'      => $statement_row['order_date'],
+                    'delivery_date'   => $statement_row['delivery_date'],
+                    'subtotal'        => $statement_row['subtotal'],
+                    'taxes'           => $statement_row['taxes'],
+                    'total'           => $statement_row['total'],
+                    'metadata'        => $statement_row['metadata'],
+                    'status'          => $statement_row['status'],
+                    'created_at'      => $statement_row['created_at'],
+                    'updated_at'      => $statement_row['updated_at'],
+                    'first_name'      => $statement_row['first_name'],
+                    'last_name'       => $statement_row['last_name'],
+                    'client_type'     => $statement_row['client_type'],
+                    'phone'           => $statement_row['phone'],
+                    'email'           => $statement_row['email'],
                 ];
             }
         }
@@ -173,9 +213,11 @@ class MealsDB_Transactions {
         $items_table    = str_replace('`', '``', MealsDB_DB::get_table_name('meals_transaction_items'));
         $products_table = str_replace('`', '``', MealsDB_DB::get_table_name('meals_products'));
 
-        $sql = "SELECT ti.*, p.product_name, p.category, p.main_ingredient"
+        $sql = "SELECT ".
+            " ti.transaction_item_id, ti.transaction_id, ti.product_id, ti.quantity, ti.line_subtotal, ti.line_taxes, ti.line_total,"
+            . " p.product_name, p.category, p.main_ingredient"
             . " FROM `{$items_table}` ti"
-            . " LEFT JOIN `{$products_table}` p ON p.product_id = ti.item_id"
+            . " LEFT JOIN `{$products_table}` p ON p.product_id = ti.product_id"
             . ' WHERE ti.transaction_id = ?'
             . ' ORDER BY p.product_name ASC';
 
@@ -209,8 +251,11 @@ class MealsDB_Transactions {
             $statement_row = [
                 'transaction_item_id' => null,
                 'transaction_id'      => null,
-                'item_id'             => null,
+                'product_id'          => null,
                 'quantity'            => null,
+                'line_subtotal'       => null,
+                'line_taxes'          => null,
+                'line_total'          => null,
                 'product_name'        => null,
                 'category'            => null,
                 'main_ingredient'     => null,
@@ -219,8 +264,11 @@ class MealsDB_Transactions {
             $bound = $stmt->bind_result(
                 $statement_row['transaction_item_id'],
                 $statement_row['transaction_id'],
-                $statement_row['item_id'],
+                $statement_row['product_id'],
                 $statement_row['quantity'],
+                $statement_row['line_subtotal'],
+                $statement_row['line_taxes'],
+                $statement_row['line_total'],
                 $statement_row['product_name'],
                 $statement_row['category'],
                 $statement_row['main_ingredient']
@@ -231,8 +279,11 @@ class MealsDB_Transactions {
                     $rows[] = [
                         'transaction_item_id' => $statement_row['transaction_item_id'],
                         'transaction_id'      => $statement_row['transaction_id'],
-                        'item_id'             => $statement_row['item_id'],
+                        'product_id'          => $statement_row['product_id'],
                         'quantity'            => $statement_row['quantity'],
+                        'line_subtotal'       => $statement_row['line_subtotal'],
+                        'line_taxes'          => $statement_row['line_taxes'],
+                        'line_total'          => $statement_row['line_total'],
                         'product_name'        => $statement_row['product_name'],
                         'category'            => $statement_row['category'],
                         'main_ingredient'     => $statement_row['main_ingredient'],
@@ -269,7 +320,9 @@ class MealsDB_Transactions {
 
         [$where_sql, $types, $params] = self::build_transactions_where_clause($filters);
 
-        $sql = "SELECT t.*, c.first_name, c.last_name, c.client_type FROM `{$transactions_table}` t"
+        $sql = "SELECT "
+            . "t.transaction_id, t.client_id, t.wp_order_id, t.wp_order_item_id, t.order_date, t.delivery_date, t.subtotal, t.taxes, t.total, t.metadata, t.status, t.created_at, t.updated_at,"
+            . " c.first_name, c.last_name, c.client_type FROM `{$transactions_table}` t"
             . " LEFT JOIN `{$clients_table}` c ON t.client_id = c.client_id"
             . ' WHERE 1=1'
             . $where_sql
@@ -308,23 +361,35 @@ class MealsDB_Transactions {
             }
         } else {
             $statement_row = [
-                'transaction_id' => null,
-                'client_id'      => null,
-                'order_date'     => null,
-                'delivery_date'  => null,
-                'status'         => null,
-                'created_at'     => null,
-                'updated_at'     => null,
-                'first_name'     => null,
-                'last_name'      => null,
-                'client_type'    => null,
+                'transaction_id'   => null,
+                'client_id'        => null,
+                'wp_order_id'      => null,
+                'wp_order_item_id' => null,
+                'order_date'       => null,
+                'delivery_date'    => null,
+                'subtotal'         => null,
+                'taxes'            => null,
+                'total'            => null,
+                'metadata'         => null,
+                'status'           => null,
+                'created_at'       => null,
+                'updated_at'       => null,
+                'first_name'       => null,
+                'last_name'        => null,
+                'client_type'      => null,
             ];
 
             $bound = $stmt->bind_result(
                 $statement_row['transaction_id'],
                 $statement_row['client_id'],
+                $statement_row['wp_order_id'],
+                $statement_row['wp_order_item_id'],
                 $statement_row['order_date'],
                 $statement_row['delivery_date'],
+                $statement_row['subtotal'],
+                $statement_row['taxes'],
+                $statement_row['total'],
+                $statement_row['metadata'],
                 $statement_row['status'],
                 $statement_row['created_at'],
                 $statement_row['updated_at'],
@@ -338,8 +403,14 @@ class MealsDB_Transactions {
                     $rows[] = [
                         'transaction_id' => $statement_row['transaction_id'],
                         'client_id'      => $statement_row['client_id'],
+                        'wp_order_id'    => $statement_row['wp_order_id'],
+                        'wp_order_item_id' => $statement_row['wp_order_item_id'],
                         'order_date'     => $statement_row['order_date'],
                         'delivery_date'  => $statement_row['delivery_date'],
+                        'subtotal'       => $statement_row['subtotal'],
+                        'taxes'          => $statement_row['taxes'],
+                        'total'          => $statement_row['total'],
+                        'metadata'       => $statement_row['metadata'],
                         'status'         => $statement_row['status'],
                         'created_at'     => $statement_row['created_at'],
                         'updated_at'     => $statement_row['updated_at'],
