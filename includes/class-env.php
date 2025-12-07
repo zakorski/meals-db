@@ -1,49 +1,68 @@
 <?php
 /**
- * Loads environment variables from a .env file into $_ENV and getenv().
- * 
+ * Lightweight .env loader for Meals DB.
+ *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
-class MealsDB_Env {
+if ( ! class_exists( 'MealsDB_Env' ) ) {
 
-    /**
-     * Load .env file and make variables available globally.
-     *
-     * @param string $file_path Absolute path to the .env file.
-     */
-    public static function load($file_path) {
-        if (!file_exists($file_path) || !is_readable($file_path)) {
-            error_log('[MealsDB] .env file not found or unreadable at: ' . $file_path);
-            return;
-        }
+    class MealsDB_Env {
 
-        $lines = file($file_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-
-        foreach ($lines as $line) {
-            // Skip comments
-            if (strpos(trim($line), '#') === 0) {
-                continue;
+        /**
+         * Load a .env file into the PHP environment.
+         *
+         * - Lines starting with # or ; are treated as comments.
+         * - KEY=VALUE pairs are parsed; surrounding double quotes are stripped.
+         * - Existing environment values are NOT overwritten.
+         *
+         * @param string $file_path Absolute path to the .env file.
+         */
+        public static function load( string $file_path ): void {
+            if ( ! is_readable( $file_path ) ) {
+                return;
             }
 
-            // Parse key=value
-            if (strpos($line, '=') !== false) {
-                list($key, $value) = explode('=', $line, 2);
+            $lines = @file( $file_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES );
+            if ( ! is_array( $lines ) ) {
+                return;
+            }
 
-                $key = trim($key);
-                $value = trim($value);
+            foreach ( $lines as $line ) {
+                $line = trim( $line );
 
-                // Strip optional surrounding quotes
-                $value = trim($value, '"\'');
-
-                if (!array_key_exists($key, $_ENV)) {
-                    $_ENV[$key] = $value;
+                // Skip empty lines and comments.
+                if ( $line === '' || $line[0] === '#' || $line[0] === ';' ) {
+                    continue;
                 }
 
-                if (function_exists('putenv')) {
-                    putenv("$key=$value");
+                // Must be KEY=VALUE form.
+                if ( strpos( $line, '=' ) === false ) {
+                    continue;
+                }
+
+                list( $key, $value ) = explode( '=', $line, 2 );
+                $key   = trim( $key );
+                $value = trim( $value );
+
+                if ( $key === '' ) {
+                    continue;
+                }
+
+                // Strip surrounding double quotes if present.
+                if ( strlen( $value ) >= 2 && $value[0] === '"' && substr( $value, -1 ) === '"' ) {
+                    $value = substr( $value, 1, -1 );
+                }
+
+                // Do not overwrite existing values.
+                if ( getenv( $key ) === false ) {
+                    @putenv( $key . '=' . $value );
+                }
+
+                if ( ! array_key_exists( $key, $_ENV ) ) {
+                    $_ENV[ $key ] = $value;
                 }
             }
         }
