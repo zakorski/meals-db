@@ -1,115 +1,121 @@
 <?php
 /**
- * Provides access to Meals DB configuration values.
+ * MealsDB Configuration Loader
+ *
+ * Handles loading environment variables from:
+ *  - .env file in the plugin root
+ *  - WP-config.php constants
+ *  - Server environment variables
+ *  - Hard defaults
+ *
+ * Author: Fishhorn Design
+ * Licensed under GPL 3.0+
  */
 
 class MealsDB_Config {
-    /**
-     * Retrieve the Meals DB host.
-     */
-    public function get_db_host(): ?string {
-        return $this->resolve_value('MEALSDB_HOST', 'MEALS_DB_HOST');
+
+    private static $instance = null;
+
+    private $env_loaded = false;
+    private $plugin_root;
+
+    private function __construct() {
+        $this->plugin_root = dirname(__FILE__, 2);
+        $this->load_env_file();
     }
 
     /**
-     * Retrieve the Meals DB user.
+     * Singleton Factory
      */
-    public function get_db_user(): ?string {
-        return $this->resolve_value('MEALSDB_USER', 'MEALS_DB_USER');
+    public static function get() {
+        if (self::$instance === null) {
+            self::$instance = new self();
+        }
+        return self::$instance;
     }
 
     /**
-     * Retrieve the Meals DB password.
+     * Load .env file into environment variables.
      */
-    public function get_db_password(): ?string {
-        return $this->resolve_value('MEALSDB_PASSWORD', 'MEALS_DB_PASS');
-    }
-
-    /**
-     * Retrieve the Meals DB name.
-     */
-    public function get_db_name(): ?string {
-        return $this->resolve_value('MEALSDB_NAME', 'MEALS_DB_NAME');
-    }
-
-    /**
-     * Retrieve the Meals DB table prefix override.
-     *
-     * Allows deployments using an external database (with tables that do not share
-     * the WordPress prefix) to opt-in to a custom prefix, including an empty
-     * prefix when needed.
-     */
-    public function get_table_prefix(): ?string {
-        $env_value = getenv('MEALSDB_TABLE_PREFIX');
-        if ($env_value !== false) {
-            return (string) $env_value;
+    private function load_env_file() {
+        if ($this->env_loaded) {
+            return;
         }
 
-        $legacy_env_value = getenv('MEALS_DB_TABLE_PREFIX');
-        if ($legacy_env_value !== false) {
-            return (string) $legacy_env_value;
+        $env_path = $this->plugin_root . '/.env';
+
+        if (!file_exists($env_path)) {
+            $this->env_loaded = true;
+            return;
         }
 
-        if (defined('MEALSDB_TABLE_PREFIX')) {
-            $value = constant('MEALSDB_TABLE_PREFIX');
-            if (is_string($value) || is_numeric($value)) {
-                return (string) $value;
+        $lines = file($env_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+        foreach ($lines as $line) {
+
+            // Skip comments
+            if (strpos(trim($line), '#') === 0) {
+                continue;
+            }
+
+            // Parse key=value
+            if (strpos($line, '=') !== false) {
+                list($key, $value) = array_map('trim', explode('=', $line, 2));
+
+                if ($key !== '' && getenv($key) === false) {
+                    putenv("$key=$value");
+                    $_ENV[$key] = $value;
+                    $_SERVER[$key] = $value;
+                }
             }
         }
 
-        if (defined('MEALS_DB_TABLE_PREFIX')) {
-            $value = constant('MEALS_DB_TABLE_PREFIX');
-            if (is_string($value) || is_numeric($value)) {
-                return (string) $value;
-            }
-        }
-
-        return null;
+        $this->env_loaded = true;
     }
 
     /**
-     * Determine if the Meals DB connection details are fully configured.
+     * Helper to resolve values from priority:
+     *   1. Environment variable
+     *   2. WordPress constant
+     *   3. Hardcoded fallback
      */
-    public static function is_db_configured(): bool {
-        $config = new self();
+    private function resolve($env_key, $wp_constant, $default = null) {
 
-        $host = $config->get_db_host();
-        $user = $config->get_db_user();
-        $pass = $config->get_db_password();
-        $name = $config->get_db_name();
-
-        return $host !== null && $host !== ''
-            && $user !== null && $user !== ''
-            && $pass !== null && $pass !== ''
-            && $name !== null && $name !== '';
-    }
-
-    /**
-     * Resolve a configuration value from environment variables or constants.
-     */
-    private function resolve_value(string $env_key, string $constant_name): ?string {
+        // Environment variable?
         $env_value = getenv($env_key);
-
-        if ($env_value !== false) {
-            $env_value = (string) $env_value;
-
-            if ($env_value !== '') {
-                return $env_value;
-            }
+        if ($env_value !== false && $env_value !== '') {
+            return $env_value;
         }
 
-        if (defined($constant_name)) {
-            $value = constant($constant_name);
-
-            if (is_string($value) || is_numeric($value)) {
-                $value = (string) $value;
-            }
-
-            if (is_string($value) && $value !== '') {
-                return $value;
-            }
+        // WP-config.php constant?
+        if (defined($wp_constant)) {
+            return constant($wp_constant);
         }
 
-        return null;
+        return $default;
+    }
+
+    /* ------------------------
+     * DATABASE CONFIG METHODS
+     * ------------------------ */
+
+    public function db_host() {
+        return $this->resolve('PLUGIN_DB_HOST', 'MEALS_DB_HOST', 'localhost');
+    }
+
+    public function db_name() {
+        return $this->resolve('PLUGIN_DB_NAME', 'MEALS_DB_NAME', null);
+    }
+
+    public function db_user() {
+        return $this->resolve('PLUGIN_DB_USER', 'MEALS_DB_USER', null);
+    }
+
+    public function db_pass() {
+        return $this->resolve('PLUGIN_DB_PASS', 'MEALS_DB_PASS', null);
+    }
+
+    public function table_prefix() {
+        return $this->resolve('MEALSDB_TABLE_PREFIX', 'MEALS_DB_TABLE_PREFIX', '');
     }
 }
