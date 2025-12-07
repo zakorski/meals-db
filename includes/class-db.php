@@ -22,7 +22,7 @@ class MealsDB_DB
     private static $table_name_cache = [];
 
     /**
-     * NEW core connection method (internal).
+     * Retrieve or establish a mysqli connection using MealsDB_Config credentials.
      *
      * @return mysqli|null
      */
@@ -37,13 +37,11 @@ class MealsDB_DB
             return null;
         }
 
-        // Use the central config singleton
-        if (!class_exists('MealsDB_Config')) {
+        $config = self::config();
+        if ($config === null) {
             error_log('[MealsDB DB] MealsDB_Config class not found; cannot load DB credentials.');
             return null;
         }
-
-        $config = MealsDB_Config::instance();
 
         $host = $config->db_host();
         $user = $config->db_user();
@@ -51,15 +49,14 @@ class MealsDB_DB
         $name = $config->db_name();
 
         $has_missing_credentials = $host === '' || $user === '' || $pass === '' || $name === '';
-
         if ($has_missing_credentials) {
             error_log('[MealsDB DB] External DB credentials are missing. Ensure .env contains MEALS_DB_HOST, MEALS_DB_USER, MEALS_DB_PASS, MEALS_DB_NAME.');
             return null;
         }
 
-        $previousReportMode = null;
+        $previous_report_mode = null;
         if (function_exists('mysqli_report')) {
-            $previousReportMode = mysqli_report(MYSQLI_REPORT_OFF);
+            $previous_report_mode = mysqli_report(MYSQLI_REPORT_OFF);
         }
 
         try {
@@ -68,17 +65,22 @@ class MealsDB_DB
             error_log('[MealsDB DB] Database connection exception: ' . $e->getMessage());
             self::$connection = null;
         } finally {
-            if (function_exists('mysqli_report') && $previousReportMode !== null) {
-                mysqli_report($previousReportMode);
+            if (function_exists('mysqli_report') && $previous_report_mode !== null) {
+                mysqli_report($previous_report_mode);
             }
         }
 
-        if (self::is_mysqli(self::$connection) && self::$connection->connect_error) {
+        if (!self::is_mysqli(self::$connection)) {
+            return null;
+        }
+
+        if (self::$connection->connect_error) {
             error_log('[MealsDB DB] Database connection failed: ' . self::$connection->connect_error);
             self::$connection = null;
-        } elseif (self::is_mysqli(self::$connection)) {
-            self::$connection->set_charset('utf8mb4');
+            return null;
         }
+
+        self::$connection->set_charset('utf8mb4');
 
         return self::$connection;
     }
@@ -117,14 +119,12 @@ class MealsDB_DB
         }
 
         $prefix = '';
-
-        if (class_exists('MealsDB_Config')) {
-            $config = MealsDB_Config::instance();
+        $config = self::config();
+        if ($config !== null) {
             $prefix = $config->table_prefix() ?: '';
         }
 
         $prefixed_table = $prefix !== '' && strpos($table, $prefix) !== 0 ? $prefix . $table : $table;
-
         $resolved_table = $prefixed_table;
 
         $connection = self::connection();
@@ -200,7 +200,7 @@ class MealsDB_DB
         }
 
         $escaped_table = $connection->real_escape_string($table_name);
-        $sql           = sprintf(
+        $sql = sprintf(
             "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '%s' LIMIT 1",
             $escaped_table
         );
@@ -222,7 +222,7 @@ class MealsDB_DB
      * BACKWARDS-COMPAT: keep $conn parameter optional.
      *
      * @param mysqli|null $conn
-     * @return mysqli_result|false
+     * @return mysqli_result|null
      */
     public static function get_all_clients($conn = null)
     {
@@ -231,7 +231,7 @@ class MealsDB_DB
         }
 
         if (!self::is_mysqli($conn)) {
-            return false;
+            return null;
         }
 
         $clients_table = self::get_table_name('mealsdb_clients');
@@ -239,6 +239,32 @@ class MealsDB_DB
 
         $sql = "SELECT client_id, first_name, last_name, client_type FROM `{$clients_table}` ORDER BY last_name ASC";
 
-        return $conn->query($sql);
+        try {
+            $result = $conn->query($sql);
+        } catch (Throwable $e) {
+            error_log('[MealsDB DB] Failed to fetch clients: ' . $e->getMessage());
+            return null;
+        }
+
+        return self::is_mysqli_result($result) ? $result : null;
+    }
+
+    /**
+     * Safely retrieve the MealsDB_Config singleton if available.
+     *
+     * @return MealsDB_Config|null
+     */
+    private static function config()
+    {
+        if (!class_exists('MealsDB_Config')) {
+            return null;
+        }
+
+        try {
+            return MealsDB_Config::instance();
+        } catch (Throwable $e) {
+            error_log('[MealsDB DB] Failed to load MealsDB_Config: ' . $e->getMessage());
+            return null;
+        }
     }
 }
