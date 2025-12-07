@@ -3,27 +3,43 @@
  * Handles mysqli connection to the Meals DB external database.
  *
  * Author: Fishhorn Design
+ * Author URI: https://fishhorn.ca
+ * Licensed under the GNU General Public License v3.0 or later.
  */
 
 class MealsDB_DB
 {
-    /** @var mysqli|null */
+    /**
+     * @var mysqli|null
+     */
     private static $connection = null;
 
-    /** @var array<string,string> */
+    /**
+     * Cache of resolved table names keyed by base table.
+     *
+     * @var array<string, string>
+     */
     private static $table_name_cache = [];
 
     /**
-     * Get connection (singleton)
+     * NEW core connection method (internal).
+     *
+     * @return mysqli|null
      */
-    public static function connection(): ?mysqli
+    public static function connection()
     {
-        if (self::$connection instanceof mysqli) {
+        if (self::is_mysqli(self::$connection)) {
             return self::$connection;
         }
 
-        if (!class_exists('mysqli')) {
-            error_log('[MealsDB] mysqli extension missing.');
+        if (!self::has_mysqli()) {
+            error_log('[MealsDB DB] mysqli extension is missing; Meals DB features are disabled.');
+            return null;
+        }
+
+        // Use the central config singleton
+        if (!class_exists('MealsDB_Config')) {
+            error_log('[MealsDB DB] MealsDB_Config class not found; cannot load DB credentials.');
             return null;
         }
 
@@ -34,96 +50,166 @@ class MealsDB_DB
         $pass = $config->db_pass();
         $name = $config->db_name();
 
-        if (!$host || !$user || !$pass || !$name) {
-            error_log('[MealsDB] Missing external DB credentials in .env.');
+        $has_missing_credentials = $host === '' || $user === '' || $pass === '' || $name === '';
+
+        if ($has_missing_credentials) {
+            error_log('[MealsDB DB] External DB credentials are missing. Ensure .env contains MEALS_DB_HOST, MEALS_DB_USER, MEALS_DB_PASS, MEALS_DB_NAME.');
             return null;
         }
 
-        // Avoid PHP warnings
-        $old = mysqli_report(MYSQLI_REPORT_OFF);
+        $previousReportMode = null;
+        if (function_exists('mysqli_report')) {
+            $previousReportMode = mysqli_report(MYSQLI_REPORT_OFF);
+        }
 
         try {
             self::$connection = @new mysqli($host, $user, $pass, $name);
         } catch (Throwable $e) {
-            error_log('[MealsDB] mysqli exception: ' . $e->getMessage());
+            error_log('[MealsDB DB] Database connection exception: ' . $e->getMessage());
             self::$connection = null;
+        } finally {
+            if (function_exists('mysqli_report') && $previousReportMode !== null) {
+                mysqli_report($previousReportMode);
+            }
         }
 
-        mysqli_report($old);
-
-        if (!self::$connection || self::$connection->connect_errno) {
-            error_log('[MealsDB] DB connection failed: ' . ($self::$connection->connect_error ?? 'unknown'));
+        if (self::is_mysqli(self::$connection) && self::$connection->connect_error) {
+            error_log('[MealsDB DB] Database connection failed: ' . self::$connection->connect_error);
             self::$connection = null;
-            return null;
+        } elseif (self::is_mysqli(self::$connection)) {
+            self::$connection->set_charset('utf8mb4');
         }
 
-        self::$connection->set_charset('utf8mb4');
         return self::$connection;
     }
 
     /**
-     * Disconnect manually
+     * BACKWARDS-COMPAT: old name used everywhere.
+     *
+     * @return mysqli|null
      */
-    public static function close(): void
+    public static function get_connection()
     {
-        if (self::$connection instanceof mysqli) {
+        return self::connection();
+    }
+
+    /**
+     * Close the DB connection manually if needed.
+     */
+    public static function close_connection()
+    {
+        if (self::is_mysqli(self::$connection)) {
             self::$connection->close();
+            self::$connection = null;
         }
-        self::$connection = null;
     }
 
     /**
-     * Compute or fetch cached table name
+     * NEW core table-name resolver.
+     *
+     * @param string $table
+     * @return string
      */
-    public static function table(string $base): string
+    public static function table(string $table): string
     {
-        if (isset(self::$table_name_cache[$base])) {
-            return self::$table_name_cache[$base];
+        if (isset(self::$table_name_cache[$table])) {
+            return self::$table_name_cache[$table];
         }
 
-        $config = MealsDB_Config::instance();
-        $prefix = $config->table_prefix();
+        $prefix = '';
 
-        $candidate = $prefix ? $prefix . $base : $base;
-
-        $conn = self::connection();
-
-        if (!$conn) {
-            return $base;
+        if (class_exists('MealsDB_Config')) {
+            $config = MealsDB_Config::instance();
+            $prefix = $config->table_prefix() ?: '';
         }
 
-        $final = $base;
+        $prefixed_table = $prefix !== '' && strpos($table, $prefix) !== 0 ? $prefix . $table : $table;
 
-        if (self::table_exists($conn, $candidate)) {
-            $final = $candidate;
-        } elseif (self::table_exists($conn, $base)) {
-            $final = $base;
+        $resolved_table = $prefixed_table;
+
+        $connection = self::connection();
+        if (self::is_mysqli($connection)) {
+            if ($prefixed_table !== $table && self::table_exists($connection, $prefixed_table)) {
+                $resolved_table = $prefixed_table;
+            } elseif (self::table_exists($connection, $table)) {
+                $resolved_table = $table;
+            }
         }
 
-        self::$table_name_cache[$base] = $final;
-        return $final;
+        self::$table_name_cache[$table] = $resolved_table;
+
+        return $resolved_table;
     }
 
     /**
-     * Check if a table exists
+     * BACKWARDS-COMPAT: original method name used across the plugin.
+     *
+     * @param string $table
+     * @return string
      */
-    private static function table_exists(mysqli $conn, string $table): bool
+    public static function get_table_name(string $table): string
     {
-        $table = $conn->real_escape_string($table);
+        return self::table($table);
+    }
 
-        $sql = "
-            SELECT 1 
-            FROM information_schema.tables 
-            WHERE table_schema = DATABASE() 
-              AND table_name = '{$table}'
-            LIMIT 1
-        ";
+    /**
+     * Determine if the mysqli extension is available.
+     */
+    public static function has_mysqli(): bool
+    {
+        return class_exists('mysqli');
+    }
 
-        $result = $conn->query($sql);
+    /**
+     * Safely verify a mysqli connection instance.
+     *
+     * @param mixed $value Potential mysqli connection.
+     */
+    public static function is_mysqli($value): bool
+    {
+        return self::has_mysqli() && $value instanceof mysqli;
+    }
 
-        if ($result instanceof mysqli_result) {
+    /**
+     * Safely verify a mysqli statement instance.
+     *
+     * @param mixed $value Potential mysqli_stmt instance.
+     */
+    public static function is_mysqli_stmt($value): bool
+    {
+        return class_exists('mysqli_stmt') && $value instanceof mysqli_stmt;
+    }
+
+    /**
+     * Safely verify a mysqli result instance.
+     *
+     * @param mixed $value Potential mysqli_result instance.
+     */
+    public static function is_mysqli_result($value): bool
+    {
+        return class_exists('mysqli_result') && $value instanceof mysqli_result;
+    }
+
+    /**
+     * Determine if a given table exists in the active database.
+     */
+    private static function table_exists(mysqli $connection, string $table_name): bool
+    {
+        if (!method_exists($connection, 'real_escape_string') || !method_exists($connection, 'query')) {
+            return false;
+        }
+
+        $escaped_table = $connection->real_escape_string($table_name);
+        $sql           = sprintf(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '%s' LIMIT 1",
+            $escaped_table
+        );
+
+        $result = $connection->query($sql);
+        if (self::is_mysqli_result($result)) {
             $exists = $result->num_rows > 0;
             $result->free();
+
             return $exists;
         }
 
@@ -131,21 +217,28 @@ class MealsDB_DB
     }
 
     /**
-     * Example: fetch all clients (used by View Clients)
+     * Retrieve all clients ordered alphabetically by last name.
+     *
+     * BACKWARDS-COMPAT: keep $conn parameter optional.
+     *
+     * @param mysqli|null $conn
+     * @return mysqli_result|false
      */
-    public static function get_all_clients(): ?mysqli_result
+    public static function get_all_clients($conn = null)
     {
-        $conn = self::connection();
-        if (!$conn) {
-            return null;
+        if (!self::is_mysqli($conn)) {
+            $conn = self::connection();
         }
 
-        $table = self::table('mealsdb_clients');
-        $table = str_replace('`', '``', $table);
+        if (!self::is_mysqli($conn)) {
+            return false;
+        }
 
-        $sql = "SELECT client_id, first_name, last_name, client_type FROM `{$table}` ORDER BY last_name ASC";
+        $clients_table = self::get_table_name('mealsdb_clients');
+        $clients_table = str_replace('`', '``', $clients_table);
+
+        $sql = "SELECT client_id, first_name, last_name, client_type FROM `{$clients_table}` ORDER BY last_name ASC";
 
         return $conn->query($sql);
     }
 }
-
