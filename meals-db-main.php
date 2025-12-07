@@ -15,34 +15,6 @@
  * This plugin is licensed under the GNU General Public License v3.0 or later.
  */
 
-/**
- * Load .env into PHP's environment.
- */
-
-add_action('plugins_loaded', function() {
-    MealsDB_Config::instance(); // force load .env at startup
-});
-
-function mealsdb_load_env_file($path) {
-    if (!file_exists($path)) {
-        return;
-    }
-
-    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    foreach ($lines as $line) {
-        if (strpos(trim($line), '#') === 0) {
-            continue;
-        }
-
-        list($key, $value) = array_map('trim', explode('=', $line, 2));
-        if (!getenv($key)) {
-            putenv("$key=$value");
-            $_ENV[$key] = $value;
-            $_SERVER[$key] = $value;
-        }
-    }
-}
-
 defined('ABSPATH') || exit;
 
 if (!defined('MEALS_DB_PLUGIN_FILE')) {
@@ -65,6 +37,12 @@ if (!defined('MEALS_DB_VERSION')) {
 
 require_once plugin_dir_path(__FILE__) . 'includes/class-autoloader.php';
 MealsDB_Autoloader::register(MEALS_DB_PLUGIN_DIR);
+
+add_action('plugins_loaded', function() {
+    if (class_exists('MealsDB_Config')) {
+        MealsDB_Config::instance(); // Ensure .env is always loaded early
+    }
+});
 
 // New loader for cleaner plugin interface.
 
