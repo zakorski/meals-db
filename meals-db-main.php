@@ -18,6 +18,11 @@
 /**
  * Load .env into PHP's environment.
  */
+
+add_action('plugins_loaded', function() {
+    MealsDB_Config::instance(); // force load .env at startup
+});
+
 function mealsdb_load_env_file($path) {
     if (!file_exists($path)) {
         return;
