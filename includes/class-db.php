@@ -10,6 +10,11 @@
 class MealsDB_DB
 {
     /**
+     * @var WP_Error|null
+     */
+    private static $last_error = null;
+
+    /**
      * @var mysqli|null
      */
     private static $connection = null;
@@ -24,7 +29,7 @@ class MealsDB_DB
     /**
      * Retrieve or establish a mysqli connection using MealsDB_Config credentials.
      *
-     * @return mysqli|null
+     * @return mysqli|WP_Error
      */
     public static function connection()
     {
@@ -33,14 +38,12 @@ class MealsDB_DB
         }
 
         if (!self::has_mysqli()) {
-            error_log('[MealsDB DB] mysqli extension is missing; Meals DB features are disabled.');
-            return null;
+            return self::fail_connection('mysqli extension is missing; Meals DB features are disabled.');
         }
 
         $config = self::config();
         if ($config === null) {
-            error_log('[MealsDB DB] MealsDB_Config class not found; cannot load DB credentials.');
-            return null;
+            return self::fail_connection('MealsDB_Config class not found; cannot load DB credentials.');
         }
 
         $host = $config->db_host();
@@ -50,8 +53,7 @@ class MealsDB_DB
 
         $has_missing_credentials = $host === '' || $user === '' || $pass === '' || $name === '';
         if ($has_missing_credentials) {
-            error_log('[MealsDB DB] External DB credentials are missing. Ensure .env contains MEALS_DB_HOST, MEALS_DB_USER, MEALS_DB_PASS, MEALS_DB_NAME.');
-            return null;
+            return self::fail_connection('External DB credentials are missing. Ensure .env contains MEALS_DB_HOST, MEALS_DB_USER, MEALS_DB_PASS, MEALS_DB_NAME.');
         }
 
         $previous_report_mode = null;
@@ -62,8 +64,7 @@ class MealsDB_DB
         try {
             self::$connection = @new mysqli($host, $user, $pass, $name);
         } catch (Throwable $e) {
-            error_log('[MealsDB DB] Database connection exception: ' . $e->getMessage());
-            self::$connection = null;
+            self::$connection = self::fail_connection('Database connection exception: ' . $e->getMessage());
         } finally {
             if (function_exists('mysqli_report') && $previous_report_mode !== null) {
                 mysqli_report($previous_report_mode);
@@ -71,13 +72,14 @@ class MealsDB_DB
         }
 
         if (!self::is_mysqli(self::$connection)) {
-            return null;
+            return self::fail_connection('Failed to initialize database connection instance.');
         }
 
         if (self::$connection->connect_error) {
-            error_log('[MealsDB DB] Database connection failed: ' . self::$connection->connect_error);
+            $error = self::$connection->connect_error;
             self::$connection = null;
-            return null;
+
+            return self::fail_connection('Database connection failed: ' . $error);
         }
 
         self::$connection->set_charset('utf8mb4');
@@ -88,7 +90,7 @@ class MealsDB_DB
     /**
      * BACKWARDS-COMPAT: old name used everywhere.
      *
-     * @return mysqli|null
+     * @return mysqli|WP_Error
      */
     public static function get_connection()
     {
@@ -150,6 +152,20 @@ class MealsDB_DB
     public static function get_table_name(string $table): string
     {
         return self::table($table);
+    }
+
+    /**
+     * Surface the last recorded connection error message.
+     *
+     * @return string|null
+     */
+    public static function last_error_message(): ?string
+    {
+        if (self::$last_error instanceof WP_Error) {
+            return self::$last_error->get_error_message();
+        }
+
+        return null;
     }
 
     /**
@@ -266,5 +282,69 @@ class MealsDB_DB
             error_log('[MealsDB DB] Failed to load MealsDB_Config: ' . $e->getMessage());
             return null;
         }
+    }
+
+    /**
+     * Record and surface a fatal connection failure.
+     *
+     * @return WP_Error
+     */
+    private static function fail_connection(string $reason)
+    {
+        $message = __('MealsDB external database connection failed. MealsDB data operations are unavailable.', 'meals-db');
+        $full_message = $message . ' ' . $reason;
+
+        self::$connection = null;
+        self::$last_error = new WP_Error('mealsdb_connection_failed', $message, ['reason' => $reason]);
+
+        if (function_exists('is_admin') && is_admin()) {
+            add_action('admin_notices', [self::class, 'render_admin_notice']);
+        }
+
+        error_log('[MealsDB DB] ' . $reason);
+
+        if (function_exists('wp_doing_ajax') && wp_doing_ajax()) {
+            wp_send_json_error([
+                'message' => $message,
+            ], 500);
+        }
+
+        if (defined('REST_REQUEST') && REST_REQUEST) {
+            wp_send_json_error([
+                'message' => $message,
+            ], 500);
+        }
+
+        if (function_exists('wp_die')) {
+            wp_die($full_message, __('MealsDB Database Error', 'meals-db'));
+        }
+
+        if (class_exists('RuntimeException')) {
+            throw new RuntimeException($full_message);
+        }
+
+        return self::$last_error;
+    }
+
+    /**
+     * Render an admin notice when the connection is unavailable.
+     */
+    public static function render_admin_notice(): void
+    {
+        if (!self::$last_error instanceof WP_Error) {
+            return;
+        }
+
+        $message = self::$last_error->get_error_message();
+        $details = self::$last_error->get_error_data('mealsdb_connection_failed');
+
+        if (is_array($details) && isset($details['reason']) && is_string($details['reason'])) {
+            $message .= ' ' . esc_html($details['reason']);
+        }
+
+        printf(
+            '<div class="notice notice-error"><p>%s</p></div>',
+            esc_html($message)
+        );
     }
 }
