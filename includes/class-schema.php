@@ -76,7 +76,7 @@ class MealsDB_Schema {
                     'delivery_province'            => 'VARCHAR(10) NULL',
                     'delivery_postal_code'         => 'VARCHAR(10) NULL',
                 ],
-                'primary_key' => 'client_id',
+                'primary_key' => ['client_id'],
                 'indexes'     => [
                     [
                         'name'    => 'client_type',
@@ -99,8 +99,8 @@ class MealsDB_Schema {
                 'table'   => MealsDB_Tables::PRODUCTS,
                 'engine'  => 'InnoDB',
                 'columns' => [
-                    'id'             => 'INT AUTO_INCREMENT PRIMARY KEY',
-                    'wc_product_id'  => 'INT NOT NULL UNIQUE',
+                    'id'             => 'INT AUTO_INCREMENT',
+                    'wc_product_id'  => 'INT NOT NULL',
                     'product_type'   => "ENUM('meal','side') NOT NULL DEFAULT 'meal'",
                     'taxable'        => 'TINYINT(1) NOT NULL DEFAULT 0',
                     'main_ingredient'=> 'VARCHAR(40) NOT NULL',
@@ -110,7 +110,7 @@ class MealsDB_Schema {
                     'unit_cost'      => 'DECIMAL(10,2) NOT NULL DEFAULT 0.00',
                     'last_updated'   => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
                 ],
-                'primary_key' => 'id',
+                'primary_key' => ['id'],
                 'indexes'     => [
                     [
                         'name'    => 'wc_product_id',
@@ -123,7 +123,7 @@ class MealsDB_Schema {
                 'table'   => MealsDB_Tables::TRANSACTIONS,
                 'engine'  => 'InnoDB',
                 'columns' => [
-                    'transaction_id' => 'INT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
+                    'transaction_id' => 'INT UNSIGNED AUTO_INCREMENT',
                     'client_id'      => 'INT UNSIGNED NOT NULL',
                     'wp_order_id'    => 'BIGINT UNSIGNED NULL',
                     'wp_order_item_id' => 'BIGINT UNSIGNED NULL',
@@ -137,7 +137,7 @@ class MealsDB_Schema {
                     'created_at'     => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
                     'updated_at'     => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
                 ],
-                'primary_key' => 'transaction_id',
+                'primary_key' => ['transaction_id'],
                 'indexes'     => [
                     [
                         'name'    => 'idx_client_id',
@@ -159,7 +159,7 @@ class MealsDB_Schema {
                 'table'   => MealsDB_Tables::TRANSACTION_ITEMS,
                 'engine'  => 'InnoDB',
                 'columns' => [
-                    'transaction_item_id' => 'INT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
+                    'transaction_item_id' => 'INT UNSIGNED AUTO_INCREMENT',
                     'transaction_id'      => 'INT UNSIGNED NOT NULL',
                     'product_id'          => 'INT UNSIGNED NOT NULL',
                     'quantity'            => 'INT UNSIGNED NOT NULL DEFAULT 1',
@@ -167,7 +167,7 @@ class MealsDB_Schema {
                     'line_taxes'          => 'DECIMAL(10,2) NOT NULL DEFAULT 0.00',
                     'line_total'          => 'DECIMAL(10,2) NOT NULL DEFAULT 0.00',
                 ],
-                'primary_key' => 'transaction_item_id',
+                'primary_key' => ['transaction_item_id'],
                 'indexes'     => [
                     [
                         'name'    => 'idx_transaction_id',
@@ -201,7 +201,7 @@ class MealsDB_Schema {
                 'table'   => MealsDB_Tables::STAFF,
                 'engine'  => 'InnoDB',
                 'columns' => [
-                    'id'                => 'INT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
+                    'id'                => 'INT UNSIGNED AUTO_INCREMENT',
                     'wordpress_user_id' => 'BIGINT UNSIGNED NULL',
                     'first_name'        => 'VARCHAR(191) NOT NULL',
                     'last_name'         => 'VARCHAR(191) NOT NULL',
@@ -210,19 +210,19 @@ class MealsDB_Schema {
                     'created_at'        => 'DATETIME DEFAULT CURRENT_TIMESTAMP',
                     'updated_at'        => 'DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
                 ],
-                'primary_key' => 'id',
+                'primary_key' => ['id'],
             ],
             MealsDB_Tables::DRAFTS => [
                 'table'   => MealsDB_Tables::DRAFTS,
                 'engine'  => 'InnoDB',
                 'columns' => [
-                    'id'         => 'INT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
+                    'id'         => 'INT UNSIGNED AUTO_INCREMENT',
                     'data'       => 'LONGTEXT NOT NULL',
                     'created_by' => 'BIGINT UNSIGNED NULL',
                     'created_at' => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
                     'updated_at' => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
                 ],
-                'primary_key' => 'id',
+                'primary_key' => ['id'],
                 'indexes'     => [
                     [
                         'name'    => 'idx_created_by',
@@ -235,7 +235,7 @@ class MealsDB_Schema {
                 'table'   => MealsDB_Tables::AUDIT_LOG,
                 'engine'  => 'InnoDB',
                 'columns' => [
-                    'id'            => 'INT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
+                    'id'            => 'INT UNSIGNED AUTO_INCREMENT',
                     'user_id'       => 'BIGINT UNSIGNED NULL',
                     'action'        => 'VARCHAR(100) NOT NULL',
                     'target_id'     => 'BIGINT UNSIGNED NULL',
@@ -245,7 +245,7 @@ class MealsDB_Schema {
                     'source'        => "VARCHAR(100) NOT NULL DEFAULT 'mealsdb'",
                     'created_at'    => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
                 ],
-                'primary_key' => 'id',
+                'primary_key' => ['id'],
                 'indexes'     => [
                     [
                         'name'    => 'idx_user_id',
@@ -263,14 +263,14 @@ class MealsDB_Schema {
                 'table'   => MealsDB_Tables::IGNORED_CONFLICTS,
                 'engine'  => 'InnoDB',
                 'columns' => [
-                    'id'           => 'INT UNSIGNED AUTO_INCREMENT PRIMARY KEY',
+                    'id'           => 'INT UNSIGNED AUTO_INCREMENT',
                     'field_name'   => 'VARCHAR(191) NOT NULL',
                     'source_value' => 'TEXT NULL',
                     'target_value' => 'TEXT NULL',
                     'ignored_by'   => 'BIGINT UNSIGNED NULL',
                     'created_at'   => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
                 ],
-                'primary_key' => 'id',
+                'primary_key' => ['id'],
                 'indexes'     => [
                     [
                         'name'    => 'idx_field_name',
@@ -309,7 +309,11 @@ class MealsDB_Schema {
         }
 
         if (!empty($schema['primary_key'])) {
-            $parts[] = sprintf('PRIMARY KEY (`%s`)', $schema['primary_key']);
+            $primary_keys = array_map(static function ($column) {
+                return str_replace('`', '``', (string) $column);
+            }, (array) $schema['primary_key']);
+
+            $parts[] = sprintf('PRIMARY KEY (`%s`)', implode('`,`', $primary_keys));
         }
 
         if (!empty($schema['indexes']) && is_array($schema['indexes'])) {

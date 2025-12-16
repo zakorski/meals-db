@@ -66,9 +66,30 @@ class MealsDB_Schema_Sync {
                 continue;
             }
 
+            $expected_primary = array_values((array) ($schema['primary_key'] ?? []));
+            try {
+                $actual_primary = self::fetch_primary_key_columns($conn, $table_name);
+                if ($expected_primary !== $actual_primary) {
+                    $results['column_mismatches'][] = [
+                        'table'    => $table_name,
+                        'column'   => 'PRIMARY KEY',
+                        'expected' => implode(',', $expected_primary),
+                        'actual'   => implode(',', $actual_primary),
+                    ];
+                }
+            } catch (Throwable $exception) {
+                $results['errors'][] = [
+                    'table'  => $table_name,
+                    'column' => 'PRIMARY KEY',
+                    'error'  => $exception->getMessage(),
+                ];
+            }
+
             foreach ($schema['columns'] as $column => $definition) {
+                $clean_definition = self::sanitize_column_definition($definition);
+
                 if (!isset($existing_columns[$column])) {
-                    $alter_sql = sprintf('ALTER TABLE `%s` ADD COLUMN `%s` %s', $escaped_table, $column, $definition);
+                    $alter_sql = sprintf('ALTER TABLE `%s` ADD COLUMN `%s` %s', $escaped_table, $column, $clean_definition);
 
                     try {
                         if ($conn->query($alter_sql) !== false) {
@@ -94,11 +115,11 @@ class MealsDB_Schema_Sync {
                     continue;
                 }
 
-                if (!self::column_matches_definition($definition, $existing_columns[$column])) {
+                if (!self::column_matches_definition($clean_definition, $existing_columns[$column])) {
                     $results['column_mismatches'][] = [
                         'table'    => $table_name,
                         'column'   => $column,
-                        'expected' => $definition,
+                        'expected' => $clean_definition,
                         'actual'   => $existing_columns[$column],
                     ];
                 }
@@ -151,10 +172,35 @@ class MealsDB_Schema_Sync {
     }
 
     /**
+     * Fetch the ordered list of primary key columns for a table.
+     *
+     * @return array<int, string>
+     */
+    private static function fetch_primary_key_columns(mysqli $conn, string $table): array {
+        $safe_table = $conn->real_escape_string($table);
+        $sql        = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{$safe_table}' AND CONSTRAINT_NAME = 'PRIMARY' ORDER BY ORDINAL_POSITION";
+
+        $result = $conn->query($sql);
+        if ($result === false) {
+            throw new RuntimeException($conn->error);
+        }
+
+        $columns = [];
+        while ($row = $result->fetch_assoc()) {
+            if (!empty($row['COLUMN_NAME'])) {
+                $columns[] = (string) $row['COLUMN_NAME'];
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
      * Compare a live column to the canonical definition.
      */
     private static function column_matches_definition(string $expected_definition, array $actual_column): bool {
-        $expected = self::normalize_expected_definition($expected_definition);
+        $expected_definition = self::sanitize_column_definition($expected_definition);
+        $expected            = self::normalize_expected_definition($expected_definition);
         $actual   = [
             'type'           => self::normalize_column_type((string) ($actual_column['column_type'] ?? '')),
             'nullable'       => strtoupper((string) ($actual_column['is_nullable'] ?? '')) === 'YES',
@@ -166,6 +212,26 @@ class MealsDB_Schema_Sync {
             && $expected['nullable'] === $actual['nullable']
             && $expected['default'] === $actual['default']
             && $expected['auto_increment'] === $actual['auto_increment'];
+    }
+
+    /**
+     * Strip constraint directives from a column definition so ALTER TABLE statements remain column-only.
+     */
+    private static function sanitize_column_definition(string $definition): string {
+        $cleaned = preg_replace('/\s+/', ' ', trim($definition));
+
+        $patterns = [
+            '/\s+primary\s+key\b/i',
+            '/\s+unique\s+key\b/i',
+            '/\s+unique\b/i',
+            '/\s+foreign\s+key\b/i',
+            '/\s+constraint\s+`?[^\s`]+`?/i',
+            '/\s+references\s+`?[^\s`]+`?\s*\([^)]*\)/i',
+        ];
+
+        $cleaned = preg_replace($patterns, '', $cleaned);
+
+        return trim(preg_replace('/\s+/', ' ', (string) $cleaned));
     }
 
     /**
