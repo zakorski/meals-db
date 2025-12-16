@@ -4,7 +4,7 @@
 - **Connection creation**: `includes/class-db.php` — `MealsDB_DB::connection()` (alias `get_connection()`) builds a `mysqli` connection using `MealsDB_Config` credentials, sets charset, and caches the handle. Credentials resolved via `MealsDB_Config::db_host()`, `db_user()`, `db_pass()`, and `db_name()`. Fallback logging when missing.
 - **Credential/config source**: `MealsDB_Config` (assumed singleton) provides DB host/user/pass/name; `MealsDB_Config::is_db_configured()` gatechecked in installer.
 - **Call sites using the connection** (all rely on `MealsDB_DB::get_connection()` unless noted):
-  - `includes/install-schema.php`: `MealsDB_Installer::install()`, `create_table_transactions()`, `alter_transactions_add_status()`, `create_table_transaction_items()`, `upgrade_meals_clients_table()`, `create_meals_products_table()` rely on live connection for CREATE/ALTER/SHOW queries.
+  - `includes/install-schema.php`: `MealsDB_Installer::install()`, `create_table_transactions()`, `alter_transactions_add_status()`, `create_table_transaction_items()`, `upgrade_meals_clients_table()`, `create_meals_products_table()` rely on live connection for CREATE/ALTER/SHOW queries against the external database.
   - `includes/class-products.php`: `install_table()`, `get_product_data()`, `save_product_data()` read/write `meals_products` via mysqli.
   - `includes/class-transactions.php`: CRUD helpers (`record_order_transaction()`, `record_transaction_items()`, `get_transactions_by_client()`, `get_recent_transactions()`, `get_transaction_items()`, `get_transactions_for_export()`, `get_transaction_for_order()`, `get_transactions_for_client()`, etc.) use mysqli statements on Meals tables.
   - `includes/class-clients.php`: `delete_clients_with_dependencies()` and `delete_client()` use mysqli statements against `meals_clients`, `meals_drafts`, and `meals_ignored_conflicts`.
@@ -26,17 +26,13 @@
 
 ## WordPress DB Usage
 - **$wpdb accesses**:
-  - `includes/install-schema.php` — `create_meals_clients_table()` uses global `$wpdb` and `dbDelta()` to create/alter the *WordPress* table `${prefix}meals_clients` with full schema (only WP DB touchpoint during install).
   - `includes/services/class-reports.php` — constructor stores `$wpdb`; `get_resupply_requirements()` and `get_meal_breakdown()` query WooCommerce tables (`woocommerce_order_items`, `woocommerce_order_itemmeta`, `posts`) and join to external `meals_products`.
-  - `includes/services/sync/class-sync-mutate.php` — `push_to_meals_db()` optionally mirrors `wp_user_id` into local `${prefix}meals_clients` via `$wpdb->update()` after verifying the table exists.
   - `includes/services/sync/class-sync-query.php` — `find_candidate_wc_matches_for_client()` queries `$wpdb->users` and `$wpdb->usermeta` for potential matches based on name/phone.
-- **dbDelta usage**:
-  - `includes/install-schema.php` — `create_meals_clients_table()` builds SQL for `${prefix}meals_clients` and passes to `dbDelta()`.
-- **Direct WP table references related to MealsDB**:
-  - `${prefix}meals_clients` referenced in installer and sync-mutate mirror logic; treated as local shadow copy of external `meals_clients`.
+  - Other standard WordPress option helpers (`get_option`, `update_option`, etc.) are used for settings/version flags.
+  - No MealsDB tables are created or altered in the WordPress database; Meals data lives exclusively in the external DB.
 
 ## MealsDB Data Tables Inventory
-- **`meals_clients` / `${prefix}meals_clients`**: external primary table for clients accessed by most mysqli-based classes (`class-clients-repository.php`, `class-client-form.php`, `class-clients.php`, `class-quick-order-ajax.php`, `class-initials.php`, `class-transactions.php`, `class-schema-sync.php`, `class-quick-order-ui.php`, `class-sync-query.php`, `class-sync-mutate.php`, `class-staff.php`, `uninstall.php`). Also mirrored in WP via `create_meals_clients_table()` and optional `$wpdb->update()` in sync-mutate — **mixed (external + WP shadow)**. Legacy alias `mealsdb_clients` used in `MealsDB_DB::get_all_clients()` (external fallback).
+- **`meals_clients`**: external primary table for clients accessed by most mysqli-based classes (`class-clients-repository.php`, `class-client-form.php`, `class-clients.php`, `class-quick-order-ajax.php`, `class-initials.php`, `class-transactions.php`, `class-schema-sync.php`, `class-quick-order-ui.php`, `class-sync-query.php`, `class-sync-mutate.php`, `class-staff.php`, `uninstall.php`). Legacy alias `mealsdb_clients` used in `MealsDB_DB::get_all_clients()` (external fallback).
 - **`meals_drafts`**: created/queried in `install-schema.php`, used in `class-client-form.php` (save/delete/get draft), `views/drafts.php`, and `class-clients.php` dependency cleanup — **external**.
 - **`meals_ignored_conflicts`**: created in installer; manipulated in `includes/ajax/class-ajax-sync.php` (insert/delete ignores), read in `class-sync-query.php` and `views/ignored.php`, cleaned in `class-clients.php` — **external**.
 - **`meals_audit_log`**: created in installer; written/read in `class-logger.php` — **external**.
@@ -50,7 +46,6 @@
 - The sync routine currently targets external `meals_clients` only (ensuring existence/columns/indexes) via `class-schema-sync.php` helper methods; no other tables altered by this UI.
 
 ## Risks / Ambiguities
-- `meals_clients` has dual existence: external primary table and optional WordPress shadow (`${prefix}meals_clients`), with sync-mutate optionally updating both; risk of divergence.
 - Legacy name `mealsdb_clients` still referenced (`class-db.php::get_all_clients()`), suggesting possible historical table naming; confirm presence before removal.
 - Table prefix handling via `MealsDB_DB::get_table_name()` means final external names may include configured prefixes; ensure consistency when cross-referencing.
 - Installer drops/creates some tables directly while schema sync UI only touches `meals_clients`, leaving other tables unmanaged; potential drift.
