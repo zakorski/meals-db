@@ -67,7 +67,7 @@ class MealsDB_Sync_Compare {
                     if (!empty($diffs)) {
                         $mismatches[] = [
                             'type'         => 'field_mismatch',
-                            'client_id'    => $client['id'] ?? 0,
+                            'client_id'    => $client['client_id'] ?? 0,
                             'woo_user_id'  => $wp_id,
                             'fields'       => $diffs,
                             'allow_sync'   => true,
@@ -435,7 +435,7 @@ class MealsDB_Sync_Compare {
 
         return [
             'type'         => 'meals_only',
-            'client_id'    => $client['id'] ?? 0,
+            'client_id'    => $client['client_id'] ?? 0,
             'woo_user_id'  => $has_wordpress_id ? (int) $wp_id : 0,
             'fields'       => $fields,
             'allow_sync'   => false,

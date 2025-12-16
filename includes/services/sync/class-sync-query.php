@@ -9,9 +9,15 @@ class MealsDB_Sync_Query {
      */
     private ?\mysqli $connection;
 
+    /**
+     * Primary key column name for the Meals DB clients table, when available.
+     */
+    private ?string $clients_primary_key;
+
     public function __construct() {
         $conn = MealsDB_DB::get_connection();
         $this->connection = $conn instanceof \mysqli ? $conn : null;
+        $this->clients_primary_key = MealsDB_Schema::get_primary_key_column(MealsDB_Tables::CLIENTS);
     }
 
     /**
@@ -62,8 +68,19 @@ class MealsDB_Sync_Query {
         $clients = $this->batched_query(
             function (int $batch_size, int $page, int $offset) use ($connection, &$query_error): array {
                 $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+                $columns = ['individual_id', 'first_name', 'last_name', 'client_email', 'phone_primary', 'address_postal', 'wordpress_user_id'];
+
+                if (!empty($this->clients_primary_key)) {
+                    array_unshift($columns, $this->clients_primary_key);
+                }
+
+                $quoted_columns = array_map(static function (string $column): string {
+                    return sprintf('`%s`', str_replace('`', '``', $column));
+                }, $columns);
+
                 $sql = sprintf(
-                    'SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM `%s` LIMIT %d OFFSET %d',
+                    'SELECT %s FROM `%s` LIMIT %d OFFSET %d',
+                    implode(', ', $quoted_columns),
                     $clients_table,
                     (int) $batch_size,
                     (int) $offset
@@ -418,13 +435,21 @@ class MealsDB_Sync_Query {
      * @return array<string, mixed>
      */
     private function normalize_client_row(array $client): array {
+        $client_id = 0;
+        $primary_key_column = $this->clients_primary_key;
+
+        if ($primary_key_column !== null && isset($client[$primary_key_column])) {
+            $client_id_raw = $client[$primary_key_column];
+            $client_id     = is_numeric($client_id_raw) ? (int) $client_id_raw : 0;
+        }
+
         $individual_id = $client['individual_id'] ?? '';
 
         if ($individual_id !== '') {
             try {
                 $individual_id = MealsDB_Encryption::decrypt($individual_id);
             } catch (Exception $e) {
-                error_log('[MealsDB Sync] Failed to decrypt individual_id for client ID ' . ($client['id'] ?? 'unknown') . ': ' . $e->getMessage());
+                error_log('[MealsDB Sync] Failed to decrypt individual_id for client ID ' . ($client_id > 0 ? (string) $client_id : 'unknown') . ': ' . $e->getMessage());
                 $individual_id = '';
             }
         }
@@ -437,7 +462,7 @@ class MealsDB_Sync_Query {
         }
 
         return [
-            'id'                => isset($client['id']) ? (int) $client['id'] : 0,
+            'client_id'         => $client_id,
             'individual_id'     => (string) $individual_id,
             'first_name'        => isset($client['first_name']) ? (string) $client['first_name'] : '',
             'last_name'         => isset($client['last_name']) ? (string) $client['last_name'] : '',

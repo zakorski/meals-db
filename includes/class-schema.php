@@ -348,6 +348,44 @@ class MealsDB_Schema {
     }
 
     /**
+     * Fetch the primary key columns for a canonical table, if defined.
+     *
+     * @return string[]
+     */
+    public static function get_primary_key_columns(string $table): array {
+        $schemas = self::get_canonical_schema();
+
+        if (!isset($schemas[$table])) {
+            return [];
+        }
+
+        $primary_keys = $schemas[$table]['primary_key'] ?? [];
+
+        if (empty($primary_keys)) {
+            return [];
+        }
+
+        return array_map(static function ($column): string {
+            return (string) $column;
+        }, (array) $primary_keys);
+    }
+
+    /**
+     * Retrieve the singular primary key column for a canonical table.
+     *
+     * Returns null for tables without a defined primary key or with a composite key.
+     */
+    public static function get_primary_key_column(string $table): ?string {
+        $primary_keys = self::get_primary_key_columns($table);
+
+        if (count($primary_keys) !== 1) {
+            return null;
+        }
+
+        return $primary_keys[0];
+    }
+
+    /**
      * Build consistent charset/collation SQL using the active connection.
      */
     public static function build_charset_collation_sql(mysqli $conn): string {
