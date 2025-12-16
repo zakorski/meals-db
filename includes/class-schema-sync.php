@@ -6,9 +6,9 @@
 class MealsDB_Schema_Sync {
 
     /**
-     * Run the full schema sync for supported tables.
+     * Run the full schema sync for all supported tables.
      *
-     * @return true|WP_Error
+     * @return array<string, mixed>|WP_Error Summary of sync actions or WP_Error on connection failure.
      */
     public static function run_full_sync() {
         $conn = MealsDB_DB::get_connection();
@@ -16,340 +16,229 @@ class MealsDB_Schema_Sync {
             return new WP_Error('db_error', 'Unable to connect to external Meals DB.');
         }
 
-        $expected_clients_table = [
-            'table'       => MealsDB_Tables::CLIENTS,
-            'columns'     => [
-                'client_id'                     => 'BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT',
-                'wp_user_id'                    => 'BIGINT(20) UNSIGNED NOT NULL',
-                'client_type'                  => "ENUM('Private','SDNB','Veteran') NOT NULL",
-                'first_name'                   => 'VARCHAR(100) NOT NULL',
-                'last_name'                    => 'VARCHAR(100) NOT NULL',
-                'client_email'                 => 'VARCHAR(255) NULL',
-                'active'                       => 'TINYINT(1) NOT NULL DEFAULT 1',
-                'client_phone_1'               => 'VARCHAR(20) NULL',
-                'client_phone_2'               => 'VARCHAR(20) NULL',
-                'alternate_contact_name'       => 'VARCHAR(255) NULL',
-                'alternate_contact_phone_1'    => 'VARCHAR(20) NULL',
-                'alternate_contact_phone_2'    => 'VARCHAR(20) NULL',
-                'alternate_contact_email'      => 'VARCHAR(255) NULL',
-                'do_not_call_client_phone'     => 'BOOLEAN NOT NULL DEFAULT 0',
-                'payment_method'               => 'VARCHAR(50) NULL',
-                'open_date'                    => 'DATE NULL',
-                'birth_date'                   => 'DATE NULL',
-                'gender'                       => 'VARCHAR(10) NULL',
-                'assigned_worker_name'         => 'VARCHAR(255) NULL',
-                'assigned_worker_email'        => 'VARCHAR(255) NULL',
-                'vendor_number'                => 'VARCHAR(50) NULL',
-                'service_center_charged'       => 'VARCHAR(255) NULL',
-                'service_id'                   => 'VARCHAR(50) NULL',
-                'requisition_id'               => 'VARCHAR(50) NULL',
-                'requisition_period'           => 'VARCHAR(50) NULL',
-                'meal_type'                    => 'VARCHAR(50) NULL',
-                'service_name_zone'            => 'VARCHAR(10) NULL',
-                'service_name_course'          => 'VARCHAR(10) NULL',
-                'service_commence_date'        => 'DATE NULL',
-                'expected_termination_date'    => 'DATE NULL',
-                'initial_renewal_termination_date' => 'DATE NULL',
-                'most_recent_renewal_termination_date' => 'DATE NULL',
-                'notes_to_service_provider'    => 'TEXT NULL',
-                'client_contribution'          => 'DECIMAL(10,2) NULL',
-                'vet_health_id_card'           => 'VARCHAR(50) NULL',
-                'rate'                         => 'DECIMAL(10,2) NOT NULL DEFAULT 0.00',
-                'required_start_date'          => 'DATE NULL',
-                'delivery_day'                 => 'VARCHAR(50) NULL',
-                'delivery_area_name'           => 'VARCHAR(255) NULL',
-                'delivery_area_zone'           => 'VARCHAR(50) NULL',
-                'ordering_contact_method'      => 'VARCHAR(50) NULL',
-                'ordering_frequency'           => 'INT NULL',
-                'delivery_frequency'           => 'INT NULL',
-                'freezer_capacity'             => 'VARCHAR(50) NULL',
-                'delivery_fee'                 => 'DECIMAL(10,2) NULL',
-                'diet_concerns'                => 'TEXT NULL',
-                'customer_comments'            => 'TEXT NULL',
-                'initials_for_delivery'        => 'VARCHAR(10) NULL',
-                'initials_delivery'            => "VARCHAR(3) NOT NULL DEFAULT ''",
-                'street_number'                => 'VARCHAR(20) NULL',
-                'street_name'                  => 'VARCHAR(255) NULL',
-                'apartment_number'             => 'VARCHAR(20) NULL',
-                'city'                         => 'VARCHAR(255) NULL',
-                'province'                     => 'VARCHAR(10) NULL',
-                'postal_code'                  => 'VARCHAR(10) NULL',
-                'delivery_street_number'       => 'VARCHAR(20) NULL',
-                'delivery_street_name'         => 'VARCHAR(255) NULL',
-                'delivery_apartment_number'    => 'VARCHAR(20) NULL',
-                'delivery_city'                => 'VARCHAR(255) NULL',
-                'delivery_province'            => 'VARCHAR(10) NULL',
-                'delivery_postal_code'         => 'VARCHAR(10) NULL',
-            ],
-            'primary_key' => 'client_id',
-            'indexes'     => [
-                [
-                    'name'    => 'client_type',
-                    'type'    => 'INDEX',
-                    'columns' => ['client_type'],
-                ],
-                [
-                    'name'    => 'initials_delivery_unique',
-                    'type'    => 'UNIQUE',
-                    'columns' => ['initials_delivery'],
-                ],
-                [
-                    'name'    => 'wp_user_id',
-                    'type'    => 'INDEX',
-                    'columns' => ['wp_user_id'],
-                ],
-            ],
+        $schemas = MealsDB_Schema::get_canonical_schema();
+        $results = [
+            'tables_created'    => [],
+            'columns_added'     => [],
+            'column_mismatches' => [],
+            'errors'            => [],
         ];
 
-        // 1) Migrate legacy schema if present
-        self::migrate_legacy_meals_clients_schema($conn, $expected_clients_table);
+        foreach ($schemas as $schema) {
+            $table_name = MealsDB_DB::get_table_name($schema['table']);
+            $escaped_table = str_replace('`', '``', $table_name);
 
-        // 2) Ensure table exists (for fresh installs)
-        $result = self::ensure_table_exists($conn, $expected_clients_table);
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        // 3) Ensure all required columns exist
-        $result = self::ensure_columns($conn, $expected_clients_table);
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        // 4) Ensure primary key exists
-        $result = self::ensure_primary_key($conn, $expected_clients_table);
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        $result = self::ensure_indexes($conn, $expected_clients_table);
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        return true;
-    }
-
-    private static function column_exists(mysqli $conn, string $table, string $column): bool {
-        $sql = sprintf(
-            "SHOW COLUMNS FROM `%s` LIKE '%s'",
-            str_replace('`', '``', $table),
-            $conn->real_escape_string($column)
-        );
-        $res = $conn->query($sql);
-        return ($res && $res->num_rows > 0);
-    }
-
-    private static function get_primary_key_column(mysqli $conn, string $table): ?string {
-        $sql = sprintf(
-            "SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'",
-            str_replace('`', '``', $table)
-        );
-        $res = $conn->query($sql);
-        if ($res && $row = $res->fetch_assoc()) {
-            return $row['Column_name'] ?? null;
-        }
-        return null;
-    }
-
-    private static function migrate_legacy_meals_clients_schema(mysqli $conn, array $schema): void {
-        $table = MealsDB_DB::get_table_name($schema['table']);
-
-        // If table does not exist, nothing to migrate
-        $res = $conn->query("SHOW TABLES LIKE '{$table}'");
-        if (!$res || $res->num_rows === 0) {
-            return;
-        }
-
-        // Detect legacy columns
-        $has_id          = self::column_exists($conn, $table, 'id');
-        $has_client_id   = self::column_exists($conn, $table, 'client_id');
-        $has_wp_user_id  = self::column_exists($conn, $table, 'wp_user_id');
-        $has_wp_legacy   = self::column_exists($conn, $table, 'wordpress_user_id');
-        $has_client_type = self::column_exists($conn, $table, 'client_type');
-        $has_legacy_type = self::column_exists($conn, $table, 'customer_type');
-
-        // 1) If we have legacy "id" and no "client_id", rename it.
-        //    This preserves AUTO_INCREMENT + PRIMARY KEY.
-        if ($has_id && !$has_client_id) {
-            $sql = "ALTER TABLE `{$table}` CHANGE `id` `client_id` BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT";
-            $conn->query($sql);
-        }
-
-        // 2) If we have legacy "wordpress_user_id" and no "wp_user_id", rename it.
-        if ($has_wp_legacy && !$has_wp_user_id) {
-            $sql = "ALTER TABLE `{$table}` CHANGE `wordpress_user_id` `wp_user_id` BIGINT(20) UNSIGNED NOT NULL";
-            $conn->query($sql);
-        }
-
-        // 3) If we have legacy "customer_type" and no "client_type", rename it.
-        if ($has_legacy_type && !$has_client_type) {
-            $sql = "ALTER TABLE `{$table}` CHANGE `customer_type` `client_type` ENUM('Private','SDNB','Veteran') NOT NULL";
-            $conn->query($sql);
-        }
-
-        // At this point, the table should have "client_id", "wp_user_id",
-        // and "client_type" if it had the legacy equivalents.
-        // Any remaining columns (first_name, last_name, active, etc.)
-        // will be created by ensure_columns().
-    }
-
-    /**
-     * Ensure the table exists with the base schema.
-     */
-    private static function ensure_table_exists(mysqli $conn, array $schema) {
-        $table = MealsDB_DB::get_table_name($schema['table']);
-
-        $res = $conn->query("SHOW TABLES LIKE '{$table}'");
-        if ($res === false) {
-            return new WP_Error('db_error', $conn->error);
-        }
-
-        if ($res && $res->num_rows > 0) {
-            // Table already exists; do not attempt to recreate or alter here.
-            return true;
-        }
-
-        $cols = [];
-        foreach ($schema['columns'] as $name => $definition) {
-            $cols[] = "`{$name}` {$definition}";
-        }
-
-        $cols[] = "PRIMARY KEY (`{$schema['primary_key']}`)";
-        $ddl    = "CREATE TABLE `{$table}` (" . implode(',', $cols) . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
-
-        $create_result = $conn->query($ddl);
-        if ($create_result === false) {
-            return new WP_Error('db_error', $conn->error);
-        }
-
-        return true;
-    }
-
-    /**
-     * Ensure all columns exist on the target table.
-     */
-    private static function ensure_columns(mysqli $conn, array $schema) {
-        $table = MealsDB_DB::get_table_name($schema['table']);
-
-        $existing = [];
-        $res      = $conn->query(sprintf('SHOW COLUMNS FROM `%s`', str_replace('`', '``', $table)));
-        if ($res === false) {
-            return new WP_Error('db_error', $conn->error);
-        }
-
-        if ($res) {
-            while ($row = $res->fetch_assoc()) {
-                $existing[$row['Field']] = true;
-            }
-        }
-
-        foreach ($schema['columns'] as $name => $definition) {
-            if (isset($existing[$name])) {
+            try {
+                $exists = self::table_exists($conn, $table_name);
+            } catch (Throwable $exception) {
+                $results['errors'][] = [
+                    'table'  => $table_name,
+                    'column' => null,
+                    'error'  => $exception->getMessage(),
+                ];
                 continue;
             }
 
-            // Do not try to add a second AUTO_INCREMENT primary key column;
-            // migration step handles renaming legacy id -> client_id.
-            if ($name === $schema['primary_key']) {
-                // If we reach here, and there is no legacy id, it means the table
-                // was freshly created and this path won't be hit, or something is
-                // very unusual. To be safe, just add a non-AI column instead.
-                $definition = preg_replace('/AUTO_INCREMENT/i', '', $definition);
+            if (!$exists) {
+                $create_sql = MealsDB_Schema::generate_create_table_sql($conn, $schema);
+                if ($conn->query($create_sql) !== false) {
+                    $results['tables_created'][] = $table_name;
+                } else {
+                    $results['errors'][] = [
+                        'table'  => $table_name,
+                        'column' => null,
+                        'error'  => $conn->error,
+                    ];
+                    // Table creation failed; continue to next table without column checks
+                    continue;
+                }
             }
 
-            $sql = sprintf('ALTER TABLE `%s` ADD `%s` %s', $table, $name, $definition);
-            if ($conn->query($sql) === false) {
-                return new WP_Error('db_error', $conn->error);
+            $existing_columns = [];
+            try {
+                $existing_columns = self::fetch_existing_columns($conn, $table_name);
+            } catch (Throwable $exception) {
+                $results['errors'][] = [
+                    'table'  => $table_name,
+                    'column' => null,
+                    'error'  => $exception->getMessage(),
+                ];
+                continue;
             }
-        }
 
-        return true;
-    }
+            foreach ($schema['columns'] as $column => $definition) {
+                if (!isset($existing_columns[$column])) {
+                    $alter_sql = sprintf('ALTER TABLE `%s` ADD COLUMN `%s` %s', $escaped_table, $column, $definition);
 
-    /**
-     * Ensure the primary key exists.
-     */
-    private static function ensure_primary_key(mysqli $conn, array $schema) {
-        $table  = MealsDB_DB::get_table_name($schema['table']);
-        $pkname = $schema['primary_key'];
+                    try {
+                        if ($conn->query($alter_sql) !== false) {
+                            $results['columns_added'][] = [
+                                'table'  => $table_name,
+                                'column' => $column,
+                            ];
+                        } else {
+                            $results['errors'][] = [
+                                'table'  => $table_name,
+                                'column' => $column,
+                                'error'  => $conn->error,
+                            ];
+                        }
+                    } catch (Throwable $exception) {
+                        $results['errors'][] = [
+                            'table'  => $table_name,
+                            'column' => $column,
+                            'error'  => $exception->getMessage(),
+                        ];
+                    }
 
-        $pk_column = self::get_primary_key_column($conn, $table);
-        if (!empty($pk_column)) {
-            // Primary key already exists; do not change it.
-            return true;
-        }
+                    continue;
+                }
 
-        // If there is no primary key, but the primary_key column exists, add PK.
-        if (self::column_exists($conn, $table, $schema['primary_key'])) {
-            $sql = sprintf(
-                'ALTER TABLE `%s` ADD PRIMARY KEY (`%s`)',
-                str_replace('`', '``', $table),
-                $pkname
-            );
-            if ($conn->query($sql) === false) {
-                return new WP_Error('db_error', $conn->error);
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Ensure secondary indexes exist.
-     */
-    private static function ensure_indexes(mysqli $conn, array $schema) {
-        $table = MealsDB_DB::get_table_name($schema['table']);
-
-        if (empty($schema['indexes']) || !is_array($schema['indexes'])) {
-            return true;
-        }
-
-        $existing_indexes = [];
-        $res              = $conn->query(sprintf('SHOW INDEX FROM `%s`', str_replace('`', '``', $table)));
-
-        if ($res === false) {
-            return new WP_Error('db_error', $conn->error);
-        }
-
-        if ($res) {
-            while ($row = $res->fetch_assoc()) {
-                if (!empty($row['Key_name'])) {
-                    $existing_indexes[$row['Key_name']] = true;
+                if (!self::column_matches_definition($definition, $existing_columns[$column])) {
+                    $results['column_mismatches'][] = [
+                        'table'    => $table_name,
+                        'column'   => $column,
+                        'expected' => $definition,
+                        'actual'   => $existing_columns[$column],
+                    ];
                 }
             }
         }
 
-        foreach ($schema['indexes'] as $index) {
-            if (empty($index['name']) || empty($index['columns'])) {
-                continue;
-            }
-
-            if (isset($existing_indexes[$index['name']])) {
-                continue;
-            }
-
-            $alter = sprintf('ALTER TABLE `%s` ADD %s', $table, self::build_index_definition($index));
-            if ($conn->query($alter) === false) {
-                return new WP_Error('db_error', $conn->error);
-            }
-        }
-
-        return true;
+        return $results;
     }
 
     /**
-     * Build an index definition snippet.
+     * Determine if the target table exists.
      */
-    private static function build_index_definition(array $index): string {
-        $type = strtoupper($index['type'] ?? 'INDEX');
-        $name = $index['name'] ?? '';
-        $cols = array_map(static function ($col) {
-            return sprintf('`%s`', $col);
-        }, $index['columns'] ?? []);
+    private static function table_exists(mysqli $conn, string $table): bool {
+        $safe_table = $conn->real_escape_string($table);
+        $sql        = "SHOW TABLES LIKE '{$safe_table}'";
 
-        $type_sql = $type === 'UNIQUE' ? 'UNIQUE KEY' : 'KEY';
+        $result = $conn->query($sql);
+        if ($result === false) {
+            throw new RuntimeException($conn->error);
+        }
 
-        return sprintf('%s `%s` (%s)', $type_sql, $name, implode(',', $cols));
+        return $result && $result->num_rows > 0;
+    }
+
+    /**
+     * Fetch column metadata for a table using INFORMATION_SCHEMA.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private static function fetch_existing_columns(mysqli $conn, string $table): array {
+        $safe_table = $conn->real_escape_string($table);
+        $sql        = "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{$safe_table}'";
+
+        $result = $conn->query($sql);
+        if ($result === false) {
+            throw new RuntimeException($conn->error);
+        }
+
+        $columns = [];
+        while ($row = $result->fetch_assoc()) {
+            $columns[$row['COLUMN_NAME']] = [
+                'column_type'   => $row['COLUMN_TYPE'] ?? '',
+                'is_nullable'   => $row['IS_NULLABLE'] ?? '',
+                'column_default'=> $row['COLUMN_DEFAULT'] ?? null,
+                'extra'         => $row['EXTRA'] ?? '',
+            ];
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Compare a live column to the canonical definition.
+     */
+    private static function column_matches_definition(string $expected_definition, array $actual_column): bool {
+        $expected = self::normalize_expected_definition($expected_definition);
+        $actual   = [
+            'type'           => self::normalize_column_type((string) ($actual_column['column_type'] ?? '')),
+            'nullable'       => strtoupper((string) ($actual_column['is_nullable'] ?? '')) === 'YES',
+            'default'        => self::normalize_default_value($actual_column['column_default'] ?? null),
+            'auto_increment' => stripos((string) ($actual_column['extra'] ?? ''), 'auto_increment') !== false,
+        ];
+
+        return $expected['type'] === $actual['type']
+            && $expected['nullable'] === $actual['nullable']
+            && $expected['default'] === $actual['default']
+            && $expected['auto_increment'] === $actual['auto_increment'];
+    }
+
+    /**
+     * Normalize the expected column definition into comparable parts.
+     *
+     * @return array<string, mixed>
+     */
+    private static function normalize_expected_definition(string $definition): array {
+        $trimmed = trim($definition);
+        $lower   = strtolower($trimmed);
+
+        $keywords     = [' not null', ' null', ' default', ' auto_increment', ' on update', ' unique', ' primary', ' comment'];
+        $cut_position = strlen($trimmed);
+        foreach ($keywords as $keyword) {
+            $pos = stripos($lower, $keyword);
+            if ($pos !== false && $pos < $cut_position) {
+                $cut_position = $pos;
+            }
+        }
+
+        $type           = self::normalize_column_type(substr($trimmed, 0, $cut_position));
+        $nullable       = stripos($lower, 'not null') === false;
+        $auto_increment = stripos($lower, 'auto_increment') !== false;
+        $default        = null;
+
+        $default_position = stripos($lower, 'default');
+        if ($default_position !== false) {
+            $default_value = trim(substr($trimmed, $default_position + strlen('default')));
+            $space_pos     = strpos($default_value, ' ');
+            if ($space_pos !== false) {
+                $default_value = substr($default_value, 0, $space_pos);
+            }
+            $default = self::normalize_default_value($default_value);
+        }
+
+        return [
+            'type'           => $type,
+            'nullable'       => $nullable,
+            'default'        => $default,
+            'auto_increment' => $auto_increment,
+        ];
+    }
+
+    /**
+     * Normalize a column type string for comparison.
+     */
+    private static function normalize_column_type(string $type): string {
+        $normalized = strtolower(trim(preg_replace('/\\s+/', ' ', $type)));
+        $normalized = preg_replace('/bigint\\(\\d+\\)/', 'bigint', $normalized);
+        $normalized = preg_replace('/int\\(\\d+\\)/', 'int', $normalized);
+        $normalized = preg_replace('/tinyint\\(\\d+\\)/', 'tinyint', $normalized);
+
+        return $normalized ?? '';
+    }
+
+    /**
+     * Normalize default values for comparison, stripping quotes and uppercasing known functions.
+     */
+    private static function normalize_default_value($value): ?string {
+        if ($value === null) {
+            return null;
+        }
+
+        $value = trim((string) $value, "'\"");
+        if (strcasecmp($value, 'null') === 0) {
+            return null;
+        }
+
+        $upper = strtoupper($value);
+        if ($upper === 'CURRENT_TIMESTAMP' || $upper === 'CURRENT_TIMESTAMP()') {
+            return 'CURRENT_TIMESTAMP';
+        }
+
+        return $value;
     }
 }
