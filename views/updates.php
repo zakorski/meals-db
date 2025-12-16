@@ -30,6 +30,26 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         </button>
     </div>
 
+    <div class="mealsdb-force-rebuild">
+        <h2><?php echo esc_html__('Force Rebuild (External Database Only)', 'meals-db'); ?></h2>
+        <p class="description">
+            <?php echo esc_html__('Drops and recreates all Meals DB external tables using the canonical schema. This action is destructive and does not affect WordPress tables.', 'meals-db'); ?>
+        </p>
+        <form method="post" class="mealsdb-force-rebuild-form">
+            <?php wp_nonce_field('mealsdb_force_rebuild', 'mealsdb_force_rebuild_nonce'); ?>
+            <input type="hidden" name="mealsdb_action" value="force_rebuild">
+            <p>
+                <label for="mealsdb_rebuild_confirm">
+                    <?php echo esc_html__('Type REBUILD to confirm:', 'meals-db'); ?>
+                </label>
+                <input type="text" id="mealsdb_rebuild_confirm" name="mealsdb_rebuild_confirm" pattern="REBUILD" required placeholder="REBUILD" autocomplete="off" />
+            </p>
+            <p>
+                <button class="button button-secondary" type="submit"><?php echo esc_html__('Force Rebuild External Schema', 'meals-db'); ?></button>
+            </p>
+        </form>
+    </div>
+
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
 </div>
