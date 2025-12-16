@@ -353,39 +353,6 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        $local_updated = true;
-        global $wpdb;
-
-        if ($wpdb instanceof wpdb) {
-            $local_table = $wpdb->prefix . 'meals_clients';
-            $table_check = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $local_table));
-
-            if ($table_check === $local_table) {
-                $local_result = $wpdb->update(
-                    $local_table,
-                    ['wp_user_id' => $user_id],
-                    ['client_id' => $client_id],
-                    ['%d'],
-                    ['%d']
-                );
-
-                if ($local_result === false) {
-                    $local_updated = false;
-                }
-            }
-        }
-
-        if (!$local_updated) {
-            if ($transaction_started) {
-                $connection->rollback();
-            }
-
-            return new WP_Error(
-                'mealsdb_local_link_failed',
-                __('Failed to update the local Meals DB client record.', 'meals-db')
-            );
-        }
-
         if ($transaction_started && !$connection->commit()) {
             $connection->rollback();
 
