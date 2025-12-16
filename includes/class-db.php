@@ -250,7 +250,7 @@ class MealsDB_DB
             return null;
         }
 
-        $clients_table = self::get_table_name('mealsdb_clients');
+        $clients_table = self::get_table_name(MealsDB_Tables::CLIENTS);
         $clients_table = str_replace('`', '``', $clients_table);
 
         $sql = "SELECT client_id, first_name, last_name, client_type FROM `{$clients_table}` ORDER BY last_name ASC";

@@ -390,7 +390,7 @@ class MealsDB_Quick_Order_Ajax {
             if ($client_db_id > 0) {
                 $conn = MealsDB_DB::get_connection();
                 if (MealsDB_DB::is_mysqli($conn)) {
-                    $table_name = MealsDB_DB::get_table_name('meals_clients');
+                    $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
                     $sql        = sprintf(
                         'SELECT client_type FROM `%s` WHERE client_id = ? LIMIT 1',
                         str_replace('`', '``', $table_name)
@@ -504,7 +504,7 @@ class MealsDB_Quick_Order_Ajax {
             return false;
         }
 
-        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $sql        = sprintf('SELECT active FROM `%s` WHERE client_id = ? LIMIT 1', str_replace('`', '``', $table_name));
 
         $stmt = $conn->prepare($sql);
@@ -547,7 +547,7 @@ class MealsDB_Quick_Order_Ajax {
             return 0;
         }
 
-        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $sql        = sprintf(
             'SELECT client_id FROM `%s` WHERE wp_user_id = ? AND active = 1 LIMIT 1',
             str_replace('`', '``', $table_name)
@@ -593,7 +593,7 @@ class MealsDB_Quick_Order_Ajax {
             return 0;
         }
 
-        $table_name = MealsDB_DB::get_table_name('meals_clients');
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $sql        = sprintf(
             'SELECT wp_user_id FROM `%s` WHERE client_id = ? AND active = 1 LIMIT 1',
             str_replace('`', '``', $table_name)
@@ -752,7 +752,7 @@ class MealsDB_Quick_Order_Ajax {
             return false;
         }
 
-        $table_name = MealsDB_DB::get_table_name('meals_transactions');
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTIONS);
 
         $sql = sprintf('INSERT INTO `%s` (client_id, order_id, order_date, created_at) VALUES (?, ?, ?, NOW())',
             str_replace('`', '``', $table_name)

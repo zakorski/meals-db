@@ -6,7 +6,8 @@ $drafts = [];
 $draft_error = null;
 
 if ($conn) {
-    $res = $conn->query("SELECT id, data, created_at FROM meals_drafts ORDER BY created_at DESC");
+    $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
+    $res = $conn->query("SELECT id, data, created_at FROM `{$drafts_table}` ORDER BY created_at DESC");
 
     if (MealsDB_DB::is_mysqli_result($res)) {
         while ($row = $res->fetch_assoc()) {

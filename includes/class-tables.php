@@ -1,0 +1,34 @@
+<?php
+/**
+ * Canonical table definitions for the external Meals DB.
+ */
+class MealsDB_Tables
+{
+    public const CLIENTS = 'meals_clients';
+    public const PRODUCTS = 'meals_products';
+    public const TRANSACTIONS = 'meals_transactions';
+    public const TRANSACTION_ITEMS = 'meals_transaction_items';
+    public const STAFF = 'meals_staff';
+    public const DRAFTS = 'meals_drafts';
+    public const AUDIT_LOG = 'meals_audit_log';
+    public const IGNORED_CONFLICTS = 'meals_ignored_conflicts';
+
+    /**
+     * Retrieve all canonical table names.
+     *
+     * @return string[]
+     */
+    public static function all(): array
+    {
+        return [
+            self::CLIENTS,
+            self::PRODUCTS,
+            self::TRANSACTIONS,
+            self::TRANSACTION_ITEMS,
+            self::STAFF,
+            self::DRAFTS,
+            self::AUDIT_LOG,
+            self::IGNORED_CONFLICTS,
+        ];
+    }
+}

@@ -95,8 +95,8 @@ class MealsDB_Clients {
         $success = true;
 
         $tables_to_cleanup = [
-            ['table' => 'meals_drafts', 'column' => 'client_id'],
-            ['table' => 'meals_ignored_conflicts', 'column' => 'client_id'],
+            ['table' => MealsDB_Tables::DRAFTS, 'column' => 'client_id'],
+            ['table' => MealsDB_Tables::IGNORED_CONFLICTS, 'column' => 'client_id'],
         ];
 
         foreach ($tables_to_cleanup as $cleanup) {

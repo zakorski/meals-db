@@ -101,7 +101,8 @@ class MealsDB_Initials {
             return false;
         }
 
-        $sql = 'SELECT client_id FROM meals_clients WHERE initials_delivery = ?';
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf('SELECT client_id FROM `%s` WHERE initials_delivery = ?', $clients_table);
 
         if ($exclude_client_id !== null) {
             $sql .= ' AND client_id != ?';

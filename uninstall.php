@@ -38,10 +38,10 @@ if (!MealsDB_DB::is_mysqli($conn)) {
 
 // Drop plugin-specific tables
 $tables = [
-    MealsDB_DB::get_table_name('meals_clients'),
-    'meals_drafts',
-    'meals_ignored_conflicts',
-    'meals_audit_log',
+    MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS),
+    MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS),
+    MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS),
+    MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG),
 ];
 
 foreach ($tables as $table) {

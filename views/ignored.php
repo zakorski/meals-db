@@ -8,9 +8,11 @@ $ignored = [];
 $ignored_error = null;
 
 if (MealsDB_DB::is_mysqli($conn)) {
-    $sql = 'SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at
-            FROM meals_ignored_conflicts
-            ORDER BY created_at DESC';
+    $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS));
+    $sql = sprintf(
+        'SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at FROM `%s` ORDER BY created_at DESC',
+        $table
+    );
 
     if ($stmt = $conn->prepare($sql)) {
         if ($stmt->execute()) {

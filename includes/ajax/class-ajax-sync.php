@@ -95,9 +95,14 @@ class MealsDB_Ajax_Sync {
             wp_send_json_error(['message' => 'Database connection failed.']);
         }
 
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS));
+
         if ($set_ignored) {
             $stmt = $conn->prepare(
-                "INSERT INTO meals_ignored_conflicts (field_name, source_value, target_value, ignored_by) VALUES (?, ?, ?, ?)"
+                sprintf(
+                    'INSERT INTO `%s` (field_name, source_value, target_value, ignored_by) VALUES (?, ?, ?, ?)',
+                    $table
+                )
             );
             if (!$stmt) {
                 error_log('[MealsDB AJAX] Failed to prepare insert for ignored conflict: ' . ($conn->error ?? 'unknown error'));
@@ -111,7 +116,7 @@ class MealsDB_Ajax_Sync {
             }
         } else {
             $stmt = $conn->prepare(
-                'DELETE FROM meals_ignored_conflicts WHERE field_name = ? AND source_value = ? AND target_value = ?'
+                sprintf('DELETE FROM `%s` WHERE field_name = ? AND source_value = ? AND target_value = ?', $table)
             );
             if (!$stmt) {
                 error_log('[MealsDB AJAX] Failed to prepare delete for ignored conflict: ' . ($conn->error ?? 'unknown error'));

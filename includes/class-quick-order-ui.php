@@ -58,7 +58,7 @@ class MealsDB_Quick_Order_UI {
         $client_options = [];
         $conn = MealsDB_DB::get_connection();
         if (MealsDB_DB::is_mysqli($conn)) {
-            $table  = MealsDB_DB::get_table_name('meals_clients');
+            $table  = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
             $sql    = "
                 SELECT client_id, wp_user_id, first_name, last_name
                 FROM `$table`

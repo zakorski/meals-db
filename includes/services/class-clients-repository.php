@@ -641,7 +641,7 @@ class MealsDB_Clients_Repository {
 
         $resolved = $this->resolve_client_table($conn);
         if ($resolved === null) {
-            error_log('[MealsDB Clients Repository] meals_clients table is missing; cannot continue.');
+            error_log('[MealsDB Clients Repository] ' . MealsDB_Tables::CLIENTS . ' table is missing; cannot continue.');
             return false;
         }
 
@@ -651,12 +651,12 @@ class MealsDB_Clients_Repository {
     }
 
     private function resolve_client_table($conn): ?string {
-        $prefixed = MealsDB_DB::get_table_name('meals_clients');
+        $prefixed = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         if ($this->table_exists($conn, $prefixed)) {
             return $prefixed;
         }
 
-        $unprefixed = 'meals_clients';
+        $unprefixed = MealsDB_Tables::CLIENTS;
         if ($prefixed !== $unprefixed && $this->table_exists($conn, $unprefixed)) {
             return $unprefixed;
         }
