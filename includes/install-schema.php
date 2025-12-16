@@ -30,7 +30,7 @@ class MealsDB_Installer {
 
         $schemas = MealsDB_Schema::get_canonical_schema();
         foreach ($schemas as $schema) {
-            $sql = MealsDB_Schema::generate_create_table_sql($conn, $schema);
+            $sql = MealsDB_Schema::generate_create_table_sql($conn, $schema, false);
 
             if (!$conn->query($sql)) {
                 error_log(sprintf('[MealsDB Installer] Failed creating %s: %s', $schema['table'], $conn->error));

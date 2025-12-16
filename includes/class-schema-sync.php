@@ -40,7 +40,7 @@ class MealsDB_Schema_Sync {
             }
 
             if (!$exists) {
-                $create_sql = MealsDB_Schema::generate_create_table_sql($conn, $schema);
+                $create_sql = MealsDB_Schema::generate_create_table_sql($conn, $schema, false);
                 if ($conn->query($create_sql) !== false) {
                     $results['tables_created'][] = $table_name;
                 } else {

@@ -6,6 +6,9 @@ class MealsDB_Schema {
     /**
      * Return canonical schema definitions keyed by base table name.
      *
+     * Foreign key definitions are kept as metadata only for reporting and dependency
+     * awareness; sync routines never execute them directly.
+     *
      * @return array<string, array<string, mixed>>
      */
     public static function get_canonical_schema(): array {
@@ -298,8 +301,12 @@ class MealsDB_Schema {
 
     /**
      * Generate a CREATE TABLE statement for a canonical schema.
+     *
+     * Foreign key definitions are treated as metadata and are excluded by default to keep
+     * schema sync additive-only. Pass $include_foreign_keys=true only for routines that
+     * explicitly manage constraint creation in a separate, safe pass.
      */
-    public static function generate_create_table_sql(mysqli $conn, array $schema): string {
+    public static function generate_create_table_sql(mysqli $conn, array $schema, bool $include_foreign_keys = false): string {
         $table_name = MealsDB_DB::get_table_name($schema['table']);
         $table_name = str_replace('`', '``', $table_name);
 
@@ -322,7 +329,7 @@ class MealsDB_Schema {
             }
         }
 
-        if (!empty($schema['foreign_keys']) && is_array($schema['foreign_keys'])) {
+        if ($include_foreign_keys && !empty($schema['foreign_keys']) && is_array($schema['foreign_keys'])) {
             foreach ($schema['foreign_keys'] as $foreign_key) {
                 $parts[] = self::build_foreign_key_definition($conn, $foreign_key);
             }
