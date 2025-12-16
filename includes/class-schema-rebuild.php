@@ -63,7 +63,7 @@ class MealsDB_Schema_Rebuild {
             }
 
             $table_name  = MealsDB_DB::get_table_name($table_key);
-            $create_sql  = MealsDB_Schema::generate_create_table_sql($conn, $schemas[$table_key]);
+            $create_sql  = MealsDB_Schema::generate_create_table_sql($conn, $schemas[$table_key], false);
 
             try {
                 $query_result = $conn->query($create_sql);
