@@ -123,8 +123,6 @@ class MealsDB_Installer {
 
         self::upgrade_meals_clients_table($conn);
 
-        self::create_meals_clients_table();
-
         self::create_meals_products_table();
     }
 
@@ -367,93 +365,6 @@ class MealsDB_Installer {
                 error_log('[MealsDB Installer] Failed updating ' . MealsDB_Tables::CLIENTS . '.client_type enum: ' . $conn->error);
             }
         }
-    }
-
-    /**
-     * Create or upgrade the meals_clients table using dbDelta.
-     */
-    private static function create_meals_clients_table(): void {
-        global $wpdb;
-
-        if (!$wpdb instanceof wpdb) {
-            error_log('[MealsDB Installer] Unable to access the WordPress database connection while creating ' . MealsDB_Tables::CLIENTS . '.');
-            return;
-        }
-
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-
-        $table_name      = $wpdb->prefix . MealsDB_Tables::CLIENTS;
-        $charset_collate = $wpdb->get_charset_collate();
-
-        $sql = "CREATE TABLE {$table_name} (
-            client_id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
-            wp_user_id BIGINT(20) UNSIGNED NOT NULL,
-            client_type ENUM('Private','SDNB','Veteran') NOT NULL,
-            first_name VARCHAR(100) NOT NULL,
-            last_name VARCHAR(100) NOT NULL,
-            client_email VARCHAR(255) NULL,
-            active TINYINT(1) NOT NULL DEFAULT 1,
-            client_phone_1 VARCHAR(20) NULL,
-            client_phone_2 VARCHAR(20) NULL,
-            alternate_contact_name VARCHAR(255) NULL,
-            alternate_contact_phone_1 VARCHAR(20) NULL,
-            alternate_contact_phone_2 VARCHAR(20) NULL,
-            alternate_contact_email VARCHAR(255) NULL,
-            do_not_call_client_phone BOOLEAN NOT NULL DEFAULT 0,
-            payment_method VARCHAR(50) NULL,
-            open_date DATE NULL,
-            birth_date DATE NULL,
-            gender VARCHAR(10) NULL,
-            assigned_worker_name VARCHAR(255) NULL,
-            assigned_worker_email VARCHAR(255) NULL,
-            vendor_number VARCHAR(50) NULL,
-            service_center_charged VARCHAR(255) NULL,
-            service_id VARCHAR(50) NULL,
-            requisition_id VARCHAR(50) NULL,
-            requisition_period VARCHAR(50) NULL,
-            meal_type VARCHAR(50) NULL,
-            service_name_zone VARCHAR(10) NULL,
-            service_name_course VARCHAR(10) NULL,
-            service_commence_date DATE NULL,
-            expected_termination_date DATE NULL,
-            initial_renewal_termination_date DATE NULL,
-            most_recent_renewal_termination_date DATE NULL,
-            notes_to_service_provider TEXT NULL,
-            client_contribution DECIMAL(10,2) NULL,
-            vet_health_id_card VARCHAR(50) NULL,
-            rate DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-            required_start_date DATE NULL,
-            delivery_day VARCHAR(50) NULL,
-            delivery_area_name VARCHAR(255) NULL,
-            delivery_area_zone VARCHAR(50) NULL,
-            ordering_contact_method VARCHAR(50) NULL,
-            ordering_frequency INT NULL,
-            delivery_frequency INT NULL,
-            freezer_capacity VARCHAR(50) NULL,
-            delivery_fee DECIMAL(10,2) NULL,
-            diet_concerns TEXT NULL,
-            customer_comments TEXT NULL,
-            initials_for_delivery VARCHAR(10) NULL,
-            initials_delivery VARCHAR(3) NOT NULL DEFAULT '',
-            street_number VARCHAR(20) NULL,
-            street_name VARCHAR(255) NULL,
-            apartment_number VARCHAR(20) NULL,
-            city VARCHAR(255) NULL,
-            province VARCHAR(10) NULL,
-            postal_code VARCHAR(10) NULL,
-            delivery_street_number VARCHAR(20) NULL,
-            delivery_street_name VARCHAR(255) NULL,
-            delivery_apartment_number VARCHAR(20) NULL,
-            delivery_city VARCHAR(255) NULL,
-            delivery_province VARCHAR(10) NULL,
-            delivery_postal_code VARCHAR(10) NULL,
-            PRIMARY KEY  (client_id),
-            KEY client_type (client_type),
-            UNIQUE KEY initials_delivery_unique (initials_delivery),
-            KEY wp_user_id (wp_user_id)
-        ) {$charset_collate};";
-
-        dbDelta($sql);
     }
 
     /**
