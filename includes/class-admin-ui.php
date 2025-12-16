@@ -496,6 +496,29 @@ class MealsDB_Admin_UI {
             }
         }
 
+        if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'force_rebuild') {
+            check_admin_referer('mealsdb_force_rebuild', 'mealsdb_force_rebuild_nonce');
+
+            require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-rebuild.php';
+
+            $confirmation = $_POST['mealsdb_rebuild_confirm'] ?? '';
+            if (function_exists('sanitize_text_field')) {
+                $confirmation = sanitize_text_field($confirmation);
+            }
+
+            $result = MealsDB_Schema_Rebuild::run($confirmation);
+
+            if (is_wp_error($result)) {
+                add_action('admin_notices', function() use ($result) {
+                    echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
+                });
+            } else {
+                add_action('admin_notices', function() use ($result) {
+                    echo MealsDB_Admin_UI::render_force_rebuild_summary($result);
+                });
+            }
+        }
+
         $tab = $_GET['tab'] ?? 'sync';
 
         echo '<div class="wrap">';
@@ -548,6 +571,52 @@ class MealsDB_Admin_UI {
         }
 
         echo '</div></div>';
+    }
+
+    /**
+     * Render a structured summary for destructive rebuild results.
+     *
+     * @param array<string, mixed> $result
+     */
+    public static function render_force_rebuild_summary(array $result): string {
+        $dropped       = $result['dropped'] ?? [];
+        $drop_errors   = $result['drop_errors'] ?? [];
+        $created       = $result['created'] ?? [];
+        $create_errors = $result['create_errors'] ?? [];
+
+        ob_start();
+        ?>
+        <div class="notice notice-warning">
+            <p><strong><?php echo esc_html__('External Meals DB Force Rebuild completed.', 'meals-db'); ?></strong></p>
+            <p class="description"><?php echo esc_html__('All external Meals DB tables were dropped and recreated using the canonical schema.', 'meals-db'); ?></p>
+            <ul>
+                <li><strong><?php echo esc_html__('Tables dropped:', 'meals-db'); ?></strong> <?php echo esc_html(implode(', ', $dropped)); ?></li>
+                <?php if (!empty($drop_errors)) : ?>
+                    <li>
+                        <strong><?php echo esc_html__('Drop failures:', 'meals-db'); ?></strong>
+                        <ul>
+                            <?php foreach ($drop_errors as $error) : ?>
+                                <li><?php echo esc_html(($error['table'] ?? 'Unknown table') . ' — ' . ($error['error'] ?? 'Unknown error')); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </li>
+                <?php endif; ?>
+                <li><strong><?php echo esc_html__('Tables created:', 'meals-db'); ?></strong> <?php echo esc_html(implode(', ', $created)); ?></li>
+                <?php if (!empty($create_errors)) : ?>
+                    <li>
+                        <strong><?php echo esc_html__('Create failures:', 'meals-db'); ?></strong>
+                        <ul>
+                            <?php foreach ($create_errors as $error) : ?>
+                                <li><?php echo esc_html(($error['table'] ?? 'Unknown table') . ' — ' . ($error['error'] ?? 'Unknown error')); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </li>
+                <?php endif; ?>
+            </ul>
+        </div>
+        <?php
+
+        return (string) ob_get_clean();
     }
 
     /**
