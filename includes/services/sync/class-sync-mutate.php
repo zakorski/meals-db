@@ -89,7 +89,8 @@ class MealsDB_Sync_Mutate {
         }
 
         $column = $allowed_fields[$field];
-        $select_sql = sprintf('SELECT %s FROM meals_clients WHERE id = ? LIMIT 1', $column);
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $select_sql = sprintf('SELECT %s FROM `%s` WHERE id = ? LIMIT 1', $column, $clients_table);
         $stmt = $connection->prepare($select_sql);
 
         if (!$stmt) {
@@ -207,7 +208,8 @@ class MealsDB_Sync_Mutate {
         $types  .= 'i';
         $values[] = $client_id;
 
-        $sql = 'UPDATE meals_clients SET ' . implode(', ', $columns) . ' WHERE id = ?';
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf('UPDATE `%s` SET %s WHERE id = ?', $clients_table, implode(', ', $columns));
         $stmt = $connection->prepare($sql);
 
         if (!$stmt) {
@@ -241,7 +243,13 @@ class MealsDB_Sync_Mutate {
         $types = str_repeat('s', count($fields));
         $values = array_map(static fn($value) => (string) $value, $fields);
 
-        $sql = 'INSERT INTO meals_clients (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $placeholders) . ')';
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'INSERT INTO `%s` (%s) VALUES (%s)',
+            $clients_table,
+            implode(', ', $columns),
+            implode(', ', $placeholders)
+        );
         $stmt = $connection->prepare($sql);
 
         if (!$stmt) {
@@ -308,7 +316,8 @@ class MealsDB_Sync_Mutate {
             $transaction_started = $connection->begin_transaction();
         }
 
-        $update_stmt = $connection->prepare('UPDATE meals_clients SET wordpress_user_id = ? WHERE id = ?');
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $update_stmt = $connection->prepare(sprintf('UPDATE `%s` SET wordpress_user_id = ? WHERE id = ?', $clients_table));
 
         if (!$update_stmt) {
             if ($transaction_started) {

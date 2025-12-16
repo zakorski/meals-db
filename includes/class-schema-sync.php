@@ -17,7 +17,7 @@ class MealsDB_Schema_Sync {
         }
 
         $expected_clients_table = [
-            'table'       => 'meals_clients',
+            'table'       => MealsDB_Tables::CLIENTS,
             'columns'     => [
                 'client_id'                     => 'BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT',
                 'wp_user_id'                    => 'BIGINT(20) UNSIGNED NOT NULL',

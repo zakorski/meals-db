@@ -465,7 +465,7 @@ class MealsDB_Staff {
      * Resolve and escape the staff table name for use in SQL identifiers.
      */
     private static function get_staff_table_name(mysqli $conn): string {
-        $table_name = MealsDB_DB::get_table_name('meals_staff');
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::STAFF);
 
         if (method_exists($conn, 'real_escape_string')) {
             $table_name = $conn->real_escape_string($table_name);

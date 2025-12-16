@@ -787,6 +787,8 @@ class MealsDB_Client_Form {
             return false;
         }
 
+        $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
+
         if ($draft_id === null && isset($data['draft_id'])) {
             $draft_id = intval($data['draft_id']);
         }
@@ -812,7 +814,7 @@ class MealsDB_Client_Form {
                 return false;
             }
 
-            $stmt = $conn->prepare('UPDATE meals_drafts SET data = ? WHERE id = ? AND created_by = ?');
+            $stmt = $conn->prepare(sprintf('UPDATE `%s` SET data = ? WHERE id = ? AND created_by = ?', $drafts_table));
             if (!$stmt) {
                 error_log('[MealsDB] Draft update failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
                 return false;
@@ -836,7 +838,7 @@ class MealsDB_Client_Form {
             return $draft_id;
         }
 
-        $stmt = $conn->prepare("INSERT INTO meals_drafts (data, created_by) VALUES (?, ?)");
+        $stmt = $conn->prepare(sprintf('INSERT INTO `%s` (data, created_by) VALUES (?, ?)', $drafts_table));
         if (!$stmt) {
             error_log('[MealsDB] Draft save failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
             return false;
@@ -883,6 +885,8 @@ class MealsDB_Client_Form {
             return false;
         }
 
+        $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
+
         if (!self::draft_exists($conn, $draft_id)) {
             error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' not found.');
             return false;
@@ -895,7 +899,7 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $stmt = $conn->prepare('DELETE FROM meals_drafts WHERE id = ? AND created_by = ?');
+        $stmt = $conn->prepare(sprintf('DELETE FROM `%s` WHERE id = ? AND created_by = ?', $drafts_table));
         if (!$stmt) {
             error_log('[MealsDB] Draft delete failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
             return false;
@@ -938,7 +942,8 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $sql = 'SELECT id FROM meals_drafts WHERE id = ?';
+        $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
+        $sql = sprintf('SELECT id FROM `%s` WHERE id = ?', $drafts_table);
         if ($owner_id !== null) {
             $sql .= ' AND created_by = ?';
         }
@@ -1295,6 +1300,7 @@ class MealsDB_Client_Form {
         }
 
         $allEnsured = true;
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
 
         foreach (self::$deterministic_index_map as $indexColumn) {
             $escapedColumn = method_exists($conn, 'real_escape_string')
@@ -1302,7 +1308,7 @@ class MealsDB_Client_Form {
                 : $indexColumn;
 
             $columnExists = false;
-            $result = $conn->query("SHOW COLUMNS FROM meals_clients LIKE '{$escapedColumn}'");
+            $result = $conn->query("SHOW COLUMNS FROM `{$clients_table}` LIKE '{$escapedColumn}'");
             if (MealsDB_DB::is_mysqli_result($result)) {
                 $columnExists = $result->num_rows > 0;
                 $result->free();
@@ -1319,7 +1325,7 @@ class MealsDB_Client_Form {
             }
 
             if (!$columnExists) {
-                $addColumnSql = "ALTER TABLE meals_clients ADD COLUMN `{$indexColumn}` CHAR(64) NULL";
+                $addColumnSql = "ALTER TABLE `{$clients_table}` ADD COLUMN `{$indexColumn}` CHAR(64) NULL";
                 if (!$conn->query($addColumnSql)) {
                     error_log('[MealsDB] Failed to add deterministic index column: ' . ($conn->error ?? 'unknown error'));
                     $allEnsured = false;
@@ -1338,7 +1344,7 @@ class MealsDB_Client_Form {
                 ? $conn->real_escape_string($legacyIndexName)
                 : $legacyIndexName;
 
-            $legacyIndexResult = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedLegacy}'");
+            $legacyIndexResult = $conn->query("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedLegacy}'");
             $legacyIndexExists = false;
             if (MealsDB_DB::is_mysqli_result($legacyIndexResult)) {
                 $legacyIndexExists = $legacyIndexResult->num_rows > 0;
@@ -1354,7 +1360,7 @@ class MealsDB_Client_Form {
             }
 
             if ($legacyIndexExists) {
-                if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$legacyIndexName}`") !== true) {
+                if ($conn->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$legacyIndexName}`") !== true) {
                     $errno = $conn->errno ?? null;
                     if ($errno !== 1091) {
                         error_log('[MealsDB] Failed to drop legacy deterministic index: ' . ($conn->error ?? 'unknown error'));
@@ -1365,7 +1371,7 @@ class MealsDB_Client_Form {
 
             $indexExists = false;
             $indexIsUnique = false;
-            $indexResult = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedIndex}'");
+            $indexResult = $conn->query("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedIndex}'");
             if (MealsDB_DB::is_mysqli_result($indexResult)) {
                 while ($row = $indexResult->fetch_assoc()) {
                     $indexExists = true;
@@ -1397,7 +1403,7 @@ class MealsDB_Client_Form {
             }
 
             if ($indexExists && !$indexIsUnique) {
-                if ($conn->query("ALTER TABLE meals_clients DROP INDEX `{$indexName}`") !== true) {
+                if ($conn->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$indexName}`") !== true) {
                     error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
                     $allEnsured = false;
                 } else {
@@ -1406,7 +1412,7 @@ class MealsDB_Client_Form {
             }
 
             if (!$indexExists) {
-                $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON meals_clients (`{$indexColumn}`)";
+                $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON `{$clients_table}` (`{$indexColumn}`)";
                 if (!$conn->query($createIndexSql)) {
                     $errno = $conn->errno ?? null;
                     if ($errno !== 1061) { // ignore duplicate index error
@@ -1441,9 +1447,10 @@ class MealsDB_Client_Form {
         }
 
         $allSuccessful = true;
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
 
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
-            $selectSql = "SELECT id, `{$field}` FROM meals_clients WHERE (`{$indexColumn}` IS NULL OR `{$indexColumn}` = '') AND `{$field}` IS NOT NULL AND `{$field}` <> ''";
+            $selectSql = "SELECT id, `{$field}` FROM `{$clients_table}` WHERE (`{$indexColumn}` IS NULL OR `{$indexColumn}` = '') AND `{$field}` IS NOT NULL AND `{$field}` <> ''";
             $result = $conn->query($selectSql);
 
             if ($result === false) {
@@ -1457,7 +1464,7 @@ class MealsDB_Client_Form {
                 continue;
             }
 
-            $updateSql = "UPDATE meals_clients SET `{$indexColumn}` = ? WHERE id = ?";
+            $updateSql = "UPDATE `{$clients_table}` SET `{$indexColumn}` = ? WHERE id = ?";
             $stmt = $conn->prepare($updateSql);
 
             if (!$stmt) {
@@ -1552,7 +1559,9 @@ class MealsDB_Client_Form {
         $exists = false;
         $isUnique = false;
 
-        $result = $conn->query("SHOW INDEX FROM meals_clients WHERE Key_name = '{$escapedIndex}'");
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+
+        $result = $conn->query("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedIndex}'");
         if (MealsDB_DB::is_mysqli_result($result)) {
             while ($row = $result->fetch_assoc()) {
                 $exists = true;

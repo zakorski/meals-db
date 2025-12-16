@@ -4,7 +4,7 @@
  */
 
 class MealsDB_Products {
-    private const TABLE = 'meals_products';
+    private const TABLE = MealsDB_Tables::PRODUCTS;
 
     /**
      * Create the meals_products table within the external Meals DB.
@@ -49,7 +49,7 @@ class MealsDB_Products {
         ) ENGINE=InnoDB {$charset_sql};";
 
         if (!$conn->query($sql)) {
-            error_log('[MealsDB Products] Failed creating meals_products table: ' . $conn->error);
+            error_log('[MealsDB Products] Failed creating ' . MealsDB_Tables::PRODUCTS . ' table: ' . $conn->error);
         }
     }
 

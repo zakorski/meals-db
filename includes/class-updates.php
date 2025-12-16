@@ -213,7 +213,7 @@ class MealsDB_Updates {
             );
         }
 
-        $table = MealsDB_DB::get_table_name('meals_products');
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
         $table = str_replace('`', '``', $table);
 
         $existing_ids = [];

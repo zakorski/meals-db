@@ -56,8 +56,10 @@ class StubStmt {
 
     public function execute(): bool {
         $sql = $this->sql;
+        $clients_table = MealsDB_Tables::CLIENTS;
+        $drafts_table  = MealsDB_Tables::DRAFTS;
 
-        if (stripos($sql, 'SELECT id FROM') === 0 && stripos($sql, 'meals_clients') !== false) {
+        if (stripos($sql, 'SELECT id FROM') === 0 && stripos($sql, $clients_table) !== false) {
             if (preg_match('/WHERE\s+`?([a-z_]+)`?\s*=\s*\?/i', $sql, $matches)) {
                 $column = $matches[1];
                 $value = $this->params[0] ?? null;
@@ -67,7 +69,7 @@ class StubStmt {
             return true;
         }
 
-        if (stripos($sql, 'INSERT INTO') === 0 && stripos($sql, 'meals_clients') !== false) {
+        if (stripos($sql, 'INSERT INTO') === 0 && stripos($sql, $clients_table) !== false) {
             $columns = [];
 
             if (preg_match('/\(([^\)]+)\)\s*VALUES/i', $sql, $matches)) {
@@ -94,7 +96,7 @@ class StubStmt {
             return true;
         }
 
-        if (stripos($sql, 'UPDATE') === 0 && stripos($sql, 'meals_clients') !== false) {
+        if (stripos($sql, 'UPDATE') === 0 && stripos($sql, $clients_table) !== false) {
             if (preg_match('/SET\s+(.+)\s+WHERE/i', $sql, $matches)) {
                 $assignments = explode(',', $matches[1]);
                 $columns = [];
@@ -116,7 +118,7 @@ class StubStmt {
             return true;
         }
 
-        if (stripos($sql, 'INSERT INTO meals_drafts') === 0) {
+        if (stripos($sql, 'INSERT INTO ' . $drafts_table) === 0) {
             $json = $this->params[0] ?? '';
             $user = $this->params[1] ?? 0;
             $this->conn->createDraft($json, (int) $user);
@@ -124,7 +126,7 @@ class StubStmt {
             return true;
         }
 
-        if (stripos($sql, 'UPDATE meals_drafts SET') === 0) {
+        if (stripos($sql, 'UPDATE ' . $drafts_table . ' SET') === 0) {
             $json = $this->params[0] ?? '';
             $id = (int) ($this->params[1] ?? 0);
             $user = (int) ($this->params[2] ?? 0);
@@ -133,7 +135,7 @@ class StubStmt {
             return true;
         }
 
-        if (stripos($sql, 'DELETE FROM meals_drafts') === 0) {
+        if (stripos($sql, 'DELETE FROM ' . $drafts_table) === 0) {
             $id = (int) ($this->params[0] ?? 0);
             $user = (int) ($this->params[1] ?? 0);
             $deleted = $this->conn->deleteDraft($id, $user);
@@ -141,7 +143,7 @@ class StubStmt {
             return true;
         }
 
-        if (stripos($sql, 'SELECT id FROM meals_drafts') === 0) {
+        if (stripos($sql, 'SELECT id FROM ' . $drafts_table) === 0) {
             $id = (int) ($this->params[0] ?? 0);
             $owner = null;
             if (stripos($sql, 'created_by') !== false) {

@@ -43,7 +43,7 @@ class MealsDB_Reports {
         $order_items_table      = $this->wpdb->prefix . 'woocommerce_order_items';
         $order_itemmeta_table   = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
         $orders_table           = $this->wpdb->posts;
-        $meals_products_table   = MealsDB_DB::get_table_name('meals_products');
+        $meals_products_table   = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
 
         $sql = "
             SELECT
@@ -99,7 +99,7 @@ class MealsDB_Reports {
         $order_items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
         $order_itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
         $orders_table         = $this->wpdb->posts;
-        $meals_products_table = MealsDB_DB::get_table_name('meals_products');
+        $meals_products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
 
         $sql = "
             SELECT

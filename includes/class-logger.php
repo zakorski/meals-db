@@ -34,13 +34,15 @@ class MealsDB_Logger {
             return;
         }
 
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG));
         $user_id = get_current_user_id();
 
-        $stmt = $conn->prepare("
-            INSERT INTO meals_audit_log (
-                user_id, action, target_id, field_changed, old_value, new_value, source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ");
+        $stmt = $conn->prepare(
+            sprintf(
+                'INSERT INTO `%s` (user_id, action, target_id, field_changed, old_value, new_value, source) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                $table
+            )
+        );
 
         if ($stmt === false) {
             error_log('[MealsDB Logger] Prepare failed: ' . $conn->error);
@@ -75,7 +77,8 @@ class MealsDB_Logger {
             return [];
         }
 
-        $sql = "SELECT * FROM meals_audit_log ORDER BY created_at DESC LIMIT ?";
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG));
+        $sql = sprintf('SELECT * FROM `%s` ORDER BY created_at DESC LIMIT ?', $table);
         $stmt = $conn->prepare($sql);
         if (!$stmt) {
             error_log('[MealsDB Logger] Failed to prepare recent logs query: ' . ($conn->error ?? 'unknown error'));

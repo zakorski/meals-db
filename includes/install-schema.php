@@ -45,10 +45,14 @@ class MealsDB_Installer {
             $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
         }
 
-        $transactions_table = str_replace('`', '``', MealsDB_DB::get_table_name('meals_transactions'));
+        $transactions_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTIONS));
+        $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
+        $ignored_conflicts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS));
+        $audit_log_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG));
+        $staff_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::STAFF));
 
         $tables = [
-            'meals_drafts' => "CREATE TABLE IF NOT EXISTS meals_drafts (
+            MealsDB_Tables::DRAFTS => "CREATE TABLE IF NOT EXISTS `{$drafts_table}` (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 data LONGTEXT NOT NULL,
                 created_by BIGINT UNSIGNED NULL,
@@ -56,7 +60,7 @@ class MealsDB_Installer {
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 KEY idx_created_by (created_by)
             ) ENGINE=InnoDB $charset_sql;",
-            'meals_ignored_conflicts' => "CREATE TABLE IF NOT EXISTS meals_ignored_conflicts (
+            MealsDB_Tables::IGNORED_CONFLICTS => "CREATE TABLE IF NOT EXISTS `{$ignored_conflicts_table}` (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 field_name VARCHAR(191) NOT NULL,
                 source_value TEXT NULL,
@@ -66,7 +70,7 @@ class MealsDB_Installer {
                 KEY idx_field_name (field_name),
                 KEY idx_ignored_by (ignored_by)
             ) ENGINE=InnoDB $charset_sql;",
-            'meals_audit_log' => "CREATE TABLE IF NOT EXISTS meals_audit_log (
+            MealsDB_Tables::AUDIT_LOG => "CREATE TABLE IF NOT EXISTS `{$audit_log_table}` (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 user_id BIGINT UNSIGNED NULL,
                 action VARCHAR(100) NOT NULL,
@@ -79,7 +83,7 @@ class MealsDB_Installer {
                 KEY idx_user_id (user_id),
                 KEY idx_target_id (target_id)
             ) ENGINE=InnoDB $charset_sql;",
-            'meals_transactions' => "CREATE TABLE IF NOT EXISTS `{$transactions_table}` (
+            MealsDB_Tables::TRANSACTIONS => "CREATE TABLE IF NOT EXISTS `{$transactions_table}` (
                 transaction_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 client_id INT UNSIGNED NOT NULL,
                 wp_order_id BIGINT UNSIGNED NULL,
@@ -95,7 +99,7 @@ class MealsDB_Installer {
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 KEY idx_client_id (client_id)
             ) ENGINE=InnoDB $charset_sql;",
-            'meals_staff' => "CREATE TABLE IF NOT EXISTS meals_staff (
+            MealsDB_Tables::STAFF => "CREATE TABLE IF NOT EXISTS `{$staff_table}` (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 wordpress_user_id BIGINT UNSIGNED NULL,
                 first_name VARCHAR(191) NOT NULL,
@@ -129,7 +133,7 @@ class MealsDB_Installer {
      */
     private static function create_table_transactions($conn): void {
         if (!MealsDB_DB::is_mysqli($conn)) {
-            error_log('[MealsDB Installer] Unable to establish database connection while creating meals_transactions.');
+            error_log('[MealsDB Installer] Unable to establish database connection while creating ' . MealsDB_Tables::TRANSACTIONS . '.');
             return;
         }
 
@@ -148,8 +152,8 @@ class MealsDB_Installer {
             $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
         }
 
-        $transactions_table = MealsDB_DB::get_table_name('meals_transactions');
-        $clients_table      = MealsDB_DB::get_table_name('meals_clients');
+        $transactions_table = MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTIONS);
+        $clients_table      = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
         $transactions_table = str_replace('`', '``', $transactions_table);
         $clients_table      = str_replace('`', '``', $clients_table);
@@ -174,7 +178,7 @@ class MealsDB_Installer {
         ) ENGINE=InnoDB {$charset_sql};";
 
         if (!$conn->query($sql)) {
-            error_log('[MealsDB Installer] Failed creating meals_transactions table: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed creating ' . MealsDB_Tables::TRANSACTIONS . ' table: ' . $conn->error);
         }
     }
 
@@ -183,11 +187,11 @@ class MealsDB_Installer {
      */
     private static function alter_transactions_add_status($conn): void {
         if (!MealsDB_DB::is_mysqli($conn)) {
-            error_log('[MealsDB Installer] Unable to establish database connection while altering meals_transactions.');
+            error_log('[MealsDB Installer] Unable to establish database connection while altering ' . MealsDB_Tables::TRANSACTIONS . '.');
             return;
         }
 
-        $transactions_table = MealsDB_DB::get_table_name('meals_transactions');
+        $transactions_table = MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTIONS);
         $transactions_table = str_replace('`', '``', $transactions_table);
 
         $column_name    = 'status';
@@ -206,7 +210,7 @@ class MealsDB_Installer {
                 $column_result->free();
             }
         } elseif ($column_result === false) {
-            error_log('[MealsDB Installer] Failed inspecting meals_transactions.status column: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed inspecting ' . MealsDB_Tables::TRANSACTIONS . '.status column: ' . $conn->error);
             return;
         }
 
@@ -217,7 +221,7 @@ class MealsDB_Installer {
         $alter_sql = "ALTER TABLE `{$transactions_table}` ADD COLUMN `{$column_name}` ENUM('Ordered','Delivered','Cancelled') NOT NULL DEFAULT 'Ordered'";
 
         if (!$conn->query($alter_sql)) {
-            error_log('[MealsDB Installer] Failed adding meals_transactions.status column: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed adding ' . MealsDB_Tables::TRANSACTIONS . '.status column: ' . $conn->error);
         }
     }
 
@@ -226,7 +230,7 @@ class MealsDB_Installer {
      */
     private static function create_table_transaction_items($conn): void {
         if (!MealsDB_DB::is_mysqli($conn)) {
-            error_log('[MealsDB Installer] Unable to establish database connection while creating meals_transaction_items.');
+            error_log('[MealsDB Installer] Unable to establish database connection while creating ' . MealsDB_Tables::TRANSACTION_ITEMS . '.');
             return;
         }
 
@@ -245,9 +249,9 @@ class MealsDB_Installer {
             $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
         }
 
-        $transaction_items_table = MealsDB_DB::get_table_name('meals_transaction_items');
-        $transactions_table      = MealsDB_DB::get_table_name('meals_transactions');
-        $products_table          = MealsDB_DB::get_table_name('meals_products');
+        $transaction_items_table = MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTION_ITEMS);
+        $transactions_table      = MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTIONS);
+        $products_table          = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
 
         $transaction_items_table = str_replace('`', '``', $transaction_items_table);
         $transactions_table      = str_replace('`', '``', $transactions_table);
@@ -270,7 +274,7 @@ class MealsDB_Installer {
         ) ENGINE=InnoDB {$charset_sql};";
 
         if (!$conn->query($sql)) {
-            error_log('[MealsDB Installer] Failed creating meals_transaction_items table: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed creating ' . MealsDB_Tables::TRANSACTION_ITEMS . ' table: ' . $conn->error);
         }
     }
 
@@ -278,7 +282,7 @@ class MealsDB_Installer {
      * Apply schema updates required for the meals_clients table.
      */
     private static function upgrade_meals_clients_table($conn): void {
-        $table = MealsDB_DB::get_table_name('meals_clients');
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
         $tableName = method_exists($conn, 'real_escape_string')
             ? $conn->real_escape_string($table)
@@ -304,7 +308,7 @@ class MealsDB_Installer {
                 $result->free();
             }
         } elseif ($result === false) {
-            error_log('[MealsDB Installer] Failed inspecting meals_clients.active column: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed inspecting ' . MealsDB_Tables::CLIENTS . '.active column: ' . $conn->error);
             return;
         }
 
@@ -312,7 +316,7 @@ class MealsDB_Installer {
             $alterSql = "ALTER TABLE `{$tableName}` ADD COLUMN `{$columnName}` TINYINT(1) NOT NULL DEFAULT 1";
 
             if (!$conn->query($alterSql)) {
-                error_log('[MealsDB Installer] Failed adding meals_clients.active column: ' . $conn->error);
+                error_log('[MealsDB Installer] Failed adding ' . MealsDB_Tables::CLIENTS . '.active column: ' . $conn->error);
             }
         }
 
@@ -348,7 +352,7 @@ class MealsDB_Installer {
                 $clientTypeResult->free();
             }
         } elseif ($clientTypeResult === false) {
-            error_log('[MealsDB Installer] Failed inspecting meals_clients.client_type column: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed inspecting ' . MealsDB_Tables::CLIENTS . '.client_type column: ' . $conn->error);
             return;
         }
 
@@ -360,7 +364,7 @@ class MealsDB_Installer {
 
             $modifySql = "ALTER TABLE `{$tableName}` MODIFY COLUMN `{$clientTypeColumn}` ENUM('Private','SDNB','Veteran') NOT NULL";
             if (!$conn->query($modifySql)) {
-                error_log('[MealsDB Installer] Failed updating meals_clients.client_type enum: ' . $conn->error);
+                error_log('[MealsDB Installer] Failed updating ' . MealsDB_Tables::CLIENTS . '.client_type enum: ' . $conn->error);
             }
         }
     }
@@ -372,13 +376,13 @@ class MealsDB_Installer {
         global $wpdb;
 
         if (!$wpdb instanceof wpdb) {
-            error_log('[MealsDB Installer] Unable to access the WordPress database connection while creating meals_clients.');
+            error_log('[MealsDB Installer] Unable to access the WordPress database connection while creating ' . MealsDB_Tables::CLIENTS . '.');
             return;
         }
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-        $table_name      = $wpdb->prefix . 'meals_clients';
+        $table_name      = $wpdb->prefix . MealsDB_Tables::CLIENTS;
         $charset_collate = $wpdb->get_charset_collate();
 
         $sql = "CREATE TABLE {$table_name} (
@@ -459,11 +463,11 @@ class MealsDB_Installer {
         $conn = MealsDB_DB::get_connection();
 
         if (!MealsDB_DB::is_mysqli($conn)) {
-            error_log('[MealsDB Installer] Unable to establish database connection while creating meals_products.');
+            error_log('[MealsDB Installer] Unable to establish database connection while creating ' . MealsDB_Tables::PRODUCTS . '.');
             return;
         }
 
-        $table = MealsDB_DB::get_table_name('meals_products');
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
         $table = str_replace('`', '``', $table);
         $version_option = 'mealsdb_products_schema_version';
         $target_version = self::MEALSDB_PRODUCTS_SCHEMA_VERSION;
@@ -483,7 +487,7 @@ class MealsDB_Installer {
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
 
         if (!$conn->query($create_sql)) {
-            error_log('[MealsDB Installer] Failed creating meals_products table: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed creating ' . MealsDB_Tables::PRODUCTS . ' table: ' . $conn->error);
             return;
         }
 
@@ -511,7 +515,7 @@ class MealsDB_Installer {
             }
             $columns_result->free();
         } elseif ($columns_result === false) {
-            error_log('[MealsDB Installer] Failed inspecting meals_products columns: ' . $conn->error);
+            error_log('[MealsDB Installer] Failed inspecting ' . MealsDB_Tables::PRODUCTS . ' columns: ' . $conn->error);
             return;
         }
 
@@ -520,7 +524,7 @@ class MealsDB_Installer {
                 $alter_sql = "ALTER TABLE `{$table}` ADD COLUMN {$column} {$definition}";
 
                 if (!$conn->query($alter_sql)) {
-                    error_log(sprintf('[MealsDB Installer] Failed adding meals_products.%s column: %s', $column, $conn->error));
+                    error_log(sprintf('[MealsDB Installer] Failed adding %s.%s column: %s', MealsDB_Tables::PRODUCTS, $column, $conn->error));
                 }
             }
         }
@@ -532,7 +536,7 @@ class MealsDB_Installer {
                 $modify_sql = "ALTER TABLE `{$table}` MODIFY COLUMN product_type ENUM('meal','side') NOT NULL DEFAULT 'meal'";
 
                 if (!$conn->query($modify_sql)) {
-                    error_log('[MealsDB Installer] Failed modifying meals_products.product_type enum: ' . $conn->error);
+                    error_log('[MealsDB Installer] Failed modifying ' . MealsDB_Tables::PRODUCTS . '.product_type enum: ' . $conn->error);
                 }
             }
         }

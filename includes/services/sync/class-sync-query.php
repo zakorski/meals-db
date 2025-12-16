@@ -61,8 +61,10 @@ class MealsDB_Sync_Query {
 
         $clients = $this->batched_query(
             function (int $batch_size, int $page, int $offset) use ($connection, &$query_error): array {
+                $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
                 $sql = sprintf(
-                    'SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM meals_clients LIMIT %d OFFSET %d',
+                    'SELECT id, individual_id, first_name, last_name, client_email, phone_primary, address_postal, wordpress_user_id FROM `%s` LIMIT %d OFFSET %d',
+                    $clients_table,
                     (int) $batch_size,
                     (int) $offset
                 );
@@ -133,7 +135,8 @@ class MealsDB_Sync_Query {
 
         $ignored = [];
 
-        $sql = 'SELECT field_name, source_value, target_value FROM meals_ignored_conflicts';
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS));
+        $sql   = sprintf('SELECT field_name, source_value, target_value FROM `%s`', $table);
         $stmt = $connection->prepare($sql);
 
         if (!$stmt) {
@@ -199,7 +202,7 @@ class MealsDB_Sync_Query {
         }
 
         $staff_ids = [];
-        $table_name = MealsDB_DB::get_table_name('meals_staff');
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::STAFF);
 
         if (method_exists($connection, 'real_escape_string')) {
             $table_name = $connection->real_escape_string($table_name);
