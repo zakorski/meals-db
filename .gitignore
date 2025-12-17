@@ -1,0 +1,79 @@
+# Wordpress - ignore core, configuration, examples, uploads and logs.
+# https://github.com/github/gitignore/blob/main/WordPress.gitignore
+
+# Core
+#
+# Note: if you want to stage/commit WP core files
+# you can delete this whole section/until Configuration.
+/wp-admin/
+/wp-content/index.php
+/wp-content/languages
+/wp-content/plugins/index.php
+/wp-content/themes/index.php
+/wp-includes/
+/index.php
+/license.txt
+/readme.html
+/wp-*.php
+/xmlrpc.php
+
+# Configuration
+wp-config.php
+
+# Example themes
+/wp-content/themes/twenty*/
+
+# Example plugin
+/wp-content/plugins/hello.php
+
+# Uploads
+/wp-content/uploads/
+
+# Log files
+*.log
+
+# htaccess
+/.htaccess
+
+# All plugins
+#
+# Note: If you wish to whitelist plugins,
+# uncomment the next line
+#/wp-content/plugins
+
+# All themes
+#
+# Note: If you wish to whitelist themes,
+# uncomment the next line
+#/wp-content/themes
+# ===================================================
+# Client Data - NEVER COMMIT (Contains PII)
+# ===================================================
+
+# CSV files with real client data
+*.csv
+!template.csv  # Exception: allow CSV template with fake data only
+
+# Import upload directory
+/uploads/mealsdb-imports/
+/wp-content/uploads/mealsdb-imports/
+
+# Specific import files
+import_*.csv
+clients_with_initials.csv
+
+# Test data directory (if created)
+/test-data/*.csv
+
+# Database dumps with real data
+*.sql
+!schema.sql  # Exception: allow schema-only SQL
+
+# Environment files with encryption keys
+.env
+.env.local
+.env.production
+
+# Backup files
+backup_*.csv
+export_*.csv
