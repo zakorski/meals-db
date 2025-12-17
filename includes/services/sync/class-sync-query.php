@@ -14,6 +14,13 @@ class MealsDB_Sync_Query {
      */
     private ?string $clients_primary_key;
 
+    /**
+     * Cache of discovered column names keyed by table.
+     *
+     * @var array<string, array<string, bool>>
+     */
+    private array $column_cache = [];
+
     public function __construct() {
         $conn = MealsDB_DB::get_connection();
         $this->connection = $conn instanceof \mysqli ? $conn : null;
@@ -67,21 +74,35 @@ class MealsDB_Sync_Query {
 
         $clients = $this->batched_query(
             function (int $batch_size, int $page, int $offset) use ($connection, &$query_error): array {
-                $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-                $columns = ['individual_id', 'first_name', 'last_name', 'client_email', 'phone_primary', 'address_postal', 'wordpress_user_id'];
+                $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+                $available_columns = $this->get_table_columns($connection, $clients_table);
+                $column_map = $this->build_client_column_map($available_columns);
 
-                if (!empty($this->clients_primary_key)) {
-                    array_unshift($columns, $this->clients_primary_key);
+                if (empty($column_map)) {
+                    $query_error = new WP_Error(
+                        'mealsdb_missing_columns',
+                        __('No compatible Meals DB columns were found for comparison.', 'meals-db')
+                    );
+
+                    return [];
                 }
 
-                $quoted_columns = array_map(static function (string $column): string {
-                    return sprintf('`%s`', str_replace('`', '``', $column));
-                }, $columns);
+                $quoted_columns = [];
+                foreach ($column_map as $column => $alias) {
+                    $escaped_column = str_replace('`', '``', $column);
+                    $escaped_alias  = str_replace('`', '``', $alias);
+                    if ($escaped_column === $escaped_alias) {
+                        $quoted_columns[] = sprintf('`%s`', $escaped_column);
+                    } else {
+                        $quoted_columns[] = sprintf('`%s` AS `%s`', $escaped_column, $escaped_alias);
+                    }
+                }
 
+                $escaped_table = str_replace('`', '``', $clients_table);
                 $sql = sprintf(
                     'SELECT %s FROM `%s` LIMIT %d OFFSET %d',
                     implode(', ', $quoted_columns),
-                    $clients_table,
+                    $escaped_table,
                     (int) $batch_size,
                     (int) $offset
                 );
@@ -220,15 +241,22 @@ class MealsDB_Sync_Query {
 
         $staff_ids = [];
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::STAFF);
+        $available_columns = $this->get_table_columns($connection, $table_name);
+        $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
+
+        if ($wp_column === null) {
+            return $staff_ids;
+        }
 
         if (method_exists($connection, 'real_escape_string')) {
             $table_name = $connection->real_escape_string($table_name);
         }
 
         $escaped_table = str_replace('`', '``', $table_name);
+        $escaped_column = str_replace('`', '``', $wp_column);
         $table        = '`' . $escaped_table . '`';
 
-        $sql = "SELECT wordpress_user_id FROM {$table} WHERE wordpress_user_id IS NOT NULL AND wordpress_user_id > 0";
+        $sql = "SELECT `{$escaped_column}` AS wordpress_user_id FROM {$table} WHERE `{$escaped_column}` IS NOT NULL AND `{$escaped_column}` > 0";
         $result = $connection->query($sql);
 
         if ($result instanceof \mysqli_result) {
@@ -282,18 +310,14 @@ class MealsDB_Sync_Query {
             $last_like  = '%' . $wpdb->esc_like(strtolower($last_name)) . '%';
 
             if ($first_name !== '' && $last_name !== '') {
-                $conditions[] = '((LOWER(IFNULL(um_first.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_first.meta_value, "")) LIKE %s) AND (LOWER(IFNULL(um_last.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_last.meta_value, "")) LIKE %s))';
+                $conditions[] = '((LOWER(IFNULL(um_first.meta_value, "")) LIKE %s) AND (LOWER(IFNULL(um_last.meta_value, "")) LIKE %s))';
                 $params[]     = $first_like;
-                $params[]     = $first_like;
-                $params[]     = $last_like;
                 $params[]     = $last_like;
             } elseif ($first_name !== '') {
-                $conditions[] = '(LOWER(IFNULL(um_first.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_first.meta_value, "")) LIKE %s)';
-                $params[]     = $first_like;
+                $conditions[] = '(LOWER(IFNULL(um_first.meta_value, "")) LIKE %s)';
                 $params[]     = $first_like;
             } elseif ($last_name !== '') {
-                $conditions[] = '(LOWER(IFNULL(um_last.meta_value, "")) LIKE %s OR LOWER(IFNULL(um_billing_last.meta_value, "")) LIKE %s)';
-                $params[]     = $last_like;
+                $conditions[] = '(LOWER(IFNULL(um_last.meta_value, "")) LIKE %s)';
                 $params[]     = $last_like;
             }
         }
@@ -314,17 +338,13 @@ class MealsDB_Sync_Query {
         $sql = "
             SELECT
                 u.ID AS user_id,
-                COALESCE(um_first.meta_value, um_billing_first.meta_value) AS first_name,
-                COALESCE(um_last.meta_value, um_billing_last.meta_value)  AS last_name,
+                um_first.meta_value AS first_name,
+                um_last.meta_value  AS last_name,
                 u.user_email AS email,
-                um_phone.meta_value AS billing_phone,
-                um_billing_first.meta_value AS billing_first_name,
-                um_billing_last.meta_value AS billing_last_name
+                um_phone.meta_value AS billing_phone
             FROM {$users_table} AS u
             LEFT JOIN {$meta_table} AS um_first ON (um_first.user_id = u.ID AND um_first.meta_key = 'first_name')
             LEFT JOIN {$meta_table} AS um_last ON (um_last.user_id = u.ID AND um_last.meta_key = 'last_name')
-            LEFT JOIN {$meta_table} AS um_billing_first ON (um_billing_first.user_id = u.ID AND um_billing_first.meta_key = 'billing_first_name')
-            LEFT JOIN {$meta_table} AS um_billing_last ON (um_billing_last.user_id = u.ID AND um_billing_last.meta_key = 'billing_last_name')
             LEFT JOIN {$meta_table} AS um_phone ON (um_phone.user_id = u.ID AND um_phone.meta_key = 'billing_phone')
             WHERE (
                 " . implode(' OR ', $conditions) . "
@@ -364,8 +384,6 @@ class MealsDB_Sync_Query {
                 'last_name'          => (string) ($row['last_name'] ?? ''),
                 'email'              => (string) ($row['email'] ?? ''),
                 'billing_phone'      => (string) ($row['billing_phone'] ?? ''),
-                'billing_first_name' => (string) ($row['billing_first_name'] ?? ''),
-                'billing_last_name'  => (string) ($row['billing_last_name'] ?? ''),
             ];
         }
 
@@ -429,30 +447,14 @@ class MealsDB_Sync_Query {
     }
 
     /**
-     * Normalize a Meals DB client record and decrypt the stored individual ID when possible.
+     * Normalize a Meals DB client record for comparison.
      *
      * @param array<string, mixed> $client
      * @return array<string, mixed>
      */
     private function normalize_client_row(array $client): array {
-        $client_id = 0;
-        $primary_key_column = $this->clients_primary_key;
-
-        if ($primary_key_column !== null && isset($client[$primary_key_column])) {
-            $client_id_raw = $client[$primary_key_column];
-            $client_id     = is_numeric($client_id_raw) ? (int) $client_id_raw : 0;
-        }
-
-        $individual_id = $client['individual_id'] ?? '';
-
-        if ($individual_id !== '') {
-            try {
-                $individual_id = MealsDB_Encryption::decrypt($individual_id);
-            } catch (Exception $e) {
-                error_log('[MealsDB Sync] Failed to decrypt individual_id for client ID ' . ($client_id > 0 ? (string) $client_id : 'unknown') . ': ' . $e->getMessage());
-                $individual_id = '';
-            }
-        }
+        $client_id_raw = $client['client_id'] ?? 0;
+        $client_id = is_numeric($client_id_raw) ? (int) $client_id_raw : 0;
 
         $wp_id_raw = $client['wordpress_user_id'] ?? 0;
         $wp_id = is_numeric($wp_id_raw) ? (int) $wp_id_raw : 0;
@@ -463,12 +465,10 @@ class MealsDB_Sync_Query {
 
         return [
             'client_id'         => $client_id,
-            'individual_id'     => (string) $individual_id,
             'first_name'        => isset($client['first_name']) ? (string) $client['first_name'] : '',
             'last_name'         => isset($client['last_name']) ? (string) $client['last_name'] : '',
             'client_email'      => isset($client['client_email']) ? (string) $client['client_email'] : '',
             'phone_primary'     => isset($client['phone_primary']) ? (string) $client['phone_primary'] : '',
-            'address_postal'    => isset($client['address_postal']) ? (string) $client['address_postal'] : '',
             'wordpress_user_id' => $wp_id,
         ];
     }
@@ -498,5 +498,90 @@ class MealsDB_Sync_Query {
      */
     private function build_ignore_key(string $field, string $source, string $target): string {
         return md5($field . '|' . $source . '|' . $target);
+    }
+
+    /**
+     * Build a safe mapping of Meals DB columns to aliases for identity comparison.
+     *
+     * @param array<string, bool> $available_columns
+     * @return array<string, string> Map of column name => alias.
+     */
+    private function build_client_column_map(array $available_columns): array {
+        $column_map = [];
+
+        $primary_column = $this->choose_column([$this->clients_primary_key, 'client_id', 'id'], $available_columns);
+        if ($primary_column !== null) {
+            $column_map[$primary_column] = 'client_id';
+        }
+
+        $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
+        if ($wp_column !== null) {
+            $column_map[$wp_column] = 'wordpress_user_id';
+        }
+
+        $identity_fields = [
+            'first_name'    => ['first_name'],
+            'last_name'     => ['last_name'],
+            'client_email'  => ['client_email'],
+            'phone_primary' => ['phone_primary', 'client_phone_1', 'phone'],
+        ];
+
+        foreach ($identity_fields as $alias => $candidates) {
+            $column = $this->choose_column($candidates, $available_columns);
+
+            if ($column !== null) {
+                $column_map[$column] = $alias;
+            }
+        }
+
+        return $column_map;
+    }
+
+    /**
+     * Select the first available column from the provided candidates.
+     *
+     * @param array<int, string|null> $candidates
+     * @param array<string, bool>     $available_columns
+     */
+    private function choose_column(array $candidates, array $available_columns): ?string {
+        foreach ($candidates as $candidate) {
+            if ($candidate !== null && isset($available_columns[$candidate])) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Retrieve and cache the available columns for a table.
+     *
+     * @param \mysqli $connection
+     * @return array<string, bool>
+     */
+    private function get_table_columns(\mysqli $connection, string $table): array {
+        if (isset($this->column_cache[$table])) {
+            return $this->column_cache[$table];
+        }
+
+        $escaped_table = str_replace('`', '``', $table);
+        $columns = [];
+
+        $sql = sprintf('SHOW COLUMNS FROM `%s`', $escaped_table);
+        $result = $connection->query($sql);
+
+        if ($result instanceof \mysqli_result) {
+            while ($row = $result->fetch_assoc()) {
+                if (!empty($row['Field'])) {
+                    $columns[(string) $row['Field']] = true;
+                }
+            }
+
+            $result->free();
+        }
+
+        $this->column_cache[$table] = $columns;
+
+        return $columns;
     }
 }
