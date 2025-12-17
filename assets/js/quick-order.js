@@ -1675,6 +1675,14 @@
                 });
                 return formatter.format(value);
             } catch (error) {
+                // Log the error for debugging purposes
+                console.error('Currency formatting failed:', {
+                    error: error.message,
+                    locale: locale,
+                    currencyCode: currencyCode,
+                    value: value
+                });
+                // Fallback to basic formatting
                 const symbol = currencySettings && currencySettings.symbol ? currencySettings.symbol : '$';
                 return `${symbol}${value.toFixed(precision)}`;
             }
