@@ -410,6 +410,63 @@ class MealsDB_Client_Form {
             }
         }
 
+        // Financial field range validation
+        $financial_fields = [
+            'rate' => ['min' => 0, 'max' => 10000, 'message' => 'Rate must be between $0 and $10,000.'],
+            'client_contribution' => ['min' => 0, 'max' => 1000, 'message' => 'Client contribution must be between $0 and $1,000.'],
+            'delivery_fee' => ['min' => 0, 'max' => 100, 'message' => 'Delivery fee must be between $0 and $100.'],
+        ];
+
+        foreach ($financial_fields as $field => $rules) {
+            if (!array_key_exists($field, $sanitized)) {
+                continue;
+            }
+
+            $value = $sanitized[$field];
+            if ($value === '') {
+                continue;
+            }
+
+            if (!is_numeric($value)) {
+                continue; // Already handled by numeric validation
+            }
+
+            $numeric_value = floatval($value);
+            if ($numeric_value < $rules['min'] || $numeric_value > $rules['max']) {
+                $record_format_error($field, $rules['message']);
+            }
+        }
+
+        // Input length validation
+        $max_lengths = [
+            'first_name' => 100,
+            'last_name' => 100,
+            'client_email' => 255,
+            'diet_concerns' => 5000,
+            'client_comments' => 5000,
+            'delivery_address' => 500,
+            'delivery_city' => 100,
+            'delivery_postal' => 20,
+            'individual_id' => 50,
+            'requisition_id' => 50,
+        ];
+
+        foreach ($max_lengths as $field => $max) {
+            if (!array_key_exists($field, $sanitized)) {
+                continue;
+            }
+
+            $value = $sanitized[$field];
+            if ($value === '') {
+                continue;
+            }
+
+            if (strlen($value) > $max) {
+                $field_label = self::get_field_label($field);
+                $record_format_error($field, sprintf('%s must be less than %d characters.', $field_label, $max));
+            }
+        }
+
         // Unique field checks
         $conflicts = self::check_unique_fields($sanitized, $ignore_client_id);
         if (!empty($conflicts)) {

@@ -12,6 +12,37 @@ class MealsDB_Permissions {
     private const REQUIRED_CAPABILITY = 'manage_woocommerce';
 
     /**
+     * Allowed capabilities for accessing Meals DB plugin features.
+     * This whitelist prevents filter hooks from weakening security.
+     */
+    private const ALLOWED_CAPABILITIES = [
+        'manage_woocommerce',
+        'manage_options',
+        'edit_shop_orders',
+    ];
+
+    /**
+     * Validate that a capability is in the allowed whitelist.
+     *
+     * @param string $capability The capability to validate.
+     * @return string The validated capability or default if invalid.
+     */
+    private static function validate_capability(string $capability): string {
+        if (in_array($capability, self::ALLOWED_CAPABILITIES, true)) {
+            return $capability;
+        }
+
+        // Log invalid capability attempts
+        error_log(sprintf(
+            '[MealsDB Security] Invalid capability "%s" attempted. Using default: %s',
+            $capability,
+            self::REQUIRED_CAPABILITY
+        ));
+
+        return self::REQUIRED_CAPABILITY;
+    }
+
+    /**
      * Checks if the current user can access Meals DB plugin features.
      *
      * @return bool
@@ -26,6 +57,9 @@ class MealsDB_Permissions {
         if (!is_string($capability) || $capability === '') {
             $capability = self::REQUIRED_CAPABILITY;
         }
+
+        // Validate against whitelist
+        $capability = self::validate_capability($capability);
 
         return current_user_can($capability);
     }
@@ -42,7 +76,8 @@ class MealsDB_Permissions {
             return self::REQUIRED_CAPABILITY;
         }
 
-        return $capability;
+        // Validate against whitelist
+        return self::validate_capability($capability);
     }
 
     /**

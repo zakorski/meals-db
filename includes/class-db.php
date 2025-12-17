@@ -109,6 +109,40 @@ class MealsDB_DB
     }
 
     /**
+     * Validate that a table name is in the whitelist of allowed tables.
+     *
+     * @param string $table The base table name to validate.
+     * @return bool True if the table is allowed.
+     */
+    private static function validate_table_name(string $table): bool
+    {
+        if (!class_exists('MealsDB_Tables')) {
+            return false;
+        }
+
+        $allowed_tables = MealsDB_Tables::all();
+
+        // Check both unprefixed and with common prefix patterns
+        if (in_array($table, $allowed_tables, true)) {
+            return true;
+        }
+
+        // Check if table starts with a prefix + allowed base name
+        $config = self::config();
+        $prefix = $config !== null ? ($config->table_prefix() ?: '') : '';
+
+        if ($prefix !== '') {
+            foreach ($allowed_tables as $allowed) {
+                if ($table === $prefix . $allowed) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * NEW core table-name resolver.
      *
      * @param string $table
@@ -118,6 +152,12 @@ class MealsDB_DB
     {
         if (isset(self::$table_name_cache[$table])) {
             return self::$table_name_cache[$table];
+        }
+
+        // Validate table name against whitelist
+        if (!self::validate_table_name($table)) {
+            error_log('[MealsDB DB] Invalid table name attempted: ' . $table);
+            throw new InvalidArgumentException('Invalid table name.');
         }
 
         $prefix = '';
