@@ -336,11 +336,10 @@ class MealsDB_Sync_Compare {
         $mismatches = [];
 
         $map = [
-            'first_name'     => $woo_user->first_name,
-            'last_name'      => $woo_user->last_name,
-            'client_email'   => $woo_user->user_email,
-            'phone_primary'  => get_user_meta($woo_user->ID, 'billing_phone', true),
-            'address_postal' => get_user_meta($woo_user->ID, 'billing_postcode', true),
+            'first_name'    => $woo_user->first_name,
+            'last_name'     => $woo_user->last_name,
+            'client_email'  => $woo_user->user_email,
+            'phone_primary' => get_user_meta($woo_user->ID, 'billing_phone', true),
         ];
 
         foreach ($map as $field => $woo_value) {

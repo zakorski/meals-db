@@ -9,9 +9,22 @@ class MealsDB_Sync_Mutate {
      */
     private ?\mysqli $connection;
 
+    /**
+     * Primary key column name for the Meals DB clients table, when available.
+     */
+    private ?string $clients_primary_key;
+
+    /**
+     * Cache of discovered column names keyed by table.
+     *
+     * @var array<string, array<string, bool>>
+     */
+    private array $column_cache = [];
+
     public function __construct() {
         $conn = MealsDB_DB::get_connection();
         $this->connection = $conn instanceof \mysqli ? $conn : null;
+        $this->clients_primary_key = MealsDB_Schema::get_primary_key_column(MealsDB_Tables::CLIENTS);
     }
 
     /**
@@ -67,30 +80,35 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        $allowed_fields = [
-            'first_name'     => 'first_name',
-            'last_name'      => 'last_name',
-            'client_email'   => 'client_email',
-            'phone_primary'  => 'phone_primary',
-            'address_postal' => 'address_postal',
-        ];
-
-        if (!isset($allowed_fields[$field])) {
-            return new WP_Error(
-                'mealsdb_sync_unsupported_field',
-                __('This field cannot be overridden from WooCommerce.', 'meals-db')
-            );
-        }
-
         $connection = $this->require_connection();
 
         if (is_wp_error($connection)) {
             return $connection;
         }
 
-        $column = $allowed_fields[$field];
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $select_sql = sprintf('SELECT %s FROM `%s` WHERE id = ? LIMIT 1', $column, $clients_table);
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $available_columns = $this->get_table_columns($connection, $clients_table);
+        $column_map = $this->build_identity_column_map($available_columns);
+
+        if (!isset($column_map[$field])) {
+            return new WP_Error(
+                'mealsdb_sync_unsupported_field',
+                __('This field cannot be overridden from WooCommerce.', 'meals-db')
+            );
+        }
+
+        $column = $column_map[$field];
+        $primary_key = $this->resolve_primary_key_column($available_columns);
+
+        if ($primary_key === null) {
+            return new WP_Error(
+                'mealsdb_sync_failed',
+                __('Unable to determine the Meals DB client primary key.', 'meals-db')
+            );
+        }
+
+        $clients_table = str_replace('`', '``', $clients_table);
+        $select_sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = ? LIMIT 1', str_replace('`', '``', $column), $clients_table, str_replace('`', '``', $primary_key));
         $stmt = $connection->prepare($select_sql);
 
         if (!$stmt) {
@@ -200,7 +218,7 @@ class MealsDB_Sync_Mutate {
         $values  = [];
 
         foreach ($fields as $column => $value) {
-            $columns[] = $column . ' = ?';
+            $columns[] = sprintf('`%s` = ?', str_replace('`', '``', $column));
             $types    .= 's';
             $values[]  = (string) $value;
         }
@@ -208,8 +226,17 @@ class MealsDB_Sync_Mutate {
         $types  .= 'i';
         $values[] = $client_id;
 
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf('UPDATE `%s` SET %s WHERE id = ?', $clients_table, implode(', ', $columns));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $available_columns = $this->get_table_columns($connection, $clients_table);
+        $primary_key = $this->resolve_primary_key_column($available_columns);
+
+        if ($primary_key === null) {
+            return false;
+        }
+
+        $escaped_table = str_replace('`', '``', $clients_table);
+        $escaped_pk    = str_replace('`', '``', $primary_key);
+        $sql = sprintf('UPDATE `%s` SET %s WHERE `%s` = ?', $escaped_table, implode(', ', $columns), $escaped_pk);
         $stmt = $connection->prepare($sql);
 
         if (!$stmt) {
@@ -238,16 +265,35 @@ class MealsDB_Sync_Mutate {
             return false;
         }
 
-        $columns = array_keys($fields);
-        $placeholders = array_fill(0, count($fields), '?');
-        $types = str_repeat('s', count($fields));
-        $values = array_map(static fn($value) => (string) $value, $fields);
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $available_columns = $this->get_table_columns($connection, $clients_table);
+        $column_map = $this->build_identity_column_map($available_columns);
 
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $prepared_columns = [];
+        $placeholders = [];
+        $values = [];
+
+        foreach ($fields as $field => $value) {
+            if (!isset($column_map[$field])) {
+                continue;
+            }
+
+            $prepared_columns[] = sprintf('`%s`', str_replace('`', '``', $column_map[$field]));
+            $placeholders[] = '?';
+            $values[] = (string) $value;
+        }
+
+        if (empty($prepared_columns)) {
+            return false;
+        }
+
+        $types = str_repeat('s', count($values));
+
+        $escaped_table = str_replace('`', '``', $clients_table);
         $sql = sprintf(
             'INSERT INTO `%s` (%s) VALUES (%s)',
-            $clients_table,
-            implode(', ', $columns),
+            $escaped_table,
+            implode(', ', $prepared_columns),
             implode(', ', $placeholders)
         );
         $stmt = $connection->prepare($sql);
@@ -316,8 +362,26 @@ class MealsDB_Sync_Mutate {
             $transaction_started = $connection->begin_transaction();
         }
 
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $update_stmt = $connection->prepare(sprintf('UPDATE `%s` SET wordpress_user_id = ? WHERE id = ?', $clients_table));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $available_columns = $this->get_table_columns($connection, $clients_table);
+        $primary_key = $this->resolve_primary_key_column($available_columns);
+        $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
+
+        if ($primary_key === null || $wp_column === null) {
+            if ($transaction_started) {
+                $connection->rollback();
+            }
+
+            return new WP_Error(
+                'mealsdb_link_prepare_failed',
+                __('Required Meals DB columns for linking could not be found.', 'meals-db')
+            );
+        }
+
+        $escaped_table  = str_replace('`', '``', $clients_table);
+        $escaped_pk     = str_replace('`', '``', $primary_key);
+        $escaped_column = str_replace('`', '``', $wp_column);
+        $update_stmt = $connection->prepare(sprintf('UPDATE `%s` SET `%s` = ? WHERE `%s` = ?', $escaped_table, $escaped_column, $escaped_pk));
 
         if (!$update_stmt) {
             if ($transaction_started) {
@@ -407,6 +471,95 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
+     * Build a safe mapping of identity fields to Meals DB columns.
+     *
+     * @param array<string, bool> $available_columns
+     * @return array<string, string>
+     */
+    private function build_identity_column_map(array $available_columns): array {
+        $map = [];
+
+        $field_candidates = [
+            'first_name'        => ['first_name'],
+            'last_name'         => ['last_name'],
+            'client_email'      => ['client_email'],
+            'phone_primary'     => ['phone_primary', 'client_phone_1', 'phone'],
+            'wordpress_user_id' => ['wordpress_user_id', 'wp_user_id'],
+        ];
+
+        foreach ($field_candidates as $field => $candidates) {
+            $column = $this->choose_column($candidates, $available_columns);
+
+            if ($column !== null) {
+                $map[$field] = $column;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Resolve the Meals DB clients primary key column.
+     *
+     * @param array<string, bool> $available_columns
+     */
+    private function resolve_primary_key_column(array $available_columns): ?string {
+        return $this->choose_column([
+            $this->clients_primary_key,
+            'client_id',
+            'id',
+        ], $available_columns);
+    }
+
+    /**
+     * Pick the first available column from a candidate list.
+     *
+     * @param array<int, string|null> $candidates
+     * @param array<string, bool>     $available_columns
+     */
+    private function choose_column(array $candidates, array $available_columns): ?string {
+        foreach ($candidates as $candidate) {
+            if ($candidate !== null && isset($available_columns[$candidate])) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Retrieve and cache the available columns for a table.
+     *
+     * @param \mysqli $connection
+     * @return array<string, bool>
+     */
+    private function get_table_columns(\mysqli $connection, string $table): array {
+        if (isset($this->column_cache[$table])) {
+            return $this->column_cache[$table];
+        }
+
+        $escaped_table = str_replace('`', '``', $table);
+        $columns = [];
+
+        $sql = sprintf('SHOW COLUMNS FROM `%s`', $escaped_table);
+        $result = $connection->query($sql);
+
+        if ($result instanceof \mysqli_result) {
+            while ($row = $result->fetch_assoc()) {
+                if (!empty($row['Field'])) {
+                    $columns[(string) $row['Field']] = true;
+                }
+            }
+
+            $result->free();
+        }
+
+        $this->column_cache[$table] = $columns;
+
+        return $columns;
+    }
+
+    /**
      * Apply an individual update operation to a WordPress user field.
      *
      * @param WP_User $user
@@ -457,14 +610,6 @@ class MealsDB_Sync_Mutate {
                 if (!$update_success) {
                     $error_message = __('Unable to update the customer phone number.', 'meals-db');
                     error_log('[MealsDB Sync] Failed to sync phone for user ' . $woo_user_id . '.');
-                }
-                break;
-            case 'address_postal':
-                $old_value = get_user_meta($woo_user_id, 'billing_postcode', true);
-                $update_success = update_user_meta($woo_user_id, 'billing_postcode', $new_value) !== false;
-                if (!$update_success) {
-                    $error_message = __('Unable to update the customer postal code.', 'meals-db');
-                    error_log('[MealsDB Sync] Failed to sync postal code for user ' . $woo_user_id . '.');
                 }
                 break;
             default:
