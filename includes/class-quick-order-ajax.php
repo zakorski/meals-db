@@ -76,6 +76,14 @@ class MealsDB_Quick_Order_Ajax {
     public static function get_categories(): void {
         self::verify_request();
 
+        // Rate limiting
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
         try {
             $categories = MealsDB_Quick_Order_Products::get_categories();
             wp_send_json([
@@ -86,7 +94,7 @@ class MealsDB_Quick_Order_Ajax {
             error_log('[MealsDB QuickOrder] get_categories error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
-                'message' => 'Server error: ' . $e->getMessage(),
+                'message' => __('An error occurred. Please try again.', 'meals-db'),
             ]);
         }
     }
@@ -96,6 +104,14 @@ class MealsDB_Quick_Order_Ajax {
      */
     public static function get_products_by_category(): void {
         self::verify_request();
+
+        // Rate limiting
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
 
         try {
             $category_id = isset($_REQUEST['category_id']) ? intval($_REQUEST['category_id']) : 0;
@@ -115,7 +131,7 @@ class MealsDB_Quick_Order_Ajax {
             error_log('[MealsDB QuickOrder] get_products_by_category error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
-                'message' => 'Server error: ' . $e->getMessage(),
+                'message' => __('An error occurred. Please try again.', 'meals-db'),
             ]);
         }
     }
@@ -128,11 +144,19 @@ class MealsDB_Quick_Order_Ajax {
         if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
             wp_send_json([
                 'success' => false,
-                'message' => 'Invalid order data.',
+                'message' => __('Invalid request.', 'meals-db'),
             ]);
         }
 
         self::verify_request(true);
+
+        // Rate limiting - stricter for order creation
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_create')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
 
         // WordPress user ID for the client placing the order.
         $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
@@ -148,7 +172,7 @@ class MealsDB_Quick_Order_Ajax {
         ) {
             wp_send_json([
                 'success' => false,
-                'message' => 'Invalid order data.',
+                'message' => __('Invalid order data.', 'meals-db'),
             ]);
         }
 
@@ -186,7 +210,7 @@ class MealsDB_Quick_Order_Ajax {
             error_log('[MealsDB QuickOrder] Order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
-                'message' => 'Order creation failed: ' . $e->getMessage(),
+                'message' => __('Order creation failed. Please try again.', 'meals-db'),
             ]);
         }
     }
@@ -197,6 +221,14 @@ class MealsDB_Quick_Order_Ajax {
     public static function clone_order(): void {
         self::verify_request();
 
+        // Rate limiting
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
         if (!self::woocommerce_is_available()) {
             wp_send_json([
                 'success' => false,
@@ -206,18 +238,13 @@ class MealsDB_Quick_Order_Ajax {
 
         try {
             $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
-            if ($source_order_id <= 0) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('An order to clone must be specified.', 'meals-db'),
-                ]);
-            }
 
+            // Generic error message to prevent enumeration
             $source_order = wc_get_order($source_order_id);
-            if (!$source_order instanceof WC_Order) {
+            if (!$source_order instanceof WC_Order || $source_order_id <= 0) {
                 wp_send_json([
                     'success' => false,
-                    'message' => __('The specified order could not be found.', 'meals-db'),
+                    'message' => __('Invalid order request.', 'meals-db'),
                 ]);
             }
 
@@ -296,7 +323,7 @@ class MealsDB_Quick_Order_Ajax {
             error_log('[MealsDB QuickOrder] clone_order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
-                'message' => 'Server error: ' . $e->getMessage(),
+                'message' => __('An error occurred. Please try again.', 'meals-db'),
             ]);
         }
     }
@@ -307,6 +334,14 @@ class MealsDB_Quick_Order_Ajax {
     public static function clone_get_order(): void {
         self::verify_request();
 
+        // Rate limiting
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
         if (!self::woocommerce_is_available()) {
             wp_send_json([
                 'success' => false,
@@ -316,18 +351,13 @@ class MealsDB_Quick_Order_Ajax {
 
         try {
             $source_order_id = isset($_REQUEST['order_id']) ? absint(wp_unslash($_REQUEST['order_id'])) : 0;
-            if ($source_order_id <= 0) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('A valid order ID is required.', 'meals-db'),
-                ]);
-            }
 
+            // Generic error message to prevent enumeration
             $source_order = wc_get_order($source_order_id);
-            if (!$source_order instanceof WC_Order) {
+            if (!$source_order instanceof WC_Order || $source_order_id <= 0) {
                 wp_send_json([
                     'success' => false,
-                    'message' => __('The specified order could not be found.', 'meals-db'),
+                    'message' => __('Invalid order request.', 'meals-db'),
                 ]);
             }
 
@@ -426,7 +456,7 @@ class MealsDB_Quick_Order_Ajax {
             error_log('[MealsDB QuickOrder] clone_get_order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
-                'message' => 'Server error: ' . $e->getMessage(),
+                'message' => __('An error occurred. Please try again.', 'meals-db'),
             ]);
         }
     }

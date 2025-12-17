@@ -10,29 +10,42 @@
 class MealsDB_Encryption {
 
     /**
-     * Get the AES key defined in wp-config.php constants.
+     * Get the AES key from environment variable or wp-config.php constants.
      *
      * @return string
      */
     private static function get_key(): string {
-        if (!defined('MEALS_DB_KEY')) {
+        // Prefer environment variable over wp-config.php constant
+        $key_b64 = getenv('MEALS_DB_ENCRYPTION_KEY');
+
+        // Fall back to wp-config.php constant for backward compatibility
+        if (!$key_b64 && defined('MEALS_DB_KEY')) {
+            $key_b64 = MEALS_DB_KEY;
+        }
+
+        if (!$key_b64) {
             throw new Exception('Missing Meals DB encryption key configuration.');
         }
 
-        $configKey = MEALS_DB_KEY;
-
-        if (!$configKey || strpos($configKey, 'base64:') !== 0) {
-            throw new Exception('Invalid Meals DB encryption key.');
+        if (strpos($key_b64, 'base64:') !== 0) {
+            throw new Exception('Invalid Meals DB encryption key format. Expected base64: prefix.');
         }
 
-        return base64_decode(substr($configKey, 7));
+        $key = base64_decode(substr($key_b64, 7));
+
+        // Verify key length (256 bits = 32 bytes)
+        if (strlen($key) !== 32) {
+            throw new Exception('Encryption key must be 256 bits (32 bytes).');
+        }
+
+        return $key;
     }
 
     /**
-     * Encrypt a string using AES-256-CBC.
+     * Encrypt a string using AES-256-CBC with HMAC authentication.
      *
      * @param string $plaintext
-     * @return string Base64-encoded IV + ciphertext
+     * @return string Base64-encoded HMAC + IV + ciphertext
      */
     public static function encrypt(string $plaintext): string {
         $key = self::get_key();
@@ -50,12 +63,15 @@ class MealsDB_Encryption {
             throw new Exception('Encryption failed.');
         }
 
-        // Combine IV and ciphertext and base64-encode it
-        return base64_encode($iv . $ciphertext);
+        // Calculate HMAC for authentication (encrypt-then-MAC)
+        $hmac = hash_hmac('sha256', $iv . $ciphertext, $key, true);
+
+        // Format: HMAC (32 bytes) + IV (16 bytes) + Ciphertext
+        return base64_encode($hmac . $iv . $ciphertext);
     }
 
     /**
-     * Decrypt a base64-encoded IV + ciphertext string.
+     * Decrypt a base64-encoded HMAC + IV + ciphertext string.
      *
      * @param string $encoded
      * @return string
@@ -64,12 +80,30 @@ class MealsDB_Encryption {
         $key = self::get_key();
         $data = base64_decode($encoded);
 
-        if (strlen($data) < 17) {
-            throw new Exception('Invalid encrypted payload.');
+        if ($data === false) {
+            throw new Exception('Invalid base64 encoding.');
         }
 
-        $iv = substr($data, 0, 16);
-        $ciphertext = substr($data, 16);
+        // Check if this is new format with HMAC (min 49 bytes: HMAC(32) + IV(16) + ciphertext(1+))
+        if (strlen($data) >= 49) {
+            // New format with HMAC
+            $hmac = substr($data, 0, 32);
+            $iv = substr($data, 32, 16);
+            $ciphertext = substr($data, 48);
+
+            // Verify HMAC before decryption (prevents padding oracle attacks)
+            $expected_hmac = hash_hmac('sha256', $iv . $ciphertext, $key, true);
+            if (!hash_equals($expected_hmac, $hmac)) {
+                throw new Exception('Data integrity check failed.');
+            }
+        } elseif (strlen($data) >= 17) {
+            // Legacy format without HMAC (backward compatibility)
+            // TODO: Remove this after migrating all encrypted data
+            $iv = substr($data, 0, 16);
+            $ciphertext = substr($data, 16);
+        } else {
+            throw new Exception('Invalid encrypted payload.');
+        }
 
         $plaintext = openssl_decrypt(
             $ciphertext,
