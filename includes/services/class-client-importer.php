@@ -357,6 +357,16 @@ class MealsDB_Client_Importer {
             throw new Exception(__('Failed to create WordPress user', 'meals-db'));
         }
 
+        // Debug: Log the do_not_call_client_phone value before insert
+        if (isset($data['do_not_call_client_phone'])) {
+            error_log(sprintf(
+                'Row %d: do_not_call_client_phone value = "%s" (type: %s)',
+                $row_number,
+                $data['do_not_call_client_phone'],
+                gettype($data['do_not_call_client_phone'])
+            ));
+        }
+
         // Insert client record
         $client_id = $this->insert_client($data, $wp_user_id);
         if (!$client_id) {
@@ -432,9 +442,19 @@ class MealsDB_Client_Importer {
 
         // Handle do not call
         if ($field === 'do_not_call_client_phone') {
-            $normalized = strtolower(trim($value));
-            // Return 1 if the value indicates to call alternate contact instead
-            return ($normalized === 'call alternate') ? 1 : 0;
+            // Normalize: remove control characters, lowercase, trim, collapse whitespace
+            $normalized = preg_replace('/[\p{C}]/u', '', $value); // Remove control/non-printable chars
+            $normalized = preg_replace('/\s+/', ' ', strtolower(trim($normalized)));
+
+            error_log(sprintf('do_not_call_client_phone transform: original="%s", normalized="%s"', $value, $normalized));
+
+            // Check for various true-ish values
+            if (in_array($normalized, ['call alternate', '1', 'yes', 'true', 'y', 'on'], true)) {
+                error_log('do_not_call_client_phone: returning 1');
+                return 1;
+            }
+            error_log('do_not_call_client_phone: returning 0');
+            return 0;
         }
 
         // Handle numeric fields
