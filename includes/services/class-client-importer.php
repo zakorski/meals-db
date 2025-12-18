@@ -432,7 +432,9 @@ class MealsDB_Client_Importer {
 
         // Handle do not call
         if ($field === 'do_not_call_client_phone') {
-            return ($value === 'call alternate') ? 1 : 0;
+            $normalized = strtolower(trim($value));
+            // Return 1 if the value indicates to call alternate contact instead
+            return ($normalized === 'call alternate') ? 1 : 0;
         }
 
         // Handle numeric fields
