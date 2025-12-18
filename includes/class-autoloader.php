@@ -34,6 +34,7 @@ class MealsDB_Autoloader {
     public static function register(string $base_dir, array $directories = []): void {
         $directories = !empty($directories) ? $directories : [
             'includes',
+            'includes/admin',
             'includes/ajax',
             'includes/services',
             'includes/services/sync',
