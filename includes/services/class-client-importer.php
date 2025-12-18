@@ -19,7 +19,6 @@ class MealsDB_Client_Importer {
         'with_initials' => 0,
         'need_initials' => 0,
         'with_emails' => 0,
-        'encrypted_individual_ids' => 0,
         'encrypted_requisition_ids' => 0,
     ];
     private $errors = [];
@@ -55,7 +54,7 @@ class MealsDB_Client_Importer {
         18 => 'do_not_call_client_phone',
 
         // Personal Info
-        19 => 'individual_id',  // ENCRYPTED
+        19 => null,  // individual_id removed - column doesn't exist in schema
         20 => 'birth_date',
         21 => 'gender',
 
@@ -73,7 +72,7 @@ class MealsDB_Client_Importer {
         32 => 'initial_renewal_termination_date',
         33 => 'most_recent_renewal_termination_date',
         34 => 'notes_to_service_provider',
-        35 => 'units',
+        35 => null,  // units removed - column doesn't exist in schema
         36 => 'vet_health_id_card',
         37 => 'meal_type',
         38 => 'requisition_period',
@@ -111,7 +110,6 @@ class MealsDB_Client_Importer {
      * Fields that require encryption
      */
     private $encrypted_fields = [
-        'individual_id',
         'requisition_id',
         'diet_concerns',
         'customer_comments',
@@ -173,10 +171,6 @@ class MealsDB_Client_Importer {
                         $this->stats['with_emails']++;
                     }
 
-                    if (!empty($data['individual_id'])) {
-                        $this->stats['encrypted_individual_ids']++;
-                    }
-
                     if (!empty($data['requisition_id'])) {
                         $this->stats['encrypted_requisition_ids']++;
                     }
@@ -191,7 +185,6 @@ class MealsDB_Client_Importer {
                     'with_initials' => $this->stats['with_initials'],
                     'need_initials' => $this->stats['need_initials'],
                     'with_emails' => $this->stats['with_emails'],
-                    'encrypted_individual_ids' => $this->stats['encrypted_individual_ids'],
                     'encrypted_requisition_ids' => $this->stats['encrypted_requisition_ids'],
                 ],
             ];
@@ -319,6 +312,10 @@ class MealsDB_Client_Importer {
             throw new Exception(__('Missing first or last name', 'meals-db'));
         }
 
+        if (empty($data['client_type'])) {
+            throw new Exception(__('Missing client type', 'meals-db'));
+        }
+
         // Generate initials if needed
         if (empty($data['initials_delivery'])) {
             $data['initials_delivery'] = $this->generate_initials(
@@ -365,6 +362,11 @@ class MealsDB_Client_Importer {
         $data = [];
 
         foreach ($this->column_mapping as $csv_index => $db_field) {
+            // Skip null field mappings (removed columns)
+            if ($db_field === null) {
+                continue;
+            }
+
             $value = isset($row[$csv_index]) ? trim($row[$csv_index]) : '';
 
             // Skip empty values
@@ -427,7 +429,7 @@ class MealsDB_Client_Importer {
             return floatval(str_replace(['$', ','], '', $value));
         }
 
-        if (in_array($field, ['ordering_frequency', 'delivery_frequency', 'units'])) {
+        if (in_array($field, ['ordering_frequency', 'delivery_frequency'])) {
             return intval($value);
         }
 
@@ -625,7 +627,7 @@ class MealsDB_Client_Importer {
             'wp_user_id' => $wp_user_id,
             'first_name' => $data['first_name'],
             'last_name' => $data['last_name'],
-            'client_type' => $data['client_type'] ?? 'Private',
+            'client_type' => $data['client_type'],
             'active' => 1,
         ];
 
@@ -692,10 +694,6 @@ class MealsDB_Client_Importer {
         }
 
         // Handle encrypted fields
-        if (isset($data['individual_id']) && $data['individual_id'] !== '') {
-            $insert_data['individual_id'] = MealsDB_Encryption::encrypt($data['individual_id']);
-        }
-
         if (isset($data['requisition_id']) && $data['requisition_id'] !== '') {
             $insert_data['requisition_id'] = MealsDB_Encryption::encrypt($data['requisition_id']);
         }
