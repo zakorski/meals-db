@@ -432,9 +432,14 @@ class MealsDB_Client_Importer {
 
         // Handle do not call
         if ($field === 'do_not_call_client_phone') {
-            $normalized = strtolower(trim($value));
+            // Normalize: lowercase, trim, and collapse multiple whitespace to single space
+            $normalized = preg_replace('/\s+/', ' ', strtolower(trim($value)));
             // Return 1 if the value indicates to call alternate contact instead
-            return ($normalized === 'call alternate') ? 1 : 0;
+            // Also check for empty value which should be 0
+            if ($normalized === 'call alternate' || $normalized === '1' || $normalized === 'yes' || $normalized === 'true') {
+                return 1;
+            }
+            return 0;
         }
 
         // Handle numeric fields
