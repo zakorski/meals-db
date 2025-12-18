@@ -432,11 +432,12 @@ class MealsDB_Client_Importer {
 
         // Handle do not call
         if ($field === 'do_not_call_client_phone') {
-            // Normalize: lowercase, trim, and collapse multiple whitespace to single space
-            $normalized = preg_replace('/\s+/', ' ', strtolower(trim($value)));
-            // Return 1 if the value indicates to call alternate contact instead
-            // Also check for empty value which should be 0
-            if ($normalized === 'call alternate' || $normalized === '1' || $normalized === 'yes' || $normalized === 'true') {
+            // Normalize: remove control characters, lowercase, trim, collapse whitespace
+            $normalized = preg_replace('/[\p{C}]/u', '', $value); // Remove control/non-printable chars
+            $normalized = preg_replace('/\s+/', ' ', strtolower(trim($normalized)));
+
+            // Check for various true-ish values
+            if (in_array($normalized, ['call alternate', '1', 'yes', 'true', 'y', 'on'], true)) {
                 return 1;
             }
             return 0;
