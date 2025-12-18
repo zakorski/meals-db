@@ -460,9 +460,9 @@ class MealsDB_Clients_Repository {
 
         try {
             $escaped_column = str_replace('`', '``', $column);
-            $sql = sprintf('SELECT id FROM `%s` WHERE `%s` = ?', $this->escape_table_name(), $escaped_column);
+            $sql = sprintf('SELECT client_id FROM `%s` WHERE `%s` = ?', $this->escape_table_name(), $escaped_column);
             if ($exclude_id !== null) {
-                $sql .= ' AND id <> ?';
+                $sql .= ' AND client_id <> ?';
             }
             $sql .= ' LIMIT 1';
 
