@@ -631,6 +631,7 @@ class MealsDB_Client_Importer {
 
         // Map all fields
         $field_map = [
+            'client_type' => 'client_type',
             'client_email' => 'client_email',
             'phone_primary' => 'client_phone_1',
             'phone_secondary' => 'client_phone_2',
