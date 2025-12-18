@@ -443,6 +443,19 @@ class MealsDB_Client_Importer {
      * Transform value based on field type
      */
     private function transform_value($field, $value) {
+        // Handle do not call (MUST be before phone check since field name contains 'phone')
+        if ($field === 'do_not_call_client_phone') {
+            // Normalize: remove control characters, lowercase, trim, collapse whitespace
+            $normalized = preg_replace('/[\p{C}]/u', '', $value); // Remove control/non-printable chars
+            $normalized = preg_replace('/\s+/', ' ', strtolower(trim($normalized)));
+
+            // Check for various true-ish values
+            if (in_array($normalized, ['call alternate', '1', 'yes', 'true', 'y', 'on'], true)) {
+                return 1;
+            }
+            return 0;
+        }
+
         // Handle dates
         if (strpos($field, '_date') !== false || $field === 'open_date') {
             return $this->transform_date($value);
@@ -461,23 +474,6 @@ class MealsDB_Client_Importer {
         // Handle client type
         if ($field === 'client_type') {
             return $this->transform_client_type($value);
-        }
-
-        // Handle do not call
-        if ($field === 'do_not_call_client_phone') {
-            // Normalize: remove control characters, lowercase, trim, collapse whitespace
-            $normalized = preg_replace('/[\p{C}]/u', '', $value); // Remove control/non-printable chars
-            $normalized = preg_replace('/\s+/', ' ', strtolower(trim($normalized)));
-
-            error_log(sprintf('do_not_call_client_phone transform: original="%s", normalized="%s"', $value, $normalized));
-
-            // Check for various true-ish values
-            if (in_array($normalized, ['call alternate', '1', 'yes', 'true', 'y', 'on'], true)) {
-                error_log('do_not_call_client_phone: returning 1');
-                return 1;
-            }
-            error_log('do_not_call_client_phone: returning 0');
-            return 0;
         }
 
         // Handle numeric fields
