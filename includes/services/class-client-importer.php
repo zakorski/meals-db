@@ -19,7 +19,6 @@ class MealsDB_Client_Importer {
         'with_initials' => 0,
         'need_initials' => 0,
         'with_emails' => 0,
-        'encrypted_individual_ids' => 0,
         'encrypted_requisition_ids' => 0,
     ];
     private $errors = [];
@@ -55,7 +54,7 @@ class MealsDB_Client_Importer {
         18 => 'do_not_call_client_phone',
 
         // Personal Info
-        19 => 'individual_id',  // ENCRYPTED
+        19 => 'individual_id',  // ENCRYPTED - SDNB client identifier
         20 => 'birth_date',
         21 => 'gender',
 
@@ -74,7 +73,7 @@ class MealsDB_Client_Importer {
         33 => 'most_recent_renewal_termination_date',
         34 => 'notes_to_service_provider',
         35 => 'units',
-        36 => 'vet_health_id_card',
+        36 => 'vet_health_card',
         37 => 'meal_type',
         38 => 'requisition_period',
         39 => 'rate',
@@ -85,7 +84,7 @@ class MealsDB_Client_Importer {
         42 => 'alternate_contact_email',
 
         // Delivery Info
-        43 => 'initials_delivery',
+        43 => 'delivery_initials',
         44 => 'delivery_day',
         45 => 'delivery_area_name',
         46 => 'delivery_area_zone',
@@ -115,6 +114,16 @@ class MealsDB_Client_Importer {
         'requisition_id',
         'diet_concerns',
         'customer_comments',
+    ];
+
+    /**
+     * Deterministic index columns used for uniqueness checks on encrypted data
+     */
+    private $deterministic_index_map = [
+        'individual_id'      => 'individual_id_index',
+        'requisition_id'     => 'requisition_id_index',
+        'vet_health_card'    => 'vet_health_card_index',
+        'delivery_initials'  => 'delivery_initials_index',
     ];
 
     public function __construct($dry_run = false) {
@@ -163,7 +172,7 @@ class MealsDB_Client_Importer {
                     $preview_data[] = $data;
 
                     // Count stats
-                    if (!empty($data['initials_delivery'])) {
+                    if (!empty($data['delivery_initials'])) {
                         $this->stats['with_initials']++;
                     } else {
                         $this->stats['need_initials']++;
@@ -171,10 +180,6 @@ class MealsDB_Client_Importer {
 
                     if (!empty($data['client_email'])) {
                         $this->stats['with_emails']++;
-                    }
-
-                    if (!empty($data['individual_id'])) {
-                        $this->stats['encrypted_individual_ids']++;
                     }
 
                     if (!empty($data['requisition_id'])) {
@@ -191,7 +196,6 @@ class MealsDB_Client_Importer {
                     'with_initials' => $this->stats['with_initials'],
                     'need_initials' => $this->stats['need_initials'],
                     'with_emails' => $this->stats['with_emails'],
-                    'encrypted_individual_ids' => $this->stats['encrypted_individual_ids'],
                     'encrypted_requisition_ids' => $this->stats['encrypted_requisition_ids'],
                 ],
             ];
@@ -319,25 +323,29 @@ class MealsDB_Client_Importer {
             throw new Exception(__('Missing first or last name', 'meals-db'));
         }
 
+        if (empty($data['client_type'])) {
+            throw new Exception(__('Missing client type', 'meals-db'));
+        }
+
         // Generate initials if needed
-        if (empty($data['initials_delivery'])) {
-            $data['initials_delivery'] = $this->generate_initials(
+        if (empty($data['delivery_initials'])) {
+            $data['delivery_initials'] = $this->generate_initials(
                 $data['first_name'],
                 $data['last_name'],
                 $this->used_initials
             );
         } else {
             // Validate existing initials
-            if (in_array($data['initials_delivery'], $this->used_initials)) {
+            if (in_array($data['delivery_initials'], $this->used_initials)) {
                 throw new Exception(sprintf(
                     __('Duplicate delivery initials: %s', 'meals-db'),
-                    $data['initials_delivery']
+                    $data['delivery_initials']
                 ));
             }
         }
 
         // Add to used initials
-        $this->used_initials[] = $data['initials_delivery'];
+        $this->used_initials[] = $data['delivery_initials'];
 
         if ($this->dry_run) {
             return; // Don't actually import in dry run mode
@@ -365,6 +373,11 @@ class MealsDB_Client_Importer {
         $data = [];
 
         foreach ($this->column_mapping as $csv_index => $db_field) {
+            // Skip null field mappings (removed columns)
+            if ($db_field === null) {
+                continue;
+            }
+
             $value = isset($row[$csv_index]) ? trim($row[$csv_index]) : '';
 
             // Skip empty values
@@ -539,12 +552,12 @@ class MealsDB_Client_Importer {
         }
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql = sprintf("SELECT initials_delivery FROM `%s` WHERE initials_delivery IS NOT NULL", str_replace('`', '``', $table));
+        $sql = sprintf("SELECT delivery_initials FROM `%s` WHERE delivery_initials IS NOT NULL", str_replace('`', '``', $table));
 
         $result = $conn->query($sql);
         if ($result) {
             while ($row = $result->fetch_assoc()) {
-                $this->used_initials[] = $row['initials_delivery'];
+                $this->used_initials[] = $row['delivery_initials'];
             }
             $result->free();
         }
@@ -625,7 +638,7 @@ class MealsDB_Client_Importer {
             'wp_user_id' => $wp_user_id,
             'first_name' => $data['first_name'],
             'last_name' => $data['last_name'],
-            'client_type' => $data['client_type'] ?? 'Private',
+            'client_type' => $data['client_type'],
             'active' => 1,
         ];
 
@@ -658,8 +671,9 @@ class MealsDB_Client_Importer {
             'initial_renewal_termination_date' => 'initial_renewal_termination_date',
             'most_recent_renewal_termination_date' => 'most_recent_renewal_termination_date',
             'notes_to_service_provider' => 'notes_to_service_provider',
+            'units' => 'units',
             'client_contribution' => 'client_contribution',
-            'vet_health_id_card' => 'vet_health_id_card',
+            'vet_health_card' => 'vet_health_card',
             'rate' => 'rate',
             'required_start_date' => 'required_start_date',
             'delivery_day' => 'delivery_day',
@@ -670,7 +684,7 @@ class MealsDB_Client_Importer {
             'delivery_frequency' => 'delivery_frequency',
             'freezer_capacity' => 'freezer_capacity',
             'delivery_fee' => 'delivery_fee',
-            'initials_delivery' => 'initials_delivery',
+            'delivery_initials' => 'delivery_initials',
             'address_street_number' => 'street_number',
             'address_street_name' => 'street_name',
             'address_unit' => 'apartment_number',
@@ -706,6 +720,13 @@ class MealsDB_Client_Importer {
 
         if (isset($data['customer_comments']) && $data['customer_comments'] !== '') {
             $insert_data['customer_comments'] = MealsDB_Encryption::encrypt($data['customer_comments']);
+        }
+
+        // Generate deterministic indexes for uniqueness checks on encrypted/unique fields
+        foreach ($this->deterministic_index_map as $field => $index_column) {
+            if (isset($data[$field]) && $data[$field] !== '') {
+                $insert_data[$index_column] = $this->deterministic_hash($data[$field]);
+            }
         }
 
         // Build INSERT query
@@ -790,5 +811,15 @@ class MealsDB_Client_Importer {
             return [];
         }
         return $errors;
+    }
+
+    /**
+     * Generate a deterministic hash for uniqueness checks
+     *
+     * @param string $value The value to hash
+     * @return string SHA-256 hash
+     */
+    private function deterministic_hash($value) {
+        return hash('sha256', strtolower(trim($value)));
     }
 }
