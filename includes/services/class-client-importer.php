@@ -38,17 +38,17 @@ class MealsDB_Client_Importer {
         5 => 'assigned_worker_email',
 
         // Primary Address (columns 6-12)
-        6 => 'street_number',
-        7 => 'street_name',
-        8 => 'street_type',
-        9 => 'apartment_number',
-        10 => 'city',
-        11 => 'province',
-        12 => 'postal_code',
+        6 => 'address_street_number',
+        7 => 'address_street_name',
+        8 => 'address_street_type',  // Will be concatenated with street_name
+        9 => 'address_unit',
+        10 => 'address_city',
+        11 => 'address_province',
+        12 => 'address_postal',
 
         // Contact Info
-        13 => 'client_phone_1',
-        14 => 'client_phone_2',
+        13 => 'phone_primary',
+        14 => 'phone_secondary',
         15 => 'alternate_contact_name',
         16 => 'alternate_contact_phone_1',
         17 => 'alternate_contact_phone_2',
@@ -98,13 +98,13 @@ class MealsDB_Client_Importer {
         53 => 'customer_comments',  // ENCRYPTED
 
         // Alternate Delivery Address (columns 54-60)
-        54 => 'delivery_street_number',
-        55 => 'delivery_street_name',
-        56 => 'delivery_street_type',
-        57 => 'delivery_apartment_number',
-        58 => 'delivery_city',
-        59 => 'delivery_province',
-        60 => 'delivery_postal_code',
+        54 => 'delivery_address_street_number',
+        55 => 'delivery_address_street_name',
+        56 => 'delivery_address_street_type',  // Will be concatenated with street_name
+        57 => 'delivery_address_unit',
+        58 => 'delivery_address_city',
+        59 => 'delivery_address_province',
+        60 => 'delivery_address_postal',
     ];
 
     /**
@@ -378,6 +378,18 @@ class MealsDB_Client_Importer {
             $data[$db_field] = $value;
         }
 
+        // Concatenate street type with street name
+        if (!empty($data['address_street_type']) && !empty($data['address_street_name'])) {
+            $data['address_street_name'] = trim($data['address_street_name'] . ' ' . $data['address_street_type']);
+        }
+        unset($data['address_street_type']);
+
+        // Concatenate delivery street type with delivery street name
+        if (!empty($data['delivery_address_street_type']) && !empty($data['delivery_address_street_name'])) {
+            $data['delivery_address_street_name'] = trim($data['delivery_address_street_name'] . ' ' . $data['delivery_address_street_type']);
+        }
+        unset($data['delivery_address_street_type']);
+
         return $data;
     }
 
@@ -620,8 +632,8 @@ class MealsDB_Client_Importer {
         // Map all fields
         $field_map = [
             'client_email' => 'client_email',
-            'client_phone_1' => 'client_phone_1',
-            'client_phone_2' => 'client_phone_2',
+            'phone_primary' => 'phone_primary',
+            'phone_secondary' => 'phone_secondary',
             'alternate_contact_name' => 'alternate_contact_name',
             'alternate_contact_phone_1' => 'alternate_contact_phone_1',
             'alternate_contact_phone_2' => 'alternate_contact_phone_2',
@@ -658,18 +670,18 @@ class MealsDB_Client_Importer {
             'freezer_capacity' => 'freezer_capacity',
             'delivery_fee' => 'delivery_fee',
             'initials_delivery' => 'initials_delivery',
-            'street_number' => 'street_number',
-            'street_name' => 'street_name',
-            'apartment_number' => 'apartment_number',
-            'city' => 'city',
-            'province' => 'province',
-            'postal_code' => 'postal_code',
-            'delivery_street_number' => 'delivery_street_number',
-            'delivery_street_name' => 'delivery_street_name',
-            'delivery_apartment_number' => 'delivery_apartment_number',
-            'delivery_city' => 'delivery_city',
-            'delivery_province' => 'delivery_province',
-            'delivery_postal_code' => 'delivery_postal_code',
+            'address_street_number' => 'address_street_number',
+            'address_street_name' => 'address_street_name',
+            'address_unit' => 'address_unit',
+            'address_city' => 'address_city',
+            'address_province' => 'address_province',
+            'address_postal' => 'address_postal',
+            'delivery_address_street_number' => 'delivery_address_street_number',
+            'delivery_address_street_name' => 'delivery_address_street_name',
+            'delivery_address_unit' => 'delivery_address_unit',
+            'delivery_address_city' => 'delivery_address_city',
+            'delivery_address_province' => 'delivery_address_province',
+            'delivery_address_postal' => 'delivery_address_postal',
         ];
 
         foreach ($field_map as $source => $target) {

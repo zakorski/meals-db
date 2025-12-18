@@ -178,7 +178,7 @@
                     <td>${escapeHtml(client.client_type || 'Private')}</td>
                     <td>${escapeHtml(client.initials_delivery || '(will generate)')}</td>
                     <td>${escapeHtml(client.client_email || '(none)')}</td>
-                    <td>${escapeHtml(client.client_phone_1 || '(none)')}</td>
+                    <td>${escapeHtml(client.phone_primary || '(none)')}</td>
                 </tr>
             `;
             tbody.append(row);

@@ -83,7 +83,7 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $sql = sprintf('SELECT * FROM `%s` WHERE id = ? LIMIT 1', $this->escape_table_name());
+            $sql = sprintf('SELECT * FROM `%s` WHERE client_id = ? LIMIT 1', $this->escape_table_name());
             $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client lookup query: ' . ($conn->error ?? 'unknown error'));
@@ -207,7 +207,7 @@ class MealsDB_Clients_Repository {
                 $set_parts[] = sprintf('`%s` = ?', $column);
             }
 
-            $sql = sprintf('UPDATE `%s` SET %s WHERE id = ? LIMIT 1', $this->escape_table_name(), implode(', ', $set_parts));
+            $sql = sprintf('UPDATE `%s` SET %s WHERE client_id = ? LIMIT 1', $this->escape_table_name(), implode(', ', $set_parts));
             $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client update statement: ' . ($conn->error ?? 'unknown error'));
@@ -264,7 +264,7 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $sql = sprintf('DELETE FROM `%s` WHERE id = ?', $this->escape_table_name());
+            $sql = sprintf('DELETE FROM `%s` WHERE client_id = ?', $this->escape_table_name());
             $stmt = $conn->prepare($sql);
             if (!is_object($stmt)) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client delete statement: ' . ($conn->error ?? 'unknown error'));
@@ -364,7 +364,7 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $columns = ['id', 'first_name', 'last_name', 'client_type', 'phone_primary', 'client_email'];
+            $columns = ['client_id', 'first_name', 'last_name', 'client_type', 'phone_primary', 'client_email'];
             $has_active_column = $this->table_has_column($conn, 'active');
 
             if ($has_active_column) {
