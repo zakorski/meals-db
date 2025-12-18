@@ -365,6 +365,15 @@ class MealsDB_Client_Importer {
                 $data['do_not_call_client_phone'],
                 gettype($data['do_not_call_client_phone'])
             ));
+        } else {
+            error_log(sprintf('Row %d: do_not_call_client_phone is NOT SET in $data array', $row_number));
+        }
+
+        // Debug: Log the raw CSV value at column 18
+        if (isset($csv_row[18])) {
+            error_log(sprintf('Row %d: CSV column 18 raw value = "%s"', $row_number, $csv_row[18]));
+        } else {
+            error_log(sprintf('Row %d: CSV column 18 does NOT exist', $row_number));
         }
 
         // Insert client record
@@ -390,13 +399,27 @@ class MealsDB_Client_Importer {
 
             $value = isset($row[$csv_index]) ? trim($row[$csv_index]) : '';
 
+            // Debug: Log column 18 specifically
+            if ($csv_index === 18) {
+                error_log(sprintf('map_csv_to_data: column 18 -> field "%s", value="%s", isset=%s',
+                    $db_field, $value, isset($row[$csv_index]) ? 'yes' : 'no'));
+            }
+
             // Skip empty values
             if ($value === '') {
+                if ($csv_index === 18) {
+                    error_log('map_csv_to_data: column 18 is empty, skipping transformation');
+                }
                 continue;
             }
 
             // Transform data
             $value = $this->transform_value($db_field, $value);
+
+            if ($csv_index === 18) {
+                error_log(sprintf('map_csv_to_data: column 18 after transform = "%s" (type: %s)',
+                    $value, gettype($value)));
+            }
 
             $data[$db_field] = $value;
         }
