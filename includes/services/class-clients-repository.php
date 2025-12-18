@@ -364,7 +364,7 @@ class MealsDB_Clients_Repository {
         }
 
         try {
-            $columns = ['client_id', 'first_name', 'last_name', 'client_type', 'phone_primary', 'client_email'];
+            $columns = ['client_id', 'client_id AS id', 'first_name', 'last_name', 'client_type', 'client_phone_1 AS phone_primary', 'client_email'];
             $has_active_column = $this->table_has_column($conn, 'active');
 
             if ($has_active_column) {
