@@ -50,6 +50,8 @@ $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
                 <th><?php esc_html_e('First Name', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Last Name', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Client Type', 'meals-db'); ?></th>
+                <th><?php esc_html_e('Social Worker', 'meals-db'); ?></th>
+                <th><?php esc_html_e('Social Worker Email', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Phone Number', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Email Address', 'meals-db'); ?></th>
                 <th class="mealsdb-client-actions-column"><?php esc_html_e('Actions', 'meals-db'); ?></th>
@@ -58,7 +60,7 @@ $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
         <tbody data-empty-message="<?php echo esc_attr__('No clients found for the selected criteria.', 'meals-db'); ?>">
             <?php if (empty($clients)) : ?>
                 <tr class="mealsdb-client-empty">
-                    <td colspan="6"><?php esc_html_e('No clients found for the selected criteria.', 'meals-db'); ?></td>
+                    <td colspan="8"><?php esc_html_e('No clients found for the selected criteria.', 'meals-db'); ?></td>
                 </tr>
             <?php else : ?>
                 <?php foreach ($clients as $client) :
@@ -82,6 +84,14 @@ $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
                         <td><?php echo esc_html($client['first_name'] ?? ''); ?></td>
                         <td><?php echo esc_html($client['last_name'] ?? ''); ?></td>
                         <td><?php echo esc_html($client['client_type'] ?? ''); ?></td>
+                        <td><?php echo esc_html($client['assigned_worker_name'] ?? '—'); ?></td>
+                        <td>
+                            <?php if (!empty($client['assigned_worker_email'])) : ?>
+                                <a href="mailto:<?php echo esc_attr($client['assigned_worker_email']); ?>"><?php echo esc_html($client['assigned_worker_email']); ?></a>
+                            <?php else : ?>
+                                —
+                            <?php endif; ?>
+                        </td>
                         <td><?php echo esc_html($client['phone_primary'] ?? ''); ?></td>
                         <td>
                             <?php if (!empty($client['client_email'])) : ?>
