@@ -369,12 +369,31 @@ class MealsDB_Client_Importer {
             error_log(sprintf('Row %d: do_not_call_client_phone is NOT SET in $data array', $row_number));
         }
 
+        // Debug: Log social worker fields
+        error_log(sprintf('Row %d: assigned_worker_name = "%s" (isset: %s)',
+            $row_number,
+            $data['assigned_worker_name'] ?? 'NOT SET',
+            isset($data['assigned_worker_name']) ? 'yes' : 'no'
+        ));
+        error_log(sprintf('Row %d: assigned_worker_email = "%s" (isset: %s)',
+            $row_number,
+            $data['assigned_worker_email'] ?? 'NOT SET',
+            isset($data['assigned_worker_email']) ? 'yes' : 'no'
+        ));
+
         // Debug: Log the raw CSV value at column 18
         if (isset($csv_row[18])) {
             error_log(sprintf('Row %d: CSV column 18 raw value = "%s"', $row_number, $csv_row[18]));
         } else {
             error_log(sprintf('Row %d: CSV column 18 does NOT exist', $row_number));
         }
+
+        // Debug: Log CSV columns 4 and 5 (social worker fields)
+        error_log(sprintf('Row %d: CSV column 4 (assigned_worker_name) = "%s"',
+            $row_number, $csv_row[4] ?? 'NOT SET'));
+        error_log(sprintf('Row %d: CSV column 5 (assigned_worker_email) = "%s"',
+            $row_number, $csv_row[5] ?? 'NOT SET'));
+
 
         // Insert client record
         $client_id = $this->insert_client($data, $wp_user_id);
