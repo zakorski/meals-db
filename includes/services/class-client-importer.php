@@ -489,11 +489,33 @@ class MealsDB_Client_Importer {
     }
 
     /**
-     * Transform date from YYYY/MM/DD to YYYY-MM-DD
+     * Transform date to MySQL YYYY-MM-DD format
+     * Handles: YYYY/MM/DD, YYYY-MM-DD, M-D-YYYY, M/D/YYYY, etc.
      */
     private function transform_date($value) {
         if (empty($value)) return null;
-        return str_replace('/', '-', $value);
+
+        // Try to parse the date
+        $timestamp = strtotime($value);
+
+        // If strtotime couldn't parse it, try manual parsing
+        if ($timestamp === false) {
+            // Try YYYY/MM/DD or YYYY-MM-DD format
+            if (preg_match('/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/', $value, $matches)) {
+                return sprintf('%04d-%02d-%02d', $matches[1], $matches[2], $matches[3]);
+            }
+
+            // Try M/D/YYYY or M-D-YYYY format
+            if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/', $value, $matches)) {
+                return sprintf('%04d-%02d-%02d', $matches[3], $matches[1], $matches[2]);
+            }
+
+            // Return original value if we can't parse it
+            return $value;
+        }
+
+        // Convert to MySQL date format
+        return date('Y-m-d', $timestamp);
     }
 
     /**
