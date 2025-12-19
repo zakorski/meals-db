@@ -787,6 +787,17 @@ class MealsDB_Client_Importer {
             }
         }
 
+        // Debug: Log what's in insert_data for social worker fields
+        error_log(sprintf('insert_data[assigned_worker_name] = "%s" (isset: %s)',
+            $insert_data['assigned_worker_name'] ?? 'NOT SET',
+            isset($insert_data['assigned_worker_name']) ? 'yes' : 'no'
+        ));
+        error_log(sprintf('insert_data[assigned_worker_email] = "%s" (isset: %s)',
+            $insert_data['assigned_worker_email'] ?? 'NOT SET',
+            isset($insert_data['assigned_worker_email']) ? 'yes' : 'no'
+        ));
+
+
         // Handle encrypted fields
         if (isset($data['individual_id']) && $data['individual_id'] !== '') {
             $insert_data['individual_id'] = MealsDB_Encryption::encrypt($data['individual_id']);
@@ -814,6 +825,14 @@ class MealsDB_Client_Importer {
         // Build INSERT query
         $columns = array_keys($insert_data);
         $placeholders = array_fill(0, count($columns), '?');
+
+        // Debug: Log the columns being inserted
+        error_log('INSERT columns: ' . implode(', ', $columns));
+        if (in_array('assigned_worker_name', $columns)) {
+            error_log('✓ assigned_worker_name column is in INSERT');
+        } else {
+            error_log('✗ assigned_worker_name column is MISSING from INSERT');
+        }
 
         $sql = sprintf(
             "INSERT INTO `%s` (`%s`) VALUES (%s)",
