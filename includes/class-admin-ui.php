@@ -1077,9 +1077,9 @@ class MealsDB_Admin_UI {
                     <td>
                         <select name="requisition_period" id="requisition_period">
                             <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
-                            <option value="Day" <?php selected($requisition_period_value, 'Day'); ?>><?php esc_html_e('Day', 'meals-db'); ?></option>
-                            <option value="Week" <?php selected($requisition_period_value, 'Week'); ?>><?php esc_html_e('Week', 'meals-db'); ?></option>
-                            <option value="Month" <?php selected($requisition_period_value, 'Month'); ?>><?php esc_html_e('Month', 'meals-db'); ?></option>
+                            <option value="day" <?php selected(strtolower($requisition_period_value), 'day'); ?>><?php esc_html_e('Daily', 'meals-db'); ?></option>
+                            <option value="week" <?php selected(strtolower($requisition_period_value), 'week'); ?>><?php esc_html_e('Weekly', 'meals-db'); ?></option>
+                            <option value="month" <?php selected(strtolower($requisition_period_value), 'month'); ?>><?php esc_html_e('Monthly', 'meals-db'); ?></option>
                         </select>
                     </td>
                 </tr>
@@ -1189,7 +1189,7 @@ class MealsDB_Admin_UI {
                         <select name="service_zone" id="service_zone" class="regular-text">
                             <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
                             <?php foreach ($service_zone_options as $option) : ?>
-                                <?php $label = $format_enum_option_label($option); ?>
+                                <?php $label = 'Zone ' . $format_enum_option_label($option); ?>
                                 <option value="<?php echo esc_attr($option); ?>" <?php selected($service_zone_value, strtoupper($option)); ?>><?php echo esc_html($label); ?></option>
                             <?php endforeach; ?>
                         </select>

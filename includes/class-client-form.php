@@ -1283,6 +1283,20 @@ class MealsDB_Client_Form {
         $value = (string) $value;
 
         switch ($column) {
+            case 'requisition_period':
+                $value = trim($value);
+                // Normalize plural forms to singular for database storage
+                $normalized = strtoupper($value);
+                if ($normalized === 'DAILY') {
+                    $value = 'day';
+                } elseif ($normalized === 'WEEKLY') {
+                    $value = 'week';
+                } elseif ($normalized === 'MONTHLY') {
+                    $value = 'month';
+                } else {
+                    $value = strtolower($value);
+                }
+                break;
             case 'client_email':
             case 'social_worker_email':
             case 'alt_contact_email':
@@ -1377,12 +1391,9 @@ class MealsDB_Client_Form {
         }, $delivery_day_allowed)));
 
         $contact_method_allowed = [
-            'CLIENT EMAIL',
-            'CLIENT PHONE',
-            'ALTERNATE CONTACT EMAIL',
-            'ALTERNATE CONTACT PHONE',
-            'SOCIAL WORKER EMAIL',
-            'SOCIAL WORKER PHONE',
+            'AUTO-RENEW',
+            'BULK EMAIL',
+            'PHONE',
         ];
 
         if (function_exists('apply_filters')) {
@@ -1418,9 +1429,9 @@ class MealsDB_Client_Form {
                 'message'   => 'Meal type must be either 1 or 2.',
             ],
             'requisition_period' => [
-                'allowed'   => ['DAY', 'WEEK', 'MONTH'],
+                'allowed'   => ['DAY', 'DAILY', 'WEEK', 'WEEKLY', 'MONTH', 'MONTHLY'],
                 'normalize' => 'upper',
-                'message'   => 'Requisition period must be Day, Week, or Month.',
+                'message'   => 'Requisition period must be Day/Daily, Week/Weekly, or Month/Monthly.',
             ],
             'delivery_day' => [
                 'allowed'   => $delivery_day_allowed,
