@@ -664,7 +664,51 @@ class MealsDB_Admin_UI {
         $client_id = intval($args['client_id']);
         $form_values = is_array($args['form_values']) ? $args['form_values'] : [];
 
-        $client_type = strtoupper($form_values['client_type'] ?? '');
+        // Normalize all enum/select field values for case-insensitive matching with UI elements
+        $normalize_field_value = static function (string $field_name, $value): string {
+            if ($value === null || $value === '') {
+                return '';
+            }
+
+            $value = trim((string) $value);
+
+            // Special case handling for client_type (SDNB must stay uppercase)
+            if ($field_name === 'client_type') {
+                $upper = strtoupper($value);
+                if ($upper === 'SDNB') {
+                    return 'SDNB';
+                }
+                return ucfirst(strtolower($value));
+            }
+
+            // Map of field names to their expected UI case format
+            $field_formats = [
+                'gender' => 'title',                // Male, Female, Other
+                'service_zone' => 'upper',          // A, B
+                'service_course' => 'keep',         // 1, 2 (numeric, keep as-is)
+                'meal_type' => 'lower',             // main, main+side
+                'requisition_period' => 'lower',    // day, week, month
+                'delivery_day' => 'upper',          // WED AM, THURS AM, etc.
+                'ordering_contact_method' => 'upper', // AUTO-RENEW, BULK EMAIL, PHONE
+                'payment_method' => 'title',        // Cheque, etc.
+            ];
+
+            $format = $field_formats[$field_name] ?? 'keep';
+
+            switch ($format) {
+                case 'upper':
+                    return strtoupper($value);
+                case 'lower':
+                    return strtolower($value);
+                case 'title':
+                    return ucfirst(strtolower($value));
+                case 'keep':
+                default:
+                    return $value;
+            }
+        };
+
+        $client_type = $normalize_field_value('client_type', $form_values['client_type'] ?? '');
 
         $delivery_day_options = MealsDB_Client_Form::get_allowed_options('delivery_day');
         $ordering_contact_method_options = MealsDB_Client_Form::get_allowed_options('ordering_contact_method');
@@ -709,12 +753,12 @@ class MealsDB_Admin_UI {
         );
 
         $delivery_initials_value = $form_values['delivery_initials'] ?? '';
-        $delivery_day_value = strtoupper($form_values['delivery_day'] ?? '');
-        $ordering_contact_method_value = strtoupper($form_values['ordering_contact_method'] ?? '');
-        $service_zone_value = strtoupper($form_values['service_zone'] ?? '');
-        $gender_value = ucfirst(strtolower($form_values['gender'] ?? ''));
-        $meal_type_value = strtolower($form_values['meal_type'] ?? '');
-        $requisition_period_value = strtolower($form_values['requisition_period'] ?? '');
+        $delivery_day_value = $normalize_field_value('delivery_day', $form_values['delivery_day'] ?? '');
+        $ordering_contact_method_value = $normalize_field_value('ordering_contact_method', $form_values['ordering_contact_method'] ?? '');
+        $service_zone_value = $normalize_field_value('service_zone', $form_values['service_zone'] ?? '');
+        $gender_value = $normalize_field_value('gender', $form_values['gender'] ?? '');
+        $meal_type_value = $normalize_field_value('meal_type', $form_values['meal_type'] ?? '');
+        $requisition_period_value = $normalize_field_value('requisition_period', $form_values['requisition_period'] ?? '');
         $form_classes = ['mealsdb-client-form'];
         if ($client_type !== '') {
             $form_classes[] = 'mealsdb-client-type-selected';
