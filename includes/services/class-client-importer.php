@@ -65,7 +65,7 @@ class MealsDB_Client_Importer {
         25 => 'requisition_id',  // ENCRYPTED
         26 => 'payment_method',
         27 => 'service_name_zone',
-        28 => 'service_name_course',
+        28 => 'meal_type',
         29 => 'required_start_date',
         30 => 'service_commence_date',
         31 => 'expected_termination_date',
@@ -74,7 +74,7 @@ class MealsDB_Client_Importer {
         34 => 'notes_to_service_provider',
         35 => 'units',
         36 => 'vet_health_card',
-        37 => 'meal_type',
+        37 => null,  // Previously meal_type, now unmapped (meal_type moved to column 28)
         38 => 'requisition_period',
         39 => 'rate',
         40 => 'client_contribution',
