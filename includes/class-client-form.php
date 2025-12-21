@@ -620,7 +620,7 @@ class MealsDB_Client_Form {
 
     /**
      * Save client data to meals_clients table.
-     * 
+     *
      * @param array $data
      * @return bool
      */
@@ -644,6 +644,9 @@ class MealsDB_Client_Form {
         if (array_key_exists('wordpress_user_id', $sanitized) && $sanitized['wordpress_user_id'] === '') {
             unset($sanitized['wordpress_user_id']);
         }
+
+        // Map form field names to database column names
+        $sanitized = self::map_form_to_db($sanitized);
 
         $sanitized = self::apply_insert_defaults($sanitized);
 
@@ -672,8 +675,8 @@ class MealsDB_Client_Form {
             }
         }
 
-        // Format date fields (assume already validated)
-        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_date', 'termination_date', 'most_recent_renewal_date'];
+        // Format date fields (assume already validated) - using database column names after mapping
+        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_termination_date', 'termination_date', 'most_recent_renewal_termination_date'];
         foreach ($date_fields as $field) {
             if (!empty($encrypted[$field])) {
                 $timestamp = strtotime($encrypted[$field]);
@@ -728,6 +731,9 @@ class MealsDB_Client_Form {
             $sanitized['wordpress_user_id'] = null;
         }
 
+        // Map form field names to database column names
+        $sanitized = self::map_form_to_db($sanitized);
+
         $encrypted = $sanitized;
         if (!self::ensure_index_columns_exist($conn)) {
             error_log('[MealsDB] Update aborted: deterministic index columns are unavailable.');
@@ -759,7 +765,8 @@ class MealsDB_Client_Form {
             }
         }
 
-        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_date', 'termination_date', 'most_recent_renewal_date'];
+        // Using database column names after mapping
+        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_termination_date', 'termination_date', 'most_recent_renewal_termination_date'];
         foreach ($date_fields as $field) {
             if (array_key_exists($field, $encrypted)) {
                 if (!empty($encrypted[$field])) {
@@ -827,7 +834,95 @@ class MealsDB_Client_Form {
             }
         }
 
+        // Map database column names to form field names
+        $db_to_form_map = [
+            'client_phone_1' => 'phone_primary',
+            'client_phone_2' => 'phone_secondary',
+            'assigned_worker_name' => 'assigned_social_worker',
+            'assigned_worker_email' => 'social_worker_email',
+            'street_number' => 'address_street_number',
+            'street_name' => 'address_street_name',
+            'apartment_number' => 'address_unit',
+            'city' => 'address_city',
+            'province' => 'address_province',
+            'postal_code' => 'address_postal',
+            'delivery_street_number' => 'delivery_address_street_number',
+            'delivery_street_name' => 'delivery_address_street_name',
+            'delivery_apartment_number' => 'delivery_address_unit',
+            'delivery_city' => 'delivery_address_city',
+            'delivery_province' => 'delivery_address_province',
+            'delivery_postal_code' => 'delivery_address_postal',
+            'alternate_contact_name' => 'alt_contact_name',
+            'alternate_contact_phone_1' => 'alt_contact_phone_primary',
+            'alternate_contact_phone_2' => 'alt_contact_phone_secondary',
+            'alternate_contact_email' => 'alt_contact_email',
+            'service_name_zone' => 'service_zone',
+            'service_name_course' => 'service_course',
+            'initial_renewal_termination_date' => 'initial_renewal_date',
+            'most_recent_renewal_termination_date' => 'most_recent_renewal_date',
+            'notes_to_service_provider' => 'per_sdnb_req',
+            'customer_comments' => 'client_comments',
+            'initials_for_delivery' => 'service_center',
+        ];
+
+        // Apply the mapping
+        foreach ($db_to_form_map as $db_col => $form_field) {
+            if (array_key_exists($db_col, $record)) {
+                $record[$form_field] = $record[$db_col];
+                unset($record[$db_col]);
+            }
+        }
+
         return $record;
+    }
+
+    /**
+     * Map form field names to database column names.
+     *
+     * @param array $data Data with form field names
+     * @return array Data with database column names
+     */
+    private static function map_form_to_db(array $data): array {
+        $form_to_db_map = [
+            'phone_primary' => 'client_phone_1',
+            'phone_secondary' => 'client_phone_2',
+            'assigned_social_worker' => 'assigned_worker_name',
+            'social_worker_email' => 'assigned_worker_email',
+            'address_street_number' => 'street_number',
+            'address_street_name' => 'street_name',
+            'address_unit' => 'apartment_number',
+            'address_city' => 'city',
+            'address_province' => 'province',
+            'address_postal' => 'postal_code',
+            'delivery_address_street_number' => 'delivery_street_number',
+            'delivery_address_street_name' => 'delivery_street_name',
+            'delivery_address_unit' => 'delivery_apartment_number',
+            'delivery_address_city' => 'delivery_city',
+            'delivery_address_province' => 'delivery_province',
+            'delivery_address_postal' => 'delivery_postal_code',
+            'alt_contact_name' => 'alternate_contact_name',
+            'alt_contact_phone_primary' => 'alternate_contact_phone_1',
+            'alt_contact_phone_secondary' => 'alternate_contact_phone_2',
+            'alt_contact_email' => 'alternate_contact_email',
+            'service_zone' => 'service_name_zone',
+            'service_course' => 'service_name_course',
+            'initial_renewal_date' => 'initial_renewal_termination_date',
+            'most_recent_renewal_date' => 'most_recent_renewal_termination_date',
+            'per_sdnb_req' => 'notes_to_service_provider',
+            'client_comments' => 'customer_comments',
+            'service_center' => 'initials_for_delivery',
+        ];
+
+        $mapped = [];
+        foreach ($data as $key => $value) {
+            if (isset($form_to_db_map[$key])) {
+                $mapped[$form_to_db_map[$key]] = $value;
+            } else {
+                $mapped[$key] = $value;
+            }
+        }
+
+        return $mapped;
     }
 
     /**
