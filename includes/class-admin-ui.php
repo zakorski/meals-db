@@ -1204,8 +1204,8 @@ class MealsDB_Admin_UI {
                     <td>
                         <select name="meal_type" id="meal_type">
                             <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
-                            <option value="1" <?php selected($meal_type_value, '1'); ?>>1 <?php esc_html_e('Course', 'meals-db'); ?></option>
-                            <option value="2" <?php selected($meal_type_value, '2'); ?>>2 <?php esc_html_e('Course', 'meals-db'); ?></option>
+                            <option value="main" <?php selected(strtolower($meal_type_value), 'main'); ?>><?php esc_html_e('Main', 'meals-db'); ?></option>
+                            <option value="main+side" <?php selected(strtolower($meal_type_value), 'main+side'); ?>><?php esc_html_e('Main+Side', 'meals-db'); ?></option>
                         </select>
                     </td>
                 </tr>
