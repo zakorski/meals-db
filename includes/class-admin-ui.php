@@ -712,9 +712,9 @@ class MealsDB_Admin_UI {
         $delivery_day_value = strtoupper($form_values['delivery_day'] ?? '');
         $ordering_contact_method_value = strtoupper($form_values['ordering_contact_method'] ?? '');
         $service_zone_value = strtoupper($form_values['service_zone'] ?? '');
-        $gender_value = $form_values['gender'] ?? '';
-        $meal_type_value = $form_values['meal_type'] ?? '';
-        $requisition_period_value = $form_values['requisition_period'] ?? '';
+        $gender_value = ucfirst(strtolower($form_values['gender'] ?? ''));
+        $meal_type_value = strtolower($form_values['meal_type'] ?? '');
+        $requisition_period_value = strtolower($form_values['requisition_period'] ?? '');
         $form_classes = ['mealsdb-client-form'];
         if ($client_type !== '') {
             $form_classes[] = 'mealsdb-client-type-selected';

@@ -1382,12 +1382,13 @@ class MealsDB_Client_Form {
      * Build the validation configuration for enumerated fields.
      */
     private static function get_enum_validation_rules(): array {
-        $delivery_day_allowed = [];
-        $week_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-        foreach ($week_days as $dayName) {
-            $delivery_day_allowed[] = strtoupper($dayName . ' AM');
-            $delivery_day_allowed[] = strtoupper($dayName . ' PM');
-        }
+        $delivery_day_allowed = [
+            'WED AM',
+            'WED PM',
+            'THURS AM',
+            'THURS PM',
+            'FRI AM',
+        ];
 
         if (function_exists('apply_filters')) {
             $filtered_days = apply_filters('mealsdb_allowed_delivery_days', $delivery_day_allowed);
