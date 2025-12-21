@@ -1297,6 +1297,16 @@ class MealsDB_Client_Form {
                     $value = strtolower($value);
                 }
                 break;
+            case 'meal_type':
+                $value = trim($value);
+                // Normalize 'meal' to 'main' for database storage
+                $normalized = strtolower($value);
+                if ($normalized === 'meal') {
+                    $value = 'main';
+                } else {
+                    $value = $normalized;
+                }
+                break;
             case 'client_email':
             case 'social_worker_email':
             case 'alt_contact_email':
@@ -1424,9 +1434,9 @@ class MealsDB_Client_Form {
                 'message'   => 'Service course must be either 1 or 2.',
             ],
             'meal_type' => [
-                'allowed'   => ['1', '2'],
+                'allowed'   => ['MAIN', 'MAIN+SIDE', 'MEAL'],
                 'normalize' => 'upper',
-                'message'   => 'Meal type must be either 1 or 2.',
+                'message'   => 'Meal type must be either Main or Main+Side.',
             ],
             'requisition_period' => [
                 'allowed'   => ['DAY', 'DAILY', 'WEEK', 'WEEKLY', 'MONTH', 'MONTHLY'],
