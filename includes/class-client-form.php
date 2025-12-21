@@ -1307,6 +1307,12 @@ class MealsDB_Client_Form {
                     $value = $normalized;
                 }
                 break;
+            case 'service_zone':
+                $value = trim($value);
+                // Strip "zone " prefix if present (handles "zone A" -> "A")
+                $value = preg_replace('/^zone\s*/i', '', $value);
+                $value = strtoupper($value);
+                break;
             case 'client_email':
             case 'social_worker_email':
             case 'alt_contact_email':
@@ -1425,7 +1431,7 @@ class MealsDB_Client_Form {
                 'message'   => 'Gender must be Male, Female, or Other.',
             ],
             'service_zone' => [
-                'allowed'   => ['A', 'B'],
+                'allowed'   => ['A', 'B', 'ZONE A', 'ZONE B'],
                 'normalize' => 'upper',
                 'message'   => 'Service zone must be either A or B.',
             ],
