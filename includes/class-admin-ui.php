@@ -681,12 +681,25 @@ class MealsDB_Admin_UI {
                 return ucfirst(strtolower($value));
             }
 
+            // Special case for service_zone: strip "zone " prefix if present (handles "zone A" -> "A")
+            if ($field_name === 'service_zone') {
+                $value = preg_replace('/^zone\s*/i', '', $value);
+                return strtoupper(trim($value));
+            }
+
+            // Special case for meal_type: convert "meal" to "main"
+            if ($field_name === 'meal_type') {
+                $normalized = strtolower($value);
+                if ($normalized === 'meal') {
+                    return 'main';
+                }
+                return $normalized;
+            }
+
             // Map of field names to their expected UI case format
             $field_formats = [
                 'gender' => 'title',                // Male, Female, Other
-                'service_zone' => 'upper',          // A, B
                 'service_course' => 'keep',         // 1, 2 (numeric, keep as-is)
-                'meal_type' => 'lower',             // main, main+side
                 'requisition_period' => 'lower',    // day, week, month
                 'delivery_day' => 'upper',          // WED AM, THURS AM, etc.
                 'ordering_contact_method' => 'upper', // AUTO-RENEW, BULK EMAIL, PHONE
