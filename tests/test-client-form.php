@@ -416,7 +416,7 @@ run_test('validation rejects invalid enumerated and numeric inputs', function ()
         'Service zone must be either A or B.',
         'Service course must be either 1 or 2.',
         'Meal type must be either 1 or 2.',
-        'Requisition period must be Day, Week, or Month.',
+        'Requisition period must be Day/Daily, Week/Weekly, or Month/Monthly.',
         'Delivery day must match one of the scheduled options.',
         'Ordering contact method must be a supported option.',
         'Ordering frequency must be a number.',
@@ -456,7 +456,7 @@ run_test('validation accepts enumerated selections', function () {
         'meal_type' => '1',
         'requisition_period' => 'Week',
         'delivery_day' => 'Friday PM',
-        'ordering_contact_method' => 'Client Email',
+        'ordering_contact_method' => 'Phone',
         'ordering_frequency' => '4',
         'delivery_frequency' => '2',
         'freezer_capacity' => '3',
@@ -483,7 +483,7 @@ run_test('validation accepts enumerated selections', function () {
         'meal_type' => '1',
         'requisition_period' => 'Week',
         'delivery_day' => 'Friday PM',
-        'ordering_contact_method' => 'Client Email',
+        'ordering_contact_method' => 'Phone',
         'ordering_frequency' => '4',
         'delivery_frequency' => '2',
         'freezer_capacity' => '3',
@@ -730,7 +730,7 @@ run_test('builds a helpful summary for missing and invalid fields', function () 
         'delivery_area_name' => 'Zone 1',
         'delivery_area_zone' => 'A',
         'ordering_frequency' => '2',
-        'ordering_contact_method' => 'Client Email',
+        'ordering_contact_method' => 'Phone',
         'delivery_frequency' => '1',
     ];
 
@@ -979,7 +979,7 @@ run_test('private client submission succeeds with all fields populated', functio
         'delivery_area_name'            => 'Area 1',
         'delivery_area_zone'            => 'Zone A',
         'ordering_frequency'            => '2',
-        'ordering_contact_method'       => 'CLIENT EMAIL',
+        'ordering_contact_method'       => 'PHONE',
         'delivery_frequency'            => '2',
         'freezer_capacity'              => '4',
         'meal_type'                     => '1',
@@ -1012,7 +1012,7 @@ run_test('private client submission succeeds with all fields populated', functio
         throw new Exception('Delivery day should be preserved for Private clients.');
     }
 
-    if (($conn->lastInsert['ordering_contact_method'] ?? '') !== 'CLIENT EMAIL') {
+    if (($conn->lastInsert['ordering_contact_method'] ?? '') !== 'PHONE') {
         throw new Exception('Ordering contact method should be preserved for Private clients.');
     }
 
@@ -1063,7 +1063,7 @@ run_test('sdnb client submission succeeds with all fields populated', function (
         'delivery_area_name'            => 'Area 2',
         'delivery_area_zone'            => 'Zone B',
         'ordering_frequency'            => '4',
-        'ordering_contact_method'       => 'CLIENT PHONE',
+        'ordering_contact_method'       => 'AUTO-RENEW',
         'delivery_frequency'            => '4',
         'freezer_capacity'              => '6',
         'meal_type'                     => '2',
@@ -1148,7 +1148,7 @@ run_test('veteran client submission succeeds with all fields populated', functio
         'delivery_area_name'            => 'Area 3',
         'delivery_area_zone'            => 'Zone C',
         'ordering_frequency'            => '3',
-        'ordering_contact_method'       => 'SOCIAL WORKER PHONE',
+        'ordering_contact_method'       => 'BULK EMAIL',
         'delivery_frequency'            => '3',
         'freezer_capacity'              => '8',
         'meal_type'                     => '2',
