@@ -30,8 +30,8 @@ class MealsDB_Initials_Validator {
 	 * @var array
 	 */
 	private static $blocked_initials = array(
-		'ASS', 'SEX', 'TIT', 'CUM', 'FAG', 'GAY', 'GOD', 'JES', 'NIG',
-		'WTF', 'XXX', 'KKK', 'FUK', 'FCK', 'DIK', 'COK', 'CNT', 'DMN',
+		'ASS', 'SEX', 'TIT', 'CUM', 'FAG', 'GAY', 'GOD', 'NIG',
+		'WTF', 'XXX', 'KKK', 'FUK',
 	);
 
 	/**
