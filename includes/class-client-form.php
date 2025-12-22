@@ -62,7 +62,6 @@ class MealsDB_Client_Form {
         'delivery_address_postal',
         'gender',
         'birth_date',
-        'service_center',
         'service_center_charged',
         'vendor_number',
         'service_id',
@@ -172,7 +171,6 @@ class MealsDB_Client_Form {
         'delivery_address_postal'        => 'Delivery Postal Code',
         'gender'                         => 'Gender',
         'birth_date'                     => 'Date of Birth',
-        'service_center'                 => 'Service Centre',
         'service_center_charged'         => 'Service Centre Charged',
         'vendor_number'                  => 'Vendor Number',
         'service_id'                     => 'Service ID',
@@ -826,7 +824,6 @@ class MealsDB_Client_Form {
             'most_recent_renewal_termination_date' => 'most_recent_renewal_date',
             'notes_to_service_provider' => 'per_sdnb_req',
             'customer_comments' => 'client_comments',
-            'initials_for_delivery' => 'service_center',
         ];
 
         // Apply the mapping
@@ -873,7 +870,6 @@ class MealsDB_Client_Form {
             'most_recent_renewal_date' => 'most_recent_renewal_termination_date',
             'per_sdnb_req' => 'notes_to_service_provider',
             'client_comments' => 'customer_comments',
-            'service_center' => 'initials_for_delivery',
         ];
 
         $mapped = [];
