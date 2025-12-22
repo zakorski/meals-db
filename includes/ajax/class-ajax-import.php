@@ -17,6 +17,7 @@ class MealsDB_Ajax_Import {
         add_action('wp_ajax_mealsdb_validate_csv', [self::class, 'validate_csv']);
         add_action('wp_ajax_mealsdb_import_clients', [self::class, 'import_clients']);
         add_action('wp_ajax_mealsdb_import_progress', [self::class, 'get_progress']);
+        add_action('wp_ajax_mealsdb_download_import_log', [self::class, 'download_import_log']);
     }
 
     /**
@@ -160,5 +161,39 @@ class MealsDB_Ajax_Import {
         }
 
         wp_send_json_success($progress);
+    }
+
+    /**
+     * Download import log file
+     */
+    public static function download_import_log(): void {
+        check_ajax_referer('mealsdb_import_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_die(__('Unauthorized', 'meals-db'), 403);
+        }
+
+        $import_id = sanitize_text_field($_GET['import_id'] ?? '');
+
+        if (empty($import_id)) {
+            wp_die(__('No import ID specified', 'meals-db'), 400);
+        }
+
+        $log_file = MealsDB_Client_Importer::get_log_file($import_id);
+
+        if (!$log_file || !file_exists($log_file)) {
+            wp_die(__('Log file not found', 'meals-db'), 404);
+        }
+
+        // Set headers for file download
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Content-Disposition: attachment; filename="import-log-' . $import_id . '.txt"');
+        header('Content-Length: ' . filesize($log_file));
+        header('Cache-Control: no-cache, must-revalidate');
+        header('Pragma: no-cache');
+
+        // Output file content
+        readfile($log_file);
+        exit;
     }
 }

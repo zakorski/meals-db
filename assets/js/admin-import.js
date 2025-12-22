@@ -280,6 +280,18 @@
         `;
         summaryHtml += '</div>';
 
+        // Add download log button
+        if (importId) {
+            summaryHtml += '<div class="mealsdb-log-download" style="margin-top: 20px;">';
+            summaryHtml += '<a href="' + mealsdbImport.ajaxUrl + '?action=mealsdb_download_import_log&import_id=' +
+                           encodeURIComponent(importId) + '&nonce=' + encodeURIComponent(mealsdbImport.nonce) +
+                           '" class="button button-secondary" download>';
+            summaryHtml += '📄 Download Detailed Import Log';
+            summaryHtml += '</a>';
+            summaryHtml += '<p class="description">Download a detailed log file showing all processed rows and field mappings.</p>';
+            summaryHtml += '</div>';
+        }
+
         $('#mealsdb-results-summary').html(summaryHtml);
 
         // Show errors if any
