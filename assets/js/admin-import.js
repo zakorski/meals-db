@@ -217,13 +217,29 @@
                     updateProgress(100);
                     showResults(response.data);
                 } else {
+                    // Extract import_id from error response if available
+                    if (response.data && response.data.import_id) {
+                        importId = response.data.import_id;
+                    }
                     showError(response.data.message || 'Import failed.');
-                    resetToUpload();
+                    // Don't reset if we have an import_id - show results with error
+                    if (importId) {
+                        showResults({
+                            stats: { total: 0, success: 0, errors: 0, wp_users_created: 0, wp_users_existing: 0 },
+                            errors: [response.data.message || 'Import failed.'],
+                            dry_run: false
+                        });
+                    } else {
+                        resetToUpload();
+                    }
                 }
             },
             error: function() {
                 showError('An error occurred during import.');
-                resetToUpload();
+                // Keep import_id if it exists, otherwise reset
+                if (!importId) {
+                    resetToUpload();
+                }
             }
         });
     }
@@ -245,11 +261,17 @@
 
         const stats = data.stats;
         const isDryRun = data.dry_run;
+        const hasErrors = data.errors && data.errors.length > 0;
+        const allFailed = stats.total === 0 || (stats.success === 0 && stats.errors > 0);
 
         let summaryHtml = '<div class="mealsdb-results-stats">';
 
-        if (isDryRun) {
+        if (allFailed && hasErrors) {
+            summaryHtml += '<div class="notice notice-error inline"><p><strong>Import Failed</strong> - The import encountered a critical error.</p></div>';
+        } else if (isDryRun) {
             summaryHtml += '<div class="notice notice-info inline"><p><strong>Dry Run Complete</strong> - No changes were made to the database.</p></div>';
+        } else if (hasErrors && stats.success > 0) {
+            summaryHtml += '<div class="notice notice-warning inline"><p><strong>Import Completed with Errors</strong> - Some rows could not be imported.</p></div>';
         } else {
             summaryHtml += '<div class="notice notice-success inline"><p><strong>Import Complete!</strong></p></div>';
         }
@@ -288,7 +310,11 @@
                            '" class="button button-secondary" download>';
             summaryHtml += '📄 Download Detailed Import Log';
             summaryHtml += '</a>';
-            summaryHtml += '<p class="description">Download a detailed log file showing all processed rows and field mappings.</p>';
+            if (hasErrors) {
+                summaryHtml += '<p class="description">Download a detailed log file to troubleshoot import errors. Shows all processed rows, field mappings, and error details.</p>';
+            } else {
+                summaryHtml += '<p class="description">Download a detailed log file showing all processed rows and field mappings.</p>';
+            }
             summaryHtml += '</div>';
         }
 
