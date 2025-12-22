@@ -284,16 +284,20 @@ class MealsDB_Client_Importer {
         try {
             $rows = $this->read_csv($file_path);
         } catch (Exception $e) {
+            $this->write_log("✗ ERROR: " . $e->getMessage());
             return [
                 'success' => false,
                 'message' => sprintf(__('Error reading CSV: %s', 'meals-db'), $e->getMessage()),
+                'import_id' => $this->import_id,
             ];
         }
 
         if (empty($rows)) {
+            $this->write_log("✗ ERROR: CSV file is empty");
             return [
                 'success' => false,
                 'message' => __('CSV file is empty.', 'meals-db'),
+                'import_id' => $this->import_id,
             ];
         }
 

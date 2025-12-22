@@ -121,7 +121,12 @@ class MealsDB_Ajax_Import {
         $result = $importer->import_from_csv($file_path, $dry_run);
 
         if (!$result['success']) {
-            wp_send_json_error(['message' => $result['message']]);
+            // Include import_id in error response so user can still download the log
+            $error_data = ['message' => $result['message']];
+            if (isset($result['import_id'])) {
+                $error_data['import_id'] = $result['import_id'];
+            }
+            wp_send_json_error($error_data);
         }
 
         // Delete the uploaded file after import (unless it's a dry run)
