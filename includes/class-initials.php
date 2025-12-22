@@ -26,11 +26,11 @@ class MealsDB_Initials {
         'FAG',
         'GAY',
         'GOD',
-        'JES',
         'NIG',
         'WTF',
         'XXX',
         'KKK',
+        'FUK',
     ];
 
     /**
