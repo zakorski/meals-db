@@ -435,26 +435,44 @@ class MealsDB_Client_Importer {
             return; // Don't actually import in dry run mode
         }
 
-        // Create WordPress user
+        // Create WordPress user or link to existing one
         $this->write_log("Creating/checking WordPress user...", 1);
-        $wp_user_id = $this->create_wp_user($data);
-        if (!$wp_user_id) {
-            $this->write_log("✗ Failed to create WordPress user", 1);
-            throw new Exception(__('Failed to create WordPress user', 'meals-db'));
+        $wp_user_result = $this->create_wp_user($data);
+        if (!$wp_user_result || !isset($wp_user_result['user_id'])) {
+            $this->write_log("✗ Failed to create/link WordPress user", 1);
+            throw new Exception(__('Failed to create/link WordPress user', 'meals-db'));
         }
-        $this->write_log("✓ WordPress user ID: " . $wp_user_id, 2);
+
+        $wp_user_id = $wp_user_result['user_id'];
+        $wp_user_status = $wp_user_result['status'];
+
+        // Log the WordPress user status
+        if ($wp_user_status === 'existing') {
+            $this->write_log("✓ WordPress user exists - linked to existing user ID: " . $wp_user_id, 1);
+        } elseif ($wp_user_status === 'generated') {
+            $this->write_log("✓ Created new WordPress user ID: " . $wp_user_id . " with generated email", 1);
+        } else {
+            $this->write_log("✓ Created new WordPress user ID: " . $wp_user_id, 1);
+        }
 
         // Insert client record
         $this->write_log("Inserting client record into database...", 1);
         $client_id = $this->insert_client($data, $wp_user_id, $row_number);
         if (!$client_id) {
             $this->write_log("✗ Failed to insert client record", 1);
-            // Rollback: delete the WP user we just created
-            wp_delete_user($wp_user_id);
-            $this->write_log("Rolled back WordPress user creation", 2);
+
+            // Rollback: Only delete the WP user if we just created it (not if we linked to existing)
+            if ($wp_user_status !== 'existing') {
+                wp_delete_user($wp_user_id);
+                $this->write_log("Rolled back WordPress user creation (deleted user ID: " . $wp_user_id . ")", 2);
+            } else {
+                $this->write_log("WordPress user was existing - not deleting", 2);
+            }
+
             throw new Exception(__('Failed to insert client record', 'meals-db'));
         }
         $this->write_log("✓ Client record inserted with ID: " . $client_id, 2);
+        $this->write_log("✓ Meals DB client created for: " . $data['first_name'] . ' ' . $data['last_name'] . ' (' . $data['delivery_initials'] . ')', 1);
     }
 
     /**
@@ -726,52 +744,140 @@ class MealsDB_Client_Importer {
     }
 
     /**
-     * Create WordPress user
+     * Create WordPress user or link to existing one
+     *
+     * Implements shared WordPress account architecture:
+     * - Multiple Meals DB clients can share the same WordPress user
+     * - Checks for existing user by EMAIL first
+     * - Creates new user only if email doesn't exist
+     *
+     * @return array ['user_id' => int, 'status' => string]
+     *               status: 'created', 'existing', or 'generated'
      */
     private function create_wp_user($data) {
-        $username = $this->generate_username($data);
-        $email = !empty($data['client_email']) ? $data['client_email'] :
-                 $username . '@mealsandmore.local';
+        $has_email = !empty($data['client_email']) && is_email($data['client_email']);
+        $email = $has_email ? $data['client_email'] : null;
+        $wp_user_status = '';
 
-        // Check if user already exists
-        $existing_user = get_user_by('login', $username);
-        if ($existing_user) {
-            $this->stats['wp_users_existing']++;
-            return $existing_user->ID;
+        // For clients WITH valid email addresses
+        if ($has_email) {
+            $this->write_log("Client has email: " . $email, 2);
+
+            // Check if WordPress user already exists with this email
+            $existing_user = get_user_by('email', $email);
+
+            if ($existing_user) {
+                // Email exists - LINK to existing WordPress user
+                $this->write_log("✓ WordPress user exists - linking to existing user ID: " . $existing_user->ID, 2);
+                $this->stats['wp_users_existing']++;
+                return [
+                    'user_id' => $existing_user->ID,
+                    'status' => 'existing'
+                ];
+            } else {
+                // Email doesn't exist - CREATE new WordPress user with real email
+                $this->write_log("Creating new WordPress user with email: " . $email, 2);
+                $username = $this->generate_unique_username($data['first_name'], $data['last_name']);
+
+                $user_id = wp_create_user(
+                    $username,
+                    wp_generate_password(20, true, true),
+                    $email
+                );
+
+                if (is_wp_error($user_id)) {
+                    throw new Exception(sprintf(__('WP user creation failed: %s', 'meals-db'), $user_id->get_error_message()));
+                }
+
+                // Set role to customer
+                $user = new WP_User($user_id);
+                $user->set_role('customer');
+
+                // Update user meta
+                update_user_meta($user_id, 'first_name', $data['first_name']);
+                update_user_meta($user_id, 'last_name', $data['last_name']);
+
+                $this->write_log("✓ Created new WordPress user ID: " . $user_id . " (username: " . $username . ")", 2);
+                $this->stats['wp_users_created']++;
+
+                return [
+                    'user_id' => $user_id,
+                    'status' => 'created'
+                ];
+            }
+        } else {
+            // For clients WITHOUT email addresses
+            // Generate unique email using delivery initials
+            $delivery_initials = $data['delivery_initials'] ?? '';
+            if (empty($delivery_initials)) {
+                throw new Exception(__('Cannot create WordPress user: no email and no delivery initials', 'meals-db'));
+            }
+
+            $generated_email = strtolower($delivery_initials) . '@mealsdb.local';
+            $this->write_log("Client has no email - generating: " . $generated_email, 2);
+
+            $username = $this->generate_unique_username_from_initials($delivery_initials);
+
+            $user_id = wp_create_user(
+                $username,
+                wp_generate_password(20, true, true),
+                $generated_email
+            );
+
+            if (is_wp_error($user_id)) {
+                throw new Exception(sprintf(__('WP user creation failed: %s', 'meals-db'), $user_id->get_error_message()));
+            }
+
+            // Set role to customer
+            $user = new WP_User($user_id);
+            $user->set_role('customer');
+
+            // Update user meta
+            update_user_meta($user_id, 'first_name', $data['first_name']);
+            update_user_meta($user_id, 'last_name', $data['last_name']);
+
+            $this->write_log("✓ Created new WordPress user ID: " . $user_id . " with generated email (username: " . $username . ")", 2);
+            $this->stats['wp_users_created']++;
+
+            return [
+                'user_id' => $user_id,
+                'status' => 'generated'
+            ];
         }
-
-        // Create user
-        $user_id = wp_create_user(
-            $username,
-            wp_generate_password(20, true, true),
-            $email
-        );
-
-        if (is_wp_error($user_id)) {
-            throw new Exception(sprintf(__('WP user creation failed: %s', 'meals-db'), $user_id->get_error_message()));
-        }
-
-        // Set role to customer
-        $user = new WP_User($user_id);
-        $user->set_role('customer');
-
-        // Update user meta
-        update_user_meta($user_id, 'first_name', $data['first_name']);
-        update_user_meta($user_id, 'last_name', $data['last_name']);
-
-        $this->stats['wp_users_created']++;
-
-        return $user_id;
     }
 
     /**
-     * Generate WordPress username
+     * Generate unique WordPress username from first and last name
+     *
+     * @param string $first_name First name
+     * @param string $last_name Last name
+     * @return string Unique username
      */
-    private function generate_username($data) {
+    private function generate_unique_username($first_name, $last_name) {
         $base = strtolower(
-            sanitize_user($data['first_name']) . '.' .
-            sanitize_user($data['last_name'])
+            sanitize_user($first_name) . '.' .
+            sanitize_user($last_name)
         );
+
+        // If username exists, append number
+        $username = $base;
+        $counter = 1;
+        while (username_exists($username)) {
+            $username = $base . $counter;
+            $counter++;
+        }
+
+        return $username;
+    }
+
+    /**
+     * Generate unique WordPress username from delivery initials
+     *
+     * @param string $initials Delivery initials
+     * @return string Unique username
+     */
+    private function generate_unique_username_from_initials($initials) {
+        $base = strtolower(sanitize_user($initials));
 
         // If username exists, append number
         $username = $base;
