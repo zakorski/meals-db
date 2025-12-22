@@ -372,6 +372,7 @@ class MealsDB_Initials_Validator {
 					client_id as id,
 					first_name,
 					last_name,
+					delivery_initials,
 					delivery_street_number,
 					delivery_street_name,
 					delivery_apartment_number,
