@@ -95,8 +95,8 @@ class MealsDB_Import_Page {
                             <ul>
                                 <li><?php echo esc_html__('File must be in CSV format', 'meals-db'); ?></li>
                                 <li><?php echo esc_html__('Maximum file size: 5MB', 'meals-db'); ?></li>
-                                <li><?php echo esc_html__('First 10 rows should be headers/legend (will be skipped)', 'meals-db'); ?></li>
-                                <li><?php echo esc_html__('Data rows start from row 11', 'meals-db'); ?></li>
+                                <li><?php echo esc_html__('First row should be the header (will be skipped)', 'meals-db'); ?></li>
+                                <li><?php echo esc_html__('Data rows start from row 2', 'meals-db'); ?></li>
                             </ul>
                         </div>
 

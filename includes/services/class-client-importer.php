@@ -362,18 +362,10 @@ class MealsDB_Client_Importer {
             throw new Exception(__('Could not open CSV file.', 'meals-db'));
         }
 
-        // Skip first 8 rows (manual data)
-        for ($i = 0; $i < 8; $i++) {
-            fgetcsv($handle);
-        }
-
-        // Skip section header row (row 9)
+        // Skip header row (row 1)
         fgetcsv($handle);
 
-        // Skip column header row (row 10)
-        fgetcsv($handle);
-
-        // Read all data rows
+        // Read all data rows (starting from row 2)
         $rows = [];
         while (($row = fgetcsv($handle)) !== false) {
             // Skip empty rows
