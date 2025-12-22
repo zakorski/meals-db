@@ -747,7 +747,6 @@ class MealsDB_Client_Importer {
             'requisition_period' => 'requisition_period',
             'meal_type' => 'meal_type',
             'service_name_zone' => 'service_name_zone',
-            'service_name_course' => 'service_name_course',
             'service_commence_date' => 'service_commence_date',
             'expected_termination_date' => 'expected_termination_date',
             'initial_renewal_termination_date' => 'initial_renewal_termination_date',
