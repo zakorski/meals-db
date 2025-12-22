@@ -47,7 +47,6 @@ class MealsDB_Schema {
                     'requisition_period'           => 'VARCHAR(50) NULL',
                     'meal_type'                    => 'VARCHAR(50) NULL',
                     'service_name_zone'            => 'VARCHAR(10) NULL',
-                    'service_name_course'          => 'VARCHAR(10) NULL',
                     'service_commence_date'        => 'DATE NULL',
                     'expected_termination_date'    => 'DATE NULL',
                     'initial_renewal_termination_date' => 'DATE NULL',
