@@ -58,17 +58,47 @@ class MealsDB_Sync_Mutate {
 
     /**
      * Sync a single field from Meals DB to WooCommerce.
+     * Also updates the Meals DB client to ensure both storage locations are in sync.
      *
      * @return true|WP_Error
      */
     public function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
-        return $this->update_wp_user($woo_user_id, [
+        // First update the WordPress user
+        $wp_result = $this->update_wp_user($woo_user_id, [
             $field => $new_value,
         ]);
+
+        if (is_wp_error($wp_result)) {
+            return $wp_result;
+        }
+
+        // Now update the corresponding Meals DB client to keep both in sync
+        $client_id = $this->get_client_id_from_wp_user($woo_user_id);
+
+        if ($client_id > 0) {
+            $connection = $this->require_connection();
+
+            if (!is_wp_error($connection)) {
+                $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+                $available_columns = $this->get_table_columns($connection, $clients_table);
+                $column_map = $this->build_identity_column_map($available_columns);
+
+                // Only update if the field exists in the client table
+                if (isset($column_map[$field])) {
+                    $column = $column_map[$field];
+                    $this->update_meals_client($client_id, [
+                        $column => $new_value,
+                    ]);
+                }
+            }
+        }
+
+        return true;
     }
 
     /**
      * Sync a single field from WooCommerce to Meals DB.
+     * Also updates the WordPress user to ensure both storage locations are in sync.
      *
      * @return true|WP_Error
      */
@@ -194,6 +224,15 @@ class MealsDB_Sync_Mutate {
             $new_value,
             'woocommerce'
         );
+
+        // Now update the corresponding WordPress user to keep both in sync
+        $wp_user_id = $this->get_wp_user_id_from_client($client_id);
+
+        if ($wp_user_id > 0) {
+            $this->update_wp_user($wp_user_id, [
+                $field => $new_value,
+            ]);
+        }
 
         return true;
     }
@@ -445,6 +484,108 @@ class MealsDB_Sync_Mutate {
      */
     public function link_client_to_wordpress_user(int $client_id, int $wp_user_id) {
         return $this->link_meals_client_to_wc_user($client_id, $wp_user_id);
+    }
+
+    /**
+     * Get the Meals DB client ID associated with a WordPress user.
+     *
+     * @param int $wp_user_id WordPress user ID
+     * @return int Client ID, or 0 if not found
+     */
+    private function get_client_id_from_wp_user(int $wp_user_id): int {
+        $connection = $this->require_connection();
+
+        if (is_wp_error($connection)) {
+            return 0;
+        }
+
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $available_columns = $this->get_table_columns($connection, $clients_table);
+        $primary_key = $this->resolve_primary_key_column($available_columns);
+        $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
+
+        if ($primary_key === null || $wp_column === null) {
+            return 0;
+        }
+
+        $escaped_table = str_replace('`', '``', $clients_table);
+        $escaped_pk = str_replace('`', '``', $primary_key);
+        $escaped_wp_col = str_replace('`', '``', $wp_column);
+        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = ? LIMIT 1', $escaped_pk, $escaped_table, $escaped_wp_col);
+        $stmt = $connection->prepare($sql);
+
+        if (!$stmt) {
+            return 0;
+        }
+
+        if (!$stmt->bind_param('i', $wp_user_id)) {
+            $stmt->close();
+            return 0;
+        }
+
+        $client_id = 0;
+
+        if ($stmt->execute()) {
+            $stmt->bind_result($client_id);
+            if (!$stmt->fetch()) {
+                $client_id = 0;
+            }
+        }
+
+        $stmt->close();
+
+        return (int) $client_id;
+    }
+
+    /**
+     * Get the WordPress user ID associated with a Meals DB client.
+     *
+     * @param int $client_id Meals DB client ID
+     * @return int WordPress user ID, or 0 if not found
+     */
+    private function get_wp_user_id_from_client(int $client_id): int {
+        $connection = $this->require_connection();
+
+        if (is_wp_error($connection)) {
+            return 0;
+        }
+
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $available_columns = $this->get_table_columns($connection, $clients_table);
+        $primary_key = $this->resolve_primary_key_column($available_columns);
+        $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
+
+        if ($primary_key === null || $wp_column === null) {
+            return 0;
+        }
+
+        $escaped_table = str_replace('`', '``', $clients_table);
+        $escaped_pk = str_replace('`', '``', $primary_key);
+        $escaped_wp_col = str_replace('`', '``', $wp_column);
+        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = ? LIMIT 1', $escaped_wp_col, $escaped_table, $escaped_pk);
+        $stmt = $connection->prepare($sql);
+
+        if (!$stmt) {
+            return 0;
+        }
+
+        if (!$stmt->bind_param('i', $client_id)) {
+            $stmt->close();
+            return 0;
+        }
+
+        $wp_user_id = 0;
+
+        if ($stmt->execute()) {
+            $stmt->bind_result($wp_user_id);
+            if (!$stmt->fetch()) {
+                $wp_user_id = 0;
+            }
+        }
+
+        $stmt->close();
+
+        return (int) $wp_user_id;
     }
 
     /**
