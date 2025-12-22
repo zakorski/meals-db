@@ -23,6 +23,8 @@ class MealsDB_Client_Importer {
     ];
     private $errors = [];
     private $used_initials = [];
+    private $log_file = null;
+    private $log_enabled = true;
 
     /**
      * Column mapping from CSV to database
@@ -129,6 +131,61 @@ class MealsDB_Client_Importer {
     public function __construct($dry_run = false) {
         $this->dry_run = $dry_run;
         $this->import_id = uniqid('import_');
+        $this->init_log_file();
+    }
+
+    /**
+     * Initialize log file for detailed import logging
+     */
+    private function init_log_file() {
+        if (!$this->log_enabled) {
+            return;
+        }
+
+        $upload_dir = wp_upload_dir();
+        $log_dir = $upload_dir['basedir'] . '/mealsdb-import-logs/';
+
+        if (!file_exists($log_dir)) {
+            wp_mkdir_p($log_dir);
+            // Add .htaccess to protect log files
+            file_put_contents($log_dir . '.htaccess', "deny from all\n");
+        }
+
+        $log_filename = $this->import_id . '_' . date('Y-m-d_H-i-s') . '.log';
+        $this->log_file = $log_dir . $log_filename;
+
+        // Store log file path in transient
+        set_transient('mealsdb_import_log_' . $this->import_id, $this->log_file, DAY_IN_SECONDS);
+
+        // Write log header
+        $this->write_log("=================================================================");
+        $this->write_log("MEALS DB CLIENT IMPORT LOG");
+        $this->write_log("Import ID: " . $this->import_id);
+        $this->write_log("Started: " . date('Y-m-d H:i:s'));
+        $this->write_log("Dry Run: " . ($this->dry_run ? 'YES' : 'NO'));
+        $this->write_log("=================================================================\n");
+    }
+
+    /**
+     * Write message to log file
+     */
+    private function write_log($message, $indent = 0) {
+        if (!$this->log_enabled || !$this->log_file) {
+            return;
+        }
+
+        $prefix = str_repeat('  ', $indent);
+        $timestamp = date('[Y-m-d H:i:s]');
+        $log_line = $timestamp . ' ' . $prefix . $message . "\n";
+
+        file_put_contents($this->log_file, $log_line, FILE_APPEND);
+    }
+
+    /**
+     * Get log file path for an import
+     */
+    public static function get_log_file($import_id) {
+        return get_transient('mealsdb_import_log_' . $import_id);
     }
 
     /**
@@ -254,14 +311,33 @@ class MealsDB_Client_Importer {
             // Update progress
             $this->update_progress($row_number, count($rows));
 
+            $this->write_log("\n" . str_repeat('-', 60));
+            $this->write_log("PROCESSING ROW #" . $row_number);
+            $this->write_log(str_repeat('-', 60));
+
             try {
                 $this->import_client($row, $row_number);
                 $this->stats['success']++;
+                $this->write_log("✓ ROW #" . $row_number . " IMPORTED SUCCESSFULLY");
             } catch (Exception $e) {
                 $this->stats['errors']++;
-                $this->errors[] = sprintf(__('Row %d: %s', 'meals-db'), $row_number, $e->getMessage());
+                $error_msg = sprintf(__('Row %d: %s', 'meals-db'), $row_number, $e->getMessage());
+                $this->errors[] = $error_msg;
+                $this->write_log("✗ ROW #" . $row_number . " FAILED: " . $e->getMessage());
             }
         }
+
+        // Write final summary to log
+        $this->write_log("\n" . str_repeat('=', 60));
+        $this->write_log("IMPORT SUMMARY");
+        $this->write_log(str_repeat('=', 60));
+        $this->write_log("Total Rows: " . $this->stats['total']);
+        $this->write_log("Successful: " . $this->stats['success']);
+        $this->write_log("Errors: " . $this->stats['errors']);
+        $this->write_log("WP Users Created: " . $this->stats['wp_users_created']);
+        $this->write_log("WP Users Existing: " . $this->stats['wp_users_existing']);
+        $this->write_log("Completed: " . date('Y-m-d H:i:s'));
+        $this->write_log(str_repeat('=', 60));
 
         // Store errors in transient
         if (!empty($this->errors)) {
@@ -316,27 +392,41 @@ class MealsDB_Client_Importer {
      */
     private function import_client($csv_row, $row_number) {
         // Extract data
-        $data = $this->map_csv_to_data($csv_row);
+        $this->write_log("Mapping CSV columns to database fields...", 1);
+        $data = $this->map_csv_to_data($csv_row, $row_number);
+
+        // Log client identification
+        $client_name = trim(($data['first_name'] ?? '') . ' ' . ($data['last_name'] ?? ''));
+        $this->write_log("Client: " . ($client_name ?: '[NO NAME]'), 1);
+        $this->write_log("Client Type: " . ($data['client_type'] ?? '[MISSING]'), 1);
 
         // Validate required fields
         if (empty($data['first_name']) || empty($data['last_name'])) {
+            $this->write_log("✗ VALIDATION FAILED: Missing first or last name", 1);
             throw new Exception(__('Missing first or last name', 'meals-db'));
         }
 
         if (empty($data['client_type'])) {
+            $this->write_log("✗ VALIDATION FAILED: Missing client type", 1);
             throw new Exception(__('Missing client type', 'meals-db'));
         }
 
+        $this->write_log("✓ Required fields validated", 1);
+
         // Generate initials if needed
         if (empty($data['delivery_initials'])) {
+            $this->write_log("Generating delivery initials...", 1);
             $data['delivery_initials'] = $this->generate_initials(
                 $data['first_name'],
                 $data['last_name'],
                 $this->used_initials
             );
+            $this->write_log("Generated initials: " . $data['delivery_initials'], 2);
         } else {
+            $this->write_log("Using existing initials: " . $data['delivery_initials'], 1);
             // Validate existing initials
             if (in_array($data['delivery_initials'], $this->used_initials)) {
+                $this->write_log("✗ VALIDATION FAILED: Duplicate delivery initials: " . $data['delivery_initials'], 1);
                 throw new Exception(sprintf(
                     __('Duplicate delivery initials: %s', 'meals-db'),
                     $data['delivery_initials']
@@ -346,69 +436,43 @@ class MealsDB_Client_Importer {
 
         // Add to used initials
         $this->used_initials[] = $data['delivery_initials'];
+        $this->write_log("✓ Delivery initials validated and reserved", 1);
 
         if ($this->dry_run) {
+            $this->write_log("DRY RUN MODE: Skipping actual database operations", 1);
             return; // Don't actually import in dry run mode
         }
 
         // Create WordPress user
+        $this->write_log("Creating/checking WordPress user...", 1);
         $wp_user_id = $this->create_wp_user($data);
         if (!$wp_user_id) {
+            $this->write_log("✗ Failed to create WordPress user", 1);
             throw new Exception(__('Failed to create WordPress user', 'meals-db'));
         }
-
-        // Debug: Log the do_not_call_client_phone value before insert
-        if (isset($data['do_not_call_client_phone'])) {
-            error_log(sprintf(
-                'Row %d: do_not_call_client_phone value = "%s" (type: %s)',
-                $row_number,
-                $data['do_not_call_client_phone'],
-                gettype($data['do_not_call_client_phone'])
-            ));
-        } else {
-            error_log(sprintf('Row %d: do_not_call_client_phone is NOT SET in $data array', $row_number));
-        }
-
-        // Debug: Log social worker fields
-        error_log(sprintf('Row %d: assigned_worker_name = "%s" (isset: %s)',
-            $row_number,
-            $data['assigned_worker_name'] ?? 'NOT SET',
-            isset($data['assigned_worker_name']) ? 'yes' : 'no'
-        ));
-        error_log(sprintf('Row %d: assigned_worker_email = "%s" (isset: %s)',
-            $row_number,
-            $data['assigned_worker_email'] ?? 'NOT SET',
-            isset($data['assigned_worker_email']) ? 'yes' : 'no'
-        ));
-
-        // Debug: Log the raw CSV value at column 18
-        if (isset($csv_row[18])) {
-            error_log(sprintf('Row %d: CSV column 18 raw value = "%s"', $row_number, $csv_row[18]));
-        } else {
-            error_log(sprintf('Row %d: CSV column 18 does NOT exist', $row_number));
-        }
-
-        // Debug: Log CSV columns 4 and 5 (social worker fields)
-        error_log(sprintf('Row %d: CSV column 4 (assigned_worker_name) = "%s"',
-            $row_number, $csv_row[4] ?? 'NOT SET'));
-        error_log(sprintf('Row %d: CSV column 5 (assigned_worker_email) = "%s"',
-            $row_number, $csv_row[5] ?? 'NOT SET'));
-
+        $this->write_log("✓ WordPress user ID: " . $wp_user_id, 2);
 
         // Insert client record
-        $client_id = $this->insert_client($data, $wp_user_id);
+        $this->write_log("Inserting client record into database...", 1);
+        $client_id = $this->insert_client($data, $wp_user_id, $row_number);
         if (!$client_id) {
+            $this->write_log("✗ Failed to insert client record", 1);
             // Rollback: delete the WP user we just created
             wp_delete_user($wp_user_id);
+            $this->write_log("Rolled back WordPress user creation", 2);
             throw new Exception(__('Failed to insert client record', 'meals-db'));
         }
+        $this->write_log("✓ Client record inserted with ID: " . $client_id, 2);
     }
 
     /**
      * Map CSV row to data array
      */
-    private function map_csv_to_data($row) {
+    private function map_csv_to_data($row, $row_number = null) {
         $data = [];
+        $mapped_count = 0;
+        $empty_count = 0;
+        $transformed_count = 0;
 
         foreach ($this->column_mapping as $csv_index => $db_field) {
             // Skip null field mappings (removed columns)
@@ -418,29 +482,22 @@ class MealsDB_Client_Importer {
 
             $value = isset($row[$csv_index]) ? trim($row[$csv_index]) : '';
 
-            // Debug: Log column 18 specifically
-            if ($csv_index === 18) {
-                error_log(sprintf('map_csv_to_data: column 18 -> field "%s", value="%s", isset=%s',
-                    $db_field, $value, isset($row[$csv_index]) ? 'yes' : 'no'));
-            }
-
             // Skip empty values
             if ($value === '') {
-                if ($csv_index === 18) {
-                    error_log('map_csv_to_data: column 18 is empty, skipping transformation');
-                }
+                $empty_count++;
                 continue;
             }
 
             // Transform data
+            $original_value = $value;
             $value = $this->transform_value($db_field, $value);
 
-            if ($csv_index === 18) {
-                error_log(sprintf('map_csv_to_data: column 18 after transform = "%s" (type: %s)',
-                    $value, gettype($value)));
+            if ($original_value !== $value) {
+                $transformed_count++;
             }
 
             $data[$db_field] = $value;
+            $mapped_count++;
         }
 
         // Concatenate street type with street name
@@ -454,6 +511,26 @@ class MealsDB_Client_Importer {
             $data['delivery_address_street_name'] = trim($data['delivery_address_street_name'] . ' ' . $data['delivery_address_street_type']);
         }
         unset($data['delivery_address_street_type']);
+
+        // Log mapping summary
+        if ($row_number !== null) {
+            $this->write_log("Field mapping summary:", 2);
+            $this->write_log("- Mapped fields: " . $mapped_count, 3);
+            $this->write_log("- Empty fields: " . $empty_count, 3);
+            $this->write_log("- Transformed fields: " . $transformed_count, 3);
+
+            // Log all mapped fields with their values
+            $this->write_log("Mapped field details:", 2);
+            foreach ($data as $field => $value) {
+                // Truncate long values for readability
+                $display_value = strlen($value) > 50 ? substr($value, 0, 50) . '...' : $value;
+                // Mask encrypted fields
+                if (in_array($field, $this->encrypted_fields)) {
+                    $display_value = '[ENCRYPTED - ' . strlen($value) . ' chars]';
+                }
+                $this->write_log(sprintf("%-30s = %s", $field, $display_value), 3);
+            }
+        }
 
         return $data;
     }
@@ -707,7 +784,7 @@ class MealsDB_Client_Importer {
     /**
      * Insert client into meals_clients table
      */
-    private function insert_client($data, $wp_user_id) {
+    private function insert_client($data, $wp_user_id, $row_number = null) {
         $conn = MealsDB_DB::get_connection();
         if (!MealsDB_DB::is_mysqli($conn)) {
             throw new Exception(__('Database connection failed', 'meals-db'));
@@ -780,22 +857,18 @@ class MealsDB_Client_Importer {
             'delivery_address_postal' => 'delivery_postal_code',
         ];
 
+        $fields_added = 0;
         foreach ($field_map as $source => $target) {
             if (isset($data[$source]) && $data[$source] !== '') {
                 $insert_data[$target] = $data[$source];
+                $fields_added++;
             }
         }
 
-        // Debug: Log what's in insert_data for social worker fields
-        error_log(sprintf('insert_data[assigned_worker_name] = "%s" (isset: %s)',
-            $insert_data['assigned_worker_name'] ?? 'NOT SET',
-            isset($insert_data['assigned_worker_name']) ? 'yes' : 'no'
-        ));
-        error_log(sprintf('insert_data[assigned_worker_email] = "%s" (isset: %s)',
-            $insert_data['assigned_worker_email'] ?? 'NOT SET',
-            isset($insert_data['assigned_worker_email']) ? 'yes' : 'no'
-        ));
-
+        if ($row_number !== null) {
+            $this->write_log("Database field mapping:", 2);
+            $this->write_log("- Fields prepared for insert: " . $fields_added, 3);
+        }
 
         // Handle encrypted fields
         if (isset($data['individual_id']) && $data['individual_id'] !== '') {
@@ -825,12 +898,10 @@ class MealsDB_Client_Importer {
         $columns = array_keys($insert_data);
         $placeholders = array_fill(0, count($columns), '?');
 
-        // Debug: Log the columns being inserted
-        error_log('INSERT columns: ' . implode(', ', $columns));
-        if (in_array('assigned_worker_name', $columns)) {
-            error_log('✓ assigned_worker_name column is in INSERT');
-        } else {
-            error_log('✗ assigned_worker_name column is MISSING from INSERT');
+        if ($row_number !== null) {
+            $this->write_log("Preparing database INSERT:", 2);
+            $this->write_log("- Total columns to insert: " . count($columns), 3);
+            $this->write_log("- Column list: " . implode(', ', $columns), 3);
         }
 
         $sql = sprintf(
