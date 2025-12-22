@@ -146,6 +146,41 @@
             return parsed;
         };
 
+        const getAddressData = () => {
+            const addressFields = [
+                'address_street_number',
+                'address_street_name',
+                'address_unit',
+                'address_city',
+                'address_postal_code',
+                'delivery_address_street_number',
+                'delivery_address_street_name',
+                'delivery_address_unit',
+                'delivery_address_city',
+                'delivery_address_postal_code'
+            ];
+
+            const data = {};
+            addressFields.forEach(field => {
+                const $field = $form.find(`[name="${field}"]`);
+                if ($field.length > 0) {
+                    const value = $field.val();
+                    if (value) {
+                        data[field] = value;
+                    }
+                }
+            });
+
+            return data;
+        };
+
+        const getClientNames = () => {
+            return {
+                first_name: $form.find('[name="first_name"]').val() || '',
+                last_name: $form.find('[name="last_name"]').val() || ''
+            };
+        };
+
         const isFieldActive = () => $initialsInput.closest('tr').is(':visible') && !$initialsInput.prop('disabled');
 
         const isValidationRequired = () => {
@@ -200,16 +235,20 @@
                 setMessage(null, '');
             }
 
+            // Collect address data for address-based validation
+            const requestData = {
+                action: 'mealsdb_validate_initials',
+                nonce: nonces.validate,
+                code: value,
+                client_id: getClientId(),
+                ...getAddressData()
+            };
+
             validationRequest = $.ajax({
                 url: ajaxUrl,
                 method: 'POST',
                 dataType: 'json',
-                data: {
-                    action: 'mealsdb_validate_initials',
-                    nonce: nonces.validate,
-                    code: value,
-                    client_id: getClientId(),
-                },
+                data: requestData,
             });
 
             validationRequest.done((response) => {
@@ -218,7 +257,12 @@
                     if (suppressMessages) {
                         setMessage(null, '');
                     } else {
-                        setMessage('success', messages.success || 'Initials are valid.');
+                        // Show special message if initials are shared at same address
+                        if (response.shared && response.message) {
+                            setMessage('success', response.message);
+                        } else {
+                            setMessage('success', messages.success || 'Initials are valid.');
+                        }
                     }
                 } else {
                     const fallbackMessage = messages.invalid || 'These initials are invalid or already in use.';
@@ -259,14 +303,21 @@
             toggleButtons(true);
             setMessage(null, '');
 
+            // Collect client data for better generation
+            const names = getClientNames();
+            const requestData = {
+                action: 'mealsdb_generate_initials',
+                nonce: nonces.generate,
+                first_name: names.first_name,
+                last_name: names.last_name,
+                ...getAddressData()
+            };
+
             $.ajax({
                 url: ajaxUrl,
                 method: 'POST',
                 dataType: 'json',
-                data: {
-                    action: 'mealsdb_generate_initials',
-                    nonce: nonces.generate,
-                },
+                data: requestData,
             }).done((response) => {
                 if (response && response.success && response.code) {
                     $initialsInput.val(response.code);

@@ -411,22 +411,32 @@ class MealsDB_Client_Importer {
             $data['delivery_initials'] = $this->generate_initials(
                 $data['first_name'],
                 $data['last_name'],
-                $this->used_initials
+                $data
             );
             $this->write_log("Generated initials: " . $data['delivery_initials'], 2);
         } else {
             $this->write_log("Using existing initials: " . $data['delivery_initials'], 1);
-            // Validate existing initials
-            if (in_array($data['delivery_initials'], $this->used_initials)) {
-                $this->write_log("✗ VALIDATION FAILED: Duplicate delivery initials: " . $data['delivery_initials'], 1);
-                throw new Exception(sprintf(
-                    __('Duplicate delivery initials: %s', 'meals-db'),
-                    $data['delivery_initials']
-                ));
+            // Validate existing initials using new address-based validator
+            $validation = MealsDB_Initials_Validator::validate(
+                $data['delivery_initials'],
+                $data,
+                null
+            );
+
+            if (!$validation['valid']) {
+                $this->write_log("✗ VALIDATION FAILED: " . $validation['error'], 1);
+                throw new Exception($validation['error']);
+            }
+
+            if (!empty($validation['shared'])) {
+                $sharing_names = array_map(function($client) {
+                    return trim($client['first_name'] . ' ' . $client['last_name']);
+                }, $validation['sharing_with']);
+                $this->write_log("✓ Initials shared with " . implode(', ', $sharing_names) . " at same address", 2);
             }
         }
 
-        // Add to used initials
+        // Track used initials for current import batch
         $this->used_initials[] = $data['delivery_initials'];
         $this->write_log("✓ Delivery initials validated and reserved", 1);
 
@@ -691,35 +701,23 @@ class MealsDB_Client_Importer {
 
     /**
      * Generate initials from first and last name
+     *
+     * @param string $first_name Client's first name.
+     * @param string $last_name Client's last name.
+     * @param array $client_data Client data including address fields (new parameter for address-based validation).
+     * @return string Generated 3-letter initials.
      */
-    public function generate_initials($first_name, $last_name, $used_initials = []) {
-        $first = strtoupper(substr($first_name, 0, 1));
-        $last = strtoupper($last_name);
+    public function generate_initials($first_name, $last_name, $client_data = []) {
+        // Use the new centralized validator which handles address-based duplicate checking
+        $generated = MealsDB_Initials_Validator::generate($first_name, $last_name, $client_data);
 
-        $banned_words = [
-            'ASS', 'SEX', 'TIT', 'CUM', 'FAG', 'GAY', 'GOD', 'JES', 'NIG', 'WTF', 'XXX', 'KKK'
-        ];
-
-        // Strategy 1: First initial + first 2 of last name
-        $initials = $first . substr($last, 0, 2);
-        if (!in_array($initials, $banned_words) && !in_array($initials, $used_initials) && !MealsDB_Initials::exists_in_db($initials)) {
-            return $initials;
+        if ($generated === false) {
+            // Fallback if generation fails
+            error_log('[MealsDB] Failed to generate initials for ' . $first_name . ' ' . $last_name);
+            return 'XXX'; // Return a placeholder that will fail validation
         }
 
-        // Strategy 2: First initial + last 2 of last name
-        $initials = $first . substr($last, -2);
-        if (!in_array($initials, $banned_words) && !in_array($initials, $used_initials) && !MealsDB_Initials::exists_in_db($initials)) {
-            return $initials;
-        }
-
-        // Strategy 3: First 2 of first + first of last
-        $initials = substr(strtoupper($first_name), 0, 2) . substr($last, 0, 1);
-        if (!in_array($initials, $banned_words) && !in_array($initials, $used_initials) && !MealsDB_Initials::exists_in_db($initials)) {
-            return $initials;
-        }
-
-        // Fallback: Use random generation
-        return MealsDB_Initials::generate();
+        return $generated;
     }
 
     /**

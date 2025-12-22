@@ -92,8 +92,8 @@ class MealsDB_Schema {
                         'columns' => ['client_type'],
                     ],
                     [
-                        'name'    => 'delivery_initials_unique',
-                        'type'    => 'UNIQUE',
+                        'name'    => 'delivery_initials_index',
+                        'type'    => 'INDEX',
                         'columns' => ['delivery_initials'],
                     ],
                     [

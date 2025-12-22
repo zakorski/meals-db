@@ -1,0 +1,404 @@
+<?php
+/**
+ * Meals DB Delivery Initials Validator
+ *
+ * Centralized validation for delivery initials across:
+ * - Add new client form
+ * - Edit client form
+ * - CSV import process
+ *
+ * Implements address-based duplicate checking - allows multiple clients
+ * to share the same delivery initials IF they are being delivered to
+ * the same physical address.
+ *
+ * @package MealsDB
+ * @since 1.0.223
+ */
+
+if (!defined('ABSPATH')) {
+	exit;
+}
+
+/**
+ * Class MealsDB_Initials_Validator
+ */
+class MealsDB_Initials_Validator {
+
+	/**
+	 * Profane/inappropriate initials to block
+	 *
+	 * @var array
+	 */
+	private static $blocked_initials = array(
+		'ASS', 'SEX', 'TIT', 'CUM', 'FAG', 'GAY', 'GOD', 'JES', 'NIG',
+		'WTF', 'XXX', 'KKK', 'FUK', 'FCK', 'DIK', 'COK', 'CNT', 'DMN',
+	);
+
+	/**
+	 * Validate delivery initials
+	 *
+	 * @param string          $initials The initials to validate.
+	 * @param array|object    $client_data Client data including address fields.
+	 * @param int|null        $current_client_id Client ID when editing (exclude from duplicate check).
+	 * @return array ['valid' => bool, 'error' => string, 'shared' => bool, 'sharing_with' => array]
+	 */
+	public static function validate($initials, $client_data, $current_client_id = null) {
+		// Convert to array if object
+		if (is_object($client_data)) {
+			$client_data = (array) $client_data;
+		}
+
+		// Step 1: Format validation - must be exactly 3 letters
+		$initials_upper = strtoupper(trim($initials));
+		if (!preg_match('/^[A-Z]{3}$/', $initials_upper)) {
+			return array(
+				'valid'   => false,
+				'error'   => __('Initials must be exactly 3 letters (no numbers or symbols)', 'meals-db'),
+				'shared'  => false,
+			);
+		}
+
+		// Step 2: Profanity check
+		if (self::is_profane($initials_upper)) {
+			return array(
+				'valid'   => false,
+				'error'   => __('These initials are not allowed', 'meals-db'),
+				'shared'  => false,
+			);
+		}
+
+		// Step 3: Check if initials are already in use
+		$existing_clients = self::get_clients_with_initials($initials_upper);
+
+		// Remove current client from check (when editing)
+		if ($current_client_id) {
+			$existing_clients = array_filter($existing_clients, function($client) use ($current_client_id) {
+				return (int) $client['id'] !== (int) $current_client_id;
+			});
+		}
+
+		// If no other clients use these initials, we're good
+		if (empty($existing_clients)) {
+			return array(
+				'valid'   => true,
+				'shared'  => false,
+			);
+		}
+
+		// Step 4: If initials ARE in use, check if delivery addresses match
+		$new_address = self::normalize_delivery_address($client_data);
+
+		// Check if we have a valid address to compare
+		if (self::is_address_empty($new_address)) {
+			// No valid address provided - cannot validate address-based sharing
+			$names = array_map(function($c) {
+				return trim($c['first_name'] . ' ' . $c['last_name']);
+			}, $existing_clients);
+
+			return array(
+				'valid'   => false,
+				'error'   => sprintf(
+					__('Initials already in use by: %s. Please provide a delivery address to verify if sharing is allowed.', 'meals-db'),
+					implode(', ', $names)
+				),
+				'shared'  => false,
+			);
+		}
+
+		// Compare addresses with existing clients
+		$sharing_with = array();
+		$different_addresses = array();
+
+		foreach ($existing_clients as $existing_client) {
+			$existing_address = self::normalize_delivery_address($existing_client);
+
+			if (self::addresses_match($new_address, $existing_address)) {
+				// Same address - initials can be shared
+				$sharing_with[] = $existing_client;
+			} else {
+				// Different address - conflict
+				$different_addresses[] = $existing_client;
+			}
+		}
+
+		// If ALL existing clients with these initials are at the same address, allow sharing
+		if (empty($different_addresses)) {
+			return array(
+				'valid'       => true,
+				'shared'      => true,
+				'sharing_with' => $sharing_with,
+			);
+		}
+
+		// Different addresses - initials must be unique
+		$names = array_map(function($c) {
+			return trim($c['first_name'] . ' ' . $c['last_name']);
+		}, $different_addresses);
+
+		return array(
+			'valid'   => false,
+			'error'   => sprintf(
+				__('Initials already in use by: %s at different address(es)', 'meals-db'),
+				implode(', ', $names)
+			),
+			'shared'  => false,
+		);
+	}
+
+	/**
+	 * Generate unique initials for a client
+	 *
+	 * Attempts to create initials based on name, checking against:
+	 * - Profanity list
+	 * - Existing clients (allows if same address)
+	 *
+	 * @param string       $first_name Client's first name.
+	 * @param string       $last_name Client's last name.
+	 * @param array|object $client_data Client address data.
+	 * @return string|false 3-letter initials or false if unable to generate.
+	 */
+	public static function generate($first_name, $last_name, $client_data = array()) {
+		// Convert to array if object
+		if (is_object($client_data)) {
+			$client_data = (array) $client_data;
+		}
+
+		$first = strtoupper(substr(trim($first_name), 0, 1));
+		$last = strtoupper(substr(trim($last_name), 0, 3));
+
+		// Try various patterns based on name
+		$patterns = array();
+
+		// Pattern 1: First + First 2 of Last (e.g., "John Smith" -> "JSM")
+		if (strlen($last) >= 2) {
+			$patterns[] = $first . substr($last, 0, 2);
+		}
+
+		// Pattern 2: First + Last 2 of Last (e.g., "John Smith" -> "JTH")
+		if (strlen($last) >= 2) {
+			$patterns[] = $first . substr($last, -2);
+		}
+
+		// Pattern 3: First 2 of First + First of Last (e.g., "John Smith" -> "JOS")
+		$first_name_upper = strtoupper(trim($first_name));
+		if (strlen($first_name_upper) >= 2) {
+			$patterns[] = substr($first_name_upper, 0, 2) . substr($last, 0, 1);
+		}
+
+		// Pattern 4: First + Middle of Last (if long enough)
+		if (strlen($last) >= 3) {
+			$patterns[] = $first . $last[1] . $last[2];
+		}
+
+		// Try each pattern
+		foreach ($patterns as $pattern) {
+			if (strlen($pattern) === 3) {
+				$validation = self::validate($pattern, $client_data, null);
+				if ($validation['valid']) {
+					return $pattern;
+				}
+			}
+		}
+
+		// If all patterns failed, generate random initials
+		$max_attempts = 100;
+		for ($i = 0; $i < $max_attempts; $i++) {
+			$random = chr(rand(65, 90)) . chr(rand(65, 90)) . chr(rand(65, 90));
+
+			$validation = self::validate($random, $client_data, null);
+			if ($validation['valid']) {
+				return $random;
+			}
+		}
+
+		// Unable to generate
+		return false;
+	}
+
+	/**
+	 * Normalize delivery address for comparison
+	 *
+	 * Uses delivery address fields if present, otherwise falls back to primary address.
+	 * Handles both form field names and database column names.
+	 *
+	 * @param array $client_data Client data with address fields.
+	 * @return array Normalized address array.
+	 */
+	private static function normalize_delivery_address($client_data) {
+		// Use delivery address if present, otherwise use primary address
+		// Handle both form field names (address_street_number) and DB column names (street_number)
+
+		// Street number
+		$street_number = !empty($client_data['delivery_address_street_number'])
+			? $client_data['delivery_address_street_number']
+			: (!empty($client_data['delivery_street_number'])
+				? $client_data['delivery_street_number']
+				: (!empty($client_data['address_street_number'])
+					? $client_data['address_street_number']
+					: ($client_data['street_number'] ?? '')));
+
+		// Street name
+		$street_name = !empty($client_data['delivery_address_street_name'])
+			? $client_data['delivery_address_street_name']
+			: (!empty($client_data['delivery_street_name'])
+				? $client_data['delivery_street_name']
+				: (!empty($client_data['address_street_name'])
+					? $client_data['address_street_name']
+					: ($client_data['street_name'] ?? '')));
+
+		// Unit/Apartment
+		$unit = !empty($client_data['delivery_address_unit'])
+			? $client_data['delivery_address_unit']
+			: (!empty($client_data['delivery_apartment_number'])
+				? $client_data['delivery_apartment_number']
+				: (!empty($client_data['address_unit'])
+					? $client_data['address_unit']
+					: ($client_data['apartment_number'] ?? '')));
+
+		// City
+		$city = !empty($client_data['delivery_address_city'])
+			? $client_data['delivery_address_city']
+			: (!empty($client_data['delivery_city'])
+				? $client_data['delivery_city']
+				: (!empty($client_data['address_city'])
+					? $client_data['address_city']
+					: ($client_data['city'] ?? '')));
+
+		// Postal code
+		$postal = !empty($client_data['delivery_address_postal_code'])
+			? $client_data['delivery_address_postal_code']
+			: (!empty($client_data['delivery_postal_code'])
+				? $client_data['delivery_postal_code']
+				: (!empty($client_data['address_postal_code'])
+					? $client_data['address_postal_code']
+					: ($client_data['postal_code'] ?? '')));
+
+		return array(
+			'street_number' => trim(strtolower((string) $street_number)),
+			'street_name'   => trim(strtolower((string) $street_name)),
+			'unit'          => self::normalize_unit($unit),
+			'city'          => trim(strtolower((string) $city)),
+			'postal'        => self::normalize_postal($postal),
+		);
+	}
+
+	/**
+	 * Normalize unit/apartment number
+	 *
+	 * Treats empty, null, and "0" as equivalent.
+	 *
+	 * @param mixed $unit Unit/apartment number.
+	 * @return string Normalized unit.
+	 */
+	private static function normalize_unit($unit) {
+		$unit = trim(strtolower((string) $unit));
+
+		// Treat empty, null, and "0" as equivalent
+		if ($unit === '' || $unit === '0' || is_null($unit)) {
+			return '';
+		}
+
+		return $unit;
+	}
+
+	/**
+	 * Normalize postal code
+	 *
+	 * Removes spaces, dashes, and converts to lowercase.
+	 *
+	 * @param string $postal Postal code.
+	 * @return string Normalized postal code.
+	 */
+	private static function normalize_postal($postal) {
+		// Remove spaces, dashes, convert to lowercase
+		return strtolower(preg_replace('/[\s\-]/', '', (string) $postal));
+	}
+
+	/**
+	 * Check if two addresses match
+	 *
+	 * All fields must match for addresses to be considered the same.
+	 *
+	 * @param array $addr1 First normalized address.
+	 * @param array $addr2 Second normalized address.
+	 * @return bool True if addresses match.
+	 */
+	private static function addresses_match($addr1, $addr2) {
+		return $addr1['street_number'] === $addr2['street_number']
+			&& $addr1['street_name'] === $addr2['street_name']
+			&& $addr1['unit'] === $addr2['unit']
+			&& $addr1['city'] === $addr2['city']
+			&& $addr1['postal'] === $addr2['postal'];
+	}
+
+	/**
+	 * Check if address is empty
+	 *
+	 * An address is considered empty if it lacks essential fields.
+	 *
+	 * @param array $address Normalized address.
+	 * @return bool True if address is empty.
+	 */
+	private static function is_address_empty($address) {
+		// Address must have at least street name and city
+		return empty($address['street_name']) || empty($address['city']);
+	}
+
+	/**
+	 * Check if initials are profane
+	 *
+	 * @param string $initials Initials to check.
+	 * @return bool True if profane.
+	 */
+	private static function is_profane($initials) {
+		return in_array(strtoupper($initials), self::$blocked_initials, true);
+	}
+
+	/**
+	 * Get all clients with specific initials
+	 *
+	 * @param string $initials Initials to search for.
+	 * @return array Array of client data.
+	 */
+	private static function get_clients_with_initials($initials) {
+		global $wpdb;
+
+		$table_name = $wpdb->prefix . 'meals_clients';
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$results = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT
+					client_id as id,
+					first_name,
+					last_name,
+					delivery_street_number,
+					delivery_street_name,
+					delivery_apartment_number,
+					delivery_city,
+					delivery_postal_code,
+					street_number,
+					street_name,
+					apartment_number,
+					city,
+					postal_code
+				FROM {$table_name}
+				WHERE delivery_initials = %s",
+				$initials
+			),
+			ARRAY_A
+		);
+		// phpcs:enable
+
+		return $results ?: array();
+	}
+
+	/**
+	 * Get blocked initials list
+	 *
+	 * @return array List of blocked initials.
+	 */
+	public static function get_blocked_initials() {
+		return self::$blocked_initials;
+	}
+}
