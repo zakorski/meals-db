@@ -654,6 +654,7 @@ class MealsDB_Client_Importer {
      * Transform client type to standard format
      */
     private function transform_client_type($value) {
+        $original_value = $value;
         $value = strtolower(trim($value));
 
         $mapping = [
@@ -661,11 +662,21 @@ class MealsDB_Client_Importer {
             'sdnbr' => 'SDNB',
             'sdnb rural' => 'SDNB',
             'vet' => 'Veteran',
+            'vets' => 'Veteran',
             'veteran' => 'Veteran',
+            'veterans' => 'Veteran',
             'private' => 'Private',
         ];
 
-        return $mapping[$value] ?? 'Private';
+        $result = $mapping[$value] ?? 'Private';
+
+        // Log transformation if value was not found in mapping
+        if (!isset($mapping[$value]) && $original_value !== '') {
+            $this->write_log("⚠ Client type transformation: '" . $original_value .
+                           "' (normalized: '" . $value . "') not in mapping, defaulting to 'Private'", 3);
+        }
+
+        return $result;
     }
 
     /**
