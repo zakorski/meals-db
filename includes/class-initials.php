@@ -2,6 +2,9 @@
 /**
  * Generates and validates initials codes for Meals DB clients.
  *
+ * This class is now a wrapper around MealsDB_Initials_Validator for backward compatibility.
+ * The new validator supports address-based duplicate checking.
+ *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
  * Licensed under the GNU General Public License v3.0 or later.
@@ -12,6 +15,7 @@ class MealsDB_Initials {
     /**
      * Words that should never be used as initials.
      *
+     * @deprecated Use MealsDB_Initials_Validator::get_blocked_initials() instead.
      * @var string[]
      */
     private static $banned_words = [
@@ -31,38 +35,71 @@ class MealsDB_Initials {
 
     /**
      * Generate a random 3-letter uppercase code.
+     *
+     * Note: This method cannot perform address-based validation since no client data is provided.
+     * For better generation that considers client address, use MealsDB_Initials_Validator::generate().
      */
     public static function generate(): string {
-        do {
-            $code = '';
+        // Delegate to new validator with empty address data
+        $generated = MealsDB_Initials_Validator::generate('', '', array());
 
-            for ($i = 0; $i < 3; $i++) {
-                try {
-                    $code .= chr(random_int(65, 90));
-                } catch (Exception $e) {
-                    error_log('[MealsDB] Unable to generate initials: ' . $e->getMessage());
-                    return '';
-                }
-            }
+        if ($generated === false) {
+            error_log('[MealsDB] Unable to generate initials.');
+            return '';
+        }
 
-            if (self::is_banned_word($code)) {
-                continue;
-            }
-
-            if (self::exists_in_db($code)) {
-                continue;
-            }
-
-            return $code;
-        } while (true);
+        return $generated;
     }
 
     /**
      * Validate a code against formatting, banned list, and existing records.
+     *
+     * Note: This method cannot perform full address-based validation since no client data is provided.
+     * It will reject duplicates even if they're at the same address.
+     * For full validation, use MealsDB_Initials_Validator::validate() with client address data.
+     *
+     * @param string $code The initials code to validate.
+     * @param int|null $exclude_client_id Client ID to exclude from duplicate check (for editing).
+     * @param array $client_data Optional client data including address fields for full validation.
+     * @return array Validation result with 'valid' and 'message' keys.
      */
-    public static function validate_code(string $code, ?int $exclude_client_id = null): array {
+    public static function validate_code(string $code, ?int $exclude_client_id = null, array $client_data = array()): array {
         $code = strtoupper(trim($code));
 
+        // If client_data is provided, use the new validator
+        if (!empty($client_data)) {
+            $result = MealsDB_Initials_Validator::validate($code, $client_data, $exclude_client_id);
+
+            // Convert to old format
+            if ($result['valid']) {
+                if (!empty($result['shared'])) {
+                    $sharing_names = array_map(function($client) {
+                        return trim($client['first_name'] . ' ' . $client['last_name']);
+                    }, $result['sharing_with']);
+
+                    return [
+                        'valid'   => true,
+                        'message' => sprintf(
+                            __('Initials are valid (shared with %s at same address).', 'meals-db'),
+                            implode(', ', $sharing_names)
+                        ),
+                        'shared'  => true,
+                    ];
+                }
+
+                return [
+                    'valid'   => true,
+                    'message' => __('Initials are available.', 'meals-db'),
+                ];
+            } else {
+                return [
+                    'valid'   => false,
+                    'message' => $result['error'],
+                ];
+            }
+        }
+
+        // Legacy validation without address data
         if (!preg_match('/^[A-Z]{3}$/', $code)) {
             return [
                 'valid'   => false,
@@ -92,6 +129,9 @@ class MealsDB_Initials {
 
     /**
      * Determine if a code already exists in the external database.
+     *
+     * Note: This method only checks for existence, not address-based sharing.
+     * It will return true even if the duplicate is at the same address.
      */
     public static function exists_in_db(string $code, ?int $exclude_client_id = null): bool {
         $connection = MealsDB_DB::get_connection();
@@ -102,7 +142,7 @@ class MealsDB_Initials {
         }
 
         $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf('SELECT client_id FROM `%s` WHERE initials_delivery = ?', $clients_table);
+        $sql = sprintf('SELECT client_id FROM `%s` WHERE delivery_initials = ?', $clients_table);
 
         if ($exclude_client_id !== null) {
             $sql .= ' AND client_id != ?';

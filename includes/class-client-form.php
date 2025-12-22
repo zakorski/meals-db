@@ -333,12 +333,17 @@ class MealsDB_Client_Form {
                 $sanitized['delivery_initials'] = null;
             }
         } else {
-            $validation = MealsDB_Initials::validate_code($initials_value, $ignore_client_id);
+            // Use new validator with address data for address-based duplicate checking
+            $validation = MealsDB_Initials::validate_code($initials_value, $ignore_client_id, $sanitized);
             if (empty($validation['valid'])) {
                 $message = $validation['message'] ?? __('Invalid initials for delivery.', 'meals-db');
                 $record_format_error('delivery_initials', $message);
             } else {
                 $sanitized['delivery_initials'] = $initials_value;
+                // Log if initials are being shared at the same address
+                if (!empty($validation['shared'])) {
+                    error_log('[MealsDB] Delivery initials ' . $initials_value . ' are shared at the same address: ' . $validation['message']);
+                }
             }
         }
 
