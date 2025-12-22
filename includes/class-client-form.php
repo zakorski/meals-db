@@ -654,19 +654,7 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        // Encrypt sensitive fields
-        try {
-            foreach (self::$encrypted_fields as $field) {
-                if (array_key_exists($field, $encrypted) && $encrypted[$field] !== '') {
-                    $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
-                }
-            }
-        } catch (Exception $e) {
-            error_log('[MealsDB] Save aborted during encryption: ' . $e->getMessage());
-            return false;
-        }
-
-        // Store deterministic hashes for encrypted unique fields
+        // Store deterministic hashes for unique fields
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
             if (array_key_exists($field, $sanitized) && $sanitized[$field] !== '') {
                 $encrypted[$indexColumn] = self::deterministic_hash($sanitized[$field]);
@@ -738,21 +726,6 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        try {
-            foreach (self::$encrypted_fields as $field) {
-                if (array_key_exists($field, $encrypted)) {
-                    if ($encrypted[$field] === '') {
-                        $encrypted[$field] = null;
-                    } elseif ($encrypted[$field] !== null) {
-                        $encrypted[$field] = MealsDB_Encryption::encrypt($encrypted[$field]);
-                    }
-                }
-            }
-        } catch (Exception $e) {
-            error_log('[MealsDB] Update aborted during encryption: ' . $e->getMessage());
-            return false;
-        }
-
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
             if (array_key_exists($field, $sanitized)) {
                 if ($sanitized[$field] !== '') {
@@ -813,17 +786,6 @@ class MealsDB_Client_Form {
 
         if (empty($record)) {
             return null;
-        }
-
-        foreach (self::$encrypted_fields as $field) {
-            if (!empty($record[$field])) {
-                try {
-                    $record[$field] = MealsDB_Encryption::decrypt($record[$field]);
-                } catch (Exception $e) {
-                    error_log('[MealsDB] Failed to decrypt ' . $field . ' for client ID ' . $client_id . ': ' . $e->getMessage());
-                    $record[$field] = '';
-                }
-            }
         }
 
         foreach (self::$deterministic_index_map as $indexColumn) {
@@ -1664,20 +1626,6 @@ class MealsDB_Client_Form {
                 $rawValue = $row[$field] ?? '';
 
                 if ($rawValue === null || $rawValue === '') {
-                    continue;
-                }
-
-                if (in_array($field, self::$encrypted_fields, true)) {
-                    try {
-                        $rawValue = MealsDB_Encryption::decrypt($rawValue);
-                    } catch (Exception $e) {
-                        error_log('[MealsDB] Failed to decrypt ' . $field . ' while backfilling deterministic index for client ID ' . ($row['id'] ?? 'unknown') . ': ' . $e->getMessage());
-                        $allSuccessful = false;
-                        continue;
-                    }
-                }
-
-                if ($rawValue === '') {
                     continue;
                 }
 

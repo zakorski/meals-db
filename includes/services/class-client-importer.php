@@ -873,24 +873,7 @@ class MealsDB_Client_Importer {
             $this->write_log("- Fields prepared for insert: " . $fields_added, 3);
         }
 
-        // Handle encrypted fields
-        if (isset($data['individual_id']) && $data['individual_id'] !== '') {
-            $insert_data['individual_id'] = MealsDB_Encryption::encrypt($data['individual_id']);
-        }
-
-        if (isset($data['requisition_id']) && $data['requisition_id'] !== '') {
-            $insert_data['requisition_id'] = MealsDB_Encryption::encrypt($data['requisition_id']);
-        }
-
-        if (isset($data['diet_concerns']) && $data['diet_concerns'] !== '') {
-            $insert_data['diet_concerns'] = MealsDB_Encryption::encrypt($data['diet_concerns']);
-        }
-
-        if (isset($data['customer_comments']) && $data['customer_comments'] !== '') {
-            $insert_data['customer_comments'] = MealsDB_Encryption::encrypt($data['customer_comments']);
-        }
-
-        // Generate deterministic indexes for uniqueness checks on encrypted/unique fields
+        // Generate deterministic indexes for uniqueness checks on unique fields
         foreach ($this->deterministic_index_map as $field => $index_column) {
             if (isset($data[$field]) && $data[$field] !== '') {
                 $insert_data[$index_column] = $this->deterministic_hash($data[$field]);
