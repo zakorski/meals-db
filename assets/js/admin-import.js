@@ -235,11 +235,34 @@
                 }
             },
             error: function() {
-                showError('An error occurred during import.');
-                // Keep import_id if it exists, otherwise reset
-                if (!importId) {
-                    resetToUpload();
-                }
+                // Server crashed or timed out - try to retrieve import_id so we can show log
+                $.ajax({
+                    url: mealsdbImport.ajaxUrl,
+                    type: 'POST',
+                    data: {
+                        action: 'mealsdb_get_import_id',
+                        nonce: mealsdbImport.nonce,
+                        file_id: fileId
+                    },
+                    success: function(response) {
+                        if (response.success && response.data.import_id) {
+                            importId = response.data.import_id;
+                            showError('The import encountered a server error or timeout.');
+                            showResults({
+                                stats: { total: 0, success: 0, errors: 0, wp_users_created: 0, wp_users_existing: 0 },
+                                errors: ['The import was interrupted by a server error or timeout. Check the log for details.'],
+                                dry_run: false
+                            });
+                        } else {
+                            showError('An error occurred during import.');
+                            resetToUpload();
+                        }
+                    },
+                    error: function() {
+                        showError('An error occurred during import.');
+                        resetToUpload();
+                    }
+                });
             }
         });
     }

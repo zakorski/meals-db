@@ -135,6 +135,13 @@ class MealsDB_Client_Importer {
     }
 
     /**
+     * Get the import ID for this import session
+     */
+    public function get_import_id() {
+        return $this->import_id;
+    }
+
+    /**
      * Initialize log file for detailed import logging
      */
     private function init_log_file() {

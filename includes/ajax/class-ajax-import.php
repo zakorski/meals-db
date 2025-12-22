@@ -18,6 +18,7 @@ class MealsDB_Ajax_Import {
         add_action('wp_ajax_mealsdb_import_clients', [self::class, 'import_clients']);
         add_action('wp_ajax_mealsdb_import_progress', [self::class, 'get_progress']);
         add_action('wp_ajax_mealsdb_download_import_log', [self::class, 'download_import_log']);
+        add_action('wp_ajax_mealsdb_get_import_id', [self::class, 'get_import_id_for_file']);
     }
 
     /**
@@ -118,6 +119,11 @@ class MealsDB_Ajax_Import {
 
         // Run import
         $importer = new MealsDB_Client_Importer($dry_run);
+
+        // Store mapping of file_id to import_id so we can retrieve it if server crashes
+        $import_id = $importer->get_import_id();
+        set_transient('mealsdb_file_to_import_' . $file_id, $import_id, HOUR_IN_SECONDS);
+
         $result = $importer->import_from_csv($file_path, $dry_run);
 
         if (!$result['success']) {
@@ -200,5 +206,30 @@ class MealsDB_Ajax_Import {
         // Output file content
         readfile($log_file);
         exit;
+    }
+
+    /**
+     * Get import ID for a file (used when server crashes and import_id wasn't returned)
+     */
+    public static function get_import_id_for_file(): void {
+        check_ajax_referer('mealsdb_import_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meals-db')]);
+        }
+
+        $file_id = sanitize_text_field($_POST['file_id'] ?? '');
+
+        if (empty($file_id)) {
+            wp_send_json_error(['message' => __('No file ID specified', 'meals-db')]);
+        }
+
+        $import_id = get_transient('mealsdb_file_to_import_' . $file_id);
+
+        if ($import_id === false) {
+            wp_send_json_error(['message' => __('Import ID not found', 'meals-db')]);
+        }
+
+        wp_send_json_success(['import_id' => $import_id]);
     }
 }
