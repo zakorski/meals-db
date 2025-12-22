@@ -757,7 +757,7 @@ class MealsDB_Client_Importer {
      *
      * Implements shared WordPress account architecture:
      * - Multiple Meals DB clients can share the same WordPress user
-     * - Checks for existing user by EMAIL first
+     * - Checks for existing user by EMAIL first (regardless of real or generated email)
      * - Creates new user only if email doesn't exist
      *
      * @return array ['user_id' => int, 'status' => string]
@@ -765,94 +765,76 @@ class MealsDB_Client_Importer {
      */
     private function create_wp_user($data) {
         $has_email = !empty($data['client_email']) && is_email($data['client_email']);
-        $email = $has_email ? $data['client_email'] : null;
-        $wp_user_status = '';
+        $email = null;
+        $is_generated_email = false;
 
-        // For clients WITH valid email addresses
+        // Determine email to use (real or generated)
         if ($has_email) {
+            // Use real email from client data
+            $email = $data['client_email'];
             $this->write_log("Client has email: " . $email, 2);
-
-            // Check if WordPress user already exists with this email
-            $existing_user = get_user_by('email', $email);
-
-            if ($existing_user) {
-                // Email exists - LINK to existing WordPress user
-                $this->write_log("✓ WordPress user exists - linking to existing user ID: " . $existing_user->ID, 2);
-                $this->stats['wp_users_existing']++;
-                return [
-                    'user_id' => $existing_user->ID,
-                    'status' => 'existing'
-                ];
-            } else {
-                // Email doesn't exist - CREATE new WordPress user with real email
-                $this->write_log("Creating new WordPress user with email: " . $email, 2);
-                $username = $this->generate_unique_username($data['first_name'], $data['last_name']);
-
-                $user_id = wp_create_user(
-                    $username,
-                    wp_generate_password(20, true, true),
-                    $email
-                );
-
-                if (is_wp_error($user_id)) {
-                    throw new Exception(sprintf(__('WP user creation failed: %s', 'meals-db'), $user_id->get_error_message()));
-                }
-
-                // Set role to customer
-                $user = new WP_User($user_id);
-                $user->set_role('customer');
-
-                // Update user meta
-                update_user_meta($user_id, 'first_name', $data['first_name']);
-                update_user_meta($user_id, 'last_name', $data['last_name']);
-
-                $this->write_log("✓ Created new WordPress user ID: " . $user_id . " (username: " . $username . ")", 2);
-                $this->stats['wp_users_created']++;
-
-                return [
-                    'user_id' => $user_id,
-                    'status' => 'created'
-                ];
-            }
         } else {
-            // For clients WITHOUT email addresses
-            // Generate unique email using delivery initials
+            // Generate email using delivery initials
             $delivery_initials = $data['delivery_initials'] ?? '';
             if (empty($delivery_initials)) {
                 throw new Exception(__('Cannot create WordPress user: no email and no delivery initials', 'meals-db'));
             }
 
-            $generated_email = strtolower($delivery_initials) . '@mealsdb.local';
-            $this->write_log("Client has no email - generating: " . $generated_email, 2);
+            $email = strtolower($delivery_initials) . '@mealsdb.local';
+            $is_generated_email = true;
+            $this->write_log("Client has no email - generating: " . $email, 2);
+        }
 
-            $username = $this->generate_unique_username_from_initials($delivery_initials);
+        // ALWAYS check if WordPress user already exists with this email
+        // (regardless of whether it's a real email or generated email)
+        $existing_user = get_user_by('email', $email);
 
-            $user_id = wp_create_user(
-                $username,
-                wp_generate_password(20, true, true),
-                $generated_email
-            );
-
-            if (is_wp_error($user_id)) {
-                throw new Exception(sprintf(__('WP user creation failed: %s', 'meals-db'), $user_id->get_error_message()));
-            }
-
-            // Set role to customer
-            $user = new WP_User($user_id);
-            $user->set_role('customer');
-
-            // Update user meta
-            update_user_meta($user_id, 'first_name', $data['first_name']);
-            update_user_meta($user_id, 'last_name', $data['last_name']);
-
-            $this->write_log("✓ Created new WordPress user ID: " . $user_id . " with generated email (username: " . $username . ")", 2);
-            $this->stats['wp_users_created']++;
-
+        if ($existing_user) {
+            // Email exists - LINK to existing WordPress user
+            $this->write_log("✓ WordPress user exists - linking to existing user ID: " . $existing_user->ID, 2);
+            $this->stats['wp_users_existing']++;
             return [
-                'user_id' => $user_id,
-                'status' => 'generated'
+                'user_id' => $existing_user->ID,
+                'status' => 'existing'
             ];
         }
+
+        // Email doesn't exist - CREATE new WordPress user
+        $this->write_log("Creating new WordPress user with email: " . $email, 2);
+
+        // Generate appropriate username based on email type
+        if ($is_generated_email) {
+            $username = $this->generate_unique_username_from_initials($data['delivery_initials']);
+        } else {
+            $username = $this->generate_unique_username($data['first_name'], $data['last_name']);
+        }
+
+        $user_id = wp_create_user(
+            $username,
+            wp_generate_password(20, true, true),
+            $email
+        );
+
+        if (is_wp_error($user_id)) {
+            throw new Exception(sprintf(__('WP user creation failed: %s', 'meals-db'), $user_id->get_error_message()));
+        }
+
+        // Set role to customer
+        $user = new WP_User($user_id);
+        $user->set_role('customer');
+
+        // Update user meta
+        update_user_meta($user_id, 'first_name', $data['first_name']);
+        update_user_meta($user_id, 'last_name', $data['last_name']);
+
+        $this->write_log("✓ WordPress user created with ID: " . $user_id . " (username: " . $username . ")", 2);
+        $this->stats['wp_users_created']++;
+
+        // Return status indicating whether email was generated or real
+        return [
+            'user_id' => $user_id,
+            'status' => $is_generated_email ? 'generated' : 'created'
+        ];
     }
 
     /**
