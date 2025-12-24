@@ -243,8 +243,34 @@ class MealsDB_CSV_User_Client_Importer {
             throw new Exception(__('Could not open CSV file.', 'meals-db'));
         }
 
-        // Skip header row
-        fgetcsv($handle);
+        // Read and store header row for debugging
+        $headers = fgetcsv($handle);
+        $this->write_log("\n" . str_repeat('=', 70));
+        $this->write_log("CSV HEADER ANALYSIS");
+        $this->write_log(str_repeat('=', 70));
+        $this->write_log("Total columns: " . count($headers));
+
+        // Log first 50 columns with their indices
+        $this->write_log("\nColumn mapping (first 50 columns):");
+        for ($i = 0; $i < min(50, count($headers)); $i++) {
+            $this->write_log(sprintf("  [%d] = %s", $i, $headers[$i]), 0);
+        }
+
+        // Read first data row for sample
+        $first_row = fgetcsv($handle);
+        if ($first_row) {
+            $this->write_log("\nFirst row sample (first 20 values):");
+            for ($i = 0; $i < min(20, count($first_row)); $i++) {
+                $value = $first_row[$i];
+                $display_value = strlen($value) > 50 ? substr($value, 0, 50) . '...' : $value;
+                $this->write_log(sprintf("  [%d] %s = %s", $i, $headers[$i] ?? 'unknown', $display_value), 0);
+            }
+
+            // Reset file pointer to start
+            rewind($handle);
+            fgetcsv($handle); // Skip header again
+        }
+        $this->write_log(str_repeat('=', 70) . "\n");
 
         $rows = [];
         while (($row = fgetcsv($handle)) !== false) {
