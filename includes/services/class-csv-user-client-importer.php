@@ -294,7 +294,7 @@ class MealsDB_CSV_User_Client_Importer {
             throw new Exception(__('Missing source_user_id', 'meals-db'));
         }
 
-        if (empty($data['first_name']) || empty($data['last_name'])) {
+        if ($data['first_name'] === '' || $data['last_name'] === '') {
             throw new Exception(__('Missing first or last name', 'meals-db'));
         }
 
