@@ -321,6 +321,7 @@ class MealsDB_CSV_User_Client_Importer {
      * Parse CSV row into associative array
      *
      * Column mapping based on actual CSV structure from new_clients_cleaned.csv
+     * Total: 144 columns
      */
     private function parse_csv_row($row) {
         $data = [];
@@ -349,10 +350,46 @@ class MealsDB_CSV_User_Client_Importer {
         $data['sides'] = $this->get_csv_value($row, 47);
         $data['service'] = $this->get_csv_value($row, 48);
         $data['commence_date'] = $this->get_csv_value($row, 49);
+        $data['service_termination_date'] = $this->get_csv_value($row, 50);
+        $data['service_centre_charged'] = $this->get_csv_value($row, 51);
+        $data['ordering_frequency'] = $this->get_csv_value($row, 52);
+        $data['ordering_contact_method'] = $this->get_csv_value($row, 53);
+        $data['delivery_frequency'] = $this->get_csv_value($row, 54);
+        $data['freeze_capacity'] = $this->get_csv_value($row, 55);
+        $data['delivery_fee'] = $this->get_csv_value($row, 56);
+        $data['requisition_units'] = $this->get_csv_value($row, 57);
 
-        // Additional fields will be mapped after seeing full column list
-        // TODO: Add billing_*, shipping_*, and other fields from columns 50+
-        // Run dry-run import to see complete column mapping in log file
+        // Encrypted fields (will be encrypted in process_encrypted_fields_for_create/update)
+        $data['dietary_needs'] = $this->get_csv_value($row, 60);
+        $data['customer_comments'] = $this->get_csv_value($row, 61);
+
+        // WooCommerce Billing Fields (WordPress User Meta)
+        $data['billing_first_name'] = $this->get_csv_value($row, 63);
+        $data['billing_last_name'] = $this->get_csv_value($row, 64);
+        $data['billing_company'] = $this->get_csv_value($row, 65);
+        $data['billing_address_1'] = $this->get_csv_value($row, 66);
+        $data['billing_address_2'] = $this->get_csv_value($row, 67);
+        $data['billing_city'] = $this->get_csv_value($row, 68);
+        $data['billing_postcode'] = $this->get_csv_value($row, 69);
+        $data['billing_country'] = $this->get_csv_value($row, 70);
+        $data['billing_state'] = $this->get_csv_value($row, 71);
+        $data['billing_phone'] = $this->get_csv_value($row, 72);
+        $data['billing_email'] = $this->get_csv_value($row, 73);
+
+        // WooCommerce Shipping Fields (WordPress User Meta)
+        $data['shipping_first_name'] = $this->get_csv_value($row, 74);
+        $data['shipping_last_name'] = $this->get_csv_value($row, 75);
+        $data['shipping_company'] = $this->get_csv_value($row, 76);
+        $data['shipping_address_1'] = $this->get_csv_value($row, 77);
+        $data['shipping_address_2'] = $this->get_csv_value($row, 78);
+        $data['shipping_city'] = $this->get_csv_value($row, 79);
+        $data['shipping_postcode'] = $this->get_csv_value($row, 80);
+        $data['shipping_country'] = $this->get_csv_value($row, 81);
+        $data['shipping_state'] = $this->get_csv_value($row, 82);
+        $data['shipping_phone'] = $this->get_csv_value($row, 83);
+
+        // Client Contribution
+        $data['contribution'] = $this->get_csv_value($row, 113);
 
         return $data;
     }
@@ -644,29 +681,60 @@ class MealsDB_CSV_User_Client_Importer {
     /**
      * Get client field mapping
      */
+    /**
+     * Get field mapping from CSV to Meals DB client table
+     *
+     * Maps CSV field names to database column names for the stag_meals_clients table
+     */
     private function get_client_field_mapping() {
         return [
+            // Contact Info
             'user_email' => 'client_email',
             'billing_phone' => 'client_phone_1',
             'shipping_phone' => 'client_phone_2',
+
+            // Primary Address (Billing = Primary)
             'billing_address_1' => 'street_name',
             'billing_address_2' => 'apartment_number',
             'billing_city' => 'city',
             'billing_state' => 'province',
             'billing_postcode' => 'postal_code',
+
+            // Delivery Address (Shipping = Delivery)
             'shipping_address_1' => 'delivery_street_name',
             'shipping_address_2' => 'delivery_apartment_number',
             'shipping_city' => 'delivery_city',
             'shipping_state' => 'delivery_province',
             'shipping_postcode' => 'delivery_postal_code',
+
+            // Service Info
             'service_id' => 'service_id',
-            'basic_cost' => 'rate',
+            'requisition_id' => 'requisition_id', // Will be encrypted
+            'individual_id' => 'individual_id', // Will be encrypted
             'payment_method' => 'payment_method',
-            'ordering_frequency' => 'ordering_frequency',
-            'delivery_frequency' => 'delivery_frequency',
-            'freeze_capacity' => 'freezer_capacity',
+            'service_centre_charged' => 'service_center_charged',
+
+            // Dates
             'commence_date' => 'service_commence_date',
             'service_termination_date' => 'expected_termination_date',
+
+            // Delivery/Ordering
+            'ordering_frequency' => 'ordering_frequency',
+            'ordering_contact_method' => 'ordering_contact_method',
+            'delivery_frequency' => 'delivery_frequency',
+            'freeze_capacity' => 'freezer_capacity',
+            'delivery_fee' => 'delivery_fee',
+
+            // Costs & Units
+            'basic_cost' => 'rate', // basic_cost maps to rate column
+            'rate' => 'rate',
+            'contribution' => 'client_contribution',
+            'requisition_units' => 'units',
+            'mains' => 'units', // Alternative mapping if units not set
+            'sides' => 'units', // Alternative mapping if units not set
+
+            // NOTE: dietary_needs and customer_comments are handled separately
+            // in process_encrypted_fields_for_create/update as they need encryption
         ];
     }
 
@@ -707,31 +775,61 @@ class MealsDB_CSV_User_Client_Importer {
 
     /**
      * Process encrypted fields for create
+     *
+     * Encrypts sensitive fields and creates searchable indexes
      */
     private function process_encrypted_fields_for_create($data, &$client_data) {
-        $encryption = MealsDB_Encryption::get_instance();
-
+        // Encrypt dietary needs
         if (!empty($data['dietary_needs'])) {
             $client_data['diet_concerns'] = MealsDB_Encryption::encrypt($data['dietary_needs']);
         }
 
+        // Encrypt customer comments
         if (!empty($data['customer_comments'])) {
             $client_data['customer_comments'] = MealsDB_Encryption::encrypt($data['customer_comments']);
+        }
+
+        // Encrypt and index requisition_id (if from field mapping)
+        if (isset($client_data['requisition_id']) && !empty($client_data['requisition_id'])) {
+            $plaintext = $client_data['requisition_id'];
+            $client_data['requisition_id'] = MealsDB_Encryption::encrypt($plaintext);
+            $client_data['requisition_id_index'] = MealsDB_Encryption::create_index($plaintext);
+        }
+
+        // Encrypt and index individual_id (if from field mapping)
+        if (isset($client_data['individual_id']) && !empty($client_data['individual_id'])) {
+            $plaintext = $client_data['individual_id'];
+            $client_data['individual_id'] = MealsDB_Encryption::encrypt($plaintext);
+            $client_data['individual_id_index'] = MealsDB_Encryption::create_index($plaintext);
         }
     }
 
     /**
      * Process encrypted fields for update (NULL-fill)
+     *
+     * Only updates encrypted fields if they are currently NULL/empty
      */
     private function process_encrypted_fields_for_update($data, $existing_client, &$update_data) {
-        $encryption = MealsDB_Encryption::get_instance();
-
+        // Encrypt dietary needs if currently empty
         if (!empty($data['dietary_needs']) && empty($existing_client->diet_concerns)) {
             $update_data['diet_concerns'] = MealsDB_Encryption::encrypt($data['dietary_needs']);
         }
 
+        // Encrypt customer comments if currently empty
         if (!empty($data['customer_comments']) && empty($existing_client->customer_comments)) {
             $update_data['customer_comments'] = MealsDB_Encryption::encrypt($data['customer_comments']);
+        }
+
+        // Encrypt and index requisition_id if currently empty
+        if (!empty($data['requisition_id']) && empty($existing_client->requisition_id)) {
+            $update_data['requisition_id'] = MealsDB_Encryption::encrypt($data['requisition_id']);
+            $update_data['requisition_id_index'] = MealsDB_Encryption::create_index($data['requisition_id']);
+        }
+
+        // Encrypt and index individual_id if currently empty
+        if (!empty($data['individual_id']) && empty($existing_client->individual_id)) {
+            $update_data['individual_id'] = MealsDB_Encryption::encrypt($data['individual_id']);
+            $update_data['individual_id_index'] = MealsDB_Encryption::create_index($data['individual_id']);
         }
     }
 
