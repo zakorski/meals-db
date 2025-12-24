@@ -492,6 +492,18 @@ class MealsDB_CSV_User_Client_Importer {
         // Handle encrypted fields
         $this->process_encrypted_fields_for_update($data, $existing_client, $update_data);
 
+        // Handle delivery initials if NULL
+        if (empty($existing_client->delivery_initials)) {
+            $this->write_log("Client has no delivery initials - generating...", 3);
+
+            // Build client data array from existing client + any updates
+            $client_data = array_merge((array)$existing_client, $update_data);
+            $client_data['first_name'] = $data['first_name'];
+            $client_data['last_name'] = $data['last_name'];
+
+            $this->process_delivery_initials_for_update($data, $client_data, $update_data);
+        }
+
         if (!empty($update_data)) {
             $result = $wpdb->update(
                 $table,
@@ -511,6 +523,63 @@ class MealsDB_CSV_User_Client_Importer {
             $this->write_log("No NULL fields to update", 3);
             $this->stats['clients_skipped']++;
         }
+    }
+
+    /**
+     * Process delivery initials for existing client update
+     */
+    private function process_delivery_initials_for_update($data, $client_data, &$update_data) {
+        // Check if CSV already has initials (from nickname field)
+        $csv_initials = null;
+        if (!empty($data['nickname'])) {
+            $csv_initials = strtoupper(substr(trim($data['nickname']), 0, 3));
+        }
+
+        if ($csv_initials && preg_match('/^[A-Z]{3}$/', $csv_initials)) {
+            // CSV has initials - validate them
+            $this->write_log("Validating existing initials from CSV: " . $csv_initials, 4);
+
+            $validation = MealsDB_Initials_Validator::validate(
+                $csv_initials,
+                $client_data,
+                $client_data['client_id'] ?? null
+            );
+
+            if ($validation['valid']) {
+                $update_data['delivery_initials'] = $csv_initials;
+                $update_data['delivery_initials_index'] = MealsDB_Encryption::create_index($csv_initials);
+                $this->write_log("✓ Initials validated: " . $csv_initials, 4);
+            } else {
+                // Initials from CSV are invalid - generate new ones
+                $this->write_log("⚠ CSV initials invalid: " . $validation['error'], 4);
+                $this->write_log("Generating new initials...", 4);
+                $this->generate_unique_initials_for_update($client_data, $update_data);
+            }
+        } else {
+            // No valid initials in CSV - generate new
+            $this->write_log("No valid initials in CSV - generating new...", 4);
+            $this->generate_unique_initials_for_update($client_data, $update_data);
+        }
+    }
+
+    /**
+     * Generate unique initials for existing client update
+     */
+    private function generate_unique_initials_for_update($client_data, &$update_data) {
+        $generated = MealsDB_Initials_Validator::generate(
+            $client_data['first_name'],
+            $client_data['last_name'],
+            $client_data
+        );
+
+        if ($generated === false) {
+            $this->write_log("✗ Failed to generate unique initials", 4);
+            throw new Exception(__('Unable to generate unique delivery initials', 'meals-db'));
+        }
+
+        $update_data['delivery_initials'] = $generated;
+        $update_data['delivery_initials_index'] = MealsDB_Encryption::create_index($generated);
+        $this->write_log("✓ Generated initials: " . $generated, 4);
     }
 
     /**
@@ -546,8 +615,8 @@ class MealsDB_CSV_User_Client_Importer {
         // Handle encrypted fields
         $this->process_encrypted_fields_for_create($data, $client_data);
 
-        // Generate delivery initials
-        $this->generate_delivery_initials($data, $client_data);
+        // Handle delivery initials - use existing validation system
+        $this->process_delivery_initials($data, $client_data);
 
         $result = $wpdb->insert(
             $table,
@@ -658,16 +727,68 @@ class MealsDB_CSV_User_Client_Importer {
     }
 
     /**
-     * Generate delivery initials
+     * Process delivery initials using existing validation system
      */
-    private function generate_delivery_initials($data, &$client_data) {
-        $encryption = MealsDB_Encryption::get_instance();
-
+    private function process_delivery_initials($data, &$client_data) {
+        // Check if CSV already has initials (from nickname field)
+        $csv_initials = null;
         if (!empty($data['nickname'])) {
-            $initials = strtoupper(substr($data['nickname'], 0, 3));
-            $client_data['delivery_initials'] = $initials;
-            $client_data['delivery_initials_index'] = MealsDB_Encryption::create_index($initials);
+            $csv_initials = strtoupper(substr(trim($data['nickname']), 0, 3));
         }
+
+        if ($csv_initials && preg_match('/^[A-Z]{3}$/', $csv_initials)) {
+            // CSV has initials - validate them
+            $this->write_log("Validating existing initials from CSV: " . $csv_initials, 3);
+
+            $validation = MealsDB_Initials_Validator::validate(
+                $csv_initials,
+                $client_data,
+                null // No current client ID since this is a new client
+            );
+
+            if ($validation['valid']) {
+                $client_data['delivery_initials'] = $csv_initials;
+                $client_data['delivery_initials_index'] = MealsDB_Encryption::create_index($csv_initials);
+
+                if (!empty($validation['shared'])) {
+                    $sharing_names = array_map(function($client) {
+                        return trim($client['first_name'] . ' ' . $client['last_name']);
+                    }, $validation['sharing_with']);
+                    $this->write_log("✓ Initials shared with " . implode(', ', $sharing_names) . " at same address", 3);
+                } else {
+                    $this->write_log("✓ Initials validated: " . $csv_initials, 3);
+                }
+            } else {
+                // Initials from CSV are invalid - generate new ones
+                $this->write_log("⚠ CSV initials invalid: " . $validation['error'], 3);
+                $this->write_log("Generating new initials...", 3);
+                $this->generate_unique_initials($client_data);
+            }
+        } else {
+            // No valid initials in CSV - generate new
+            $this->write_log("No valid initials in CSV - generating new...", 3);
+            $this->generate_unique_initials($client_data);
+        }
+    }
+
+    /**
+     * Generate unique delivery initials using centralized validator
+     */
+    private function generate_unique_initials(&$client_data) {
+        $generated = MealsDB_Initials_Validator::generate(
+            $client_data['first_name'],
+            $client_data['last_name'],
+            $client_data
+        );
+
+        if ($generated === false) {
+            $this->write_log("✗ Failed to generate unique initials", 3);
+            throw new Exception(__('Unable to generate unique delivery initials', 'meals-db'));
+        }
+
+        $client_data['delivery_initials'] = $generated;
+        $client_data['delivery_initials_index'] = MealsDB_Encryption::create_index($generated);
+        $this->write_log("✓ Generated initials: " . $generated, 3);
     }
 
     /**
