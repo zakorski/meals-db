@@ -250,9 +250,9 @@ class MealsDB_CSV_User_Client_Importer {
         $this->write_log(str_repeat('=', 70));
         $this->write_log("Total columns: " . count($headers));
 
-        // Log first 50 columns with their indices
-        $this->write_log("\nColumn mapping (first 50 columns):");
-        for ($i = 0; $i < min(50, count($headers)); $i++) {
+        // Log ALL columns with their indices
+        $this->write_log("\nColumn mapping (all " . count($headers) . " columns):");
+        for ($i = 0; $i < count($headers); $i++) {
             $this->write_log(sprintf("  [%d] = %s", $i, $headers[$i]), 0);
         }
 
@@ -319,57 +319,40 @@ class MealsDB_CSV_User_Client_Importer {
 
     /**
      * Parse CSV row into associative array
+     *
+     * Column mapping based on actual CSV structure from new_clients_cleaned.csv
      */
     private function parse_csv_row($row) {
         $data = [];
 
-        // Map all 144 columns (you'll need to adjust these indices based on your actual CSV)
-        $data['source_user_id'] = $this->get_csv_value($row, 0);
-        $data['user_login'] = $this->get_csv_value($row, 1);
-        $data['user_email'] = $this->get_csv_value($row, 2);
-        $data['user_nicename'] = $this->get_csv_value($row, 3);
-        $data['display_name'] = $this->get_csv_value($row, 4);
-        $data['first_name'] = $this->get_csv_value($row, 5);
-        $data['last_name'] = $this->get_csv_value($row, 6);
-        $data['nickname'] = $this->get_csv_value($row, 7);
+        // WordPress Core Fields
+        $data['user_login'] = $this->get_csv_value($row, 0);
+        $data['user_email'] = $this->get_csv_value($row, 1);
+        $data['source_user_id'] = $this->get_csv_value($row, 2);
+        $data['user_nicename'] = $this->get_csv_value($row, 4);
+        $data['display_name'] = $this->get_csv_value($row, 7);
 
-        // Billing fields (WordPress meta)
-        $data['billing_first_name'] = $this->get_csv_value($row, 8);
-        $data['billing_last_name'] = $this->get_csv_value($row, 9);
-        $data['billing_company'] = $this->get_csv_value($row, 10);
-        $data['billing_address_1'] = $this->get_csv_value($row, 11);
-        $data['billing_address_2'] = $this->get_csv_value($row, 12);
-        $data['billing_city'] = $this->get_csv_value($row, 13);
-        $data['billing_state'] = $this->get_csv_value($row, 14);
-        $data['billing_postcode'] = $this->get_csv_value($row, 15);
-        $data['billing_country'] = $this->get_csv_value($row, 16);
-        $data['billing_email'] = $this->get_csv_value($row, 17);
-        $data['billing_phone'] = $this->get_csv_value($row, 18);
+        // WordPress User Meta
+        $data['nickname'] = $this->get_csv_value($row, 9);
+        $data['first_name'] = $this->get_csv_value($row, 10);
+        $data['last_name'] = $this->get_csv_value($row, 11);
 
-        // Shipping fields (WordPress meta)
-        $data['shipping_first_name'] = $this->get_csv_value($row, 19);
-        $data['shipping_last_name'] = $this->get_csv_value($row, 20);
-        $data['shipping_company'] = $this->get_csv_value($row, 21);
-        $data['shipping_address_1'] = $this->get_csv_value($row, 22);
-        $data['shipping_address_2'] = $this->get_csv_value($row, 23);
-        $data['shipping_city'] = $this->get_csv_value($row, 24);
-        $data['shipping_state'] = $this->get_csv_value($row, 25);
-        $data['shipping_postcode'] = $this->get_csv_value($row, 26);
-        $data['shipping_country'] = $this->get_csv_value($row, 27);
-        $data['shipping_phone'] = $this->get_csv_value($row, 28);
+        // Client Service Fields
+        $data['customer_group'] = $this->get_csv_value($row, 39);
+        $data['service_id'] = $this->get_csv_value($row, 40);
+        $data['requisition_id'] = $this->get_csv_value($row, 41);
+        $data['individual_id'] = $this->get_csv_value($row, 42);
+        $data['basic_cost'] = $this->get_csv_value($row, 43);
+        $data['rate'] = $this->get_csv_value($row, 44);
+        $data['payment_method'] = $this->get_csv_value($row, 45);
+        $data['mains'] = $this->get_csv_value($row, 46);
+        $data['sides'] = $this->get_csv_value($row, 47);
+        $data['service'] = $this->get_csv_value($row, 48);
+        $data['commence_date'] = $this->get_csv_value($row, 49);
 
-        // Client-specific fields
-        $data['customer_group'] = $this->get_csv_value($row, 29);
-        $data['service_id'] = $this->get_csv_value($row, 30);
-        $data['basic_cost'] = $this->get_csv_value($row, 31);
-        $data['payment_method'] = $this->get_csv_value($row, 32);
-        $data['ordering_frequency'] = $this->get_csv_value($row, 33);
-        $data['delivery_frequency'] = $this->get_csv_value($row, 34);
-        $data['freeze_capacity'] = $this->get_csv_value($row, 35);
-        $data['dietary_needs'] = $this->get_csv_value($row, 36);
-        $data['customer_comments'] = $this->get_csv_value($row, 37);
-        $data['commence_date'] = $this->get_csv_value($row, 38);
-        $data['service_termination_date'] = $this->get_csv_value($row, 39);
+        // Additional fields will be mapped after seeing full column list
+        // TODO: Add billing_*, shipping_*, and other fields from columns 50+
+        // Run dry-run import to see complete column mapping in log file
 
         return $data;
     }
