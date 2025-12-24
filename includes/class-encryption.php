@@ -119,4 +119,58 @@ class MealsDB_Encryption {
 
         return $plaintext;
     }
+
+    /**
+     * Create a searchable index (SHA-256 hash) for encrypted fields.
+     * This allows searching encrypted data without decrypting it.
+     *
+     * @param string $plaintext The value to create an index for
+     * @return string SHA-256 hash for searching
+     */
+    public static function create_index(string $plaintext): string {
+        return hash('sha256', strtolower(trim($plaintext)));
+    }
+
+    /**
+     * Get singleton instance for backward compatibility.
+     *
+     * @return MealsDB_Encryption
+     */
+    public static function get_instance(): MealsDB_Encryption {
+        static $instance = null;
+        if ($instance === null) {
+            $instance = new self();
+        }
+        return $instance;
+    }
+
+    /**
+     * Instance method wrapper for encrypt.
+     *
+     * @param string $plaintext
+     * @return string
+     */
+    public function encrypt_value(string $plaintext): string {
+        return self::encrypt($plaintext);
+    }
+
+    /**
+     * Instance method wrapper for decrypt.
+     *
+     * @param string $encoded
+     * @return string
+     */
+    public function decrypt_value(string $encoded): string {
+        return self::decrypt($encoded);
+    }
+
+    /**
+     * Instance method wrapper for create_index.
+     *
+     * @param string $plaintext
+     * @return string
+     */
+    public function create_search_index(string $plaintext): string {
+        return self::create_index($plaintext);
+    }
 }

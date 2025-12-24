@@ -1,0 +1,319 @@
+/**
+ * CSV Import UI - Styles
+ */
+
+/* Main Container */
+.mealsdb-csv-import-page {
+    max-width: 1200px;
+}
+
+.mealsdb-import-info-box {
+    background: #fff;
+    border-left: 4px solid #2271b1;
+    padding: 12px 20px;
+    margin: 20px 0;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.mealsdb-import-info-box h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+}
+
+.mealsdb-import-info-box ul {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.mealsdb-import-info-box li {
+    margin: 8px 0;
+}
+
+/* Card Container */
+.mealsdb-csv-card {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    padding: 30px;
+    margin: 20px 0;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.mealsdb-csv-card h2 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #dcdcde;
+}
+
+.mealsdb-csv-card h3 {
+    margin-top: 25px;
+    margin-bottom: 15px;
+}
+
+/* Upload Area */
+.mealsdb-csv-upload-area {
+    border: 2px dashed #c3c4c7;
+    border-radius: 8px;
+    padding: 60px 40px;
+    text-align: center;
+    background: #f6f7f7;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.mealsdb-csv-upload-area:hover,
+.mealsdb-csv-upload-area.dragover {
+    border-color: #2271b1;
+    background: #f0f6fc;
+}
+
+.mealsdb-csv-upload-icon {
+    font-size: 64px;
+    margin-bottom: 15px;
+}
+
+.mealsdb-csv-upload-text {
+    font-size: 16px;
+    color: #50575e;
+    margin-bottom: 20px;
+}
+
+.mealsdb-csv-upload-progress {
+    text-align: center;
+    padding: 40px;
+}
+
+.mealsdb-csv-spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #2271b1;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 20px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Stats */
+.mealsdb-csv-stats {
+    display: flex;
+    gap: 20px;
+    margin: 20px 0;
+    flex-wrap: wrap;
+}
+
+.mealsdb-csv-stat-box {
+    flex: 1;
+    min-width: 150px;
+    background: #f0f6fc;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    padding: 20px;
+    text-align: center;
+}
+
+.mealsdb-csv-stat-number {
+    font-size: 36px;
+    font-weight: bold;
+    color: #2271b1;
+    margin-bottom: 5px;
+}
+
+.mealsdb-csv-stat-label {
+    font-size: 14px;
+    color: #50575e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Preview Table */
+#mealsdb-csv-preview-container {
+    margin: 25px 0;
+}
+
+#mealsdb-csv-preview-table {
+    margin-top: 15px;
+}
+
+/* Options */
+.mealsdb-csv-options {
+    margin: 25px 0;
+    padding: 20px;
+    background: #f6f7f7;
+    border-radius: 4px;
+}
+
+.mealsdb-csv-options label {
+    display: block;
+    margin: 10px 0;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.mealsdb-csv-options input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+/* Actions */
+.mealsdb-csv-actions {
+    margin-top: 25px;
+    padding-top: 20px;
+    border-top: 1px solid #dcdcde;
+    text-align: right;
+}
+
+.mealsdb-csv-actions .button {
+    margin-left: 10px;
+}
+
+/* Progress */
+.mealsdb-csv-progress-container {
+    margin: 30px 0;
+}
+
+.mealsdb-csv-progress-bar-container {
+    width: 100%;
+    height: 30px;
+    background: #f0f0f1;
+    border-radius: 15px;
+    overflow: hidden;
+    margin-bottom: 15px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.mealsdb-csv-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #2271b1 0%, #135e96 100%);
+    border-radius: 15px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.mealsdb-csv-progress-text {
+    text-align: center;
+    font-size: 18px;
+    font-weight: bold;
+    color: #2271b1;
+}
+
+.mealsdb-csv-import-status {
+    text-align: center;
+    color: #50575e;
+    margin-top: 20px;
+}
+
+/* Results */
+.mealsdb-csv-results-summary {
+    margin: 25px 0;
+}
+
+.mealsdb-csv-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.mealsdb-csv-stat-item {
+    background: #fff;
+    border: 2px solid #c3c4c7;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+}
+
+.mealsdb-csv-stat-item.mealsdb-csv-stat-success {
+    border-color: #00a32a;
+    background: #f0f6f0;
+}
+
+.mealsdb-csv-stat-item.mealsdb-csv-stat-info {
+    border-color: #2271b1;
+    background: #f0f6fc;
+}
+
+.mealsdb-csv-stat-item.mealsdb-csv-stat-error {
+    border-color: #d63638;
+    background: #fcf0f1;
+}
+
+.mealsdb-csv-stat-value {
+    font-size: 48px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.mealsdb-csv-stat-success .mealsdb-csv-stat-value {
+    color: #00a32a;
+}
+
+.mealsdb-csv-stat-info .mealsdb-csv-stat-value {
+    color: #2271b1;
+}
+
+.mealsdb-csv-stat-error .mealsdb-csv-stat-value {
+    color: #d63638;
+}
+
+.mealsdb-csv-stat-title {
+    font-size: 14px;
+    color: #50575e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.mealsdb-csv-results-errors {
+    margin: 25px 0;
+}
+
+.mealsdb-csv-results-errors ul {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.mealsdb-csv-results-errors li {
+    margin: 8px 0;
+}
+
+.mealsdb-csv-results-actions {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid #dcdcde;
+    text-align: center;
+}
+
+.mealsdb-csv-results-actions .button {
+    margin: 5px;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+    .mealsdb-csv-card {
+        padding: 20px;
+    }
+
+    .mealsdb-csv-upload-area {
+        padding: 40px 20px;
+    }
+
+    .mealsdb-csv-stats {
+        flex-direction: column;
+    }
+
+    .mealsdb-csv-summary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mealsdb-csv-actions {
+        text-align: center;
+    }
+
+    .mealsdb-csv-actions .button {
+        margin: 5px;
+    }
+}
