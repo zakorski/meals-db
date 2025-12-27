@@ -605,32 +605,44 @@ class MealsDB_CSV_User_Client_Importer {
      * Create or update Meals DB client
      */
     private function create_or_update_client($data) {
-        global $wpdb;
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            throw new Exception(__('Database connection failed', 'meals-db'));
+        }
 
-        $table = $wpdb->prefix . 'meals_clients';
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $user_id = intval($data['source_user_id']);
 
         $this->write_log("Processing Meals DB client...", 1);
 
         // Check if client exists
-        $existing_client = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM $table WHERE wp_user_id = %d",
-            $user_id
-        ));
+        $sql = sprintf(
+            "SELECT * FROM `%s` WHERE wp_user_id = ?",
+            str_replace('`', '``', $table)
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            throw new Exception(sprintf(__('Failed to prepare statement: %s', 'meals-db'), $conn->error));
+        }
+
+        $stmt->bind_param('i', $user_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $existing_client = $result->fetch_object();
+        $stmt->close();
 
         if ($existing_client) {
-            $this->update_existing_client($existing_client, $data, $table);
+            $this->update_existing_client($existing_client, $data, $table, $conn);
         } else {
-            $this->create_new_client($data, $table, $user_id);
+            $this->create_new_client($data, $table, $user_id, $conn);
         }
     }
 
     /**
      * Update existing client (NULL-fill only)
      */
-    private function update_existing_client($existing_client, $data, $table) {
-        global $wpdb;
-
+    private function update_existing_client($existing_client, $data, $table, $conn) {
         $this->write_log("Client exists - applying NULL-fill logic", 2);
 
         if ($this->dry_run) {
@@ -668,17 +680,61 @@ class MealsDB_CSV_User_Client_Importer {
         }
 
         if (!empty($update_data)) {
-            $result = $wpdb->update(
-                $table,
-                $update_data,
-                ['client_id' => $existing_client->client_id],
-                $this->get_field_types($update_data),
-                ['%d']
+            // Build UPDATE query
+            $set_clauses = [];
+            foreach (array_keys($update_data) as $column) {
+                $set_clauses[] = "`$column` = ?";
+            }
+
+            $sql = sprintf(
+                "UPDATE `%s` SET %s WHERE client_id = ?",
+                str_replace('`', '``', $table),
+                implode(', ', $set_clauses)
             );
 
-            if ($result === false) {
-                throw new Exception(__('Failed to update client record', 'meals-db'));
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new Exception(sprintf(__('Failed to prepare update statement: %s', 'meals-db'), $conn->error));
             }
+
+            // Bind parameters
+            $types = '';
+            $values = [];
+            foreach ($update_data as $value) {
+                if (is_int($value)) {
+                    $types .= 'i';
+                } elseif (is_float($value)) {
+                    $types .= 'd';
+                } else {
+                    $types .= 's';
+                }
+                $values[] = $value;
+            }
+
+            // Add client_id parameter
+            $types .= 'i';
+            $values[] = $existing_client->client_id;
+
+            // Bind parameters using references
+            $refs = [];
+            foreach ($values as $key => $value) {
+                $refs[$key] = $values[$key];
+            }
+            array_unshift($refs, $types);
+
+            $bind_refs = [];
+            foreach ($refs as $key => $value) {
+                $bind_refs[$key] = &$refs[$key];
+            }
+
+            call_user_func_array([$stmt, 'bind_param'], $bind_refs);
+
+            // Execute
+            if (!$stmt->execute()) {
+                throw new Exception(sprintf(__('Failed to update client: %s', 'meals-db'), $stmt->error));
+            }
+
+            $stmt->close();
 
             $this->write_log("✓ Client updated - filled " . count($update_data) . " NULL fields", 3);
             $this->stats['clients_updated']++;
@@ -748,9 +804,7 @@ class MealsDB_CSV_User_Client_Importer {
     /**
      * Create new client
      */
-    private function create_new_client($data, $table, $user_id) {
-        global $wpdb;
-
+    private function create_new_client($data, $table, $user_id, $conn) {
         $this->write_log("Client doesn't exist - creating new record", 2);
 
         if ($this->dry_run) {
@@ -781,17 +835,59 @@ class MealsDB_CSV_User_Client_Importer {
         // Handle delivery initials - use existing validation system
         $this->process_delivery_initials($data, $client_data);
 
-        $result = $wpdb->insert(
-            $table,
-            $client_data,
-            $this->get_field_types($client_data)
+        // Build INSERT query
+        $columns = array_keys($client_data);
+        $placeholders = array_fill(0, count($columns), '?');
+
+        $sql = sprintf(
+            "INSERT INTO `%s` (%s) VALUES (%s)",
+            str_replace('`', '``', $table),
+            implode(', ', array_map(function($col) { return "`$col`"; }, $columns)),
+            implode(', ', $placeholders)
         );
 
-        if (!$result) {
-            throw new Exception(__('Failed to create client record', 'meals-db'));
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            throw new Exception(sprintf(__('Failed to prepare insert statement: %s', 'meals-db'), $conn->error));
         }
 
-        $this->write_log("✓ Client created with ID: " . $wpdb->insert_id, 3);
+        // Bind parameters
+        $types = '';
+        $values = [];
+        foreach ($client_data as $value) {
+            if (is_int($value)) {
+                $types .= 'i';
+            } elseif (is_float($value)) {
+                $types .= 'd';
+            } else {
+                $types .= 's';
+            }
+            $values[] = $value;
+        }
+
+        // Bind parameters using references
+        $refs = [];
+        foreach ($values as $key => $value) {
+            $refs[$key] = $values[$key];
+        }
+        array_unshift($refs, $types);
+
+        $bind_refs = [];
+        foreach ($refs as $key => $value) {
+            $bind_refs[$key] = &$refs[$key];
+        }
+
+        call_user_func_array([$stmt, 'bind_param'], $bind_refs);
+
+        // Execute
+        if (!$stmt->execute()) {
+            throw new Exception(sprintf(__('Failed to create client: %s', 'meals-db'), $stmt->error));
+        }
+
+        $client_id = $conn->insert_id;
+        $stmt->close();
+
+        $this->write_log("✓ Client created with ID: " . $client_id, 3);
         $this->stats['clients_created']++;
     }
 
