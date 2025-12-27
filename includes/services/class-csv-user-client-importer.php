@@ -17,6 +17,7 @@ class MealsDB_CSV_User_Client_Importer {
     private $update_clients = true;
     private $stats = [
         'total' => 0,
+        'wp_users_created' => 0,
         'wp_users_updated' => 0,
         'wp_users_skipped' => 0,
         'clients_created' => 0,
@@ -212,6 +213,7 @@ class MealsDB_CSV_User_Client_Importer {
         $this->write_log("IMPORT SUMMARY");
         $this->write_log(str_repeat('=', 70));
         $this->write_log("Total Rows: " . $this->stats['total']);
+        $this->write_log("WordPress Users Created: " . $this->stats['wp_users_created']);
         $this->write_log("WordPress Users Updated: " . $this->stats['wp_users_updated']);
         $this->write_log("WordPress Users Skipped: " . $this->stats['wp_users_skipped']);
         $this->write_log("Meals DB Clients Created: " . $this->stats['clients_created']);
@@ -402,26 +404,130 @@ class MealsDB_CSV_User_Client_Importer {
     }
 
     /**
-     * Update WordPress user (OVERWRITE mode)
+     * Create or update WordPress user (OVERWRITE mode)
      */
     private function update_wordpress_user($data) {
         $user_id = intval($data['source_user_id']);
 
-        $this->write_log("Updating WordPress user...", 1);
+        $this->write_log("Processing WordPress user...", 1);
 
         if ($this->dry_run) {
-            $this->write_log("DRY RUN: Would update WordPress user ID: " . $user_id, 2);
-            $this->stats['wp_users_updated']++;
+            $user = get_user_by('id', $user_id);
+            if ($user) {
+                $this->write_log("DRY RUN: Would update WordPress user ID: " . $user_id, 2);
+                $this->stats['wp_users_updated']++;
+            } else {
+                $this->write_log("DRY RUN: Would create WordPress user ID: " . $user_id, 2);
+                $this->stats['wp_users_created']++;
+            }
             return;
         }
 
         $user = get_user_by('id', $user_id);
+
         if (!$user) {
-            $this->write_log("✗ WordPress user ID " . $user_id . " not found", 2);
+            // User doesn't exist - try to create with the specified ID
+            $this->create_wordpress_user_with_id($data, $user_id);
+        } else {
+            // User exists - update it
+            $this->update_existing_wordpress_user($data, $user_id);
+        }
+    }
+
+    /**
+     * Create WordPress user with specific ID
+     */
+    private function create_wordpress_user_with_id($data, $user_id) {
+        global $wpdb;
+
+        $this->write_log("WordPress user ID " . $user_id . " not found - attempting to create...", 2);
+
+        // Check if ID is already in use (shouldn't be, but double-check)
+        $existing = $wpdb->get_var($wpdb->prepare("SELECT ID FROM {$wpdb->users} WHERE ID = %d", $user_id));
+        if ($existing) {
+            $this->write_log("✗ WordPress user ID " . $user_id . " is already in use", 2);
             $this->stats['wp_users_skipped']++;
-            throw new Exception(__('WordPress user not found', 'meals-db'));
+            throw new Exception(__('WordPress user ID already in use', 'meals-db'));
         }
 
+        // Prepare user data
+        $user_login = !empty($data['user_login']) ? $data['user_login'] : sanitize_user($data['user_email']);
+        $user_nicename = !empty($data['user_nicename']) ? $data['user_nicename'] : sanitize_title($user_login);
+        $display_name = !empty($data['display_name']) ? $data['display_name'] : trim($data['first_name'] . ' ' . $data['last_name']);
+
+        // Check if email is already in use
+        if (email_exists($data['user_email'])) {
+            $this->write_log("✗ Email " . $data['user_email'] . " already exists", 2);
+            $this->stats['wp_users_skipped']++;
+            throw new Exception(__('Email already exists', 'meals-db'));
+        }
+
+        // Check if user_login is already in use
+        if (username_exists($user_login)) {
+            // Try appending the ID to make it unique
+            $user_login = sanitize_user($data['user_email']) . '_' . $user_id;
+            if (username_exists($user_login)) {
+                $this->write_log("✗ Username " . $user_login . " already exists", 2);
+                $this->stats['wp_users_skipped']++;
+                throw new Exception(__('Username already exists', 'meals-db'));
+            }
+        }
+
+        // Insert user directly into database with specific ID
+        $now = current_time('mysql');
+        $result = $wpdb->insert(
+            $wpdb->users,
+            [
+                'ID' => $user_id,
+                'user_login' => $user_login,
+                'user_pass' => wp_hash_password(wp_generate_password(24)),
+                'user_nicename' => $user_nicename,
+                'user_email' => $data['user_email'],
+                'user_registered' => $now,
+                'display_name' => $display_name,
+            ],
+            ['%d', '%s', '%s', '%s', '%s', '%s', '%s']
+        );
+
+        if (!$result) {
+            $this->write_log("✗ Failed to create WordPress user", 2);
+            $this->stats['wp_users_skipped']++;
+            throw new Exception(__('Failed to create WordPress user', 'meals-db'));
+        }
+
+        // Set default role (customer)
+        $wpdb->insert(
+            $wpdb->usermeta,
+            [
+                'user_id' => $user_id,
+                'meta_key' => $wpdb->get_blog_prefix() . 'capabilities',
+                'meta_value' => serialize(['customer' => true]),
+            ],
+            ['%d', '%s', '%s']
+        );
+
+        $wpdb->insert(
+            $wpdb->usermeta,
+            [
+                'user_id' => $user_id,
+                'meta_key' => $wpdb->get_blog_prefix() . 'user_level',
+                'meta_value' => '0',
+            ],
+            ['%d', '%s', '%s']
+        );
+
+        $this->write_log("✓ WordPress user created with ID: " . $user_id, 2);
+
+        // Update user meta fields
+        $this->update_user_meta_fields($data, $user_id);
+
+        $this->stats['wp_users_created']++;
+    }
+
+    /**
+     * Update existing WordPress user
+     */
+    private function update_existing_wordpress_user($data, $user_id) {
         // Update core user fields
         $user_data = [
             'ID' => $user_id,
@@ -444,6 +550,18 @@ class MealsDB_CSV_User_Client_Importer {
             throw new Exception($result->get_error_message());
         }
 
+        $this->write_log("✓ WordPress user updated (core fields)", 2);
+
+        // Update user meta fields
+        $this->update_user_meta_fields($data, $user_id);
+
+        $this->stats['wp_users_updated']++;
+    }
+
+    /**
+     * Update user meta fields
+     */
+    private function update_user_meta_fields($data, $user_id) {
         // Update user meta (OVERWRITE all fields)
         $meta_fields = [
             'first_name',
@@ -480,8 +598,7 @@ class MealsDB_CSV_User_Client_Importer {
             }
         }
 
-        $this->write_log("✓ WordPress user updated (core + " . $updated_meta_count . " meta fields)", 2);
-        $this->stats['wp_users_updated']++;
+        $this->write_log("✓ User meta updated (" . $updated_meta_count . " fields)", 2);
     }
 
     /**
