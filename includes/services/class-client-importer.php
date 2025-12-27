@@ -16,6 +16,9 @@ class MealsDB_Client_Importer {
         'errors' => 0,
         'wp_users_created' => 0,
         'wp_users_existing' => 0,
+        'clients_created' => 0,
+        'clients_updated' => 0,
+        'clients_skipped' => 0,
         'with_initials' => 0,
         'need_initials' => 0,
         'with_emails' => 0,
@@ -347,6 +350,9 @@ class MealsDB_Client_Importer {
         $this->write_log("Errors: " . $this->stats['errors']);
         $this->write_log("WP Users Created: " . $this->stats['wp_users_created']);
         $this->write_log("WP Users Existing: " . $this->stats['wp_users_existing']);
+        $this->write_log("Clients Created: " . $this->stats['clients_created']);
+        $this->write_log("Clients Updated: " . $this->stats['clients_updated']);
+        $this->write_log("Clients Skipped: " . $this->stats['clients_skipped']);
         $this->write_log("Completed: " . date('Y-m-d H:i:s'));
         $this->write_log(str_repeat('=', 60));
 
@@ -476,11 +482,11 @@ class MealsDB_Client_Importer {
             $this->write_log("✓ Created new WordPress user ID: " . $wp_user_id, 1);
         }
 
-        // Insert client record
-        $this->write_log("Inserting client record into database...", 1);
-        $client_id = $this->insert_client($data, $wp_user_id, $row_number);
-        if (!$client_id) {
-            $this->write_log("✗ Failed to insert client record", 1);
+        // Create or update client record
+        $this->write_log("Creating or updating client record in database...", 1);
+        $result = $this->create_or_update_client($data, $wp_user_id, $row_number);
+        if (!$result) {
+            $this->write_log("✗ Failed to create/update client record", 1);
 
             // Rollback: Only delete the WP user if we just created it (not if we linked to existing)
             if ($wp_user_status !== 'existing') {
@@ -490,10 +496,25 @@ class MealsDB_Client_Importer {
                 $this->write_log("WordPress user was existing - not deleting", 2);
             }
 
-            throw new Exception(__('Failed to insert client record', 'meals-db'));
+            throw new Exception(__('Failed to create/update client record', 'meals-db'));
         }
-        $this->write_log("✓ Client record inserted with ID: " . $client_id, 2);
-        $this->write_log("✓ Meals DB client created for: " . $data['first_name'] . ' ' . $data['last_name'] . ' (' . $data['delivery_initials'] . ')', 1);
+
+        $client_id = $result['client_id'];
+        $operation = $result['operation'];
+
+        if ($operation === 'updated') {
+            $this->stats['clients_updated']++;
+            $this->write_log("✓ Client record updated (ID: " . $client_id . ") - filled " . $result['fields_updated'] . " NULL fields", 2);
+            $this->write_log("✓ Meals DB client updated for: " . $data['first_name'] . ' ' . $data['last_name'] . ' (' . $data['delivery_initials'] . ')', 1);
+        } elseif ($operation === 'skipped') {
+            $this->stats['clients_skipped']++;
+            $this->write_log("✓ Client record skipped (ID: " . $client_id . ") - no NULL fields to update", 2);
+            $this->write_log("✓ Meals DB client already complete for: " . $data['first_name'] . ' ' . $data['last_name'] . ' (' . $data['delivery_initials'] . ')', 1);
+        } else {
+            $this->stats['clients_created']++;
+            $this->write_log("✓ Client record created with ID: " . $client_id, 2);
+            $this->write_log("✓ Meals DB client created for: " . $data['first_name'] . ' ' . $data['last_name'] . ' (' . $data['delivery_initials'] . ')', 1);
+        }
     }
 
     /**
@@ -882,9 +903,9 @@ class MealsDB_Client_Importer {
     }
 
     /**
-     * Insert client into meals_clients table
+     * Create or update client record
      */
-    private function insert_client($data, $wp_user_id, $row_number = null) {
+    private function create_or_update_client($data, $wp_user_id, $row_number = null) {
         $conn = MealsDB_DB::get_connection();
         if (!MealsDB_DB::is_mysqli($conn)) {
             throw new Exception(__('Database connection failed', 'meals-db'));
@@ -892,17 +913,145 @@ class MealsDB_Client_Importer {
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
-        // Prepare data for insertion
-        $insert_data = [
-            'wp_user_id' => $wp_user_id,
-            'first_name' => $data['first_name'],
-            'last_name' => $data['last_name'],
-            'client_type' => $data['client_type'],
-            'active' => 1,
-        ];
+        // Check if client already exists for this WordPress user
+        $sql = sprintf(
+            "SELECT * FROM `%s` WHERE wp_user_id = ?",
+            str_replace('`', '``', $table)
+        );
 
-        // Map all fields
-        $field_map = [
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            throw new Exception(sprintf(__('Failed to prepare statement: %s', 'meals-db'), $conn->error));
+        }
+
+        $stmt->bind_param('i', $wp_user_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $existing_client = $result->fetch_object();
+        $stmt->close();
+
+        if ($existing_client) {
+            // Client exists - update with NULL-fill logic
+            $this->write_log("Client already exists for wp_user_id " . $wp_user_id . " - updating NULL fields only", 2);
+            return $this->update_client($existing_client, $data, $table, $row_number);
+        } else {
+            // Client doesn't exist - create new
+            $this->write_log("Client doesn't exist for wp_user_id " . $wp_user_id . " - creating new record", 2);
+            $client_id = $this->create_client($data, $wp_user_id, $table, $row_number);
+            return [
+                'client_id' => $client_id,
+                'operation' => 'created',
+                'fields_updated' => 0
+            ];
+        }
+    }
+
+    /**
+     * Update existing client with NULL-fill logic (only update empty fields)
+     */
+    private function update_client($existing_client, $data, $table, $row_number = null) {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            throw new Exception(__('Database connection failed', 'meals-db'));
+        }
+
+        // Get field mapping
+        $field_map = $this->get_field_map();
+
+        // Build update data (only fields that are currently NULL or empty)
+        $update_data = [];
+        foreach ($field_map as $source => $target) {
+            $current_value = $existing_client->$target ?? null;
+            $new_value = $data[$source] ?? null;
+
+            // Only update if current value is NULL/empty AND new value is not empty
+            if ((is_null($current_value) || $current_value === '') && !empty($new_value)) {
+                $update_data[$target] = $new_value;
+            }
+        }
+
+        // Update deterministic indexes for fields being updated
+        foreach ($this->deterministic_index_map as $field => $index_column) {
+            if (isset($update_data[$field]) && !empty($update_data[$field])) {
+                $update_data[$index_column] = $this->deterministic_hash($update_data[$field]);
+            }
+        }
+
+        if (empty($update_data)) {
+            $this->write_log("No NULL fields to update - client already has all data", 3);
+            return [
+                'client_id' => $existing_client->client_id,
+                'operation' => 'skipped',
+                'fields_updated' => 0
+            ];
+        }
+
+        if ($row_number !== null) {
+            $this->write_log("Updating " . count($update_data) . " NULL fields", 3);
+        }
+
+        // Build UPDATE query
+        $set_clauses = [];
+        foreach (array_keys($update_data) as $column) {
+            $set_clauses[] = "`$column` = ?";
+        }
+
+        $sql = sprintf(
+            "UPDATE `%s` SET %s WHERE client_id = ?",
+            str_replace('`', '``', $table),
+            implode(', ', $set_clauses)
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            throw new Exception(sprintf(__('Failed to prepare update statement: %s', 'meals-db'), $conn->error));
+        }
+
+        // Bind parameters
+        $types = '';
+        $values = [];
+        foreach ($update_data as $value) {
+            if (is_int($value)) {
+                $types .= 'i';
+            } elseif (is_float($value)) {
+                $types .= 'd';
+            } else {
+                $types .= 's';
+            }
+            $values[] = $value;
+        }
+
+        // Add client_id parameter
+        $types .= 'i';
+        $values[] = $existing_client->client_id;
+
+        $bind_params = array_merge([$types], $values);
+        $refs = [];
+        foreach ($bind_params as $key => $value) {
+            $refs[$key] = &$bind_params[$key];
+        }
+
+        call_user_func_array([$stmt, 'bind_param'], $refs);
+
+        // Execute
+        if (!$stmt->execute()) {
+            throw new Exception(sprintf(__('Failed to update client: %s', 'meals-db'), $stmt->error));
+        }
+
+        $stmt->close();
+
+        return [
+            'client_id' => $existing_client->client_id,
+            'operation' => 'updated',
+            'fields_updated' => count($update_data)
+        ];
+    }
+
+    /**
+     * Get field mapping for database operations
+     */
+    private function get_field_map() {
+        return [
             'client_type' => 'client_type',
             'client_email' => 'client_email',
             'phone_primary' => 'client_phone_1',
@@ -955,7 +1104,33 @@ class MealsDB_Client_Importer {
             'delivery_address_city' => 'delivery_city',
             'delivery_address_province' => 'delivery_province',
             'delivery_address_postal' => 'delivery_postal_code',
+            'individual_id' => 'individual_id',
+            'requisition_id' => 'requisition_id',
+            'diet_concerns' => 'diet_concerns',
+            'customer_comments' => 'customer_comments',
         ];
+    }
+
+    /**
+     * Create new client record
+     */
+    private function create_client($data, $wp_user_id, $table, $row_number = null) {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            throw new Exception(__('Database connection failed', 'meals-db'));
+        }
+
+        // Prepare data for insertion
+        $insert_data = [
+            'wp_user_id' => $wp_user_id,
+            'first_name' => $data['first_name'],
+            'last_name' => $data['last_name'],
+            'client_type' => $data['client_type'],
+            'active' => 1,
+        ];
+
+        // Map all fields using centralized field map
+        $field_map = $this->get_field_map();
 
         $fields_added = 0;
         foreach ($field_map as $source => $target) {
