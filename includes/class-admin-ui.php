@@ -519,6 +519,29 @@ class MealsDB_Admin_UI {
             }
         }
 
+        if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'delete_nonadmin_users') {
+            check_admin_referer('mealsdb_delete_nonadmin_users', 'mealsdb_delete_nonadmin_users_nonce');
+
+            require_once MEALS_DB_PLUGIN_DIR . 'includes/class-user-delete.php';
+
+            $confirmation = $_POST['mealsdb_delete_confirm'] ?? '';
+            if (function_exists('sanitize_text_field')) {
+                $confirmation = sanitize_text_field($confirmation);
+            }
+
+            $result = MealsDB_User_Delete::run($confirmation);
+
+            if (is_wp_error($result)) {
+                add_action('admin_notices', function() use ($result) {
+                    echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
+                });
+            } else {
+                add_action('admin_notices', function() use ($result) {
+                    echo MealsDB_Admin_UI::render_user_delete_summary($result);
+                });
+            }
+        }
+
         $tab = $_GET['tab'] ?? 'sync';
 
         echo '<div class="wrap">';
@@ -613,6 +636,55 @@ class MealsDB_Admin_UI {
                     </li>
                 <?php endif; ?>
             </ul>
+        </div>
+        <?php
+
+        return (string) ob_get_clean();
+    }
+
+    /**
+     * Render a structured summary for user deletion results.
+     *
+     * @param array<string, mixed> $result
+     */
+    public static function render_user_delete_summary(array $result): string {
+        $deleted      = $result['deleted'] ?? [];
+        $skipped      = $result['skipped'] ?? [];
+        $errors       = $result['errors'] ?? [];
+        $total_count  = $result['total_count'] ?? 0;
+
+        ob_start();
+        ?>
+        <div class="notice notice-warning">
+            <p><strong><?php echo esc_html__('Non-Admin User Deletion completed.', 'meals-db'); ?></strong></p>
+            <p class="description"><?php echo esc_html__('All non-administrator WordPress users have been processed.', 'meals-db'); ?></p>
+            <ul>
+                <li><strong><?php echo esc_html__('Total users processed:', 'meals-db'); ?></strong> <?php echo esc_html($total_count); ?></li>
+                <li><strong><?php echo esc_html__('Users deleted:', 'meals-db'); ?></strong> <?php echo esc_html(count($deleted)); ?></li>
+                <li><strong><?php echo esc_html__('Users skipped (administrators):', 'meals-db'); ?></strong> <?php echo esc_html(count($skipped)); ?></li>
+                <?php if (!empty($errors)) : ?>
+                    <li>
+                        <strong><?php echo esc_html__('Deletion failures:', 'meals-db'); ?></strong>
+                        <ul>
+                            <?php foreach ($errors as $error) : ?>
+                                <li><?php echo esc_html(($error['login'] ?? 'Unknown user') . ' (' . ($error['email'] ?? 'no email') . ') — ' . ($error['error'] ?? 'Unknown error')); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </li>
+                <?php endif; ?>
+            </ul>
+            <?php if (!empty($deleted) && count($deleted) <= 10) : ?>
+                <details>
+                    <summary><?php echo esc_html__('View deleted users', 'meals-db'); ?></summary>
+                    <ul>
+                        <?php foreach ($deleted as $user) : ?>
+                            <li><?php echo esc_html(($user['login'] ?? 'Unknown') . ' (' . ($user['email'] ?? 'no email') . ')'); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </details>
+            <?php elseif (!empty($deleted)) : ?>
+                <p class="description"><?php echo esc_html(sprintf(__('%d users were deleted successfully.', 'meals-db'), count($deleted))); ?></p>
+            <?php endif; ?>
         </div>
         <?php
 
