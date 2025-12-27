@@ -50,6 +50,26 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         </form>
     </div>
 
+    <div class="mealsdb-delete-nonadmin-users">
+        <h2><?php echo esc_html__('Delete Non-Admin Users', 'meals-db'); ?></h2>
+        <p class="description">
+            <?php echo esc_html__('Permanently deletes all WordPress users who are not administrators, along with their metadata. This action is destructive and cannot be undone.', 'meals-db'); ?>
+        </p>
+        <form method="post" class="mealsdb-delete-nonadmin-users-form">
+            <?php wp_nonce_field('mealsdb_delete_nonadmin_users', 'mealsdb_delete_nonadmin_users_nonce'); ?>
+            <input type="hidden" name="mealsdb_action" value="delete_nonadmin_users">
+            <p>
+                <label for="mealsdb_delete_confirm">
+                    <?php echo esc_html__('Type DELETE to confirm:', 'meals-db'); ?>
+                </label>
+                <input type="text" id="mealsdb_delete_confirm" name="mealsdb_delete_confirm" pattern="DELETE" required placeholder="DELETE" autocomplete="off" />
+            </p>
+            <p>
+                <button class="button button-secondary" type="submit"><?php echo esc_html__('Delete Non-Admin Users', 'meals-db'); ?></button>
+            </p>
+        </form>
+    </div>
+
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
 </div>
