@@ -422,40 +422,59 @@ class MealsDB_Client_Importer {
 
         $this->write_log("✓ Required fields validated", 1);
 
-        // Generate initials if needed
-        if (empty($data['delivery_initials'])) {
-            $this->write_log("Generating delivery initials...", 1);
-            $data['delivery_initials'] = $this->generate_initials(
-                $data['first_name'],
-                $data['last_name'],
-                $data
-            );
-            $this->write_log("Generated initials: " . $data['delivery_initials'], 2);
+        // Check if client already exists BEFORE validating initials
+        $this->write_log("Checking if client already exists...", 1);
+        $existing_client_id = $this->check_existing_client($data);
+
+        if ($existing_client_id) {
+            $this->write_log("✓ Client already exists (ID: " . $existing_client_id . ") - skipping initials validation", 1);
+            // For existing clients, use their current initials if not provided in CSV
+            if (empty($data['delivery_initials'])) {
+                $this->write_log("Retrieving existing client's initials...", 2);
+                $existing_initials = $this->get_existing_client_initials($existing_client_id);
+                if ($existing_initials) {
+                    $data['delivery_initials'] = $existing_initials;
+                    $this->write_log("Using existing client's initials: " . $existing_initials, 2);
+                }
+            }
         } else {
-            $this->write_log("Using existing initials: " . $data['delivery_initials'], 1);
-            // Validate existing initials using new address-based validator
-            $validation = MealsDB_Initials_Validator::validate(
-                $data['delivery_initials'],
-                $data,
-                null
-            );
+            $this->write_log("✓ New client - validating delivery initials...", 1);
 
-            if (!$validation['valid']) {
-                $this->write_log("✗ VALIDATION FAILED: " . $validation['error'], 1);
-                throw new Exception($validation['error']);
+            // Generate initials if needed
+            if (empty($data['delivery_initials'])) {
+                $this->write_log("Generating delivery initials...", 2);
+                $data['delivery_initials'] = $this->generate_initials(
+                    $data['first_name'],
+                    $data['last_name'],
+                    $data
+                );
+                $this->write_log("Generated initials: " . $data['delivery_initials'], 2);
+            } else {
+                $this->write_log("Using provided initials: " . $data['delivery_initials'], 2);
+                // Validate existing initials using new address-based validator
+                $validation = MealsDB_Initials_Validator::validate(
+                    $data['delivery_initials'],
+                    $data,
+                    null
+                );
+
+                if (!$validation['valid']) {
+                    $this->write_log("✗ VALIDATION FAILED: " . $validation['error'], 2);
+                    throw new Exception($validation['error']);
+                }
+
+                if (!empty($validation['shared'])) {
+                    $sharing_names = array_map(function($client) {
+                        return trim($client['first_name'] . ' ' . $client['last_name']);
+                    }, $validation['sharing_with']);
+                    $this->write_log("✓ Initials shared with " . implode(', ', $sharing_names) . " at same address", 2);
+                }
             }
 
-            if (!empty($validation['shared'])) {
-                $sharing_names = array_map(function($client) {
-                    return trim($client['first_name'] . ' ' . $client['last_name']);
-                }, $validation['sharing_with']);
-                $this->write_log("✓ Initials shared with " . implode(', ', $sharing_names) . " at same address", 2);
-            }
+            // Track used initials for current import batch
+            $this->used_initials[] = $data['delivery_initials'];
+            $this->write_log("✓ Delivery initials validated and reserved", 2);
         }
-
-        // Track used initials for current import batch
-        $this->used_initials[] = $data['delivery_initials'];
-        $this->write_log("✓ Delivery initials validated and reserved", 1);
 
         // Determine what would happen (for both dry run and real run)
         if ($this->dry_run) {
@@ -1378,5 +1397,94 @@ class MealsDB_Client_Importer {
      */
     private function deterministic_hash($value) {
         return hash('sha256', strtolower(trim($value)));
+    }
+
+    /**
+     * Check if a client already exists based on email
+     *
+     * @param array $data Client data
+     * @return int|null Client ID if exists, null otherwise
+     */
+    private function check_existing_client($data) {
+        // Determine email (real or generated)
+        $has_email = !empty($data['client_email']) && is_email($data['client_email']);
+        $email = null;
+
+        if ($has_email) {
+            $email = $data['client_email'];
+        } else {
+            // Generate email from initials if available
+            $delivery_initials = $data['delivery_initials'] ?? '';
+            if (!empty($delivery_initials)) {
+                $email = strtolower($delivery_initials) . '@mealsdb.local';
+            } else {
+                // Cannot determine email - client doesn't exist
+                return null;
+            }
+        }
+
+        // Check if WordPress user exists with this email
+        $existing_user = get_user_by('email', $email);
+        if (!$existing_user) {
+            return null;
+        }
+
+        // Check if client record exists for this WordPress user
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return null;
+        }
+
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = sprintf(
+            "SELECT client_id FROM `%s` WHERE wp_user_id = ?",
+            str_replace('`', '``', $table)
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            return null;
+        }
+
+        $wp_user_id = $existing_user->ID;
+        $stmt->bind_param('i', $wp_user_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $client = $result->fetch_object();
+        $stmt->close();
+
+        return $client ? (int) $client->client_id : null;
+    }
+
+    /**
+     * Get existing client's delivery initials
+     *
+     * @param int $client_id Client ID
+     * @return string|null Delivery initials or null
+     */
+    private function get_existing_client_initials($client_id) {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return null;
+        }
+
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = sprintf(
+            "SELECT delivery_initials FROM `%s` WHERE client_id = ?",
+            str_replace('`', '``', $table)
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            return null;
+        }
+
+        $stmt->bind_param('i', $client_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $client = $result->fetch_object();
+        $stmt->close();
+
+        return $client ? $client->delivery_initials : null;
     }
 }
