@@ -451,6 +451,9 @@ class MealsDB_Client_Importer {
                 $this->write_log("Generated initials: " . $data['delivery_initials'], 2);
             } else {
                 $this->write_log("Using provided initials: " . $data['delivery_initials'], 2);
+                // Store original CSV initials for potential conflict logging
+                $original_initials = $data['delivery_initials'];
+
                 // Validate existing initials using new address-based validator
                 $validation = MealsDB_Initials_Validator::validate(
                     $data['delivery_initials'],
@@ -460,14 +463,67 @@ class MealsDB_Client_Importer {
 
                 if (!$validation['valid']) {
                     $this->write_log("✗ VALIDATION FAILED: " . $validation['error'], 2);
-                    throw new Exception($validation['error']);
-                }
 
-                if (!empty($validation['shared'])) {
-                    $sharing_names = array_map(function($client) {
-                        return trim($client['first_name'] . ' ' . $client['last_name']);
-                    }, $validation['sharing_with']);
-                    $this->write_log("✓ Initials shared with " . implode(', ', $sharing_names) . " at same address", 2);
+                    // Check if this is an initials conflict (not other validation errors)
+                    // Conflicts typically contain "already in use" in the error message
+                    if (stripos($validation['error'], 'already in use') !== false) {
+                        $this->write_log("⚠ Initials conflict detected: " . $validation['error'], 2);
+                        $client_name = trim($data['first_name'] . ' ' . $data['last_name']);
+                        $this->write_log("Auto-generating alternative initials for " . $client_name . "...", 2);
+
+                        // Generate new initials
+                        $generated_initials = $this->generate_initials(
+                            $data['first_name'],
+                            $data['last_name'],
+                            $data
+                        );
+
+                        // Check if generation was successful (XXX indicates failure)
+                        if ($generated_initials === 'XXX') {
+                            $this->write_log("✗ Failed to auto-generate valid initials", 2);
+                            throw new Exception($validation['error']);
+                        }
+
+                        $this->write_log("Generated new initials: " . $generated_initials, 2);
+
+                        // Validate the newly generated initials
+                        $new_validation = MealsDB_Initials_Validator::validate(
+                            $generated_initials,
+                            $data,
+                            null
+                        );
+
+                        if (!$new_validation['valid']) {
+                            $this->write_log("✗ Auto-generated initials also failed validation: " . $new_validation['error'], 2);
+                            throw new Exception($validation['error']); // Throw original error
+                        }
+
+                        $this->write_log("✓ New initials validated successfully", 2);
+
+                        // Use the new initials
+                        $data['delivery_initials'] = $generated_initials;
+
+                        // Log the change for manual review
+                        $this->write_log("⚠ INITIALS AUTO-CHANGED: CSV specified '" . $original_initials . "' but assigned '" . $generated_initials . "' due to conflict", 2);
+
+                        if (!empty($new_validation['shared'])) {
+                            $sharing_names = array_map(function($client) {
+                                return trim($client['first_name'] . ' ' . $client['last_name']);
+                            }, $new_validation['sharing_with']);
+                            $this->write_log("✓ Initials shared with " . implode(', ', $sharing_names) . " at same address", 2);
+                        }
+                    } else {
+                        // Other validation errors (not conflicts) - throw immediately
+                        throw new Exception($validation['error']);
+                    }
+                } else {
+                    // Validation passed on first try
+                    if (!empty($validation['shared'])) {
+                        $sharing_names = array_map(function($client) {
+                            return trim($client['first_name'] . ' ' . $client['last_name']);
+                        }, $validation['sharing_with']);
+                        $this->write_log("✓ Initials shared with " . implode(', ', $sharing_names) . " at same address", 2);
+                    }
                 }
             }
 
