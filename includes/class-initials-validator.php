@@ -361,37 +361,70 @@ class MealsDB_Initials_Validator {
 	 * @return array Array of client data.
 	 */
 	private static function get_clients_with_initials($initials) {
-		global $wpdb;
+		$connection = MealsDB_DB::get_connection();
 
-		$table_name = $wpdb->prefix . 'meals_clients';
+		if (!MealsDB_DB::is_mysqli($connection)) {
+			error_log('[MealsDB] Unable to obtain database connection for initials lookup.');
+			return array();
+		}
 
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		$results = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT
-					client_id as id,
-					first_name,
-					last_name,
-					delivery_initials,
-					delivery_street_number,
-					delivery_street_name,
-					delivery_apartment_number,
-					delivery_city,
-					delivery_postal_code,
-					street_number,
-					street_name,
-					apartment_number,
-					city,
-					postal_code
-				FROM {$table_name}
-				WHERE delivery_initials = %s",
-				$initials
-			),
-			ARRAY_A
+		$clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+		$sql = sprintf(
+			'SELECT
+				client_id as id,
+				first_name,
+				last_name,
+				delivery_initials,
+				delivery_street_number,
+				delivery_street_name,
+				delivery_apartment_number,
+				delivery_city,
+				delivery_postal_code,
+				street_number,
+				street_name,
+				apartment_number,
+				city,
+				postal_code
+			FROM `%s`
+			WHERE delivery_initials = ?',
+			$clients_table
 		);
-		// phpcs:enable
 
-		return $results ?: array();
+		$statement = $connection->prepare($sql);
+
+		if (!MealsDB_DB::is_mysqli_stmt($statement)) {
+			error_log('[MealsDB] Failed to prepare initials lookup query.');
+			return array();
+		}
+
+		if (!$statement->bind_param('s', $initials)) {
+			error_log('[MealsDB] Failed to bind parameters for initials lookup.');
+			$statement->close();
+			return array();
+		}
+
+		if (!$statement->execute()) {
+			error_log('[MealsDB] Failed to execute initials lookup query: ' . $statement->error);
+			$statement->close();
+			return array();
+		}
+
+		$result = $statement->get_result();
+		if (!$result) {
+			error_log('[MealsDB] Failed to get result set for initials lookup.');
+			$statement->close();
+			return array();
+		}
+
+		$results = array();
+		while ($row = $result->fetch_assoc()) {
+			$results[] = $row;
+		}
+
+		$result->free();
+		$statement->close();
+
+		return $results;
 	}
 
 	/**
