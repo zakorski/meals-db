@@ -457,8 +457,34 @@ class MealsDB_Client_Importer {
         $this->used_initials[] = $data['delivery_initials'];
         $this->write_log("✓ Delivery initials validated and reserved", 1);
 
+        // Determine what would happen (for both dry run and real run)
         if ($this->dry_run) {
-            $this->write_log("DRY RUN MODE: Skipping actual database operations", 1);
+            $this->write_log("DRY RUN MODE: Simulating database operations for statistics", 1);
+
+            // Simulate WordPress user creation/linking
+            $wp_user_simulation = $this->simulate_wp_user_creation($data);
+            $this->write_log("Would " . ($wp_user_simulation['status'] === 'existing' ? 'link to existing' : 'create new') . " WordPress user", 2);
+
+            // Simulate client creation/update
+            $client_simulation = $this->simulate_client_creation($data, $wp_user_simulation);
+            $this->write_log("Would " . $client_simulation['operation'] . " client record", 2);
+
+            // Update statistics based on simulation
+            if ($wp_user_simulation['status'] === 'existing') {
+                $this->stats['wp_users_existing']++;
+            } else {
+                $this->stats['wp_users_created']++;
+            }
+
+            if ($client_simulation['operation'] === 'created') {
+                $this->stats['clients_created']++;
+            } elseif ($client_simulation['operation'] === 'updated') {
+                $this->stats['clients_updated']++;
+            } else {
+                $this->stats['clients_skipped']++;
+            }
+
+            $this->write_log("✓ DRY RUN: Would import " . $data['first_name'] . ' ' . $data['last_name'] . ' (' . $data['delivery_initials'] . ')', 1);
             return; // Don't actually import in dry run mode
         }
 
@@ -855,6 +881,108 @@ class MealsDB_Client_Importer {
         return [
             'user_id' => $user_id,
             'status' => $is_generated_email ? 'generated' : 'created'
+        ];
+    }
+
+    /**
+     * Simulate WordPress user creation to determine statistics without making changes
+     * Used in dry run mode to calculate accurate statistics
+     *
+     * @param array $data Client data
+     * @return array ['status' => string, 'would_create' => bool]
+     */
+    private function simulate_wp_user_creation($data) {
+        $has_email = !empty($data['client_email']) && is_email($data['client_email']);
+        $email = null;
+
+        // Determine email to use (real or generated)
+        if ($has_email) {
+            $email = $data['client_email'];
+        } else {
+            $delivery_initials = $data['delivery_initials'] ?? '';
+            if (empty($delivery_initials)) {
+                throw new Exception(__('Cannot create WordPress user: no email and no delivery initials', 'meals-db'));
+            }
+            $email = strtolower($delivery_initials) . '@mealsdb.local';
+        }
+
+        // Check if WordPress user already exists with this email
+        $existing_user = get_user_by('email', $email);
+
+        if ($existing_user) {
+            return [
+                'status' => 'existing',
+                'would_create' => false,
+                'user_id' => $existing_user->ID
+            ];
+        }
+
+        return [
+            'status' => 'created',
+            'would_create' => true,
+            'user_id' => null
+        ];
+    }
+
+    /**
+     * Simulate client creation to determine statistics without making changes
+     * Used in dry run mode to calculate accurate statistics
+     *
+     * @param array $data Client data
+     * @param array $wp_user_simulation Result from simulate_wp_user_creation
+     * @return array ['operation' => string] (created, updated, or skipped)
+     */
+    private function simulate_client_creation($data, $wp_user_simulation) {
+        // If the WordPress user exists, check if there's already a client record
+        if ($wp_user_simulation['status'] === 'existing' && $wp_user_simulation['user_id']) {
+            $conn = MealsDB_DB::get_connection();
+            if (!MealsDB_DB::is_mysqli($conn)) {
+                throw new Exception(__('Database connection failed', 'meals-db'));
+            }
+
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+            $sql = sprintf(
+                "SELECT * FROM `%s` WHERE wp_user_id = ?",
+                str_replace('`', '``', $table)
+            );
+
+            $stmt = $conn->prepare($sql);
+            if (!$stmt) {
+                throw new Exception(sprintf(__('Failed to prepare statement: %s', 'meals-db'), $conn->error));
+            }
+
+            $wp_user_id = $wp_user_simulation['user_id'];
+            $stmt->bind_param('i', $wp_user_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $existing_client = $result->fetch_object();
+            $stmt->close();
+
+            if ($existing_client) {
+                // Client exists - would update or skip
+                // Check if there are any NULL fields that would be updated
+                $field_map = $this->get_field_map();
+                $has_null_fields = false;
+
+                foreach ($field_map as $source => $target) {
+                    $current_value = $existing_client->$target ?? null;
+                    $new_value = $data[$source] ?? null;
+
+                    if ((is_null($current_value) || $current_value === '') && !empty($new_value)) {
+                        $has_null_fields = true;
+                        break;
+                    }
+                }
+
+                return [
+                    'operation' => $has_null_fields ? 'updated' : 'skipped'
+                ];
+            }
+        }
+
+        // No existing client - would create new
+        return [
+            'operation' => 'created'
         ];
     }
 
