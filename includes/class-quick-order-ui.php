@@ -136,6 +136,22 @@ class MealsDB_Quick_Order_UI {
                     <label for="mealsdb-quick-order-date"><?php esc_html_e('Order Date', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-quick-order-date" class="mealsdb-quick-order__order-date" />
                 </div>
+                <div class="mealsdb-quick-order__control">
+                    <label for="mealsdb-quick-order-rate">
+                        <?php esc_html_e('Billing Rate', 'meals-db'); ?>
+                        <span class="mealsdb-quick-order__rate-indicator" id="mealsdb-quick-order-rate-indicator" style="font-size: 0.85em; color: #666; margin-left: 5px;"></span>
+                    </label>
+                    <input
+                        type="number"
+                        id="mealsdb-quick-order-rate"
+                        class="mealsdb-quick-order__rate-input"
+                        step="0.01"
+                        min="0"
+                        placeholder="0.00"
+                        style="width: 150px;"
+                    />
+                    <input type="hidden" id="mealsdb-quick-order-default-rate" value="" />
+                </div>
             </div>
 
             <div id="mealsdb-qo-categories" class="mealsdb-qo-categories">
@@ -176,6 +192,10 @@ class MealsDB_Quick_Order_UI {
                             <div class="mealsdb-quick-order__summary-meta-row">
                                 <dt class="mealsdb-quick-order__summary-meta-label"><?php esc_html_e('Order Date', 'meals-db'); ?></dt>
                                 <dd class="mealsdb-quick-order__summary-meta-value" id="mealsdb-quick-order-summary-date"><?php esc_html_e('Not set', 'meals-db'); ?></dd>
+                            </div>
+                            <div class="mealsdb-quick-order__summary-meta-row">
+                                <dt class="mealsdb-quick-order__summary-meta-label"><?php esc_html_e('Billing Rate', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-meta-value" id="mealsdb-quick-order-summary-rate"><?php esc_html_e('Not set', 'meals-db'); ?></dd>
                             </div>
                         </dl>
                     </header>

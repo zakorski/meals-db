@@ -13,6 +13,7 @@ class MealsDB_Quick_Order_Ajax {
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
         add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
+        add_action('wp_ajax_mealsdb_qo_get_client_rate', [self::class, 'get_client_rate']);
     }
 
     /**
@@ -162,6 +163,7 @@ class MealsDB_Quick_Order_Ajax {
         $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
         $date      = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
         $items     = self::normalise_items($_POST['items'] ?? []);
+        $billing_rate = isset($_POST['billing_rate']) ? floatval($_POST['billing_rate']) : null;
         $order_date = self::parse_order_date($date);
 
         if (
@@ -173,6 +175,13 @@ class MealsDB_Quick_Order_Ajax {
             wp_send_json([
                 'success' => false,
                 'message' => __('Invalid order data.', 'meals-db'),
+            ]);
+        }
+
+        if ($billing_rate !== null && $billing_rate < 0) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Invalid billing rate.', 'meals-db'),
             ]);
         }
 
@@ -191,7 +200,7 @@ class MealsDB_Quick_Order_Ajax {
             }
             $order->save();
 
-            if ($client_db_id > 0 && !self::log_transaction($order, $client_db_id, $order_date)) {
+            if ($client_db_id > 0 && !self::log_transaction($order, $client_db_id, $order_date, $billing_rate)) {
                 $order_id = $order->get_id();
                 if ($order_id > 0) {
                     wp_trash_post($order_id);
@@ -454,6 +463,94 @@ class MealsDB_Quick_Order_Ajax {
             ]);
         } catch (Exception $e) {
             error_log('[MealsDB QuickOrder] clone_get_order error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => __('An error occurred. Please try again.', 'meals-db'),
+            ]);
+        }
+    }
+
+    /**
+     * AJAX endpoint to retrieve a client's default rate from meals_clients table.
+     */
+    public static function get_client_rate(): void {
+        self::verify_request();
+
+        // Rate limiting
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
+        try {
+            $user_id = isset($_REQUEST['user_id']) ? intval($_REQUEST['user_id']) : 0;
+            if ($user_id <= 0) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Invalid user ID.', 'meals-db'),
+                ]);
+            }
+
+            $client_db_id = self::get_active_client_id_for_user($user_id);
+            if ($client_db_id <= 0) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Client not found.', 'meals-db'),
+                ]);
+            }
+
+            $conn = MealsDB_DB::get_connection();
+            if (!MealsDB_DB::is_mysqli($conn)) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Database connection error.', 'meals-db'),
+                ]);
+            }
+
+            $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+            $sql = sprintf(
+                'SELECT rate FROM `%s` WHERE client_id = ? AND active = 1 LIMIT 1',
+                str_replace('`', '``', $table_name)
+            );
+
+            $stmt = $conn->prepare($sql);
+            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Database query error.', 'meals-db'),
+                ]);
+            }
+
+            $stmt->bind_param('i', $client_db_id);
+
+            if (!$stmt->execute()) {
+                $stmt->close();
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Failed to retrieve client rate.', 'meals-db'),
+                ]);
+            }
+
+            $result = $stmt->get_result();
+            $rate = 0.00;
+
+            if (MealsDB_DB::is_mysqli_result($result)) {
+                $row = $result->fetch_assoc();
+                if (isset($row['rate'])) {
+                    $rate = floatval($row['rate']);
+                }
+            }
+
+            $stmt->close();
+
+            wp_send_json([
+                'success' => true,
+                'rate' => $rate,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] get_client_rate error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
                 'message' => __('An error occurred. Please try again.', 'meals-db'),
@@ -776,7 +873,7 @@ class MealsDB_Quick_Order_Ajax {
     /**
      * Persist the order details in the external Meals DB transactions table.
      */
-    private static function log_transaction(WC_Order $order, int $client_id, ?DateTimeImmutable $order_date): bool {
+    private static function log_transaction(WC_Order $order, int $client_id, ?DateTimeImmutable $order_date, ?float $billing_rate = null): bool {
         $conn = MealsDB_DB::get_connection();
         if (!MealsDB_DB::is_mysqli($conn)) {
             return false;
@@ -784,7 +881,7 @@ class MealsDB_Quick_Order_Ajax {
 
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTIONS);
 
-        $sql = sprintf('INSERT INTO `%s` (client_id, order_id, order_date, created_at) VALUES (?, ?, ?, NOW())',
+        $sql = sprintf('INSERT INTO `%s` (client_id, order_id, order_date, billing_rate, created_at) VALUES (?, ?, ?, ?, NOW())',
             str_replace('`', '``', $table_name)
         );
 
@@ -799,7 +896,7 @@ class MealsDB_Quick_Order_Ajax {
 
         $order_id = $order->get_id();
 
-        if (!$stmt->bind_param('iis', $client_id, $order_id, $order_date_value)) {
+        if (!$stmt->bind_param('iisd', $client_id, $order_id, $order_date_value, $billing_rate)) {
             $stmt->close();
             return false;
         }
