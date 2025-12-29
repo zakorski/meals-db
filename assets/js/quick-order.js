@@ -60,11 +60,15 @@
             this.$summaryContent = $('#mealsdb-quick-order-summary-content');
             this.$summaryClient = $('#mealsdb-quick-order-summary-client');
             this.$summaryDate = $('#mealsdb-quick-order-summary-date');
+            this.$summaryRate = $('#mealsdb-quick-order-summary-rate');
             this.$search = $('#mealsdb_qo_search');
             this.$clientSearch = $('#mealsdb_qo_client_search');
             this.$clientDropdown = $('#mealsdb_qo_client_dropdown');
             this.$clientSelect = $('#client_id');
             this.$orderDate = $('#mealsdb-quick-order-date');
+            this.$rateInput = $('#mealsdb-quick-order-rate');
+            this.$rateIndicator = $('#mealsdb-quick-order-rate-indicator');
+            this.$defaultRate = $('#mealsdb-quick-order-default-rate');
             this.$createOrder = $('#qo-create-order');
             this.$orderSuccess = $('#qo-order-success');
             this.$qoItemsCount = $('#mealsdb-quick-order-summary-items');
@@ -202,6 +206,13 @@
                     if (this.$summaryDate && this.$summaryDate.length) {
                         this.$summaryDate.text(value ? value : this.translate('Not set'));
                     }
+                });
+            }
+
+            if (this.$rateInput && this.$rateInput.length) {
+                this.$rateInput.on('input change', () => {
+                    this.updateRateIndicator();
+                    this.updateSummaryRate();
                 });
             }
         },
@@ -1238,9 +1249,17 @@
             const clientId = parseInt(clientIdRaw, 10);
             const orderDate = this.$orderDate && this.$orderDate.length ? this.$orderDate.val() : '';
             const items = Object.values(this.state.cart || {}).filter((entry) => entry && entry.quantity > 0);
+            const billingRateRaw = this.$rateInput && this.$rateInput.length ? this.$rateInput.val() : '';
+            const billingRate = parseFloat(billingRateRaw);
 
             if (!Number.isInteger(clientId) || clientId <= 0 || !orderDate || !items.length) {
                 qoShowToast('Please select a client, date, and at least one product.', 'error');
+                this.clearCreateOrderLoading(createButton);
+                return;
+            }
+
+            if (!Number.isFinite(billingRate) || billingRate < 0) {
+                qoShowToast('Please enter a valid billing rate.', 'error');
                 this.clearCreateOrderLoading(createButton);
                 return;
             }
@@ -1262,6 +1281,7 @@
                     client_id: clientId,
                     date: orderDate,
                     items: payloadItems,
+                    billing_rate: billingRate,
                 },
             }).done((response) => {
                 if (!this.isSuccessfulResponse(response)) {
@@ -1505,8 +1525,109 @@
 
             this.updateProductRestrictionStates();
             this.updateSummaryPanel();
+            this.fetchClientRate(clientId);
 
             $(document).trigger('mealsdb_update_summary');
+        },
+
+        fetchClientRate(userId) {
+            if (!Number.isInteger(userId) || userId <= 0) {
+                this.clearClientRate();
+                return;
+            }
+
+            $.ajax({
+                url: this.getAjaxUrl(),
+                method: 'GET',
+                dataType: 'json',
+                data: {
+                    action: 'mealsdb_qo_get_client_rate',
+                    nonce: this.getSecurityNonce(),
+                    user_id: userId,
+                },
+            }).done((response) => {
+                const payload = this.getResponsePayload(response);
+
+                if (!this.isSuccessfulResponse(response)) {
+                    this.clearClientRate();
+                    return;
+                }
+
+                const rate = parseFloat(payload.rate || 0);
+                this.setClientRate(rate);
+            }).fail(() => {
+                this.clearClientRate();
+            });
+        },
+
+        setClientRate(rate) {
+            const safeRate = Number.isFinite(rate) && rate >= 0 ? rate : 0;
+
+            if (this.$defaultRate && this.$defaultRate.length) {
+                this.$defaultRate.val(safeRate.toFixed(2));
+            }
+
+            if (this.$rateInput && this.$rateInput.length) {
+                this.$rateInput.val(safeRate.toFixed(2));
+            }
+
+            this.updateRateIndicator();
+            this.updateSummaryRate();
+        },
+
+        clearClientRate() {
+            if (this.$defaultRate && this.$defaultRate.length) {
+                this.$defaultRate.val('');
+            }
+
+            if (this.$rateInput && this.$rateInput.length) {
+                this.$rateInput.val('');
+            }
+
+            if (this.$rateIndicator && this.$rateIndicator.length) {
+                this.$rateIndicator.text('');
+            }
+
+            this.updateSummaryRate();
+        },
+
+        updateRateIndicator() {
+            if (!this.$rateIndicator || !this.$rateIndicator.length || !this.$rateInput || !this.$defaultRate) {
+                return;
+            }
+
+            const currentRate = parseFloat(this.$rateInput.val()) || 0;
+            const defaultRate = parseFloat(this.$defaultRate.val()) || 0;
+
+            if (currentRate === 0 && defaultRate === 0) {
+                this.$rateIndicator.text('');
+                return;
+            }
+
+            if (Math.abs(currentRate - defaultRate) < 0.01) {
+                this.$rateIndicator.text('(default)').css('color', '#666');
+            } else {
+                this.$rateIndicator.text('(overridden)').css('color', '#d63638');
+            }
+        },
+
+        updateSummaryRate() {
+            if (!this.$summaryRate || !this.$summaryRate.length) {
+                return;
+            }
+
+            if (!this.$rateInput || !this.$rateInput.length) {
+                this.$summaryRate.text(this.translate('Not set'));
+                return;
+            }
+
+            const rate = parseFloat(this.$rateInput.val());
+            if (!Number.isFinite(rate) || rate < 0) {
+                this.$summaryRate.text(this.translate('Not set'));
+                return;
+            }
+
+            this.$summaryRate.text(this.formatPrice(rate));
         },
 
         normaliseClientType(value) {
