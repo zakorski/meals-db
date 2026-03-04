@@ -10,15 +10,29 @@ class MealsDB_Reports {
     private $wpdb;
 
     /**
-     * @param wpdb|null $wpdb
+     * @var MealsDB_WC_Order_Query|null
      */
-    public function __construct($wpdb = null) {
+    private $order_query;
+
+    /**
+     * @param wpdb|null                  $wpdb
+     * @param MealsDB_WC_Order_Query|null $order_query
+     */
+    public function __construct($wpdb = null, $order_query = null) {
         if ($wpdb instanceof wpdb) {
             $this->wpdb = $wpdb;
         } elseif (isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof wpdb) {
             $this->wpdb = $GLOBALS['wpdb'];
         } else {
             $this->wpdb = null;
+        }
+
+        if ($order_query instanceof MealsDB_WC_Order_Query) {
+            $this->order_query = $order_query;
+        } elseif ($this->wpdb instanceof wpdb) {
+            $this->order_query = new MealsDB_WC_Order_Query($this->wpdb);
+        } else {
+            $this->order_query = null;
         }
     }
 
@@ -40,9 +54,9 @@ class MealsDB_Reports {
             return [];
         }
 
-        $order_items_table      = $this->wpdb->prefix . 'woocommerce_order_items';
+        $order_items_table      = $this->wpdb->prefix . 'wc_order_items';
         $order_itemmeta_table   = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
-        $orders_table           = $this->wpdb->posts;
+        $orders_table           = $this->wpdb->prefix . 'wc_orders';
         $meals_products_table   = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
 
         $sql = "
@@ -61,13 +75,14 @@ class MealsDB_Reports {
             INNER JOIN {$order_itemmeta_table} qty_meta
                 ON qty_meta.order_item_id = oi.order_item_id
                 AND qty_meta.meta_key = '_qty'
-            INNER JOIN {$orders_table} p
-                ON p.ID = oi.order_id
+            INNER JOIN {$orders_table} o
+                ON o.id = oi.order_id
             LEFT JOIN `{$meals_products_table}` mp
                 ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
-            WHERE p.post_date >= %s
-                AND p.post_date <= %s
-                AND p.post_status LIKE 'wc-%'
+            WHERE o.date_created_gmt >= %s
+                AND o.date_created_gmt <= %s
+                AND o.status NOT IN ('wc-cancelled', 'wc-trash', 'trash')
+                AND o.type = 'shop_order'
             GROUP BY wc_product_id, item, mp.case_size, mp.unit_cost
             ORDER BY item ASC
         ";
@@ -96,9 +111,9 @@ class MealsDB_Reports {
             return [];
         }
 
-        $order_items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
+        $order_items_table    = $this->wpdb->prefix . 'wc_order_items';
         $order_itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
-        $orders_table         = $this->wpdb->posts;
+        $orders_table         = $this->wpdb->prefix . 'wc_orders';
         $meals_products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
 
         $sql = "
@@ -117,13 +132,14 @@ class MealsDB_Reports {
             INNER JOIN {$order_itemmeta_table} qty_meta
                 ON qty_meta.order_item_id = oi.order_item_id
                 AND qty_meta.meta_key = '_qty'
-            INNER JOIN {$orders_table} p
-                ON p.ID = oi.order_id
+            INNER JOIN {$orders_table} o
+                ON o.id = oi.order_id
             LEFT JOIN `{$meals_products_table}` mp
                 ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
-            WHERE p.post_date >= %s
-                AND p.post_date <= %s
-                AND p.post_status LIKE 'wc-%'
+            WHERE o.date_created_gmt >= %s
+                AND o.date_created_gmt <= %s
+                AND o.status NOT IN ('wc-cancelled', 'wc-trash', 'trash')
+                AND o.type = 'shop_order'
             GROUP BY wc_product_id, item, mp.product_type, mp.main_ingredient, mp.dietary_tags, mp.allergen_flags
             ORDER BY item ASC
         ";
