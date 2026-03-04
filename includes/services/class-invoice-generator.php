@@ -3,7 +3,8 @@
  * Government Invoice Generator
  *
  * Generates invoices for government agencies (SDNB and Veterans Affairs Canada)
- * in their required CSV and PDF formats.
+ * in their required CSV and PDF formats. Data is sourced from meals_clients
+ * joined to WooCommerce HPOS orders via MealsDB_WC_Order_Query.
  *
  * @package MealsDB
  * @since 1.0.249
@@ -53,6 +54,145 @@ class MealsDB_Invoice_Generator {
     ];
 
     /**
+     * Shared data-fetch: resolves orders, rates, and product types for a set of clients.
+     *
+     * Returns one row per order, enriched with client fields, resolved rate,
+     * unit totals, basic cost, tax, and total cost.
+     *
+     * @param array  $client_rows Rows from meals_clients (must include client_id, wp_user_id, default_rate_id).
+     * @param string $start_date  Y-m-d.
+     * @param string $end_date    Y-m-d.
+     *
+     * @return array Enriched invoice rows.
+     */
+    private static function get_invoice_data_for_clients(array $client_rows, string $start_date, string $end_date): array {
+        if (empty($client_rows)) {
+            return [];
+        }
+
+        // Index clients by wp_user_id.
+        $clients_by_user_id = [];
+        $wp_user_ids        = [];
+        foreach ($client_rows as $c) {
+            $uid = (int) $c['wp_user_id'];
+            if ($uid > 0) {
+                $clients_by_user_id[$uid] = $c;
+                $wp_user_ids[]            = $uid;
+            }
+        }
+
+        if (empty($wp_user_ids)) {
+            return [];
+        }
+
+        $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
+        $orders      = $order_query->get_orders_with_items_for_users($wp_user_ids, $start_date, $end_date);
+
+        if (empty($orders)) {
+            return [];
+        }
+
+        // Collect all wc_product_ids across every item for a single product-type lookup.
+        $all_product_ids = [];
+        foreach ($orders as $order) {
+            foreach ($order['items'] as $item) {
+                $pid = (int) $item['wc_product_id'];
+                if ($pid > 0) {
+                    $all_product_ids[$pid] = $pid;
+                }
+            }
+        }
+
+        $product_types = $order_query->get_product_types_for_ids(array_values($all_product_ids));
+
+        // Build invoice rows — one per order.
+        $rows = [];
+        foreach ($orders as $order) {
+            $uid    = (int) $order['wp_user_id'];
+            $client = isset($clients_by_user_id[$uid]) ? $clients_by_user_id[$uid] : null;
+            if (!$client) {
+                continue;
+            }
+
+            $rate_id       = isset($order['mealsdb_rate_id']) ? (int) $order['mealsdb_rate_id'] : 0;
+            $resolved_rate = $order_query->resolve_rate_for_order($rate_id, (int) $client['client_id']);
+
+            $total_units = 0;
+            $tax_amount  = 0.0;
+
+            foreach ($order['items'] as $item) {
+                $qty = (float) $item['quantity'];
+                $total_units += $qty;
+
+                $pid    = (int) $item['wc_product_id'];
+                $is_tax = isset($product_types[$pid]) && !empty($product_types[$pid]['taxable']);
+                if ($is_tax) {
+                    $tax_amount += (float) $item['line_tax'];
+                }
+            }
+
+            $basic_cost          = $total_units * $resolved_rate;
+            $client_contribution = (float) ($client['client_contribution'] ?? 0);
+            $total_cost          = $basic_cost + $tax_amount - $client_contribution;
+
+            $rows[] = array_merge($client, [
+                'order_id'        => (int) $order['order_id'],
+                'order_date'      => $order['date_created_gmt'],
+                'resolved_rate'   => $resolved_rate,
+                'total_units'     => $total_units,
+                'basic_cost'      => $basic_cost,
+                'tax_amount'      => $tax_amount,
+                'total_cost'      => $total_cost,
+                'items'           => $order['items'],
+            ]);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Query meals_clients from the external DB with a prepared statement.
+     *
+     * @param string $sql    SQL with ? placeholders.
+     * @param string $types  bind_param type string.
+     * @param array  $params Parameters to bind.
+     *
+     * @return array Client rows.
+     */
+    private static function query_clients(string $sql, string $types = '', array $params = []): array {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return [];
+        }
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return [];
+        }
+
+        if ($types !== '' && !empty($params)) {
+            $stmt->bind_param($types, ...$params);
+        }
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+
+        $result = $stmt->get_result();
+        $rows   = [];
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            while ($row = $result->fetch_assoc()) {
+                $rows[] = $row;
+            }
+        }
+
+        $stmt->close();
+
+        return $rows;
+    }
+
+    /**
      * Generate SDNB Legacy Zone-Based Invoice
      *
      * @param string $zone Zone code (M=Moncton, S=Sussex)
@@ -61,8 +201,6 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_sdnb_legacy($zone, $start_date, $end_date) {
-        $conn = MealsDB_DB::get_connection();
-
         // Get service center info
         $service_center = isset(self::$service_centers[$zone]) ? self::$service_centers[$zone] : self::$service_centers['M'];
 
@@ -70,51 +208,30 @@ class MealsDB_Invoice_Generator {
         $end_date_obj = new DateTime($end_date);
         $invoice_number = $end_date_obj->format('Y M d') . ' ' . $zone;
 
-        // Query transactions for SDNB legacy clients in this zone
-        $query = "
-            SELECT
-                t.transaction_id,
-                c.service_id,
-                c.requisition_id,
-                c.individual_id,
-                c.last_name,
-                c.first_name,
-                c.client_contribution,
-                t.billing_rate,
-                t.order_date,
-                SUM(ti.quantity) as total_units,
-                SUM(ti.line_subtotal) as basic_cost,
-                SUM(ti.line_taxes) as tax_amount,
-                SUM(ti.line_total) as total_cost
-            FROM " . MealsDB_DB::table('transactions') . " t
-            INNER JOIN " . MealsDB_DB::table('clients') . " c ON t.client_id = c.client_id
-            INNER JOIN " . MealsDB_DB::table('transaction_items') . " ti ON t.transaction_id = ti.transaction_id
-            WHERE c.client_type = 'SDNB'
-                AND c.use_legacy_billing = 1
-                AND c.delivery_area_zone = ?
-                AND t.order_date BETWEEN ? AND ?
-                AND t.status != 'cancelled'
-            GROUP BY t.transaction_id, c.service_id, c.requisition_id, c.individual_id,
-                     c.last_name, c.first_name, c.client_contribution, t.billing_rate, t.order_date
-            ORDER BY c.last_name, c.first_name
-        ";
+        // Query eligible clients from external DB.
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
+                    individual_id, client_contribution, delivery_area_zone, default_rate_id
+             FROM `%s`
+             WHERE client_type = ? AND use_legacy_billing = 1
+               AND delivery_area_zone = ? AND active = 1 AND wp_user_id > 0',
+            $clients_table
+        );
 
-        $stmt = $conn->prepare($query);
-        $stmt->bind_param('sss', $zone, $start_date, $end_date);
-        $stmt->execute();
-        $result = $stmt->get_result();
+        $client_type = 'SDNB';
+        $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
 
-        $transactions = [];
+        // Fetch invoice data via WC HPOS.
+        $invoice_rows = self::get_invoice_data_for_clients($client_rows, $start_date, $end_date);
+
+        // Accumulate totals for header.
         $total_invoice_amount = 0;
-        $total_tax_amount = 0;
-
-        while ($row = $result->fetch_assoc()) {
-            $transactions[] = $row;
-            $total_invoice_amount += $row['total_cost'];
-            $total_tax_amount += $row['tax_amount'];
+        $total_tax_amount     = 0;
+        foreach ($invoice_rows as $r) {
+            $total_invoice_amount += $r['total_cost'];
+            $total_tax_amount     += $r['tax_amount'];
         }
-
-        $stmt->close();
 
         // Build CSV content
         $csv = [];
@@ -173,7 +290,7 @@ class MealsDB_Invoice_Generator {
         $row5[20] = self::CONTACT_AREA_CODE;
         $row5[21] = self::CONTACT_PHONE;
         $row5[22] = self::CONTACT_EMAIL;
-        $row5[23] = count($transactions);
+        $row5[23] = count($invoice_rows);
         $row5[24] = 'F'; // Unknown flag from sample
         $csv[] = implode(',', $row5);
 
@@ -218,7 +335,7 @@ class MealsDB_Invoice_Generator {
         $csv[] = implode(',', $row6);
 
         // Data rows
-        foreach ($transactions as $trans) {
+        foreach ($invoice_rows as $trans) {
             $row = array_fill(0, 100, '');
             $row[0] = '3';
             $row[1] = $trans['service_id'] ?: '356029'; // Default service ID
@@ -228,7 +345,7 @@ class MealsDB_Invoice_Generator {
             $row[5] = $trans['first_name'] ?: '';
             $row[6] = number_format($trans['total_units'], 2, '.', '');
             $row[7] = 'Meal';
-            $row[8] = number_format($trans['billing_rate'], 2, '.', '');
+            $row[8] = number_format($trans['resolved_rate'], 2, '.', '');
             $row[9] = number_format($trans['basic_cost'], 2, '.', '');
             $row[10] = ''; // Total Kilometers - home support
             $row[11] = ''; // Other Cost - home support
@@ -271,53 +388,48 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_sdnb_new_portal($start_date, $end_date) {
-        $conn = MealsDB_DB::get_connection();
+        // Query eligible clients from external DB.
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, first_name, last_name, sdnb_service_request_id,
+                    client_contribution, default_rate_id
+             FROM `%s`
+             WHERE client_type = ? AND use_legacy_billing = 0
+               AND active = 1 AND wp_user_id > 0',
+            $clients_table
+        );
 
-        // Query transactions for SDNB new portal clients
-        $query = "
-            SELECT
-                t.transaction_id,
-                c.sdnb_service_request_id,
-                CONCAT(UPPER(c.first_name), ' ', UPPER(c.last_name)) as client_name,
-                c.client_contribution,
-                t.billing_rate,
-                SUM(ti.quantity) as total_units,
-                SUM(ti.line_taxes) as tax_amount
-            FROM " . MealsDB_DB::table('transactions') . " t
-            INNER JOIN " . MealsDB_DB::table('clients') . " c ON t.client_id = c.client_id
-            INNER JOIN " . MealsDB_DB::table('transaction_items') . " ti ON t.transaction_id = ti.transaction_id
-            WHERE c.client_type = 'SDNB'
-                AND c.use_legacy_billing = 0
-                AND t.order_date BETWEEN ? AND ?
-                AND t.status != 'cancelled'
-            GROUP BY t.transaction_id, c.sdnb_service_request_id, client_name,
-                     c.client_contribution, t.billing_rate
-            ORDER BY client_name
-        ";
+        $client_type = 'SDNB';
+        $client_rows = self::query_clients($sql, 's', [$client_type]);
 
-        $stmt = $conn->prepare($query);
-        $stmt->bind_param('ss', $start_date, $end_date);
-        $stmt->execute();
-        $result = $stmt->get_result();
+        // Fetch invoice data via WC HPOS.
+        $invoice_rows = self::get_invoice_data_for_clients($client_rows, $start_date, $end_date);
 
         $csv = [];
 
         // Header row
         $csv[] = 'Service Confirmation Item Id,Product Name,Service Request Id,Client Name,No. Of Units,Unit Type,Rate,Kilometres,Kilometre Rate,Other Cost (transportation),Other Cost (meals),Other Cost (sundry),Other Cost (admin fees),Other Cost (recreation),Other Cost (parking),Client Contribution,Stat Holiday Units,Tax';
 
-        // Data rows
-        while ($row = $result->fetch_assoc()) {
-            $sci_id = 'SCI-' . str_pad($row['transaction_id'], 8, '0', STR_PAD_LEFT);
+        // Data rows — sorted by client name.
+        usort($invoice_rows, function ($a, $b) {
+            $name_a = strtoupper($a['first_name'] . ' ' . $a['last_name']);
+            $name_b = strtoupper($b['first_name'] . ' ' . $b['last_name']);
+            return strcmp($name_a, $name_b);
+        });
+
+        foreach ($invoice_rows as $r) {
+            $sci_id      = 'SCI-' . str_pad($r['order_id'], 8, '0', STR_PAD_LEFT);
+            $client_name = strtoupper($r['first_name']) . ' ' . strtoupper($r['last_name']);
 
             $csv[] = sprintf(
                 '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s',
                 $sci_id,
                 'Meal Services - Services de repas',
-                $row['sdnb_service_request_id'] ?: '',
-                $row['client_name'],
-                intval($row['total_units']),
+                $r['sdnb_service_request_id'] ?: '',
+                $client_name,
+                intval($r['total_units']),
                 'Meal',
-                number_format($row['billing_rate'], 2, '.', ''),
+                number_format($r['resolved_rate'], 2, '.', ''),
                 '', // Kilometres
                 '', // Kilometre Rate
                 '', // Other Cost (transportation)
@@ -328,11 +440,9 @@ class MealsDB_Invoice_Generator {
                 '', // Other Cost (parking)
                 '', // Client Contribution
                 '', // Stat Holiday Units
-                number_format($row['tax_amount'], 2, '.', '')
+                number_format($r['tax_amount'], 2, '.', '')
             );
         }
-
-        $stmt->close();
 
         return implode("\n", $csv);
     }
@@ -345,109 +455,153 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_vac_csv($start_date, $end_date) {
-        $conn = MealsDB_DB::get_connection();
+        // Query eligible veteran clients from external DB.
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
+                    vet_health_card, requisition_period, client_contribution, default_rate_id,
+                    apartment_number, street_number, street_name, city, postal_code, client_phone_1
+             FROM `%s`
+             WHERE client_type = ? AND active = 1 AND wp_user_id > 0',
+            $clients_table
+        );
 
-        // Query aggregated data per veteran
-        $query = "
-            SELECT
-                c.client_id,
-                c.vet_health_card,
-                c.last_name,
-                c.first_name,
-                CONCAT(
-                    COALESCE(CONCAT(c.apartment_number, ' - '), ''),
-                    COALESCE(c.street_number, ''),
-                    ' ',
-                    COALESCE(c.street_name, '')
-                ) as billing_address,
-                c.city as billing_city,
-                c.postal_code as billing_postcode,
-                c.client_phone_1 as billing_phone,
-                c.requisition_period,
-                t.billing_rate
-            FROM " . MealsDB_DB::table('clients') . " c
-            INNER JOIN " . MealsDB_DB::table('transactions') . " t ON c.client_id = t.client_id
-            WHERE c.client_type = 'Veteran'
-                AND t.order_date BETWEEN ? AND ?
-                AND t.status != 'cancelled'
-            GROUP BY c.client_id
-            ORDER BY c.last_name, c.first_name
-        ";
+        $client_type = 'Veteran';
+        $client_rows = self::query_clients($sql, 's', [$client_type]);
 
-        $stmt = $conn->prepare($query);
-        $stmt->bind_param('ss', $start_date, $end_date);
-        $stmt->execute();
-        $result = $stmt->get_result();
-
-        $veterans = [];
-        while ($row = $result->fetch_assoc()) {
-            $veterans[] = $row;
+        if (empty($client_rows)) {
+            return '';
         }
-        $stmt->close();
 
-        // For each veteran, get product breakdown
+        // Fetch WC HPOS orders for all veterans.
+        $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
+        $wp_user_ids = [];
+        $clients_by_user = [];
+        foreach ($client_rows as $c) {
+            $uid = (int) $c['wp_user_id'];
+            if ($uid > 0) {
+                $wp_user_ids[]       = $uid;
+                $clients_by_user[$uid] = $c;
+            }
+        }
+
+        $orders = $order_query->get_orders_with_items_for_users($wp_user_ids, $start_date, $end_date);
+
+        // Collect all product IDs for a single product-type lookup.
+        $all_product_ids = [];
+        foreach ($orders as $order) {
+            foreach ($order['items'] as $item) {
+                $pid = (int) $item['wc_product_id'];
+                if ($pid > 0) {
+                    $all_product_ids[$pid] = $pid;
+                }
+            }
+        }
+        $product_types = $order_query->get_product_types_for_ids(array_values($all_product_ids));
+
+        // Aggregate orders per veteran (client_id).
+        $vet_aggregates = [];
+        foreach ($orders as $order) {
+            $uid    = (int) $order['wp_user_id'];
+            $client = isset($clients_by_user[$uid]) ? $clients_by_user[$uid] : null;
+            if (!$client) {
+                continue;
+            }
+
+            $cid = (int) $client['client_id'];
+            if (!isset($vet_aggregates[$cid])) {
+                // Resolve the rate from the first order for this client.
+                $rate_id       = isset($order['mealsdb_rate_id']) ? (int) $order['mealsdb_rate_id'] : 0;
+                $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid);
+
+                $vet_aggregates[$cid] = [
+                    'client'               => $client,
+                    'resolved_rate'        => $resolved_rate,
+                    'mains_ordered'        => 0,
+                    'sides_ordered_taxable' => 0,
+                    'sides_ordered_nontax' => 0,
+                    'sides_cost'           => 0.0,
+                    'sides_tax'            => 0.0,
+                ];
+            }
+
+            foreach ($order['items'] as $item) {
+                $pid  = (int) $item['wc_product_id'];
+                $qty  = (float) $item['quantity'];
+                $prod = isset($product_types[$pid]) ? $product_types[$pid] : null;
+
+                $ptype  = $prod ? $prod['product_type'] : 'meal';
+                $is_tax = $prod ? !empty($prod['taxable']) : false;
+
+                if ($ptype === 'meal') {
+                    $vet_aggregates[$cid]['mains_ordered'] += $qty;
+                } elseif ($ptype === 'side') {
+                    if ($is_tax) {
+                        $vet_aggregates[$cid]['sides_ordered_taxable'] += $qty;
+                        $vet_aggregates[$cid]['sides_cost'] += (float) $item['line_subtotal'];
+                        $vet_aggregates[$cid]['sides_tax']  += (float) $item['line_tax'];
+                    } else {
+                        $vet_aggregates[$cid]['sides_ordered_nontax'] += $qty;
+                    }
+                }
+            }
+        }
+
+        // Sort by last_name, first_name.
+        uasort($vet_aggregates, function ($a, $b) {
+            $cmp = strcmp($a['client']['last_name'] ?? '', $b['client']['last_name'] ?? '');
+            return $cmp !== 0 ? $cmp : strcmp($a['client']['first_name'] ?? '', $b['client']['first_name'] ?? '');
+        });
+
         $csv = [];
 
         // Header row
         $csv[] = 'K#,Client Last Name,Client First Name,Billing Address 1,Billing City,Billing Postcode,Billing Phone,Unit Type,Rate,Mains Ordered,Mains Allowance,Bill Mains,BNM Mains,Sides Ordered,Sides Allowance,Desserts,Muffin,Total Tax Sides Ordered,Bill Tax Sides,Overage Tax Sides,Remaining Sides,Cereal,Soup,Total Non-Tax Sides Ordered,Bill Non-Taxable Sides,Overage Non Taxable Sides,Bill Sides,Service,Monthly Allowance,Vet Mains Cost,Allowance Remaining,Sides Cost,Bill HST,New Total,Errors,New User flag';
 
-        // Data rows
-        foreach ($veterans as $vet) {
-            // Get product breakdown for this veteran
-            $products_query = "
-                SELECT
-                    p.product_type,
-                    p.taxable,
-                    SUM(ti.quantity) as quantity,
-                    SUM(ti.line_subtotal) as subtotal,
-                    SUM(ti.line_taxes) as taxes
-                FROM " . MealsDB_DB::table('transaction_items') . " ti
-                INNER JOIN " . MealsDB_DB::table('products') . " p ON ti.product_id = p.product_id
-                INNER JOIN " . MealsDB_DB::table('transactions') . " t ON ti.transaction_id = t.transaction_id
-                WHERE t.client_id = ?
-                    AND t.order_date BETWEEN ? AND ?
-                    AND t.status != 'cancelled'
-                GROUP BY p.product_type, p.taxable
-            ";
+        foreach ($vet_aggregates as $agg) {
+            $vet = $agg['client'];
 
-            $prod_stmt = $conn->prepare($products_query);
-            $prod_stmt->bind_param('iss', $vet['client_id'], $start_date, $end_date);
-            $prod_stmt->execute();
-            $prod_result = $prod_stmt->get_result();
-
-            $mains_ordered = 0;
-            $sides_ordered_taxable = 0;
-            $sides_ordered_nontax = 0;
-            $sides_cost = 0;
-            $sides_tax = 0;
-
-            while ($prod = $prod_result->fetch_assoc()) {
-                if ($prod['product_type'] === 'meal') {
-                    $mains_ordered += $prod['quantity'];
-                } else if ($prod['product_type'] === 'side') {
-                    if ($prod['taxable']) {
-                        $sides_ordered_taxable += $prod['quantity'];
-                        $sides_cost += $prod['subtotal'];
-                        $sides_tax += $prod['taxes'];
-                    } else {
-                        $sides_ordered_nontax += $prod['quantity'];
-                    }
+            // Decrypt vet_health_card (encrypted PII field).
+            $health_card = '';
+            if (!empty($vet['vet_health_card'])) {
+                try {
+                    $health_card = MealsDB_Encryption::decrypt($vet['vet_health_card']);
+                } catch (Exception $e) {
+                    $health_card = '';
                 }
             }
-            $prod_stmt->close();
+
+            // Build billing address from component fields.
+            $billing_address = '';
+            if (!empty($vet['apartment_number'])) {
+                $billing_address .= $vet['apartment_number'] . ' - ';
+            }
+            $billing_address .= ($vet['street_number'] ?? '') . ' ' . ($vet['street_name'] ?? '');
+            $billing_address  = trim($billing_address);
+
+            $billing_city    = $vet['city'] ?? '';
+            $billing_postcode = $vet['postal_code'] ?? '';
+            $billing_phone   = $vet['client_phone_1'] ?? '';
+
+            $resolved_rate         = $agg['resolved_rate'];
+            $mains_ordered         = $agg['mains_ordered'];
+            $sides_ordered_taxable = $agg['sides_ordered_taxable'];
+            $sides_ordered_nontax  = $agg['sides_ordered_nontax'];
+            $sides_cost            = $agg['sides_cost'];
+            $sides_tax             = $agg['sides_tax'];
 
             // Get allowance info
             $service = strtolower($vet['requisition_period'] ?: 'week');
             $allowance_info = isset(self::$vac_allowances[$service]) ?
                 self::$vac_allowances[$service] : self::$vac_allowances['week'];
 
-            $mains_allowance = $allowance_info['mains'];
+            $mains_allowance  = $allowance_info['mains'];
             $monthly_allowance = $allowance_info['amount'];
 
             // Calculate billing
             $bill_mains = min($mains_ordered, $mains_allowance);
             $bnm_mains = max(0, $mains_ordered - $mains_allowance); // Beyond allowance
-            $vet_mains_cost = $bill_mains * $vet['billing_rate'];
+            $vet_mains_cost = $bill_mains * $resolved_rate;
             $allowance_remaining = $monthly_allowance - $vet_mains_cost;
 
             // Sides allowance (example: 10 per period, adjust as needed)
@@ -469,19 +623,18 @@ class MealsDB_Invoice_Generator {
 
             // Check for errors/warnings
             $errors = '';
-            // Add error detection logic here if needed
 
             $csv[] = sprintf(
                 '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s',
-                $vet['vet_health_card'] ?: '',
+                $health_card,
                 $vet['last_name'] ?: '',
                 $vet['first_name'] ?: '',
-                str_replace(',', '', $vet['billing_address']), // Remove commas from address
-                $vet['billing_city'] ?: '',
-                $vet['billing_postcode'] ?: '',
-                $vet['billing_phone'] ?: '',
+                str_replace(',', '', $billing_address), // Remove commas from address
+                $billing_city ?: '',
+                $billing_postcode ?: '',
+                $billing_phone ?: '',
                 'Meal',
-                number_format($vet['billing_rate'], 2, '.', ''),
+                number_format($resolved_rate, 2, '.', ''),
                 $mains_ordered,
                 $mains_allowance,
                 $bill_mains,
