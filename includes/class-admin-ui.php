@@ -589,6 +589,10 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/daily-slips.php');
                 break;
 
+            case 'po':
+                include MealsDB_Plugin::path('views/purchase-order.php');
+                break;
+
             case 'updates':
                 include MealsDB_Plugin::path('views/updates.php');
                 break;
@@ -709,6 +713,7 @@ class MealsDB_Admin_UI {
             'drafts'  => __('Drafts', 'meals-db'),
             'ignored' => __('Ignored Conflicts', 'meals-db'),
             'slips'   => __('Daily Slips', 'meals-db'),
+            'po'      => __('Purchase Order', 'meals-db'),
             'updates' => __('Updates', 'meals-db'),
         ];
 
