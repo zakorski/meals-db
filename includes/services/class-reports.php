@@ -244,6 +244,188 @@ class MealsDB_Reports {
     }
 
     /**
+     * Calculate average weekly demand per product over a trailing period.
+     *
+     * @param int $trailing_weeks Number of weeks to look back (default 8).
+     *
+     * @return array<int, array<string, mixed>> Keyed by wc_product_id.
+     */
+    public function get_demand_history(int $trailing_weeks = 8): array {
+        if (!$this->wpdb instanceof wpdb) {
+            return [];
+        }
+
+        if ($trailing_weeks < 1) {
+            $trailing_weeks = 8;
+        }
+
+        $end_date   = gmdate('Y-m-d');
+        $start_date = gmdate('Y-m-d', strtotime("-" . ($trailing_weeks * 7) . " days"));
+
+        $order_items_table    = $this->wpdb->prefix . 'wc_order_items';
+        $order_itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
+        $orders_table         = $this->wpdb->prefix . 'wc_orders';
+
+        $sql = "
+            SELECT
+                CAST(product_meta.meta_value AS UNSIGNED) AS wc_product_id,
+                oi.order_item_name AS product_name,
+                YEARWEEK(o.date_created_gmt, 1) AS year_week,
+                SUM(CAST(qty_meta.meta_value AS DECIMAL(10,2))) AS weekly_quantity
+            FROM {$order_items_table} oi
+            INNER JOIN {$order_itemmeta_table} product_meta
+                ON product_meta.order_item_id = oi.order_item_id
+                AND product_meta.meta_key = '_product_id'
+            INNER JOIN {$order_itemmeta_table} qty_meta
+                ON qty_meta.order_item_id = oi.order_item_id
+                AND qty_meta.meta_key = '_qty'
+            INNER JOIN {$orders_table} o
+                ON o.id = oi.order_id
+                AND o.type = 'shop_order'
+                AND o.status NOT IN ('wc-cancelled','wc-trash','trash')
+            WHERE DATE(o.date_created_gmt) BETWEEN %s AND %s
+                AND oi.order_item_type = 'line_item'
+            GROUP BY wc_product_id, product_name, year_week
+            ORDER BY wc_product_id, year_week
+        ";
+
+        $prepared = $this->wpdb->prepare($sql, $start_date, $end_date);
+        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        // Aggregate per product.
+        $products = [];
+        foreach ($rows as $row) {
+            $pid = (int) $row['wc_product_id'];
+            if (!isset($products[$pid])) {
+                $products[$pid] = [
+                    'wc_product_id'     => $pid,
+                    'product_name'      => (string) $row['product_name'],
+                    'avg_weekly_demand' => 0.0,
+                    'weekly_history'    => [],
+                    'total_trailing'    => 0.0,
+                ];
+            }
+            $qty = (float) $row['weekly_quantity'];
+            $products[$pid]['weekly_history'][$row['year_week']] = $qty;
+            $products[$pid]['total_trailing'] += $qty;
+        }
+
+        // Calculate averages using trailing_weeks as denominator.
+        foreach ($products as &$p) {
+            $p['avg_weekly_demand'] = round($p['total_trailing'] / $trailing_weeks, 2);
+        }
+        unset($p);
+
+        return $products;
+    }
+
+    /**
+     * Generate a purchase order projection from historical demand.
+     *
+     * @param int $weeks_ahead    Weeks to project forward (default 1).
+     * @param int $trailing_weeks Trailing weeks for demand history (default 8).
+     *
+     * @return array
+     */
+    public function generate_purchase_order(int $weeks_ahead = 1, int $trailing_weeks = 8): array {
+        $demand = $this->get_demand_history($trailing_weeks);
+        if (empty($demand)) {
+            return [];
+        }
+
+        // Get product metadata from meals_products.
+        $product_ids = array_keys($demand);
+        $product_meta = [];
+        if ($this->order_query instanceof MealsDB_WC_Order_Query) {
+            $product_meta = $this->order_query->get_product_types_for_ids($product_ids);
+        }
+
+        $rows = [];
+        foreach ($demand as $pid => $d) {
+            $meta       = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
+            $case_size  = isset($meta['case_size']) && (int) $meta['case_size'] > 0 ? (int) $meta['case_size'] : 1;
+            $unit_cost  = isset($meta['unit_cost']) ? (float) $meta['unit_cost'] : 0.0;
+            $ptype      = isset($meta['product_type']) ? (string) $meta['product_type'] : 'meal';
+
+            $projected = $d['avg_weekly_demand'] * $weeks_ahead;
+            $cases     = $projected > 0 ? (int) ceil($projected / $case_size) : 0;
+
+            $rows[] = [
+                'wc_product_id'     => $pid,
+                'product_name'      => $d['product_name'],
+                'product_type'      => $ptype,
+                'avg_weekly_demand' => $d['avg_weekly_demand'],
+                'projected_units'   => round($projected, 2),
+                'case_size'         => $case_size,
+                'cases_needed'      => $cases,
+                'unit_cost'         => $unit_cost,
+                'estimated_cost'    => round($cases * $unit_cost, 2),
+            ];
+        }
+
+        // Sort by product_type ASC, then product_name ASC.
+        usort($rows, function ($a, $b) {
+            $cmp = strcmp($a['product_type'], $b['product_type']);
+            return $cmp !== 0 ? $cmp : strcmp($a['product_name'], $b['product_name']);
+        });
+
+        return $rows;
+    }
+
+    /**
+     * Export a purchase order array to CSV string.
+     *
+     * @param array $po_rows Rows from generate_purchase_order().
+     *
+     * @return string CSV content.
+     */
+    public function export_purchase_order_csv(array $po_rows): string {
+        $handle = fopen('php://temp', 'r+');
+        if ($handle === false) {
+            return '';
+        }
+
+        fputcsv($handle, [
+            'Product Name', 'Product Type', 'Avg Weekly Units', 'Projected Units',
+            'Case Size', 'Cases to Order', 'Unit Cost', 'Estimated Cost',
+        ]);
+
+        $total_cases = 0;
+        $total_cost  = 0.0;
+
+        foreach ($po_rows as $row) {
+            fputcsv($handle, [
+                $row['product_name'],
+                $row['product_type'],
+                $row['avg_weekly_demand'],
+                $row['projected_units'],
+                $row['case_size'],
+                $row['cases_needed'],
+                number_format($row['unit_cost'], 2, '.', ''),
+                number_format($row['estimated_cost'], 2, '.', ''),
+            ]);
+            $total_cases += $row['cases_needed'];
+            $total_cost  += $row['estimated_cost'];
+        }
+
+        // Blank row + totals row.
+        fputcsv($handle, []);
+        fputcsv($handle, [
+            'TOTAL', '', '', '', '', $total_cases, '', number_format($total_cost, 2, '.', ''),
+        ]);
+
+        rewind($handle);
+        $csv = stream_get_contents($handle);
+        fclose($handle);
+
+        return is_string($csv) ? $csv : '';
+    }
+
+    /**
      * Normalise date inputs to MySQL datetime strings.
      *
      * @param string|int $start_date
