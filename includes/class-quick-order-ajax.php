@@ -13,7 +13,7 @@ class MealsDB_Quick_Order_Ajax {
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
         add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
-        add_action('wp_ajax_mealsdb_qo_get_client_rate', [self::class, 'get_client_rate']);
+        MealsDB_Ajax_Rates::init();
     }
 
     /**
@@ -163,7 +163,7 @@ class MealsDB_Quick_Order_Ajax {
         $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
         $date      = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
         $items     = self::normalise_items($_POST['items'] ?? []);
-        $billing_rate = isset($_POST['billing_rate']) ? floatval($_POST['billing_rate']) : null;
+        $rate_id   = isset($_POST['rate_id']) ? intval($_POST['rate_id']) : 0;
         $order_date = self::parse_order_date($date);
 
         if (
@@ -178,11 +178,17 @@ class MealsDB_Quick_Order_Ajax {
             ]);
         }
 
-        if ($billing_rate !== null && $billing_rate < 0) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('Invalid billing rate.', 'meals-db'),
-            ]);
+        // Meals DB client_id from the external meals_clients table for this WordPress user.
+        $client_db_id = self::get_active_client_id_for_user($client_id);
+
+        // Validate that the selected rate belongs to this client.
+        if ($rate_id > 0 && $client_db_id > 0) {
+            if (!self::validate_rate_for_client($rate_id, $client_db_id)) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('Invalid rate selection.', 'meals-db'),
+                ]);
+            }
         }
 
         try {
@@ -193,21 +199,15 @@ class MealsDB_Quick_Order_Ajax {
 
             $order->update_meta_data('mealsdb_client_user_id', $client_id);
 
-            // Meals DB client_id from the external meals_clients table for this WordPress user.
-            $client_db_id = self::get_active_client_id_for_user($client_id);
             if ($client_db_id > 0) {
                 $order->update_meta_data('mealsdb_client_id', $client_db_id);
             }
-            $order->save();
 
-            if ($client_db_id > 0 && !self::log_transaction($order, $client_db_id, $order_date, $billing_rate)) {
-                $order_id = $order->get_id();
-                if ($order_id > 0) {
-                    wp_trash_post($order_id);
-                }
-
-                throw new Exception(__('Failed to record Meals DB transaction.', 'meals-db'));
+            if ($rate_id > 0) {
+                $order->update_meta_data('mealsdb_rate_id', $rate_id);
             }
+
+            $order->save();
 
             $order_id = $order->get_id();
             wp_send_json([
@@ -454,103 +454,18 @@ class MealsDB_Quick_Order_Ajax {
                 }
             }
 
+            $rate_id = intval($source_order->get_meta('mealsdb_rate_id'));
+
             wp_send_json([
                 'success'     => true,
                 'client_id'   => $client_id,
                 'client_type' => $client_type,
                 'order_date'  => $order_date,
                 'items'       => $items,
+                'rate_id'     => $rate_id > 0 ? $rate_id : null,
             ]);
         } catch (Exception $e) {
             error_log('[MealsDB QuickOrder] clone_get_order error: ' . $e->getMessage());
-            wp_send_json([
-                'success' => false,
-                'message' => __('An error occurred. Please try again.', 'meals-db'),
-            ]);
-        }
-    }
-
-    /**
-     * AJAX endpoint to retrieve a client's default rate from meals_clients table.
-     */
-    public static function get_client_rate(): void {
-        self::verify_request();
-
-        // Rate limiting
-        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
-            ], 429);
-        }
-
-        try {
-            $user_id = isset($_REQUEST['user_id']) ? intval($_REQUEST['user_id']) : 0;
-            if ($user_id <= 0) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Invalid user ID.', 'meals-db'),
-                ]);
-            }
-
-            $client_db_id = self::get_active_client_id_for_user($user_id);
-            if ($client_db_id <= 0) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Client not found.', 'meals-db'),
-                ]);
-            }
-
-            $conn = MealsDB_DB::get_connection();
-            if (!MealsDB_DB::is_mysqli($conn)) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Database connection error.', 'meals-db'),
-                ]);
-            }
-
-            $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-            $sql = sprintf(
-                'SELECT rate FROM `%s` WHERE client_id = ? AND active = 1 LIMIT 1',
-                str_replace('`', '``', $table_name)
-            );
-
-            $stmt = $conn->prepare($sql);
-            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Database query error.', 'meals-db'),
-                ]);
-            }
-
-            $stmt->bind_param('i', $client_db_id);
-
-            if (!$stmt->execute()) {
-                $stmt->close();
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Failed to retrieve client rate.', 'meals-db'),
-                ]);
-            }
-
-            $result = $stmt->get_result();
-            $rate = 0.00;
-
-            if (MealsDB_DB::is_mysqli_result($result)) {
-                $row = $result->fetch_assoc();
-                if (isset($row['rate'])) {
-                    $rate = floatval($row['rate']);
-                }
-            }
-
-            $stmt->close();
-
-            wp_send_json([
-                'success' => true,
-                'rate' => $rate,
-            ]);
-        } catch (Exception $e) {
-            error_log('[MealsDB QuickOrder] get_client_rate error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
                 'message' => __('An error occurred. Please try again.', 'meals-db'),
@@ -871,17 +786,17 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
-     * Persist the order details in the external Meals DB transactions table.
+     * Validate that a rate_id belongs to a given client in meals_client_rates.
      */
-    private static function log_transaction(WC_Order $order, int $client_id, ?DateTimeImmutable $order_date, ?float $billing_rate = null): bool {
+    private static function validate_rate_for_client(int $rate_id, int $client_id): bool {
         $conn = MealsDB_DB::get_connection();
         if (!MealsDB_DB::is_mysqli($conn)) {
             return false;
         }
 
-        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::TRANSACTIONS);
-
-        $sql = sprintf('INSERT INTO `%s` (client_id, order_id, order_date, billing_rate, created_at) VALUES (?, ?, ?, ?, NOW())',
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
+        $sql = sprintf(
+            'SELECT rate_id FROM `%s` WHERE rate_id = ? AND client_id = ? LIMIT 1',
             str_replace('`', '``', $table_name)
         );
 
@@ -890,20 +805,21 @@ class MealsDB_Quick_Order_Ajax {
             return false;
         }
 
-        $order_date_value = $order_date instanceof DateTimeImmutable
-            ? $order_date->format('Y-m-d H:i:s')
-            : current_time('mysql');
-
-        $order_id = $order->get_id();
-
-        if (!$stmt->bind_param('iisd', $client_id, $order_id, $order_date_value, $billing_rate)) {
+        $stmt->bind_param('ii', $rate_id, $client_id);
+        if (!$stmt->execute()) {
             $stmt->close();
             return false;
         }
 
-        $executed = $stmt->execute();
+        $result = $stmt->get_result();
+        $found = false;
+
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            $found = $result->fetch_assoc() !== null;
+        }
+
         $stmt->close();
 
-        return (bool) $executed;
+        return $found;
     }
 }

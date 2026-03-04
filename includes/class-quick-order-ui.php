@@ -136,21 +136,13 @@ class MealsDB_Quick_Order_UI {
                     <label for="mealsdb-quick-order-date"><?php esc_html_e('Order Date', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-quick-order-date" class="mealsdb-quick-order__order-date" />
                 </div>
-                <div class="mealsdb-quick-order__control">
+                <div class="mealsdb-quick-order__control" id="mealsdb-quick-order-rate-container" style="display: none;">
                     <label for="mealsdb-quick-order-rate">
                         <?php esc_html_e('Billing Rate', 'meals-db'); ?>
-                        <span class="mealsdb-quick-order__rate-indicator" id="mealsdb-quick-order-rate-indicator" style="font-size: 0.85em; color: #666; margin-left: 5px;"></span>
                     </label>
-                    <input
-                        type="number"
-                        id="mealsdb-quick-order-rate"
-                        class="mealsdb-quick-order__rate-input"
-                        step="0.01"
-                        min="0"
-                        placeholder="0.00"
-                        style="width: 150px;"
-                    />
-                    <input type="hidden" id="mealsdb-quick-order-default-rate" value="" />
+                    <select id="mealsdb-quick-order-rate" class="mealsdb-quick-order__rate-select" style="width: 250px;">
+                        <option value="0"><?php esc_html_e('— Select rate —', 'meals-db'); ?></option>
+                    </select>
                 </div>
             </div>
 

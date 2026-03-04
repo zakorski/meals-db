@@ -66,9 +66,8 @@
             this.$clientDropdown = $('#mealsdb_qo_client_dropdown');
             this.$clientSelect = $('#client_id');
             this.$orderDate = $('#mealsdb-quick-order-date');
-            this.$rateInput = $('#mealsdb-quick-order-rate');
-            this.$rateIndicator = $('#mealsdb-quick-order-rate-indicator');
-            this.$defaultRate = $('#mealsdb-quick-order-default-rate');
+            this.$rateSelect = $('#mealsdb-quick-order-rate');
+            this.$rateContainer = $('#mealsdb-quick-order-rate-container');
             this.$createOrder = $('#qo-create-order');
             this.$orderSuccess = $('#qo-order-success');
             this.$qoItemsCount = $('#mealsdb-quick-order-summary-items');
@@ -209,9 +208,8 @@
                 });
             }
 
-            if (this.$rateInput && this.$rateInput.length) {
-                this.$rateInput.on('input change', () => {
-                    this.updateRateIndicator();
+            if (this.$rateSelect && this.$rateSelect.length) {
+                this.$rateSelect.on('change', () => {
                     this.updateSummaryRate();
                 });
             }
@@ -342,6 +340,12 @@
 
                 if (payload.client_id) {
                     this.applyClonedClient(payload.client_id, payload.client_type, payload.client_name);
+
+                    // Pre-select the rate from the cloned order after rates load.
+                    const cloneRateId = payload.rate_id ? parseInt(payload.rate_id, 10) : null;
+                    if (cloneRateId && cloneRateId > 0) {
+                        this.fetchClientRates(parseInt(payload.client_id, 10), cloneRateId);
+                    }
                 }
 
                 if (payload.order_date && this.$orderDate && this.$orderDate.length) {
@@ -1249,17 +1253,10 @@
             const clientId = parseInt(clientIdRaw, 10);
             const orderDate = this.$orderDate && this.$orderDate.length ? this.$orderDate.val() : '';
             const items = Object.values(this.state.cart || {}).filter((entry) => entry && entry.quantity > 0);
-            const billingRateRaw = this.$rateInput && this.$rateInput.length ? this.$rateInput.val() : '';
-            const billingRate = parseFloat(billingRateRaw);
+            const rateId = this.$rateSelect && this.$rateSelect.length ? parseInt(this.$rateSelect.val(), 10) || 0 : 0;
 
             if (!Number.isInteger(clientId) || clientId <= 0 || !orderDate || !items.length) {
                 qoShowToast('Please select a client, date, and at least one product.', 'error');
-                this.clearCreateOrderLoading(createButton);
-                return;
-            }
-
-            if (!Number.isFinite(billingRate) || billingRate < 0) {
-                qoShowToast('Please enter a valid billing rate.', 'error');
                 this.clearCreateOrderLoading(createButton);
                 return;
             }
@@ -1281,7 +1278,7 @@
                     client_id: clientId,
                     date: orderDate,
                     items: payloadItems,
-                    billing_rate: billingRate,
+                    rate_id: rateId,
                 },
             }).done((response) => {
                 if (!this.isSuccessfulResponse(response)) {
@@ -1525,14 +1522,14 @@
 
             this.updateProductRestrictionStates();
             this.updateSummaryPanel();
-            this.fetchClientRate(clientId);
+            this.fetchClientRates(clientId);
 
             $(document).trigger('mealsdb_update_summary');
         },
 
-        fetchClientRate(userId) {
+        fetchClientRates(userId, preselectRateId) {
             if (!Number.isInteger(userId) || userId <= 0) {
-                this.clearClientRate();
+                this.clearClientRates();
                 return;
             }
 
@@ -1541,74 +1538,69 @@
                 method: 'GET',
                 dataType: 'json',
                 data: {
-                    action: 'mealsdb_qo_get_client_rate',
+                    action: 'mealsdb_get_client_rates',
                     nonce: this.getSecurityNonce(),
                     user_id: userId,
                 },
             }).done((response) => {
                 const payload = this.getResponsePayload(response);
 
-                if (!this.isSuccessfulResponse(response)) {
-                    this.clearClientRate();
+                if (!this.isSuccessfulResponse(response) || !payload) {
+                    this.clearClientRates();
                     return;
                 }
 
-                const rate = parseFloat(payload.rate || 0);
-                this.setClientRate(rate);
+                const rates = Array.isArray(payload.rates) ? payload.rates : [];
+                if (!rates.length) {
+                    this.clearClientRates();
+                    return;
+                }
+
+                this.populateRateSelector(rates, preselectRateId || payload.default_rate_id);
             }).fail(() => {
-                this.clearClientRate();
+                this.clearClientRates();
             });
         },
 
-        setClientRate(rate) {
-            const safeRate = Number.isFinite(rate) && rate >= 0 ? rate : 0;
-
-            if (this.$defaultRate && this.$defaultRate.length) {
-                this.$defaultRate.val(safeRate.toFixed(2));
-            }
-
-            if (this.$rateInput && this.$rateInput.length) {
-                this.$rateInput.val(safeRate.toFixed(2));
-            }
-
-            this.updateRateIndicator();
-            this.updateSummaryRate();
-        },
-
-        clearClientRate() {
-            if (this.$defaultRate && this.$defaultRate.length) {
-                this.$defaultRate.val('');
-            }
-
-            if (this.$rateInput && this.$rateInput.length) {
-                this.$rateInput.val('');
-            }
-
-            if (this.$rateIndicator && this.$rateIndicator.length) {
-                this.$rateIndicator.text('');
-            }
-
-            this.updateSummaryRate();
-        },
-
-        updateRateIndicator() {
-            if (!this.$rateIndicator || !this.$rateIndicator.length || !this.$rateInput || !this.$defaultRate) {
+        populateRateSelector(rates, defaultRateId) {
+            if (!this.$rateSelect || !this.$rateSelect.length) {
                 return;
             }
 
-            const currentRate = parseFloat(this.$rateInput.val()) || 0;
-            const defaultRate = parseFloat(this.$defaultRate.val()) || 0;
+            this.$rateSelect.empty();
+            this.$rateSelect.append($('<option>', { value: '0', text: '\u2014 Select rate \u2014' }));
 
-            if (currentRate === 0 && defaultRate === 0) {
-                this.$rateIndicator.text('');
-                return;
+            rates.forEach((r) => {
+                const label = r.label + ' \u2014 $' + r.rate;
+                this.$rateSelect.append($('<option>', {
+                    value: r.rate_id,
+                    text: label,
+                    'data-rate': r.rate,
+                }));
+            });
+
+            if (defaultRateId) {
+                this.$rateSelect.val(String(defaultRateId));
             }
 
-            if (Math.abs(currentRate - defaultRate) < 0.01) {
-                this.$rateIndicator.text('(default)').css('color', '#666');
-            } else {
-                this.$rateIndicator.text('(overridden)').css('color', '#d63638');
+            if (this.$rateContainer && this.$rateContainer.length) {
+                this.$rateContainer.show();
             }
+
+            this.updateSummaryRate();
+        },
+
+        clearClientRates() {
+            if (this.$rateSelect && this.$rateSelect.length) {
+                this.$rateSelect.empty();
+                this.$rateSelect.append($('<option>', { value: '0', text: '\u2014 Select rate \u2014' }));
+            }
+
+            if (this.$rateContainer && this.$rateContainer.length) {
+                this.$rateContainer.hide();
+            }
+
+            this.updateSummaryRate();
         },
 
         updateSummaryRate() {
@@ -1616,12 +1608,20 @@
                 return;
             }
 
-            if (!this.$rateInput || !this.$rateInput.length) {
+            if (!this.$rateSelect || !this.$rateSelect.length) {
                 this.$summaryRate.text(this.translate('Not set'));
                 return;
             }
 
-            const rate = parseFloat(this.$rateInput.val());
+            const selected = this.$rateSelect.find(':selected');
+            const rateVal = selected.data('rate');
+
+            if (!rateVal && parseInt(this.$rateSelect.val(), 10) === 0) {
+                this.$summaryRate.text(this.translate('Not set'));
+                return;
+            }
+
+            const rate = parseFloat(rateVal);
             if (!Number.isFinite(rate) || rate < 0) {
                 this.$summaryRate.text(this.translate('Not set'));
                 return;
