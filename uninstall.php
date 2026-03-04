@@ -36,8 +36,9 @@ if (!MealsDB_DB::is_mysqli($conn)) {
     return;
 }
 
-// Drop plugin-specific tables
+// Drop plugin-specific tables (order respects FK dependencies: CLIENT_RATES before CLIENTS)
 $tables = [
+    MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES),
     MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS),
     MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS),
     MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS),
@@ -53,6 +54,9 @@ foreach ($tables as $table) {
 }
 
 MealsDB_DB::close_connection();
+
+// Clear scheduled events
+wp_clear_scheduled_hook('mealsdb_nightly_sync');
 
 // Optional: remove plugin options or transients
 // delete_option('mealsdb_plugin_version');

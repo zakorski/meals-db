@@ -6,8 +6,7 @@ class MealsDB_Tables
 {
     public const CLIENTS = 'meals_clients';
     public const PRODUCTS = 'meals_products';
-    public const TRANSACTIONS = 'meals_transactions';
-    public const TRANSACTION_ITEMS = 'meals_transaction_items';
+    public const CLIENT_RATES = 'meals_client_rates';
     public const STAFF = 'meals_staff';
     public const DRAFTS = 'meals_drafts';
     public const AUDIT_LOG = 'meals_audit_log';
@@ -23,8 +22,7 @@ class MealsDB_Tables
         return [
             self::CLIENTS,
             self::PRODUCTS,
-            self::TRANSACTIONS,
-            self::TRANSACTION_ITEMS,
+            self::CLIENT_RATES,
             self::STAFF,
             self::DRAFTS,
             self::AUDIT_LOG,
