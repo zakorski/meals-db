@@ -43,52 +43,102 @@ class MealsDB_Installer {
         }
 
         // Run one-time migrations
-        self::migrate_service_name_course_to_meal_type($conn);
+        // Migration: service_name_course → meal_type completed in v1.x
+        self::migrate_rate_to_client_rates($conn);
+        self::drop_defunct_transaction_tables($conn);
     }
 
     /**
-     * Migrate data from service_name_course to meal_type and remove the old column.
-     * This is a one-time migration to consolidate duplicate fields.
+     * Seed meals_client_rates from existing meals_clients.rate column.
+     *
+     * On first run: copies each client's flat rate into the new rates table as a
+     * "Standard" default rate, back-fills default_rate_id on meals_clients, then
+     * drops the now-redundant rate column.
      */
-    private static function migrate_service_name_course_to_meal_type(mysqli $conn): void {
-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $escaped_table = str_replace('`', '``', $table);
+    private static function migrate_rate_to_client_rates(mysqli $conn): void {
+        $rates_table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $escaped_rates   = str_replace('`', '``', $rates_table);
+        $escaped_clients = str_replace('`', '``', $clients_table);
 
-        // Check if service_name_course column still exists
-        $check_sql = sprintf(
-            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '%s' AND COLUMN_NAME = 'service_name_course'",
-            $conn->real_escape_string($table)
-        );
-
-        $result = $conn->query($check_sql);
-        if (!$result || $result->num_rows === 0) {
-            // Column already removed, migration complete
+        // Check if meals_client_rates table is empty
+        $count_result = $conn->query(sprintf("SELECT COUNT(*) AS cnt FROM `%s`", $escaped_rates));
+        if (!$count_result) {
+            error_log(sprintf('[MealsDB Installer] Could not check meals_client_rates count: %s', $conn->error));
+            return;
+        }
+        $count_row = $count_result->fetch_assoc();
+        if ((int) ($count_row['cnt'] ?? 0) > 0) {
+            // Already seeded — nothing to do
             return;
         }
 
-        // Copy data from service_name_course to meal_type where meal_type is NULL or empty
-        $update_sql = sprintf(
-            "UPDATE `%s` SET meal_type = service_name_course WHERE (meal_type IS NULL OR meal_type = '') AND service_name_course IS NOT NULL AND service_name_course != ''",
-            $escaped_table
-        );
-
-        if (!$conn->query($update_sql)) {
-            error_log(sprintf('[MealsDB Installer] Failed to migrate service_name_course data: %s', $conn->error));
+        // Check if meals_clients.rate column still exists
+        $safe_clients = $conn->real_escape_string($clients_table);
+        $col_check = $conn->query(sprintf(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '%s' AND COLUMN_NAME = 'rate'",
+            $safe_clients
+        ));
+        if (!$col_check || $col_check->num_rows === 0) {
+            // rate column already removed — migration previously completed
             return;
         }
 
-        $rows_updated = $conn->affected_rows;
-        if ($rows_updated > 0) {
-            error_log(sprintf('[MealsDB Installer] Migrated %d rows from service_name_course to meal_type', $rows_updated));
+        // Seed rates from existing flat rate values
+        $insert_sql = sprintf(
+            "INSERT INTO `%s` (client_id, label, rate, is_default, created_at) SELECT client_id, 'Standard', rate, 1, NOW() FROM `%s` WHERE rate > 0",
+            $escaped_rates,
+            $escaped_clients
+        );
+        if (!$conn->query($insert_sql)) {
+            error_log(sprintf('[MealsDB Installer] Failed to seed meals_client_rates: %s', $conn->error));
+            return;
         }
+        $seeded = $conn->affected_rows;
+        error_log(sprintf('[MealsDB Installer] Seeded %d rows into meals_client_rates', $seeded));
 
-        // Drop the service_name_course column
-        $drop_sql = sprintf("ALTER TABLE `%s` DROP COLUMN service_name_course", $escaped_table);
+        // Back-fill default_rate_id on meals_clients
+        $backfill_sql = sprintf(
+            "UPDATE `%s` c INNER JOIN `%s` r ON r.client_id = c.client_id AND r.is_default = 1 SET c.default_rate_id = r.rate_id",
+            $escaped_clients,
+            $escaped_rates
+        );
+        if (!$conn->query($backfill_sql)) {
+            error_log(sprintf('[MealsDB Installer] Failed to back-fill default_rate_id: %s', $conn->error));
+            return;
+        }
+        error_log(sprintf('[MealsDB Installer] Back-filled default_rate_id for %d clients', $conn->affected_rows));
 
+        // Drop the now-redundant rate column
+        $drop_sql = sprintf("ALTER TABLE `%s` DROP COLUMN rate", $escaped_clients);
         if (!$conn->query($drop_sql)) {
-            error_log(sprintf('[MealsDB Installer] Failed to drop service_name_course column: %s', $conn->error));
+            error_log(sprintf('[MealsDB Installer] Failed to drop meals_clients.rate column: %s', $conn->error));
         } else {
-            error_log('[MealsDB Installer] Successfully dropped service_name_course column');
+            error_log('[MealsDB Installer] Dropped meals_clients.rate column');
+        }
+    }
+
+    /**
+     * Drop defunct transaction tables that are no longer part of the schema.
+     *
+     * Order data now lives exclusively in WooCommerce HPOS tables.
+     */
+    private static function drop_defunct_transaction_tables(mysqli $conn): void {
+        $tables_to_drop = [
+            'meals_transaction_items',
+            'meals_transactions',
+        ];
+
+        foreach ($tables_to_drop as $base_name) {
+            $table_name = MealsDB_DB::get_table_name($base_name);
+            $escaped    = str_replace('`', '``', $table_name);
+            $sql        = sprintf("DROP TABLE IF EXISTS `%s`", $escaped);
+
+            if (!$conn->query($sql)) {
+                error_log(sprintf('[MealsDB Installer] Failed to drop defunct table %s: %s', $table_name, $conn->error));
+            } else {
+                error_log(sprintf('[MealsDB Installer] Dropped defunct table: %s', $table_name));
+            }
         }
     }
 }
