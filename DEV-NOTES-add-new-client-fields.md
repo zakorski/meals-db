@@ -26,7 +26,7 @@ Fields listed here are rendered for SDNB, Veteran, and Private clients (the only
 | Postal Code * | `address_postal` | text | SDNB/Veteran/Private | Masked input; required per type. |
 | Payment Method * | `payment_method` | text | SDNB/Veteran/Private | Required per type. |
 | Required Start Date * | `required_start_date` | date | SDNB/Veteran/Private | Required per type. |
-| Rate * | `rate` | text | SDNB/Veteran/Private | Required per type. |
+| Rate * | `rate_id` | select | SDNB/Veteran/Private | Multi-rate selector; rates stored in `meals_client_rates` table, linked via `default_rate_id` FK on `meals_clients`. |
 | Delivery Fee | `delivery_fee` | text | No | Optional monetary field. |
 | Freezer Capacity | `freezer_capacity` | text | No | Optional capacity note. |
 | Delivery Day * | `delivery_day` | select | SDNB/Veteran/Private | Options populated from allowed values; required per type. |
