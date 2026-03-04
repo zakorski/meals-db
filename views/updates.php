@@ -70,6 +70,134 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         </form>
     </div>
 
+    <div class="mealsdb-historical-import">
+        <h2><?php echo esc_html__('Historical Order Import', 'meals-db'); ?></h2>
+        <p class="description">
+            <?php echo esc_html__('Tags existing WooCommerce orders with Meals DB client identifiers for SDNB and Veteran clients. Run once after initial setup.', 'meals-db'); ?>
+        </p>
+        <div class="mealsdb-historical-import-actions">
+            <button type="button" class="button" id="mealsdb-historical-dry-run">
+                <?php echo esc_html__('Start Dry Run', 'meals-db'); ?>
+            </button>
+            <button type="button" class="button button-primary" id="mealsdb-historical-run" disabled>
+                <?php echo esc_html__('Run Import', 'meals-db'); ?>
+            </button>
+            <button type="button" class="button" id="mealsdb-historical-reset">
+                <?php echo esc_html__('Reset', 'meals-db'); ?>
+            </button>
+        </div>
+        <div id="mealsdb-historical-progress" style="display:none; margin-top:12px;">
+            <div style="background:#e0e0e0; border-radius:3px; overflow:hidden; height:24px; max-width:500px;">
+                <div id="mealsdb-historical-bar" style="background:#0073aa; height:100%; width:0%; transition:width .3s;"></div>
+            </div>
+            <p id="mealsdb-historical-percent" style="margin:4px 0;">0%</p>
+        </div>
+        <div id="mealsdb-historical-status" class="notice" style="display:none; margin-top:12px;"></div>
+        <pre id="mealsdb-historical-log" style="display:none; max-height:200px; overflow:auto; background:#f5f5f5; padding:8px; margin-top:8px; font-size:12px;"></pre>
+    </div>
+
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
 </div>
+
+<script>
+(function($) {
+    'use strict';
+
+    var nonce   = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
+    var $dryBtn = $('#mealsdb-historical-dry-run');
+    var $runBtn = $('#mealsdb-historical-run');
+    var $rstBtn = $('#mealsdb-historical-reset');
+    var $prog   = $('#mealsdb-historical-progress');
+    var $bar    = $('#mealsdb-historical-bar');
+    var $pct    = $('#mealsdb-historical-percent');
+    var $status = $('#mealsdb-historical-status');
+    var $log    = $('#mealsdb-historical-log');
+
+    function setButtons(running) {
+        $dryBtn.prop('disabled', running);
+        $runBtn.prop('disabled', running);
+        $rstBtn.prop('disabled', running);
+    }
+
+    function logLine(text) {
+        $log.show().append(text + "\n").scrollTop($log[0].scrollHeight);
+    }
+
+    function showStatus(msg, type) {
+        $status.show().removeClass('notice-info notice-success notice-error')
+            .addClass('notice-' + type).html('<p>' + msg + '</p>');
+    }
+
+    function startImport(dryRun) {
+        setButtons(true);
+        $prog.show();
+        $bar.css('width', '0%');
+        $pct.text('0%');
+        $log.empty().show();
+
+        logLine(dryRun ? 'Starting dry run...' : 'Starting live import...');
+
+        $.post(ajaxurl, { action: 'mealsdb_historical_import_start', nonce: nonce, dry_run: dryRun ? 1 : 0 }, function(res) {
+            if (!res.success) {
+                showStatus(res.message || 'Start failed.', 'error');
+                setButtons(false);
+                return;
+            }
+            logLine('Total orders: ' + res.total);
+            processBatch(dryRun);
+        }).fail(function() {
+            showStatus('Request failed.', 'error');
+            setButtons(false);
+        });
+    }
+
+    function processBatch(dryRun) {
+        $.post(ajaxurl, { action: 'mealsdb_historical_import_batch', nonce: nonce, dry_run: dryRun ? 1 : 0 }, function(res) {
+            if (!res.success) {
+                showStatus(res.message || 'Batch failed.', 'error');
+                setButtons(false);
+                return;
+            }
+
+            $bar.css('width', res.percent + '%');
+            $pct.text(res.percent + '%');
+
+            var line = 'Batch: processed=' + (res.processed || 0)
+                + ' tagged=' + (res.tagged || 0)
+                + ' already=' + (res.already_tagged || 0)
+                + ' skipped=' + (res.skipped || 0)
+                + ' errors=' + (res.errors || 0);
+            logLine(line);
+
+            if (res.complete) {
+                var label = dryRun ? 'Dry run complete.' : 'Import complete.';
+                showStatus(label, 'success');
+                setButtons(false);
+                if (dryRun) {
+                    $runBtn.prop('disabled', false);
+                }
+                return;
+            }
+
+            processBatch(dryRun);
+        }).fail(function() {
+            showStatus('Request failed.', 'error');
+            setButtons(false);
+        });
+    }
+
+    $dryBtn.on('click', function() { startImport(true); });
+    $runBtn.on('click', function() { startImport(false); });
+    $rstBtn.on('click', function() {
+        $.post(ajaxurl, { action: 'mealsdb_historical_import_reset', nonce: nonce }, function(res) {
+            if (res.success) {
+                showStatus('Progress reset.', 'info');
+                $prog.hide();
+                $log.hide().empty();
+                $runBtn.prop('disabled', true);
+            }
+        });
+    });
+})(jQuery);
+</script>
