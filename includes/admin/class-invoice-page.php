@@ -88,7 +88,7 @@ class MealsDB_Invoice_Page {
 
         $query = "
             SELECT DISTINCT delivery_area_zone
-            FROM " . MealsDB_DB::table('clients') . "
+            FROM " . MealsDB_DB::table(MealsDB_Tables::CLIENTS) . "
             WHERE client_type = 'SDNB'
                 AND use_legacy_billing = 1
                 AND delivery_area_zone IS NOT NULL
