@@ -125,6 +125,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Import_Page::init();
     MealsDB_CSV_Import_Page::init();
     MealsDB_Invoice_Page::init();
+    MealsDB_Sync::register_hooks();
 });
 
 // Register the plugin update checker against the GitHub repository.

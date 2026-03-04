@@ -73,6 +73,14 @@ class MealsDB_Sync_Mutate {
      * @return true|WP_Error
      */
     public function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
+        // Only WP-authoritative fields may be pushed to WooCommerce.
+        if (!in_array($field, MealsDB_Sync::get_wp_authoritative_fields(), true)) {
+            return new WP_Error(
+                'mealsdb_sync_readonly_field',
+                __('This field is not authoritative in WooCommerce and cannot be pushed there.', 'meals-db')
+            );
+        }
+
         // First update the WordPress user
         $wp_result = $this->update_wp_user($woo_user_id, [
             $field => $new_value,
@@ -117,6 +125,14 @@ class MealsDB_Sync_Mutate {
             return new WP_Error(
                 'mealsdb_sync_invalid_client',
                 __('A valid Meals DB client is required to sync this field.', 'meals-db')
+            );
+        }
+
+        // Only WP-authoritative fields may be written from WP to meals_clients.
+        if (!in_array($field, MealsDB_Sync::get_wp_authoritative_fields(), true)) {
+            return new WP_Error(
+                'mealsdb_sync_readonly_field',
+                __('This field is authoritative in Meals DB and cannot be overwritten from WooCommerce.', 'meals-db')
             );
         }
 
@@ -702,6 +718,7 @@ class MealsDB_Sync_Mutate {
     private function build_identity_column_map(array $available_columns): array {
         $map = [];
 
+        // Core identity fields with possible column name variants.
         $field_candidates = [
             'first_name'        => ['first_name'],
             'last_name'         => ['last_name'],
@@ -715,6 +732,34 @@ class MealsDB_Sync_Mutate {
 
             if ($column !== null) {
                 $map[$field] = $column;
+            }
+        }
+
+        // WP-authoritative fields where the field name matches the column name directly.
+        $direct_fields = [
+            'client_phone_1',
+            'client_phone_2',
+            'street_number',
+            'street_name',
+            'apartment_number',
+            'city',
+            'province',
+            'postal_code',
+            'delivery_street_number',
+            'delivery_street_name',
+            'delivery_apartment_number',
+            'delivery_city',
+            'delivery_province',
+            'delivery_postal_code',
+            'alternate_contact_name',
+            'alternate_contact_phone_1',
+            'alternate_contact_phone_2',
+            'alternate_contact_email',
+        ];
+
+        foreach ($direct_fields as $field) {
+            if (!isset($map[$field]) && isset($available_columns[$field])) {
+                $map[$field] = $field;
             }
         }
 
@@ -799,6 +844,10 @@ class MealsDB_Sync_Mutate {
         $error_code = 'mealsdb_sync_failed';
         $error_message = '';
 
+        // Resolve the WP meta map entry for this field, if available.
+        $meta_map = MealsDB_Sync::get_field_to_wp_meta_map();
+        $descriptor = $meta_map[$field] ?? null;
+
         switch ($field) {
             case 'first_name':
             case 'last_name':
@@ -828,6 +877,7 @@ class MealsDB_Sync_Mutate {
                 }
                 break;
             case 'phone_primary':
+            case 'client_phone_1':
                 $old_value = get_user_meta($woo_user_id, 'billing_phone', true);
                 $update_success = update_user_meta($woo_user_id, 'billing_phone', $new_value) !== false;
                 if (!$update_success) {
@@ -836,8 +886,22 @@ class MealsDB_Sync_Mutate {
                 }
                 break;
             default:
-                $error_code = 'mealsdb_sync_unsupported_field';
-                $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
+                // Handle any WP-authoritative field that maps to user meta.
+                if ($descriptor !== null && $descriptor['type'] === 'meta') {
+                    $meta_key = $descriptor['key'];
+                    $old_value = get_user_meta($woo_user_id, $meta_key, true);
+                    $update_success = update_user_meta($woo_user_id, $meta_key, $new_value) !== false;
+                    if (!$update_success) {
+                        $error_message = sprintf(
+                            __('Unable to update user meta "%s".', 'meals-db'),
+                            $meta_key
+                        );
+                        error_log('[MealsDB Sync] Failed to sync meta ' . $meta_key . ' for user ' . $woo_user_id . '.');
+                    }
+                } else {
+                    $error_code = 'mealsdb_sync_unsupported_field';
+                    $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
+                }
                 break;
         }
 
