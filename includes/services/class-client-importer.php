@@ -23,6 +23,7 @@ class MealsDB_Client_Importer {
         'need_initials' => 0,
         'with_emails' => 0,
         'encrypted_requisition_ids' => 0,
+        'private_clients_wp_only' => 0,
     ];
     private $errors = [];
     private $used_initials = [];
@@ -135,6 +136,16 @@ class MealsDB_Client_Importer {
         $this->dry_run = $dry_run;
         $this->import_id = uniqid('import_');
         $this->init_log_file();
+    }
+
+    /**
+     * Check if a client type is a government client (SDNB or Veteran).
+     *
+     * Only government clients are stored in the external encrypted database.
+     * Private clients exist solely as WordPress/WooCommerce users.
+     */
+    private function is_government_client(string $client_type): bool {
+        return $client_type === 'SDNB' || $client_type === 'Veteran';
     }
 
     /**
@@ -353,6 +364,7 @@ class MealsDB_Client_Importer {
         $this->write_log("Clients Created: " . $this->stats['clients_created']);
         $this->write_log("Clients Updated: " . $this->stats['clients_updated']);
         $this->write_log("Clients Skipped: " . $this->stats['clients_skipped']);
+        $this->write_log("Private (WP Only): " . $this->stats['private_clients_wp_only']);
         $this->write_log("Completed: " . date('Y-m-d H:i:s'));
         $this->write_log(str_repeat('=', 60));
 
@@ -536,6 +548,19 @@ class MealsDB_Client_Importer {
         if ($this->dry_run) {
             $this->write_log("DRY RUN MODE: Simulating database operations for statistics", 1);
 
+            // Private clients: WP-only, skip external DB simulation
+            if (!$this->is_government_client($data['client_type'] ?? '')) {
+                $wp_user_simulation = $this->simulate_wp_user_creation($data);
+                if ($wp_user_simulation['status'] === 'existing') {
+                    $this->stats['wp_users_existing']++;
+                } else {
+                    $this->stats['wp_users_created']++;
+                }
+                $this->stats['private_clients_wp_only']++;
+                $this->write_log("SKIPPED (Private — WP only): " . $data['first_name'] . ' ' . $data['last_name'], 1);
+                return;
+            }
+
             // Simulate WordPress user creation/linking
             $wp_user_simulation = $this->simulate_wp_user_creation($data);
             $this->write_log("Would " . ($wp_user_simulation['status'] === 'existing' ? 'link to existing' : 'create new') . " WordPress user", 2);
@@ -581,6 +606,14 @@ class MealsDB_Client_Importer {
             $this->write_log("✓ Created new WordPress user ID: " . $wp_user_id . " with generated email", 1);
         } else {
             $this->write_log("✓ Created new WordPress user ID: " . $wp_user_id, 1);
+        }
+
+        // Gate: Private clients are WP-only — skip external DB write
+        if (!$this->is_government_client($data['client_type'] ?? '')) {
+            $this->stats['private_clients_wp_only']++;
+            $this->write_log("SKIPPED (Private — WP only): " . $data['first_name'] . ' ' . $data['last_name'] . " (wp_user_id: " . $wp_user_id . ")", 1);
+            error_log(sprintf('[MealsDB Importer] Skipped external DB write for Private client: %s %s (wp_user_id: %d)', $data['first_name'], $data['last_name'], $wp_user_id));
+            return;
         }
 
         // Create or update client record

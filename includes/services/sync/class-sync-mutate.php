@@ -28,6 +28,16 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
+     * Check if a client type is a government client (SDNB or Veteran).
+     *
+     * Only government clients are stored in the external encrypted database.
+     * Private clients exist solely as WordPress/WooCommerce users.
+     */
+    private function is_government_client(string $client_type): bool {
+        return $client_type === 'SDNB' || $client_type === 'Veteran';
+    }
+
+    /**
      * Update a WordPress user with the provided field values.
      *
      * @param int                  $user_id Identifier of the WordPress user to update.
@@ -114,6 +124,12 @@ class MealsDB_Sync_Mutate {
 
         if (is_wp_error($connection)) {
             return $connection;
+        }
+
+        // Type gate: Private clients have no external DB record — silently succeed
+        $client_type = $this->get_client_type($connection, $client_id);
+        if ($client_type !== null && !$this->is_government_client($client_type)) {
+            return true;
         }
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -252,6 +268,12 @@ class MealsDB_Sync_Mutate {
             return false;
         }
 
+        // Type gate: verify the existing record is not a Private client
+        $client_type = $this->get_client_type($connection, $client_id);
+        if ($client_type !== null && !$this->is_government_client($client_type)) {
+            return false;
+        }
+
         $columns = [];
         $types   = '';
         $values  = [];
@@ -302,6 +324,15 @@ class MealsDB_Sync_Mutate {
 
         if (is_wp_error($connection) || empty($fields)) {
             return false;
+        }
+
+        // Type gate: Private clients are not stored in the external database
+        $client_type = $fields['client_type'] ?? '';
+        if (is_string($client_type) && !$this->is_government_client($client_type)) {
+            return new WP_Error(
+                'mealsdb_sync_private_client',
+                __('Private clients are not stored in the Meals DB external database.', 'meals-db')
+            );
         }
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -385,6 +416,15 @@ class MealsDB_Sync_Mutate {
 
         if (is_wp_error($connection)) {
             return $connection;
+        }
+
+        // Type gate: Private clients are not stored in the external database
+        $client_type = $this->get_client_type($connection, $client_id);
+        if ($client_type !== null && !$this->is_government_client($client_type)) {
+            return new WP_Error(
+                'mealsdb_sync_private_client',
+                __('Private clients are not stored in the Meals DB external database.', 'meals-db')
+            );
         }
 
         $wp_user = get_userdata($user_id);
@@ -586,6 +626,48 @@ class MealsDB_Sync_Mutate {
         $stmt->close();
 
         return (int) $wp_user_id;
+    }
+
+    /**
+     * Look up the client_type for a given client_id.
+     *
+     * @return string|null The client_type value, or null if the record cannot be found.
+     */
+    private function get_client_type(\mysqli $connection, int $client_id): ?string {
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $available_columns = $this->get_table_columns($connection, $clients_table);
+
+        if (!isset($available_columns['client_type'])) {
+            return null;
+        }
+
+        $primary_key = $this->resolve_primary_key_column($available_columns);
+        if ($primary_key === null) {
+            return null;
+        }
+
+        $escaped_table = str_replace('`', '``', $clients_table);
+        $escaped_pk    = str_replace('`', '``', $primary_key);
+        $sql  = sprintf('SELECT `client_type` FROM `%s` WHERE `%s` = ? LIMIT 1', $escaped_table, $escaped_pk);
+        $stmt = $connection->prepare($sql);
+
+        if (!$stmt) {
+            return null;
+        }
+
+        if (!$stmt->bind_param('i', $client_id) || !$stmt->execute()) {
+            $stmt->close();
+            return null;
+        }
+
+        $type = null;
+        $stmt->bind_result($type);
+        if (!$stmt->fetch()) {
+            $type = null;
+        }
+        $stmt->close();
+
+        return is_string($type) ? $type : null;
     }
 
     /**

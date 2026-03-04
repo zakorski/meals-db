@@ -135,6 +135,13 @@ class MealsDB_Clients_Repository {
             return false;
         }
 
+        // Type gate: Private clients are not stored in the external database
+        $client_type = $data['client_type'] ?? '';
+        if (is_string($client_type) && $client_type !== '' && !self::is_government_client($client_type)) {
+            error_log(sprintf('[MealsDB Clients Repository] Skipped external DB write for Private client: %s %s', $data['first_name'] ?? '', $data['last_name'] ?? ''));
+            return false;
+        }
+
         try {
             $columns = array_keys($data);
             $placeholders = implode(', ', array_fill(0, count($columns), '?'));
@@ -199,6 +206,16 @@ class MealsDB_Clients_Repository {
         if (empty($data)) {
             error_log('[MealsDB Clients Repository] Attempted to update client with no data.');
             return false;
+        }
+
+        // Type gate: verify the existing record is not a Private client
+        $existing = $this->get_client_by_id($client_id);
+        if (is_array($existing)) {
+            $existing_type = $existing['client_type'] ?? '';
+            if ($existing_type !== '' && !self::is_government_client($existing_type)) {
+                error_log(sprintf('[MealsDB Clients Repository] Skipped external DB update for Private client ID %d', $client_id));
+                return false;
+            }
         }
 
         try {
@@ -502,6 +519,15 @@ class MealsDB_Clients_Repository {
             error_log('[MealsDB Clients Repository] Exception while checking unique field for column ' . $column . ': ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Check if a client type is a government client (SDNB or Veteran).
+     *
+     * Only government clients are stored in the external encrypted database.
+     */
+    private static function is_government_client(string $client_type): bool {
+        return $client_type === 'SDNB' || $client_type === 'Veteran';
     }
 
     private function get_or_fetch_connection() {

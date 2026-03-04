@@ -100,7 +100,7 @@ class MealsDB_Sync_Query {
 
                 $escaped_table = str_replace('`', '``', $clients_table);
                 $sql = sprintf(
-                    'SELECT %s FROM `%s` LIMIT %d OFFSET %d',
+                    "SELECT %s FROM `%s` WHERE client_type IN ('SDNB', 'Veteran') LIMIT %d OFFSET %d",
                     implode(', ', $quoted_columns),
                     $escaped_table,
                     (int) $batch_size,
