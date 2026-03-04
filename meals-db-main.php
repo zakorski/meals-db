@@ -119,6 +119,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Import::init();
     MealsDB_Ajax_CSV_Import::init();
     MealsDB_Ajax_Invoice::init();
+    MealsDB_Ajax_Historical_Import::init();
     MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();
     MealsDB_WC_Product_Tab::init();
