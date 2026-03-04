@@ -1,0 +1,344 @@
+<?php
+/**
+ * WooCommerce HPOS order query service for Meals DB.
+ *
+ * Single point of access for all queries against WC HPOS tables.
+ * Invoice generators, slip generators, and reports should use this
+ * class rather than querying WC tables directly.
+ *
+ * @package MealsDB
+ */
+
+class MealsDB_WC_Order_Query {
+
+    /**
+     * @var wpdb
+     */
+    private $wpdb;
+
+    /**
+     * @param wpdb $wpdb WordPress database abstraction.
+     */
+    public function __construct(wpdb $wpdb) {
+        $this->wpdb = $wpdb;
+    }
+
+    /**
+     * Fetch orders for the given WP user IDs within a date range.
+     *
+     * @param int[]    $wp_user_ids      WordPress user IDs.
+     * @param string   $start_date       Start date (Y-m-d).
+     * @param string   $end_date         End date (Y-m-d).
+     * @param string[] $exclude_statuses Order statuses to exclude.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function get_orders_for_users(
+        array $wp_user_ids,
+        string $start_date,
+        string $end_date,
+        array $exclude_statuses = ['wc-cancelled', 'wc-trash', 'trash']
+    ): array {
+        $wp_user_ids = array_filter(array_map('intval', $wp_user_ids));
+        if (empty($wp_user_ids)) {
+            return [];
+        }
+
+        $orders_table = $this->orders_table();
+        $meta_table   = $this->orders_meta_table();
+
+        $user_placeholders   = implode(',', array_fill(0, count($wp_user_ids), '%d'));
+        $status_placeholders = implode(',', array_fill(0, count($exclude_statuses), '%s'));
+
+        $sql = "
+            SELECT
+                o.id              AS order_id,
+                o.customer_id     AS wp_user_id,
+                o.status,
+                o.date_created_gmt,
+                o.total_amount,
+                o.tax_amount,
+                rate_meta.meta_value AS mealsdb_rate_id
+            FROM {$orders_table} o
+            LEFT JOIN {$meta_table} rate_meta
+                ON rate_meta.order_id = o.id
+                AND rate_meta.meta_key = 'mealsdb_rate_id'
+            WHERE o.customer_id IN ({$user_placeholders})
+                AND DATE(o.date_created_gmt) BETWEEN %s AND %s
+                AND o.status NOT IN ({$status_placeholders})
+                AND o.type = 'shop_order'
+            ORDER BY o.date_created_gmt ASC
+        ";
+
+        $params = array_merge(
+            $wp_user_ids,
+            [$start_date, $end_date],
+            $exclude_statuses
+        );
+
+        $prepared = $this->wpdb->prepare($sql, $params);
+        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    /**
+     * Fetch line items for the given order IDs.
+     *
+     * @param int[] $order_ids WC order IDs.
+     *
+     * @return array<int, array<string, mixed>> Flat array of item rows.
+     */
+    public function get_order_items(array $order_ids): array {
+        $order_ids = array_filter(array_map('intval', $order_ids));
+        if (empty($order_ids)) {
+            return [];
+        }
+
+        $items_table    = $this->order_items_table();
+        $itemmeta_table = $this->order_itemmeta_table();
+
+        $placeholders = implode(',', array_fill(0, count($order_ids), '%d'));
+
+        $sql = "
+            SELECT
+                oi.order_item_id,
+                oi.order_id,
+                oi.order_item_name,
+                product_meta.meta_value   AS wc_product_id,
+                qty_meta.meta_value       AS quantity,
+                subtotal_meta.meta_value  AS line_subtotal,
+                tax_meta.meta_value       AS line_tax,
+                total_meta.meta_value     AS line_total
+            FROM {$items_table} oi
+            INNER JOIN {$itemmeta_table} product_meta
+                ON product_meta.order_item_id = oi.order_item_id
+                AND product_meta.meta_key = '_product_id'
+            INNER JOIN {$itemmeta_table} qty_meta
+                ON qty_meta.order_item_id = oi.order_item_id
+                AND qty_meta.meta_key = '_qty'
+            INNER JOIN {$itemmeta_table} subtotal_meta
+                ON subtotal_meta.order_item_id = oi.order_item_id
+                AND subtotal_meta.meta_key = '_line_subtotal'
+            LEFT JOIN {$itemmeta_table} tax_meta
+                ON tax_meta.order_item_id = oi.order_item_id
+                AND tax_meta.meta_key = '_line_tax'
+            INNER JOIN {$itemmeta_table} total_meta
+                ON total_meta.order_item_id = oi.order_item_id
+                AND total_meta.meta_key = '_line_total'
+            WHERE oi.order_id IN ({$placeholders})
+                AND oi.order_item_type = 'line_item'
+            ORDER BY oi.order_id, oi.order_item_id
+        ";
+
+        $prepared = $this->wpdb->prepare($sql, $order_ids);
+        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    /**
+     * Fetch orders with their line items attached.
+     *
+     * @param int[]    $wp_user_ids      WordPress user IDs.
+     * @param string   $start_date       Start date (Y-m-d).
+     * @param string   $end_date         End date (Y-m-d).
+     * @param string[] $exclude_statuses Order statuses to exclude.
+     *
+     * @return array<int, array<string, mixed>> Orders with 'items' key.
+     */
+    public function get_orders_with_items_for_users(
+        array $wp_user_ids,
+        string $start_date,
+        string $end_date,
+        array $exclude_statuses = ['wc-cancelled', 'wc-trash', 'trash']
+    ): array {
+        $orders = $this->get_orders_for_users($wp_user_ids, $start_date, $end_date, $exclude_statuses);
+        if (empty($orders)) {
+            return [];
+        }
+
+        $order_ids = array_column($orders, 'order_id');
+        $items     = $this->get_order_items(array_map('intval', $order_ids));
+
+        // Group items by order_id.
+        $items_by_order = [];
+        foreach ($items as $item) {
+            $oid = (int) $item['order_id'];
+            if (!isset($items_by_order[$oid])) {
+                $items_by_order[$oid] = [];
+            }
+            $items_by_order[$oid][] = $item;
+        }
+
+        // Attach items to each order.
+        foreach ($orders as &$order) {
+            $oid = (int) $order['order_id'];
+            $order['items'] = isset($items_by_order[$oid]) ? $items_by_order[$oid] : [];
+        }
+        unset($order);
+
+        return $orders;
+    }
+
+    /**
+     * Look up product metadata from the external meals_products table.
+     *
+     * @param int[] $wc_product_ids WooCommerce product IDs.
+     *
+     * @return array<int, array<string, mixed>> Keyed by wc_product_id.
+     */
+    public function get_product_types_for_ids(array $wc_product_ids): array {
+        $wc_product_ids = array_filter(array_map('intval', $wc_product_ids));
+        if (empty($wc_product_ids)) {
+            return [];
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return [];
+        }
+
+        $products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
+        $placeholders   = implode(',', array_fill(0, count($wc_product_ids), '?'));
+
+        $sql  = sprintf(
+            'SELECT wc_product_id, product_type, taxable, case_size, unit_cost FROM `%s` WHERE wc_product_id IN (%s)',
+            $products_table,
+            $placeholders
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return [];
+        }
+
+        $types  = str_repeat('i', count($wc_product_ids));
+        $stmt->bind_param($types, ...$wc_product_ids);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+
+        $result   = $stmt->get_result();
+        $products = [];
+
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            while ($row = $result->fetch_assoc()) {
+                $pid = (int) $row['wc_product_id'];
+                $products[$pid] = [
+                    'wc_product_id' => $pid,
+                    'product_type'  => (string) $row['product_type'],
+                    'taxable'       => (int) $row['taxable'],
+                    'case_size'     => (int) $row['case_size'],
+                    'unit_cost'     => (float) $row['unit_cost'],
+                ];
+            }
+        }
+
+        $stmt->close();
+
+        return $products;
+    }
+
+    /**
+     * Resolve the billing rate for an order.
+     *
+     * Looks up the rate from meals_client_rates. Falls back to the client's
+     * default rate if the given rate_id is 0 or not found.
+     *
+     * @param int $rate_id   Rate ID from order meta (0 if unset).
+     * @param int $client_id External meals_clients client_id.
+     *
+     * @return float
+     */
+    public function resolve_rate_for_order(int $rate_id, int $client_id): float {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return 0.00;
+        }
+
+        $rates_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES));
+
+        // Try the explicit rate_id first.
+        if ($rate_id > 0) {
+            $sql  = sprintf(
+                'SELECT rate FROM `%s` WHERE rate_id = ? AND client_id = ? LIMIT 1',
+                $rates_table
+            );
+            $stmt = $conn->prepare($sql);
+            if (MealsDB_DB::is_mysqli_stmt($stmt)) {
+                $stmt->bind_param('ii', $rate_id, $client_id);
+                if ($stmt->execute()) {
+                    $result = $stmt->get_result();
+                    if (MealsDB_DB::is_mysqli_result($result)) {
+                        $row = $result->fetch_assoc();
+                        if (is_array($row) && isset($row['rate'])) {
+                            $stmt->close();
+                            return (float) $row['rate'];
+                        }
+                    }
+                }
+                $stmt->close();
+            }
+        }
+
+        // Fall back to the client's default rate.
+        $sql  = sprintf(
+            'SELECT rate FROM `%s` WHERE client_id = ? AND is_default = 1 LIMIT 1',
+            $rates_table
+        );
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return 0.00;
+        }
+
+        $stmt->bind_param('i', $client_id);
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return 0.00;
+        }
+
+        $result = $stmt->get_result();
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            $row = $result->fetch_assoc();
+            if (is_array($row) && isset($row['rate'])) {
+                $stmt->close();
+                return (float) $row['rate'];
+            }
+        }
+
+        $stmt->close();
+
+        return 0.00;
+    }
+
+    /**
+     * @return string Fully-prefixed wc_orders table name.
+     */
+    private function orders_table(): string {
+        return $this->wpdb->prefix . 'wc_orders';
+    }
+
+    /**
+     * @return string Fully-prefixed wc_orders_meta table name.
+     */
+    private function orders_meta_table(): string {
+        return $this->wpdb->prefix . 'wc_orders_meta';
+    }
+
+    /**
+     * @return string Fully-prefixed wc_order_items table name.
+     */
+    private function order_items_table(): string {
+        return $this->wpdb->prefix . 'wc_order_items';
+    }
+
+    /**
+     * @return string Fully-prefixed woocommerce_order_itemmeta table name.
+     */
+    private function order_itemmeta_table(): string {
+        return $this->wpdb->prefix . 'woocommerce_order_itemmeta';
+    }
+}
