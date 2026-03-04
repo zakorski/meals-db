@@ -534,49 +534,6 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
-     * Determine whether the provided Meals DB client exists and is active.
-     */
-    private static function client_is_active(int $client_id): bool {
-        if ($client_id <= 0) {
-            return false;
-        }
-
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return false;
-        }
-
-        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql        = sprintf('SELECT active FROM `%s` WHERE client_id = ? LIMIT 1', str_replace('`', '``', $table_name));
-
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return false;
-        }
-
-        $stmt->bind_param('i', $client_id);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return false;
-        }
-
-        $result = $stmt->get_result();
-        $active = false;
-
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            $row = $result->fetch_assoc();
-            if (isset($row['active'])) {
-                $active = (int) $row['active'] === 1;
-            }
-        }
-
-        $stmt->close();
-
-        return $active;
-    }
-
-    /**
      * Lookup an active Meals DB client ID for a given WordPress user.
      */
     private static function get_active_client_id_for_user(int $user_id): int {

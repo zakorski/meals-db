@@ -44,8 +44,6 @@ class MealsDB_Admin_UI {
         add_filter('woocommerce_admin_order_actions', [$this, 'add_quick_order_clone_action'], 10, 2);
         add_filter('woocommerce_admin_order_preview_actions', [$this, 'add_quick_order_clone_preview_action'], 10, 2);
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_quick_order_clone_button']);
-        add_filter('submenu_file', [$this, 'highlight_transactions_parent']);
-        add_filter('admin_title', [$this, 'filter_transaction_admin_title'], 10, 2);
     }
 
     /**
@@ -90,25 +88,6 @@ class MealsDB_Admin_UI {
             ['MealsDB_Quick_Order_UI', 'render_quick_order_page']
         );
 
-        add_submenu_page(
-            'mealsdb',
-            __('Transactions', 'meals-db'),
-            __('Transactions', 'meals-db'),
-            MealsDB_Permissions::required_capability(),
-            'mealsdb-transactions',
-            ['MealsDB_Admin_UI', 'render_transactions_page']
-        );
-
-        add_submenu_page(
-            'mealsdb',
-            __('Transaction Details', 'meals-db'),
-            __('Transaction Details', 'meals-db'),
-            MealsDB_Permissions::required_capability(),
-            'mealsdb-transaction',
-            ['MealsDB_Admin_UI', 'render_transaction_details_page']
-        );
-
-        remove_submenu_page('mealsdb', 'mealsdb-transaction');
     }
 
     /**
@@ -149,30 +128,6 @@ class MealsDB_Admin_UI {
 
             exit;
         }
-    }
-
-    /**
-     * Keep the Transactions menu highlighted while viewing hidden transaction details.
-     */
-    public function highlight_transactions_parent($submenu_file)
-    {
-        if (isset($_GET['page']) && $_GET['page'] === 'mealsdb-transaction') {
-            return 'mealsdb-transactions';
-        }
-
-        return $submenu_file;
-    }
-
-    /**
-     * Override the admin title for the transaction details page to avoid null values.
-     */
-    public function filter_transaction_admin_title($admin_title, $title)
-    {
-        if (isset($_GET['page']) && $_GET['page'] === 'mealsdb-transaction') {
-            return 'Transaction Details – Meals DB';
-        }
-
-        return $admin_title;
     }
 
     /**
@@ -255,22 +210,6 @@ class MealsDB_Admin_UI {
             ],
             admin_url('admin.php')
         );
-    }
-
-    /**
-     * Render the transactions admin page.
-     */
-    public static function render_transactions_page(): void
-    {
-        include MealsDB_Plugin::path('views/admin-transactions.php');
-    }
-
-    /**
-     * Render the transaction details admin page.
-     */
-    public static function render_transaction_details_page(): void
-    {
-        include MealsDB_Plugin::path('views/admin-transaction-details.php');
     }
 
     /**
