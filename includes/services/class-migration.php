@@ -134,10 +134,12 @@ class MealsDB_Migration {
     }
 
     /**
-     * Copy a single source table from the remote database into the local
+     * Copy a single source table from the source database into the local
      * WordPress database.  Called once per table by the AJAX handler.
      *
-     * Uses CREATE TABLE … LIKE + INSERT INTO … SELECT to preserve schema.
+     * Connects to the source DB with the provided credentials, reads the
+     * CREATE TABLE statement and all rows, then writes them into the local
+     * WP database via $wpdb.
      *
      * @return array{table:string, rows:int, table_index:int, total_tables:int, tables_copied:int, complete:bool, percent:float}|array{error:string}
      */
@@ -157,36 +159,101 @@ class MealsDB_Migration {
             ];
         }
 
-        // Grant access: use wpdb to run cross-database queries
-        // The MySQL user running WP must have SELECT privileges on the source DB.
         $suffix       = $suffixes[ $table_index ];
         $source_table = $source_prefix . $suffix;
-        $local_table  = $source_table; // same name in local DB
+        $local_table  = $source_table; // same name in local WP DB
+        $local_esc    = '`' . str_replace( '`', '``', $local_table ) . '`';
+        $source_esc   = '`' . str_replace( '`', '``', $source_table ) . '`';
 
-        $src_full = '`' . str_replace( '`', '``', $db_name ) . '`.`' . str_replace( '`', '``', $source_table ) . '`';
-        $dst_full = '`' . str_replace( '`', '``', $local_table ) . '`';
+        // Connect to source database with the provided credentials
+        $src_conn = @new \mysqli( $host, $user, $pass, $db_name );
+        if ( $src_conn->connect_errno ) {
+            return [ 'error' => 'Source DB connection failed: ' . $src_conn->connect_error ];
+        }
+        $src_conn->set_charset( 'utf8mb4' );
 
-        // Drop local copy if exists (from a previous run)
-        $wpdb->query( "DROP TABLE IF EXISTS {$dst_full}" );
+        // Get the CREATE TABLE statement from the source
+        $show = $src_conn->query( "SHOW CREATE TABLE {$source_esc}" );
+        if ( ! $show || $show->num_rows === 0 ) {
+            $err = $src_conn->error;
+            $src_conn->close();
+            return [ 'error' => "Table {$source_table} not found in source DB: {$err}" ];
+        }
+        $create_row = $show->fetch_row();
+        $create_sql = $create_row[1]; // The full CREATE TABLE statement
 
-        // Create structure
+        // Rewrite the table name to the local name (they're the same, but be safe)
+        $create_sql = preg_replace(
+            '/CREATE TABLE\s+`[^`]+`/',
+            "CREATE TABLE {$local_esc}",
+            $create_sql,
+            1
+        );
+
+        // Drop + recreate locally
+        $wpdb->query( "DROP TABLE IF EXISTS {$local_esc}" );
         $wpdb->suppress_errors( true );
-        $create_result = $wpdb->query( "CREATE TABLE {$dst_full} LIKE {$src_full}" );
+        $create_result = $wpdb->query( $create_sql );
         if ( $create_result === false ) {
             $err = $wpdb->last_error;
             $wpdb->suppress_errors( false );
-            return [ 'error' => "Failed to create {$local_table}: {$err}" ];
+            $src_conn->close();
+            return [ 'error' => "Failed to create local table {$local_table}: {$err}" ];
         }
-
-        // Copy data
-        $rows = $wpdb->query( "INSERT INTO {$dst_full} SELECT * FROM {$src_full}" );
         $wpdb->suppress_errors( false );
 
+        // Read rows from source and insert into local DB in batches
+        $total_rows  = 0;
+        $batch_size  = 500;
+        $offset      = 0;
+
+        while ( true ) {
+            $result = $src_conn->query(
+                "SELECT * FROM {$source_esc} LIMIT {$batch_size} OFFSET {$offset}"
+            );
+
+            if ( ! $result || $result->num_rows === 0 ) {
+                break;
+            }
+
+            $fields = $result->fetch_fields();
+            $col_names = [];
+            foreach ( $fields as $field ) {
+                $col_names[] = '`' . str_replace( '`', '``', $field->name ) . '`';
+            }
+            $col_sql = implode( ', ', $col_names );
+
+            // Build a multi-row INSERT for the batch
+            $value_groups = [];
+            while ( $row = $result->fetch_row() ) {
+                $escaped = [];
+                foreach ( $row as $val ) {
+                    if ( $val === null ) {
+                        $escaped[] = 'NULL';
+                    } else {
+                        $escaped[] = "'" . $wpdb->_real_escape( $val ) . "'";
+                    }
+                }
+                $value_groups[] = '(' . implode( ', ', $escaped ) . ')';
+                $total_rows++;
+            }
+
+            if ( ! empty( $value_groups ) ) {
+                $insert_sql = "INSERT IGNORE INTO {$local_esc} ({$col_sql}) VALUES " . implode( ', ', $value_groups );
+                $wpdb->suppress_errors( true );
+                $wpdb->query( $insert_sql );
+                $wpdb->suppress_errors( false );
+            }
+
+            $offset += $batch_size;
+        }
+
+        $src_conn->close();
         $copied = $table_index + 1;
 
         return [
             'table'         => $local_table,
-            'rows'          => max( 0, (int) $rows ),
+            'rows'          => $total_rows,
             'table_index'   => $copied,
             'total_tables'  => $total_tables,
             'tables_copied' => $copied,
