@@ -116,20 +116,16 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Staff::init();
     MealsDB_Ajax_Drafts::init();
     MealsDB_Ajax_Initials::init();
-    MealsDB_Ajax_Import::init();
-    MealsDB_Ajax_CSV_Import::init();
     MealsDB_Ajax_Invoice::init();
-    MealsDB_Ajax_Historical_Import::init();
     MealsDB_Ajax_Delivery_Slips::init();
     MealsDB_Ajax_Reports::init();
     MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();
     MealsDB_WC_Product_Tab::init();
-    MealsDB_Import_Page::init();
-    MealsDB_CSV_Import_Page::init();
     MealsDB_Invoice_Page::init();
     MealsDB_Migration_Page::init();
     MealsDB_Ajax_Migration::init();
+    MealsDB_Ajax_DB_Sync::init();
     MealsDB_Sync::register_hooks();
 });
 
