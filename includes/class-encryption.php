@@ -15,10 +15,21 @@ class MealsDB_Encryption {
      * @return string
      */
     private static function get_key(): string {
-        // Prefer environment variable over wp-config.php constant
-        $key_b64 = getenv('MEALS_DB_ENCRYPTION_KEY');
+        // 1. WordPress options (Settings tab)
+        $key_b64 = '';
+        if (function_exists('get_option')) {
+            $opts = get_option('mealsdb_settings', []);
+            if (is_array($opts) && !empty($opts['encryption_key'])) {
+                $key_b64 = $opts['encryption_key'];
+            }
+        }
 
-        // Fall back to wp-config.php constant for backward compatibility
+        // 2. Environment variable
+        if (!$key_b64) {
+            $key_b64 = getenv('MEALS_DB_ENCRYPTION_KEY');
+        }
+
+        // 3. wp-config.php constant (backward compatibility)
         if (!$key_b64 && defined('MEALS_DB_KEY')) {
             $key_b64 = MEALS_DB_KEY;
         }
