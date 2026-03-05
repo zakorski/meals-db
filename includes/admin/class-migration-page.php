@@ -86,6 +86,9 @@ class MealsDB_Migration_Page {
                     <button type="button" class="button mig-tab" data-tab="upload">
                         <?php esc_html_e( 'Upload SQL File', 'meals-db' ); ?>
                     </button>
+                    <button type="button" class="button mig-tab" data-tab="filepath">
+                        <?php esc_html_e( 'Server File Path', 'meals-db' ); ?>
+                    </button>
                 </div>
 
                 <!-- Database connection tab -->
@@ -148,7 +151,24 @@ class MealsDB_Migration_Page {
                     </table>
                 </div>
 
-                <!-- Prefix result (shared by both tabs) -->
+                <!-- Server file path tab -->
+                <div class="mealsdb-mig-tab-content" id="mig-tab-filepath" style="display:none;">
+                    <p class="description"><?php esc_html_e( 'Enter the full server path to a SQL dump file already uploaded via FTP or cPanel File Manager.', 'meals-db' ); ?></p>
+                    <table class="form-table">
+                        <tr>
+                            <th><label for="mig-file-path"><?php esc_html_e( 'SQL dump path', 'meals-db' ); ?></label></th>
+                            <td>
+                                <input type="text" id="mig-file-path" class="regular-text" placeholder="/home/username/mealsandmore.sql">
+                                <button type="button" class="button" id="mig-detect-btn">
+                                    <?php esc_html_e( 'Detect Prefix', 'meals-db' ); ?>
+                                </button>
+                                <p class="description"><?php esc_html_e( 'Absolute path to the .sql file on this server.', 'meals-db' ); ?></p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Prefix result (shared by all tabs) -->
                 <div id="mig-prefix-result" style="display:none;">
                     <table class="form-table">
                         <tr>

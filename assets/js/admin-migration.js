@@ -2,7 +2,7 @@
     'use strict';
 
     var state = {
-        sourceMode: 'db',  // 'db' or 'upload'
+        sourceMode: 'db',  // 'db', 'upload', or 'filepath'
         filePath: '',
         sourcePrefix: '',
         dbHost: '',
@@ -177,6 +177,32 @@
         });
     });
 
+    // ── Server File Path ─────────────────────────
+
+    $('#mig-detect-btn').on('click', function () {
+        var path = $('#mig-file-path').val().trim();
+        if (!path) {
+            alert('Enter the SQL dump path.');
+            return;
+        }
+
+        var $btn = $(this);
+        $btn.prop('disabled', true).text('Detecting...');
+
+        ajax('detect', { file_path: path }, function (data) {
+            state.sourcePrefix = data.prefix;
+            state.filePath     = path;
+
+            $('#mig-prefix-value').text(data.prefix);
+            $('#mig-source-info').text('(' + data.file_mb + ' MB)');
+            $('#mig-prefix-result').show();
+            $btn.prop('disabled', false).text('Detect Prefix');
+        }, function (msg) {
+            alert(msg);
+            $btn.prop('disabled', false).text('Detect Prefix');
+        });
+    });
+
     // ── Start Migration ──────────────────────────
 
     $('#mig-start-btn').on('click', function () {
@@ -218,7 +244,7 @@
         if (state.phase === 0) {
             if (state.sourceMode === 'db') {
                 runLoadFromDb();
-            } else {
+            } else { // 'upload' or 'filepath' — both use file-based loading
                 runLoadPhase();
             }
         } else {
