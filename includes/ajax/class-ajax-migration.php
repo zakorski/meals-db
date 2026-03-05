@@ -12,16 +12,110 @@ if ( ! defined( 'ABSPATH' ) ) {
 class MealsDB_Ajax_Migration {
 
     public static function init(): void {
-        add_action( 'wp_ajax_mealsdb_migration_detect',  [ self::class, 'detect_prefix' ] );
-        add_action( 'wp_ajax_mealsdb_migration_load',    [ self::class, 'load_source' ] );
-        add_action( 'wp_ajax_mealsdb_migration_phase',   [ self::class, 'run_phase' ] );
-        add_action( 'wp_ajax_mealsdb_migration_cleanup', [ self::class, 'cleanup' ] );
-        add_action( 'wp_ajax_mealsdb_migration_reset',   [ self::class, 'reset' ] );
-        add_action( 'wp_ajax_mealsdb_migration_log',     [ self::class, 'get_log' ] );
+        add_action( 'wp_ajax_mealsdb_migration_detect',      [ self::class, 'detect_prefix' ] );
+        add_action( 'wp_ajax_mealsdb_migration_test_db',     [ self::class, 'test_db' ] );
+        add_action( 'wp_ajax_mealsdb_migration_upload',      [ self::class, 'upload_file' ] );
+        add_action( 'wp_ajax_mealsdb_migration_load',        [ self::class, 'load_source' ] );
+        add_action( 'wp_ajax_mealsdb_migration_load_from_db', [ self::class, 'load_from_db' ] );
+        add_action( 'wp_ajax_mealsdb_migration_phase',       [ self::class, 'run_phase' ] );
+        add_action( 'wp_ajax_mealsdb_migration_cleanup',     [ self::class, 'cleanup' ] );
+        add_action( 'wp_ajax_mealsdb_migration_reset',       [ self::class, 'reset' ] );
+        add_action( 'wp_ajax_mealsdb_migration_log',         [ self::class, 'get_log' ] );
     }
 
     /**
-     * Detect the table prefix from the SQL dump file path.
+     * Test a direct database connection and detect the table prefix.
+     */
+    public static function test_db(): void {
+        self::verify();
+
+        $host   = sanitize_text_field( $_POST['db_host'] ?? '' );
+        $name   = sanitize_text_field( $_POST['db_name'] ?? '' );
+        $user   = sanitize_text_field( $_POST['db_user'] ?? '' );
+        $pass   = $_POST['db_pass'] ?? '';
+
+        if ( ! $host || ! $name || ! $user ) {
+            wp_send_json_error( [ 'message' => 'Host, database name, and username are required.' ] );
+        }
+
+        $result = MealsDB_Migration::test_source_db( $host, $name, $user, $pass );
+
+        if ( isset( $result['error'] ) ) {
+            wp_send_json_error( [ 'message' => $result['error'] ] );
+        }
+
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Handle SQL file upload.
+     */
+    public static function upload_file(): void {
+        self::verify();
+
+        if ( empty( $_FILES['sql_file'] ) ) {
+            wp_send_json_error( [ 'message' => 'No file uploaded.' ] );
+        }
+
+        $file = $_FILES['sql_file'];
+
+        if ( $file['error'] !== UPLOAD_ERR_OK ) {
+            $errors = [
+                UPLOAD_ERR_INI_SIZE   => 'File exceeds server upload_max_filesize limit.',
+                UPLOAD_ERR_FORM_SIZE  => 'File exceeds form size limit.',
+                UPLOAD_ERR_PARTIAL    => 'File was only partially uploaded.',
+                UPLOAD_ERR_NO_FILE    => 'No file was uploaded.',
+                UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary folder on server.',
+                UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
+            ];
+            $msg = $errors[ $file['error'] ] ?? 'Upload error code: ' . $file['error'];
+            wp_send_json_error( [ 'message' => $msg ] );
+        }
+
+        // Validate extension
+        $ext = strtolower( pathinfo( $file['name'], PATHINFO_EXTENSION ) );
+        if ( ! in_array( $ext, [ 'sql', 'gz' ], true ) ) {
+            wp_send_json_error( [ 'message' => 'Only .sql and .sql.gz files are allowed.' ] );
+        }
+
+        // Move to uploads directory
+        $upload_dir = wp_upload_dir();
+        $dest_dir   = trailingslashit( $upload_dir['basedir'] ) . 'mealsdb-migration';
+
+        if ( ! wp_mkdir_p( $dest_dir ) ) {
+            wp_send_json_error( [ 'message' => 'Cannot create upload directory.' ] );
+        }
+
+        // Write an .htaccess to block direct access
+        $htaccess = $dest_dir . '/.htaccess';
+        if ( ! file_exists( $htaccess ) ) {
+            file_put_contents( $htaccess, "Deny from all\n" );
+        }
+
+        $dest_path = $dest_dir . '/migration-source.sql';
+
+        if ( ! move_uploaded_file( $file['tmp_name'], $dest_path ) ) {
+            wp_send_json_error( [ 'message' => 'Failed to move uploaded file.' ] );
+        }
+
+        // Detect prefix
+        $prefix = MealsDB_Migration::detect_prefix( $dest_path );
+        if ( ! $prefix ) {
+            wp_send_json_error( [ 'message' => 'File uploaded but could not detect a table prefix in the SQL dump.' ] );
+        }
+
+        $file_size = filesize( $dest_path );
+
+        wp_send_json_success( [
+            'prefix'    => $prefix,
+            'file_path' => $dest_path,
+            'file_size' => $file_size,
+            'file_mb'   => round( $file_size / ( 1024 * 1024 ), 1 ),
+        ] );
+    }
+
+    /**
+     * Detect the table prefix from a SQL dump file path (legacy / fallback).
      */
     public static function detect_prefix(): void {
         self::verify();
@@ -46,7 +140,7 @@ class MealsDB_Ajax_Migration {
     }
 
     /**
-     * Phase 0: Load source tables from the SQL dump (chunked).
+     * Phase 0 (file mode): Load source tables from the SQL dump (chunked).
      */
     public static function load_source(): void {
         self::verify();
@@ -69,6 +163,39 @@ class MealsDB_Ajax_Migration {
         if ( $result['complete'] ) {
             MealsDB_Migration::append_log(
                 "Phase 0 complete: loaded source tables from dump ({$result['statements']} total statements)."
+            );
+        }
+
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Phase 0 (database mode): Copy source tables from the remote DB (batched).
+     */
+    public static function load_from_db(): void {
+        self::verify();
+        set_time_limit( 300 );
+
+        $host          = sanitize_text_field( $_POST['db_host'] ?? '' );
+        $name          = sanitize_text_field( $_POST['db_name'] ?? '' );
+        $user          = sanitize_text_field( $_POST['db_user'] ?? '' );
+        $pass          = $_POST['db_pass'] ?? '';
+        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+        $table_index   = (int) ( $_POST['table_index'] ?? 0 );
+
+        if ( ! $host || ! $name || ! $user || ! $source_prefix ) {
+            wp_send_json_error( [ 'message' => 'Missing database connection parameters.' ] );
+        }
+
+        $result = MealsDB_Migration::copy_table_from_db( $host, $name, $user, $pass, $source_prefix, $table_index );
+
+        if ( isset( $result['error'] ) ) {
+            wp_send_json_error( [ 'message' => $result['error'] ] );
+        }
+
+        if ( $result['complete'] ) {
+            MealsDB_Migration::append_log(
+                "Phase 0 complete: copied {$result['tables_copied']} source tables from database '{$name}'."
             );
         }
 

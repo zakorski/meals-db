@@ -52,8 +52,12 @@ class MealsDB_Migration_Page {
         );
 
         wp_localize_script( 'mealsdb-migration', 'mealsdbMigration', [
-            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-            'nonce'   => wp_create_nonce( 'mealsdb_migration_nonce' ),
+            'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
+            'nonce'        => wp_create_nonce( 'mealsdb_migration_nonce' ),
+            'maxUploadMb'  => min(
+                (int) ini_get( 'upload_max_filesize' ),
+                (int) ini_get( 'post_max_size' )
+            ),
         ] );
     }
 
@@ -68,42 +72,105 @@ class MealsDB_Migration_Page {
 
             <div class="mealsdb-mig-info notice notice-warning inline">
                 <p><strong><?php esc_html_e( 'One-time migration tool.', 'meals-db' ); ?></strong>
-                <?php esc_html_e( 'Imports users, products, and orders from a legacy SQL dump into this WordPress site, then creates government client records in the Meals DB external database.', 'meals-db' ); ?></p>
-                <p><?php esc_html_e( 'Place the SQL dump file on the server (e.g. via SFTP) and enter the absolute path below.', 'meals-db' ); ?></p>
+                <?php esc_html_e( 'Imports users, products, and orders from the legacy site into this WordPress site, then creates government client records in the Meals DB external database.', 'meals-db' ); ?></p>
             </div>
 
-            <!-- Step 1: File path + prefix detection -->
+            <!-- Step 1: Source selection -->
             <div class="mealsdb-mig-card" id="mig-step-setup">
-                <h2><?php esc_html_e( 'Step 1: Source File', 'meals-db' ); ?></h2>
+                <h2><?php esc_html_e( 'Step 1: Data Source', 'meals-db' ); ?></h2>
 
-                <table class="form-table">
-                    <tr>
-                        <th><label for="mig-file-path"><?php esc_html_e( 'SQL dump path', 'meals-db' ); ?></label></th>
-                        <td>
-                            <input type="text" id="mig-file-path" class="regular-text" placeholder="/var/www/html/mealsand_wp_ba74f.sql">
-                            <button type="button" class="button" id="mig-detect-btn"><?php esc_html_e( 'Detect Prefix', 'meals-db' ); ?></button>
-                            <p class="description"><?php esc_html_e( 'Absolute path to the .sql file on this server.', 'meals-db' ); ?></p>
-                        </td>
-                    </tr>
-                    <tr id="mig-prefix-row" style="display:none;">
-                        <th><?php esc_html_e( 'Detected prefix', 'meals-db' ); ?></th>
-                        <td>
-                            <code id="mig-prefix-value"></code>
-                            <span id="mig-file-size"></span>
-                        </td>
-                    </tr>
-                </table>
-
-                <div class="mealsdb-mig-options" id="mig-options" style="display:none;">
-                    <h3><?php esc_html_e( 'Options', 'meals-db' ); ?></h3>
-                    <label>
-                        <input type="checkbox" id="mig-dry-run" checked>
-                        <?php esc_html_e( 'Dry run (preview only, no writes)', 'meals-db' ); ?>
-                    </label>
-                    <br><br>
-                    <button type="button" class="button button-primary button-hero" id="mig-start-btn">
-                        <?php esc_html_e( 'Start Migration', 'meals-db' ); ?>
+                <div class="mealsdb-mig-source-tabs">
+                    <button type="button" class="button mig-tab active" data-tab="db">
+                        <?php esc_html_e( 'Database Connection', 'meals-db' ); ?>
                     </button>
+                    <button type="button" class="button mig-tab" data-tab="upload">
+                        <?php esc_html_e( 'Upload SQL File', 'meals-db' ); ?>
+                    </button>
+                </div>
+
+                <!-- Database connection tab -->
+                <div class="mealsdb-mig-tab-content" id="mig-tab-db">
+                    <p class="description"><?php esc_html_e( 'Connect directly to the legacy database on the same MySQL server. This is the recommended option — no file upload needed.', 'meals-db' ); ?></p>
+                    <table class="form-table">
+                        <tr>
+                            <th><label for="mig-db-host"><?php esc_html_e( 'Host', 'meals-db' ); ?></label></th>
+                            <td>
+                                <input type="text" id="mig-db-host" class="regular-text" value="localhost" placeholder="localhost">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><label for="mig-db-name"><?php esc_html_e( 'Database Name', 'meals-db' ); ?></label></th>
+                            <td>
+                                <input type="text" id="mig-db-name" class="regular-text" placeholder="mealsandmore_wp">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><label for="mig-db-user"><?php esc_html_e( 'Username', 'meals-db' ); ?></label></th>
+                            <td>
+                                <input type="text" id="mig-db-user" class="regular-text">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th><label for="mig-db-pass"><?php esc_html_e( 'Password', 'meals-db' ); ?></label></th>
+                            <td>
+                                <input type="password" id="mig-db-pass" class="regular-text">
+                            </td>
+                        </tr>
+                    </table>
+                    <button type="button" class="button" id="mig-test-db-btn">
+                        <?php esc_html_e( 'Test Connection & Detect Prefix', 'meals-db' ); ?>
+                    </button>
+                </div>
+
+                <!-- Upload tab -->
+                <div class="mealsdb-mig-tab-content" id="mig-tab-upload" style="display:none;">
+                    <p class="description">
+                        <?php
+                        printf(
+                            esc_html__( 'Upload the SQL dump file directly. Current max upload size: %s MB. For larger files, use the Database Connection option instead.', 'meals-db' ),
+                            esc_html( min( (int) ini_get( 'upload_max_filesize' ), (int) ini_get( 'post_max_size' ) ) )
+                        );
+                        ?>
+                    </p>
+                    <table class="form-table">
+                        <tr>
+                            <th><label for="mig-file-upload"><?php esc_html_e( 'SQL File', 'meals-db' ); ?></label></th>
+                            <td>
+                                <input type="file" id="mig-file-upload" accept=".sql,.sql.gz">
+                                <button type="button" class="button" id="mig-upload-btn">
+                                    <?php esc_html_e( 'Upload & Detect Prefix', 'meals-db' ); ?>
+                                </button>
+                                <div id="mig-upload-progress" style="display:none;">
+                                    <span id="mig-upload-status"><?php esc_html_e( 'Uploading...', 'meals-db' ); ?></span>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Prefix result (shared by both tabs) -->
+                <div id="mig-prefix-result" style="display:none;">
+                    <table class="form-table">
+                        <tr>
+                            <th><?php esc_html_e( 'Detected prefix', 'meals-db' ); ?></th>
+                            <td>
+                                <code id="mig-prefix-value"></code>
+                                <span id="mig-source-info"></span>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <div class="mealsdb-mig-options">
+                        <h3><?php esc_html_e( 'Options', 'meals-db' ); ?></h3>
+                        <label>
+                            <input type="checkbox" id="mig-dry-run" checked>
+                            <?php esc_html_e( 'Dry run (preview only, no writes)', 'meals-db' ); ?>
+                        </label>
+                        <br><br>
+                        <button type="button" class="button button-primary button-hero" id="mig-start-btn">
+                            <?php esc_html_e( 'Start Migration', 'meals-db' ); ?>
+                        </button>
+                    </div>
                 </div>
             </div>
 

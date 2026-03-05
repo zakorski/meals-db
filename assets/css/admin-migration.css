@@ -108,6 +108,23 @@
     word-break: break-all;
 }
 
+/* Source tabs */
+.mealsdb-mig-source-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.mealsdb-mig-source-tabs .mig-tab.active {
+    background: #0073aa;
+    color: #fff;
+    border-color: #0073aa;
+}
+
+.mealsdb-mig-tab-content {
+    margin-bottom: 16px;
+}
+
 /* Options */
 .mealsdb-mig-options {
     margin-top: 16px;

@@ -89,6 +89,113 @@ class MealsDB_Migration {
     }
 
     // ──────────────────────────────────────────────
+    //  Database source – test connection & detect prefix
+    // ──────────────────────────────────────────────
+
+    /**
+     * Test a direct MySQL connection to the source database and detect the
+     * table prefix by looking for a `*_users` table.
+     *
+     * @return array{prefix:string, tables:int, db_name:string}|array{error:string}
+     */
+    public static function test_source_db( string $host, string $db_name, string $user, string $pass ): array {
+        $conn = @new \mysqli( $host, $user, $pass, $db_name );
+
+        if ( $conn->connect_errno ) {
+            return [ 'error' => 'Connection failed: ' . $conn->connect_error ];
+        }
+
+        // Find the prefix by looking for a table ending in "users"
+        $result = $conn->query( 'SHOW TABLES' );
+        if ( ! $result ) {
+            $conn->close();
+            return [ 'error' => 'Cannot list tables in database.' ];
+        }
+
+        $tables = [];
+        $prefix = null;
+        while ( $row = $result->fetch_row() ) {
+            $tables[] = $row[0];
+            if ( $prefix === null && preg_match( '/^(.+?)users$/', $row[0], $m ) ) {
+                $prefix = $m[1];
+            }
+        }
+        $conn->close();
+
+        if ( ! $prefix ) {
+            return [ 'error' => 'Could not detect a table prefix (no *users table found).' ];
+        }
+
+        return [
+            'prefix'  => $prefix,
+            'tables'  => count( $tables ),
+            'db_name' => $db_name,
+        ];
+    }
+
+    /**
+     * Copy a single source table from the remote database into the local
+     * WordPress database.  Called once per table by the AJAX handler.
+     *
+     * Uses CREATE TABLE … LIKE + INSERT INTO … SELECT to preserve schema.
+     *
+     * @return array{table:string, rows:int, table_index:int, total_tables:int, tables_copied:int, complete:bool, percent:float}|array{error:string}
+     */
+    public static function copy_table_from_db( string $host, string $db_name, string $user, string $pass, string $source_prefix, int $table_index = 0 ): array {
+        global $wpdb;
+
+        $suffixes     = self::$needed_suffixes;
+        $total_tables = count( $suffixes );
+
+        if ( $table_index >= $total_tables ) {
+            return [
+                'table_index'   => $table_index,
+                'total_tables'  => $total_tables,
+                'tables_copied' => $table_index,
+                'complete'      => true,
+                'percent'       => 100,
+            ];
+        }
+
+        // Grant access: use wpdb to run cross-database queries
+        // The MySQL user running WP must have SELECT privileges on the source DB.
+        $suffix       = $suffixes[ $table_index ];
+        $source_table = $source_prefix . $suffix;
+        $local_table  = $source_table; // same name in local DB
+
+        $src_full = '`' . str_replace( '`', '``', $db_name ) . '`.`' . str_replace( '`', '``', $source_table ) . '`';
+        $dst_full = '`' . str_replace( '`', '``', $local_table ) . '`';
+
+        // Drop local copy if exists (from a previous run)
+        $wpdb->query( "DROP TABLE IF EXISTS {$dst_full}" );
+
+        // Create structure
+        $wpdb->suppress_errors( true );
+        $create_result = $wpdb->query( "CREATE TABLE {$dst_full} LIKE {$src_full}" );
+        if ( $create_result === false ) {
+            $err = $wpdb->last_error;
+            $wpdb->suppress_errors( false );
+            return [ 'error' => "Failed to create {$local_table}: {$err}" ];
+        }
+
+        // Copy data
+        $rows = $wpdb->query( "INSERT INTO {$dst_full} SELECT * FROM {$src_full}" );
+        $wpdb->suppress_errors( false );
+
+        $copied = $table_index + 1;
+
+        return [
+            'table'         => $local_table,
+            'rows'          => max( 0, (int) $rows ),
+            'table_index'   => $copied,
+            'total_tables'  => $total_tables,
+            'tables_copied' => $copied,
+            'complete'      => $copied >= $total_tables,
+            'percent'       => round( ( $copied / $total_tables ) * 100, 1 ),
+        ];
+    }
+
+    // ──────────────────────────────────────────────
     //  Phase 0 – Load source tables from SQL dump
     // ──────────────────────────────────────────────
 
