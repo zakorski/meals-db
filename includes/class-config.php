@@ -1,7 +1,7 @@
 <?php
 /**
  * Central configuration loader for Meals DB.
- * Loads environment variables from the WordPress root .env file.
+ * Reads settings from WordPress options first, then falls back to .env.
  */
 
 class MealsDB_Config
@@ -37,6 +37,14 @@ class MealsDB_Config
         }
 
         return self::$instance;
+    }
+
+    /**
+     * Reset the singleton so the next call to instance() reloads settings.
+     */
+    public static function reset(): void
+    {
+        self::$instance = null;
     }
 
     /**
@@ -82,14 +90,20 @@ class MealsDB_Config
     }
 
     /**
-     * Load DB settings from environment vars.
+     * Load DB settings from WordPress options first, then environment vars.
      */
     private function load_settings(): void
     {
-        $this->db_host = getenv('MEALS_DB_HOST') ?: '';
-        $this->db_user = getenv('MEALS_DB_USER') ?: '';
-        $this->db_pass = getenv('MEALS_DB_PASS') ?: '';
-        $this->db_name = getenv('MEALS_DB_NAME') ?: '';
+        $opts = function_exists('get_option') ? get_option('mealsdb_settings', []) : [];
+
+        if (!is_array($opts)) {
+            $opts = [];
+        }
+
+        $this->db_host      = !empty($opts['db_host']) ? $opts['db_host'] : (getenv('MEALS_DB_HOST') ?: '');
+        $this->db_user      = !empty($opts['db_user']) ? $opts['db_user'] : (getenv('MEALS_DB_USER') ?: '');
+        $this->db_pass      = !empty($opts['db_pass']) ? $opts['db_pass'] : (getenv('MEALS_DB_PASS') ?: '');
+        $this->db_name      = !empty($opts['db_name']) ? $opts['db_name'] : (getenv('MEALS_DB_NAME') ?: '');
         $this->table_prefix = getenv('MEALS_DB_PREFIX') ?: '';
     }
 

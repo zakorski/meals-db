@@ -536,6 +536,10 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/updates.php');
                 break;
 
+            case 'settings':
+                include MealsDB_Plugin::path('views/settings.php');
+                break;
+
             default:
                 echo '<p>Invalid tab selected.</p>';
         }
@@ -653,7 +657,8 @@ class MealsDB_Admin_UI {
             'ignored' => __('Ignored Conflicts', 'meals-db'),
             'slips'   => __('Daily Slips', 'meals-db'),
             'po'      => __('Purchase Order', 'meals-db'),
-            'updates' => __('Updates', 'meals-db'),
+            'updates'  => __('Updates', 'meals-db'),
+            'settings' => __('Settings', 'meals-db'),
         ];
 
         include MealsDB_Plugin::path('views/partials/tabs.php');
