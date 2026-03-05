@@ -128,6 +128,8 @@ add_action('plugins_loaded', function () {
     MealsDB_Import_Page::init();
     MealsDB_CSV_Import_Page::init();
     MealsDB_Invoice_Page::init();
+    MealsDB_Migration_Page::init();
+    MealsDB_Ajax_Migration::init();
     MealsDB_Sync::register_hooks();
 });
 
