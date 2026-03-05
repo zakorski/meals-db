@@ -2,14 +2,20 @@
     'use strict';
 
     var state = {
+        sourceMode: 'db',  // 'db' or 'upload'
         filePath: '',
         sourcePrefix: '',
+        dbHost: '',
+        dbName: '',
+        dbUser: '',
+        dbPass: '',
         dryRun: true,
-        phase: -1,        // -1 = not started, 0-5 = active phase
+        phase: -1,
         phaseOffset: 0,
         byteOffset: 0,
+        tableIndex: 0,
         running: false,
-        phaseStats: {},   // accumulated stats per phase
+        phaseStats: {},
     };
 
     var phaseNames = [
@@ -39,8 +45,31 @@
         });
     }
 
+    function ajaxUpload(formData, successCb, errorCb) {
+        formData.append('action', 'mealsdb_migration_upload');
+        formData.append('nonce', mealsdbMigration.nonce);
+        $.ajax({
+            url: mealsdbMigration.ajaxUrl,
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: function (resp) {
+                if (resp.success) {
+                    successCb(resp.data);
+                } else {
+                    var msg = (resp.data && resp.data.message) ? resp.data.message : 'Upload failed';
+                    if (errorCb) errorCb(msg); else alert('Error: ' + msg);
+                }
+            },
+            error: function (xhr) {
+                var msg = 'Upload failed (' + xhr.status + ')';
+                if (errorCb) errorCb(msg); else alert(msg);
+            },
+        });
+    }
+
     function setPhaseIcon(phase, icon) {
-        // icon: 'pending' | 'running' | 'done' | 'error'
         var $el = $('#mig-phase-' + phase + ' .mealsdb-mig-phase-icon');
         var map = { pending: '&#9711;', running: '&#9881;', done: '&#10003;', error: '&#10007;' };
         $el.html(map[icon] || map.pending)
@@ -64,26 +93,87 @@
         return parts.join(' &nbsp;|&nbsp; ');
     }
 
-    // ── Detect Prefix ────────────────────────────
+    // ── Tab Switching ─────────────────────────────
 
-    $('#mig-detect-btn').on('click', function () {
-        var path = $('#mig-file-path').val().trim();
-        if (!path) { alert('Enter the SQL dump path.'); return; }
+    $('.mig-tab').on('click', function () {
+        var tab = $(this).data('tab');
+        $('.mig-tab').removeClass('active');
+        $(this).addClass('active');
+        $('.mealsdb-mig-tab-content').hide();
+        $('#mig-tab-' + tab).show();
+        state.sourceMode = tab;
+        $('#mig-prefix-result').hide();
+    });
 
-        $(this).prop('disabled', true).text('Detecting...');
+    // ── Database Connection Test ──────────────────
 
-        ajax('detect', { file_path: path }, function (data) {
-            state.filePath     = path;
+    $('#mig-test-db-btn').on('click', function () {
+        var host = $('#mig-db-host').val().trim();
+        var name = $('#mig-db-name').val().trim();
+        var user = $('#mig-db-user').val().trim();
+        var pass = $('#mig-db-pass').val();
+
+        if (!name || !user) {
+            alert('Database name and username are required.');
+            return;
+        }
+
+        var $btn = $(this);
+        $btn.prop('disabled', true).text('Testing...');
+
+        ajax('test_db', {
+            db_host: host || 'localhost',
+            db_name: name,
+            db_user: user,
+            db_pass: pass,
+        }, function (data) {
             state.sourcePrefix = data.prefix;
+            state.dbHost = host || 'localhost';
+            state.dbName = name;
+            state.dbUser = user;
+            state.dbPass = pass;
 
             $('#mig-prefix-value').text(data.prefix);
-            $('#mig-file-size').text('(' + data.file_mb + ' MB)');
-            $('#mig-prefix-row').show();
-            $('#mig-options').show();
-            $('#mig-detect-btn').prop('disabled', false).text('Detect Prefix');
+            $('#mig-source-info').text('(' + data.tables + ' tables in ' + data.db_name + ')');
+            $('#mig-prefix-result').show();
+            $btn.prop('disabled', false).text('Test Connection & Detect Prefix');
         }, function (msg) {
             alert(msg);
-            $('#mig-detect-btn').prop('disabled', false).text('Detect Prefix');
+            $btn.prop('disabled', false).text('Test Connection & Detect Prefix');
+        });
+    });
+
+    // ── File Upload ───────────────────────────────
+
+    $('#mig-upload-btn').on('click', function () {
+        var fileInput = $('#mig-file-upload')[0];
+        if (!fileInput.files || !fileInput.files[0]) {
+            alert('Select a SQL file first.');
+            return;
+        }
+
+        var $btn = $(this);
+        $btn.prop('disabled', true);
+        $('#mig-upload-progress').show();
+        $('#mig-upload-status').text('Uploading...');
+
+        var formData = new FormData();
+        formData.append('sql_file', fileInput.files[0]);
+
+        ajaxUpload(formData, function (data) {
+            state.sourcePrefix = data.prefix;
+            state.filePath     = data.file_path;
+            state.sourceMode   = 'upload';
+
+            $('#mig-prefix-value').text(data.prefix);
+            $('#mig-source-info').text('(' + data.file_mb + ' MB uploaded)');
+            $('#mig-prefix-result').show();
+            $('#mig-upload-progress').hide();
+            $btn.prop('disabled', false);
+        }, function (msg) {
+            alert(msg);
+            $('#mig-upload-progress').hide();
+            $btn.prop('disabled', false);
         });
     });
 
@@ -91,20 +181,24 @@
 
     $('#mig-start-btn').on('click', function () {
         if (state.running) return;
+        if (!state.sourcePrefix) {
+            alert('Detect the source prefix first.');
+            return;
+        }
 
-        state.dryRun     = $('#mig-dry-run').is(':checked');
-        state.phase      = 0;
+        state.dryRun      = $('#mig-dry-run').is(':checked');
+        state.phase       = 0;
         state.phaseOffset = 0;
-        state.byteOffset = 0;
-        state.running    = true;
-        state.phaseStats = {};
+        state.byteOffset  = 0;
+        state.tableIndex  = 0;
+        state.running     = true;
+        state.phaseStats  = {};
 
         $('#mig-step-setup').find('input, button').prop('disabled', true);
         $('#mig-step-progress').show();
         $('#mig-step-results').hide();
         $('#mig-log-viewer').hide();
 
-        // Reset all phase indicators
         for (var i = 0; i <= 5; i++) {
             setPhaseIcon(i, 'pending');
             setPhaseStatus(i, '');
@@ -122,12 +216,17 @@
         setPhaseIcon(state.phase, 'running');
 
         if (state.phase === 0) {
-            runLoadPhase();
+            if (state.sourceMode === 'db') {
+                runLoadFromDb();
+            } else {
+                runLoadPhase();
+            }
         } else {
             runDataPhase();
         }
     }
 
+    // Phase 0: file mode
     function runLoadPhase() {
         ajax('load', {
             file_path:     state.filePath,
@@ -142,7 +241,7 @@
                 setPhaseIcon(0, 'done');
                 advancePhase();
             } else {
-                runLoadPhase(); // next chunk
+                runLoadPhase();
             }
         }, function (msg) {
             setPhaseIcon(0, 'error');
@@ -152,6 +251,39 @@
         });
     }
 
+    // Phase 0: database mode
+    function runLoadFromDb() {
+        ajax('load_from_db', {
+            db_host:       state.dbHost,
+            db_name:       state.dbName,
+            db_user:       state.dbUser,
+            db_pass:       state.dbPass,
+            source_prefix: state.sourcePrefix,
+            table_index:   state.tableIndex,
+        }, function (data) {
+            state.tableIndex = data.table_index;
+            setPhaseBar(0, data.percent);
+            var status = data.table
+                ? data.percent + '% — ' + data.table + ' (' + data.rows + ' rows)'
+                : data.percent + '%';
+            setPhaseStatus(0, status);
+
+            if (data.complete) {
+                state.phaseStats[0] = { tables_copied: data.tables_copied };
+                setPhaseIcon(0, 'done');
+                advancePhase();
+            } else {
+                runLoadFromDb();
+            }
+        }, function (msg) {
+            setPhaseIcon(0, 'error');
+            setPhaseStatus(0, msg);
+            state.running = false;
+            enableSetup();
+        });
+    }
+
+    // Phases 1-5
     function runDataPhase() {
         ajax('phase', {
             phase:         state.phase,
@@ -159,7 +291,6 @@
             dry_run:       state.dryRun ? 1 : 0,
             source_prefix: state.sourcePrefix,
         }, function (data) {
-            // Accumulate stats
             if (data.stats) {
                 if (!state.phaseStats[state.phase]) {
                     state.phaseStats[state.phase] = {};
@@ -182,7 +313,7 @@
                 advancePhase();
             } else {
                 state.phaseOffset = data.offset;
-                runDataPhase(); // next batch
+                runDataPhase();
             }
         }, function (msg) {
             setPhaseIcon(state.phase, 'error');
@@ -194,7 +325,6 @@
 
     function advancePhase() {
         if (state.phase >= 5) {
-            // All done
             state.running = false;
             showResults();
             return;
