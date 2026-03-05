@@ -1,0 +1,192 @@
+<?php
+/**
+ * AJAX endpoints for the consolidated site migration tool.
+ *
+ * @package MealsDB
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+class MealsDB_Ajax_Migration {
+
+    public static function init(): void {
+        add_action( 'wp_ajax_mealsdb_migration_detect',  [ self::class, 'detect_prefix' ] );
+        add_action( 'wp_ajax_mealsdb_migration_load',    [ self::class, 'load_source' ] );
+        add_action( 'wp_ajax_mealsdb_migration_phase',   [ self::class, 'run_phase' ] );
+        add_action( 'wp_ajax_mealsdb_migration_cleanup', [ self::class, 'cleanup' ] );
+        add_action( 'wp_ajax_mealsdb_migration_reset',   [ self::class, 'reset' ] );
+        add_action( 'wp_ajax_mealsdb_migration_log',     [ self::class, 'get_log' ] );
+    }
+
+    /**
+     * Detect the table prefix from the SQL dump file path.
+     */
+    public static function detect_prefix(): void {
+        self::verify();
+
+        $file_path = self::sanitize_path( $_POST['file_path'] ?? '' );
+        if ( ! $file_path || ! file_exists( $file_path ) ) {
+            wp_send_json_error( [ 'message' => 'File not found: ' . $file_path ] );
+        }
+
+        $prefix = MealsDB_Migration::detect_prefix( $file_path );
+        if ( ! $prefix ) {
+            wp_send_json_error( [ 'message' => 'Could not detect table prefix in the SQL dump.' ] );
+        }
+
+        $file_size = filesize( $file_path );
+
+        wp_send_json_success( [
+            'prefix'    => $prefix,
+            'file_size' => $file_size,
+            'file_mb'   => round( $file_size / ( 1024 * 1024 ), 1 ),
+        ] );
+    }
+
+    /**
+     * Phase 0: Load source tables from the SQL dump (chunked).
+     */
+    public static function load_source(): void {
+        self::verify();
+        set_time_limit( 300 );
+
+        $file_path     = self::sanitize_path( $_POST['file_path'] ?? '' );
+        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+        $byte_offset   = (int) ( $_POST['byte_offset'] ?? 0 );
+
+        if ( ! $file_path || ! $source_prefix ) {
+            wp_send_json_error( [ 'message' => 'Missing file_path or source_prefix.' ] );
+        }
+
+        $result = MealsDB_Migration::load_source( $file_path, $source_prefix, $byte_offset );
+
+        if ( isset( $result['error'] ) ) {
+            wp_send_json_error( [ 'message' => $result['error'] ] );
+        }
+
+        if ( $result['complete'] ) {
+            MealsDB_Migration::append_log(
+                "Phase 0 complete: loaded source tables from dump ({$result['statements']} total statements)."
+            );
+        }
+
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Run a migration phase (1-5).
+     */
+    public static function run_phase(): void {
+        self::verify();
+        set_time_limit( 300 );
+
+        $phase         = (int) ( $_POST['phase'] ?? 0 );
+        $offset        = (int) ( $_POST['offset'] ?? 0 );
+        $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
+        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+
+        $result = [];
+
+        switch ( $phase ) {
+            case 1:
+                $result = MealsDB_Migration::migrate_users( $source_prefix, $offset, $dry_run );
+                break;
+            case 2:
+                $result = MealsDB_Migration::migrate_products( $source_prefix, $offset, $dry_run );
+                break;
+            case 3:
+                $result = MealsDB_Migration::migrate_orders( $source_prefix, $offset, $dry_run );
+                break;
+            case 4:
+                $result = MealsDB_Migration::create_clients( $offset, $dry_run );
+                break;
+            case 5:
+                $result = MealsDB_Migration::create_rates( $offset, $dry_run );
+                break;
+            default:
+                wp_send_json_error( [ 'message' => 'Invalid phase: ' . $phase ] );
+        }
+
+        if ( isset( $result['error'] ) ) {
+            wp_send_json_error( [ 'message' => $result['error'] ] );
+        }
+
+        // Log phase completion
+        if ( ! empty( $result['complete'] ) ) {
+            $phase_names = [
+                1 => 'Users',
+                2 => 'Products',
+                3 => 'Orders',
+                4 => 'Meals Clients',
+                5 => 'Client Rates',
+            ];
+            $name  = $phase_names[ $phase ] ?? "Phase {$phase}";
+            $mode  = $dry_run ? ' (dry run)' : '';
+            $stats = isset( $result['stats'] ) ? wp_json_encode( $result['stats'] ) : '{}';
+            MealsDB_Migration::append_log( "{$name}{$mode} complete. Stats: {$stats}" );
+        }
+
+        $result['phase'] = $phase;
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Cleanup: drop source tables.
+     */
+    public static function cleanup(): void {
+        self::verify();
+
+        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+        if ( ! $source_prefix ) {
+            wp_send_json_error( [ 'message' => 'Missing source_prefix.' ] );
+        }
+
+        $result = MealsDB_Migration::cleanup( $source_prefix );
+        MealsDB_Migration::append_log( "Cleanup: dropped {$result['dropped']} source tables." );
+
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Reset progress and log.
+     */
+    public static function reset(): void {
+        self::verify();
+        MealsDB_Migration::reset();
+        wp_send_json_success();
+    }
+
+    /**
+     * Return the migration log.
+     */
+    public static function get_log(): void {
+        self::verify();
+        wp_send_json_success( [ 'log' => MealsDB_Migration::get_log() ] );
+    }
+
+    // ── Helpers ──────────────────────────────────
+
+    private static function verify(): void {
+        check_ajax_referer( 'mealsdb_migration_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
+        }
+    }
+
+    /**
+     * Sanitize and validate a file-system path.
+     */
+    private static function sanitize_path( string $raw ): string {
+        $path = wp_normalize_path( trim( $raw ) );
+
+        // Block directory traversal
+        if ( strpos( $path, '..' ) !== false ) {
+            return '';
+        }
+
+        return $path;
+    }
+}
