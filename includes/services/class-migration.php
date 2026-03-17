@@ -703,8 +703,17 @@ class MealsDB_Migration {
             }
 
             // Normalize client type
-            $group       = strtolower( trim( $meta['customer_group'] ?? '' ) );
-            $client_type = self::$type_map[ $group ] ?? 'SDNB';
+            $group = strtolower( trim( $meta['customer_group'] ?? '' ) );
+            if ( ! isset( self::$type_map[ $group ] ) ) {
+                error_log( sprintf(
+                    '[MealsDB Migration] Skipped user %d: unrecognized customer_group "%s".',
+                    $uid,
+                    $meta['customer_group'] ?? ''
+                ) );
+                $stats['errors']++;
+                continue;
+            }
+            $client_type = self::$type_map[ $group ];
 
             // Build client record
             $first = $meta['first_name'] ?? $user['display_name'] ?? '';
@@ -944,7 +953,7 @@ class MealsDB_Migration {
 
             $insert_sql = sprintf(
                 "INSERT INTO `%s` (client_id, label, rate, is_default, effective_date)
-                 VALUES (?, 'Default Rate', ?, 1, CURDATE())",
+                 VALUES (?, 'Standard', ?, 1, CURDATE())",
                 $rates_table
             );
 

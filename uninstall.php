@@ -40,6 +40,8 @@ if (!MealsDB_DB::is_mysqli($conn)) {
 $tables = [
     MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES),
     MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS),
+    MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS),
+    MealsDB_DB::get_table_name(MealsDB_Tables::STAFF),
     MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS),
     MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS),
     MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG),

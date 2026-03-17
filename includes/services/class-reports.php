@@ -54,7 +54,7 @@ class MealsDB_Reports {
             return [];
         }
 
-        $order_items_table      = $this->wpdb->prefix . 'wc_order_items';
+        $order_items_table      = $this->wpdb->prefix . 'woocommerce_order_items';
         $order_itemmeta_table   = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
         $orders_table           = $this->wpdb->prefix . 'wc_orders';
         $meals_products_table   = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
@@ -81,8 +81,9 @@ class MealsDB_Reports {
                 ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
             WHERE o.date_created_gmt >= %s
                 AND o.date_created_gmt <= %s
-                AND o.status NOT IN ('wc-cancelled', 'wc-trash', 'trash')
+                AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
                 AND o.type = 'shop_order'
+                AND (mp.product_type IS NULL OR mp.product_type IN ('meal', 'side'))
             GROUP BY wc_product_id, item, mp.case_size, mp.unit_cost
             ORDER BY item ASC
         ";
@@ -111,7 +112,7 @@ class MealsDB_Reports {
             return [];
         }
 
-        $order_items_table    = $this->wpdb->prefix . 'wc_order_items';
+        $order_items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
         $order_itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
         $orders_table         = $this->wpdb->prefix . 'wc_orders';
         $meals_products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
@@ -138,8 +139,9 @@ class MealsDB_Reports {
                 ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
             WHERE o.date_created_gmt >= %s
                 AND o.date_created_gmt <= %s
-                AND o.status NOT IN ('wc-cancelled', 'wc-trash', 'trash')
+                AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
                 AND o.type = 'shop_order'
+                AND (mp.product_type IS NULL OR mp.product_type IN ('meal', 'side'))
             GROUP BY wc_product_id, item, mp.product_type, mp.main_ingredient, mp.dietary_tags, mp.allergen_flags
             ORDER BY item ASC
         ";
@@ -259,10 +261,11 @@ class MealsDB_Reports {
             $trailing_weeks = 8;
         }
 
-        $end_date   = gmdate('Y-m-d');
-        $start_date = gmdate('Y-m-d', strtotime("-" . ($trailing_weeks * 7) . " days"));
+        $end_date           = gmdate('Y-m-d');
+        $end_date_exclusive = gmdate('Y-m-d', strtotime($end_date . ' +1 day'));
+        $start_date         = gmdate('Y-m-d', strtotime("-" . ($trailing_weeks * 7) . " days"));
 
-        $order_items_table    = $this->wpdb->prefix . 'wc_order_items';
+        $order_items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
         $order_itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
         $orders_table         = $this->wpdb->prefix . 'wc_orders';
 
@@ -282,14 +285,14 @@ class MealsDB_Reports {
             INNER JOIN {$orders_table} o
                 ON o.id = oi.order_id
                 AND o.type = 'shop_order'
-                AND o.status NOT IN ('wc-cancelled','wc-trash','trash')
-            WHERE DATE(o.date_created_gmt) BETWEEN %s AND %s
+                AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
+            WHERE o.date_created_gmt >= %s AND o.date_created_gmt < %s
                 AND oi.order_item_type = 'line_item'
             GROUP BY wc_product_id, product_name, year_week
             ORDER BY wc_product_id, year_week
         ";
 
-        $prepared = $this->wpdb->prepare($sql, $start_date, $end_date);
+        $prepared = $this->wpdb->prepare($sql, $start_date, $end_date_exclusive);
         $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
 
         if (!is_array($rows)) {
