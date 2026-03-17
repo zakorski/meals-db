@@ -37,7 +37,7 @@ class MealsDB_WC_Order_Query {
         array $wp_user_ids,
         string $start_date,
         string $end_date,
-        array $exclude_statuses = ['wc-cancelled', 'wc-trash', 'trash']
+        array $exclude_statuses = ['wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash']
     ): array {
         $wp_user_ids = array_filter(array_map('intval', $wp_user_ids));
         if (empty($wp_user_ids)) {
@@ -64,15 +64,19 @@ class MealsDB_WC_Order_Query {
                 ON rate_meta.order_id = o.id
                 AND rate_meta.meta_key = 'mealsdb_rate_id'
             WHERE o.customer_id IN ({$user_placeholders})
-                AND DATE(o.date_created_gmt) BETWEEN %s AND %s
+                AND o.date_created_gmt >= %s
+                AND o.date_created_gmt < %s
                 AND o.status NOT IN ({$status_placeholders})
                 AND o.type = 'shop_order'
             ORDER BY o.date_created_gmt ASC
         ";
 
+        // End date is inclusive (full day), so advance to the next day for < comparison.
+        $end_date_exclusive = date('Y-m-d', strtotime($end_date . ' +1 day'));
+
         $params = array_merge(
             $wp_user_ids,
-            [$start_date, $end_date],
+            [$start_date, $end_date_exclusive],
             $exclude_statuses
         );
 
@@ -151,7 +155,7 @@ class MealsDB_WC_Order_Query {
         array $wp_user_ids,
         string $start_date,
         string $end_date,
-        array $exclude_statuses = ['wc-cancelled', 'wc-trash', 'trash']
+        array $exclude_statuses = ['wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash']
     ): array {
         $orders = $this->get_orders_for_users($wp_user_ids, $start_date, $end_date, $exclude_statuses);
         if (empty($orders)) {
@@ -332,7 +336,7 @@ class MealsDB_WC_Order_Query {
      * @return string Fully-prefixed wc_order_items table name.
      */
     private function order_items_table(): string {
-        return $this->wpdb->prefix . 'wc_order_items';
+        return $this->wpdb->prefix . 'woocommerce_order_items';
     }
 
     /**

@@ -110,7 +110,7 @@ class MealsDB_Schema {
                 'columns' => [
                     'id'             => 'INT AUTO_INCREMENT',
                     'wc_product_id'  => 'INT NOT NULL',
-                    'product_type'   => "ENUM('meal','side') NOT NULL DEFAULT 'meal'",
+                    'product_type'   => "ENUM('meal','side','fee','other') NOT NULL DEFAULT 'meal'",
                     'taxable'        => 'TINYINT(1) NOT NULL DEFAULT 0',
                     'main_ingredient'=> 'VARCHAR(40) NOT NULL',
                     'dietary_tags'   => 'JSON NULL',
