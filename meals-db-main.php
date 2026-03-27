@@ -49,7 +49,31 @@ add_action('plugins_loaded', function() {
 require_once __DIR__ . '/includes/class-plugin.php';
 MealsDB_Plugin::init();
 
-// Abort early if wp-config.php constants have not been configured.
+/**
+ * Initialize plugin functionality after all plugins are loaded.
+ */
+add_action('plugins_loaded', function () {
+    MealsDB_Admin_UI::init();
+    MealsDB_Ajax_Sync::init();
+    MealsDB_Ajax_Clients::init();
+    MealsDB_Ajax_Staff::init();
+    MealsDB_Ajax_Drafts::init();
+    MealsDB_Ajax_Initials::init();
+    MealsDB_Ajax_Invoice::init();
+    MealsDB_Ajax_Delivery_Slips::init();
+    MealsDB_Ajax_Reports::init();
+    MealsDB_Quick_Order_Ajax::init();
+    MealsDB_Staff::init();
+    MealsDB_WC_Product_Tab::init();
+    MealsDB_Invoice_Page::init();
+    MealsDB_Migration_Page::init();
+    MealsDB_Ajax_Migration::init();
+    MealsDB_Ajax_DB_Sync::init();
+    MealsDB_Ajax_Settings::init();
+    MealsDB_Sync::register_hooks();
+});
+
+// Warn and abort remaining setup if wp-config.php constants have not been configured.
 if (!defined('MEALS_DB_KEY')) {
     add_action('admin_notices', function () {
         echo '<div class="notice notice-error"><p><strong>Meals Database:</strong> Configuration constants are missing. Please add them to wp-config.php.</p></div>';
@@ -105,30 +129,6 @@ function meals_db_check_requirements() {
     require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
     MealsDB_Installer::install();
 }
-
-/**
- * Initialize plugin functionality after all plugins are loaded.
- */
-add_action('plugins_loaded', function () {
-    MealsDB_Admin_UI::init();
-    MealsDB_Ajax_Sync::init();
-    MealsDB_Ajax_Clients::init();
-    MealsDB_Ajax_Staff::init();
-    MealsDB_Ajax_Drafts::init();
-    MealsDB_Ajax_Initials::init();
-    MealsDB_Ajax_Invoice::init();
-    MealsDB_Ajax_Delivery_Slips::init();
-    MealsDB_Ajax_Reports::init();
-    MealsDB_Quick_Order_Ajax::init();
-    MealsDB_Staff::init();
-    MealsDB_WC_Product_Tab::init();
-    MealsDB_Invoice_Page::init();
-    MealsDB_Migration_Page::init();
-    MealsDB_Ajax_Migration::init();
-    MealsDB_Ajax_DB_Sync::init();
-    MealsDB_Ajax_Settings::init();
-    MealsDB_Sync::register_hooks();
-});
 
 // Register the plugin update checker against the GitHub repository.
 require_once plugin_dir_path(__FILE__) . 'plugin-update-checker/plugin-update-checker.php';
