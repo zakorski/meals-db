@@ -149,12 +149,13 @@ class MealsDB_Ajax_Migration {
         $file_path     = self::sanitize_path( $_POST['file_path'] ?? '' );
         $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
         $byte_offset   = (int) ( $_POST['byte_offset'] ?? 0 );
+        $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
 
         if ( ! $file_path || ! $source_prefix ) {
             wp_send_json_error( [ 'message' => 'Missing file_path or source_prefix.' ] );
         }
 
-        $result = MealsDB_Migration::load_source( $file_path, $source_prefix, $byte_offset );
+        $result = MealsDB_Migration::load_source( $file_path, $source_prefix, $byte_offset, $dry_run );
 
         if ( isset( $result['error'] ) ) {
             wp_send_json_error( [ 'message' => $result['error'] ] );
@@ -182,12 +183,13 @@ class MealsDB_Ajax_Migration {
         $pass          = $_POST['db_pass'] ?? '';
         $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
         $table_index   = (int) ( $_POST['table_index'] ?? 0 );
+        $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
 
         if ( ! $host || ! $name || ! $user || ! $source_prefix ) {
             wp_send_json_error( [ 'message' => 'Missing database connection parameters.' ] );
         }
 
-        $result = MealsDB_Migration::copy_table_from_db( $host, $name, $user, $pass, $source_prefix, $table_index );
+        $result = MealsDB_Migration::copy_table_from_db( $host, $name, $user, $pass, $source_prefix, $table_index, $dry_run );
 
         if ( isset( $result['error'] ) ) {
             wp_send_json_error( [ 'message' => $result['error'] ] );
