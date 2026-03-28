@@ -903,7 +903,7 @@ class MealsDB_Migration {
             $notes_final = $notes !== '' ? $notes : null;
 
             $stmt->bind_param(
-                'issssssssssssssidsssssiisdssssss',
+                'issssssssssssssidsssssiisdsssssss',
                 $uid, $client_type, $first, $last, $email,
                 $phone1, $phone2, $payment,
                 $open_date, $individual_id, $individual_id_index,
