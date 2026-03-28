@@ -494,8 +494,21 @@ class MealsDB_Migration {
             return [ 'stats' => $stats, 'offset' => $offset, 'total' => $total, 'complete' => true ];
         }
 
+        $ids_str = implode( ',', array_map( 'intval', $ids ) );
+
         if ( $dry_run ) {
-            $stats['posts'] = count( $ids );
+            // Count posts that don't already exist in the destination
+            $existing = (int) $wpdb->get_var(
+                "SELECT COUNT(*) FROM `{$dst_posts}` WHERE ID IN ({$ids_str})"
+            );
+            $stats['posts']   = count( $ids ) - $existing;
+            $stats['skipped'] = $existing;
+
+            // Count meta rows that would be inserted
+            $stats['meta'] = (int) $wpdb->get_var(
+                "SELECT COUNT(*) FROM `{$src_meta}` WHERE post_id IN ({$ids_str})"
+            );
+
             return [
                 'stats'    => $stats,
                 'offset'   => $offset + self::BATCH_SIZE,
@@ -503,8 +516,6 @@ class MealsDB_Migration {
                 'complete' => count( $ids ) < self::BATCH_SIZE,
             ];
         }
-
-        $ids_str = implode( ',', array_map( 'intval', $ids ) );
 
         // Import terms (once – idempotent via IGNORE)
         if ( $offset === 0 ) {
@@ -576,8 +587,31 @@ class MealsDB_Migration {
             return [ 'stats' => $stats, 'offset' => $offset, 'total' => $total, 'complete' => true ];
         }
 
+        $oids = implode( ',', array_map( 'intval', $order_ids ) );
+
         if ( $dry_run ) {
-            $stats['orders'] = count( $order_ids );
+            // Count orders that don't already exist in the destination
+            $existing = (int) $wpdb->get_var(
+                "SELECT COUNT(*) FROM `{$dst_orders}` WHERE id IN ({$oids})"
+            );
+            $stats['orders'] = count( $order_ids ) - $existing;
+
+            // Count line items for these orders
+            $stats['items'] = (int) $wpdb->get_var(
+                "SELECT COUNT(*) FROM `{$src_items}` WHERE order_id IN ({$oids})"
+            );
+
+            // Count line item meta
+            $item_ids = $wpdb->get_col(
+                "SELECT order_item_id FROM `{$src_items}` WHERE order_id IN ({$oids})"
+            );
+            if ( ! empty( $item_ids ) ) {
+                $iids = implode( ',', array_map( 'intval', $item_ids ) );
+                $stats['itemmeta'] = (int) $wpdb->get_var(
+                    "SELECT COUNT(*) FROM `{$src_itemmeta}` WHERE order_item_id IN ({$iids})"
+                );
+            }
+
             return [
                 'stats'    => $stats,
                 'offset'   => $offset + self::BATCH_SIZE,
@@ -585,8 +619,6 @@ class MealsDB_Migration {
                 'complete' => count( $order_ids ) < self::BATCH_SIZE,
             ];
         }
-
-        $oids = implode( ',', array_map( 'intval', $order_ids ) );
 
         // Order headers
         $stats['orders'] = max( 0, (int) $wpdb->query(
