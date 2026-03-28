@@ -971,7 +971,7 @@ class MealsDB_Admin_UI {
             static function (array $client) {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="address_street_name"><?php esc_html_e('Street Name *', 'meals-db'); ?></label></th>
+                    <th><label for="address_street_name"><?php esc_html_e('Address line 1 *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_street_name" id="address_street_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_street_name'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
@@ -979,7 +979,7 @@ class MealsDB_Admin_UI {
             static function (array $client) {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="address_unit"><?php esc_html_e('Apt # *', 'meals-db'); ?></label></th>
+                    <th><label for="address_unit"><?php esc_html_e('Address line 2 *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_unit" id="address_unit" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_unit'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
@@ -1019,11 +1019,11 @@ class MealsDB_Admin_UI {
                             <td><input type="text" name="delivery_address_street_number" id="delivery_address_street_number" class="regular-text" value="<?php echo esc_attr($form_values['delivery_address_street_number'] ?? ''); ?>" /></td>
                         </tr>
                         <tr>
-                            <th><label for="delivery_address_street_name"><?php esc_html_e('Street Name', 'meals-db'); ?></label></th>
+                            <th><label for="delivery_address_street_name"><?php esc_html_e('Address line 1', 'meals-db'); ?></label></th>
                             <td><input type="text" name="delivery_address_street_name" id="delivery_address_street_name" class="regular-text" value="<?php echo esc_attr($form_values['delivery_address_street_name'] ?? ''); ?>" /></td>
                         </tr>
                         <tr>
-                            <th><label for="delivery_address_unit"><?php esc_html_e('Apt #', 'meals-db'); ?></label></th>
+                            <th><label for="delivery_address_unit"><?php esc_html_e('Address line 2', 'meals-db'); ?></label></th>
                             <td><input type="text" name="delivery_address_unit" id="delivery_address_unit" class="regular-text" value="<?php echo esc_attr($form_values['delivery_address_unit'] ?? ''); ?>" /></td>
                         </tr>
                         <tr>
