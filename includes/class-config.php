@@ -134,4 +134,14 @@ class MealsDB_Config
     {
         return $this->table_prefix;
     }
+
+    /**
+     * Check whether external DB credentials have been configured.
+     */
+    public static function is_db_configured(): bool
+    {
+        $config = self::instance();
+
+        return $config->db_host !== '' && $config->db_user !== '' && $config->db_pass !== '' && $config->db_name !== '';
+    }
 }
