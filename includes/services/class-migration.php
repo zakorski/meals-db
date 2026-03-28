@@ -161,9 +161,48 @@ class MealsDB_Migration {
 
         $suffix       = $suffixes[ $table_index ];
         $source_table = $source_prefix . $suffix;
+        $source_esc   = '`' . str_replace( '`', '``', $source_table ) . '`';
+
+        // Safety: never drop or overwrite live WordPress tables.
+        // If the source prefix matches the local WP prefix, the tables
+        // already exist in the local database — skip the copy entirely.
+        if ( $source_prefix === $wpdb->prefix ) {
+            $src_conn = @new \mysqli( $host, $user, $pass, $db_name );
+            if ( $src_conn->connect_errno ) {
+                return [ 'error' => 'Source DB connection failed: ' . $src_conn->connect_error ];
+            }
+            $count_result = $src_conn->query( "SELECT COUNT(*) FROM {$source_esc}" );
+            $total_rows   = $count_result ? (int) $count_result->fetch_row()[0] : 0;
+            $src_conn->close();
+
+            $copied = $table_index + 1;
+
+            return [
+                'table'         => $source_table,
+                'rows'          => $total_rows,
+                'table_index'   => $copied,
+                'total_tables'  => $total_tables,
+                'tables_copied' => $copied,
+                'complete'      => $copied >= $total_tables,
+                'percent'       => round( ( $copied / $total_tables ) * 100, 1 ),
+                'skipped'       => true,
+            ];
+        }
+
         $local_table  = $source_table; // same name in local WP DB
         $local_esc    = '`' . str_replace( '`', '``', $local_table ) . '`';
-        $source_esc   = '`' . str_replace( '`', '``', $source_table ) . '`';
+
+        // Prevent dropping any core WordPress table regardless of prefix detection.
+        $wp_core_suffixes = [
+            'users', 'usermeta', 'posts', 'postmeta', 'options',
+            'comments', 'commentmeta', 'terms', 'term_taxonomy',
+            'term_relationships', 'links',
+        ];
+        foreach ( $wp_core_suffixes as $core_suffix ) {
+            if ( $local_table === $wpdb->prefix . $core_suffix ) {
+                return [ 'error' => "Refusing to overwrite live WordPress table: {$local_table}" ];
+            }
+        }
 
         // Connect to source database with the provided credentials
         $src_conn = @new \mysqli( $host, $user, $pass, $db_name );
@@ -281,6 +320,11 @@ class MealsDB_Migration {
      */
     public static function load_source( string $file_path, string $source_prefix, int $byte_offset = 0, bool $dry_run = false ): array {
         global $wpdb;
+
+        // Safety: refuse to load if the source prefix matches the live WP prefix.
+        if ( $source_prefix === $wpdb->prefix ) {
+            return [ 'error' => 'Source prefix matches the live WordPress prefix. Tables already exist — Phase 0 load is not needed.' ];
+        }
 
         $target_tables = self::get_source_tables( $source_prefix );
         $handle = @fopen( $file_path, 'r' );
@@ -1122,11 +1166,17 @@ class MealsDB_Migration {
     public static function cleanup( string $source_prefix ): array {
         global $wpdb;
 
+        // Safety: never drop tables that belong to the live WordPress installation.
+        if ( $source_prefix === $wpdb->prefix ) {
+            return [ 'dropped' => 0, 'skipped' => true ];
+        }
+
         $tables  = self::get_source_tables( $source_prefix );
         $dropped = 0;
 
         foreach ( $tables as $table ) {
-            $wpdb->query( "DROP TABLE IF EXISTS `{$table}`" );
+            $escaped = '`' . str_replace( '`', '``', $table ) . '`';
+            $wpdb->query( "DROP TABLE IF EXISTS {$escaped}" );
             $dropped++;
         }
 
