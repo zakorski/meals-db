@@ -950,7 +950,7 @@ class MealsDB_Migration {
             $birth_date       = ! empty( $meta['date_of_birth'] ) && $meta['date_of_birth'] !== '0' ? $meta['date_of_birth'] : ( ! empty( $meta['birth_date'] ) && $meta['birth_date'] !== '0' ? $meta['birth_date'] : null );
             $worker_name      = $meta['social_worker_name']  ?? $meta['assigned_worker_name']  ?? null;
             $worker_email     = $meta['social_worker_email'] ?? $meta['assigned_worker_email'] ?? null;
-            $vendor_number    = $meta['vendor_number'] ?? null;
+            $vendor_number    = $meta['vendor_number'] ?? $meta['billing_vat_number'] ?? null;
             $meal_type        = $meta['meal_type']     ?? null;
             $delivery_day     = $meta['delivery_day']  ?? null;
             $do_not_call      = ! empty( $meta['do_not_call_client_phone'] ) ? 1 : 0;
