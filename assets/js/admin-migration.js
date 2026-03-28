@@ -258,6 +258,7 @@
             file_path:     state.filePath,
             source_prefix: state.sourcePrefix,
             byte_offset:   state.byteOffset,
+            dry_run:       state.dryRun ? 1 : 0,
         }, function (data) {
             state.byteOffset = data.byte_offset;
             setPhaseBar(0, data.percent);
@@ -286,6 +287,7 @@
             db_pass:       state.dbPass,
             source_prefix: state.sourcePrefix,
             table_index:   state.tableIndex,
+            dry_run:       state.dryRun ? 1 : 0,
         }, function (data) {
             state.tableIndex = data.table_index;
             setPhaseBar(0, data.percent);

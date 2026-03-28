@@ -143,7 +143,7 @@ class MealsDB_Migration {
      *
      * @return array{table:string, rows:int, table_index:int, total_tables:int, tables_copied:int, complete:bool, percent:float}|array{error:string}
      */
-    public static function copy_table_from_db( string $host, string $db_name, string $user, string $pass, string $source_prefix, int $table_index = 0 ): array {
+    public static function copy_table_from_db( string $host, string $db_name, string $user, string $pass, string $source_prefix, int $table_index = 0, bool $dry_run = false ): array {
         global $wpdb;
 
         $suffixes     = self::$needed_suffixes;
@@ -190,65 +190,72 @@ class MealsDB_Migration {
             1
         );
 
-        // Drop + recreate locally
-        $wpdb->query( "DROP TABLE IF EXISTS {$local_esc}" );
-        $wpdb->suppress_errors( true );
-        $create_result = $wpdb->query( $create_sql );
-        if ( $create_result === false ) {
-            $err = $wpdb->last_error;
-            $wpdb->suppress_errors( false );
+        // In dry-run mode, just count the rows without touching local tables.
+        if ( $dry_run ) {
+            $count_result = $src_conn->query( "SELECT COUNT(*) FROM {$source_esc}" );
+            $total_rows   = $count_result ? (int) $count_result->fetch_row()[0] : 0;
             $src_conn->close();
-            return [ 'error' => "Failed to create local table {$local_table}: {$err}" ];
-        }
-        $wpdb->suppress_errors( false );
-
-        // Read rows from source and insert into local DB in batches
-        $total_rows  = 0;
-        $batch_size  = 500;
-        $offset      = 0;
-
-        while ( true ) {
-            $result = $src_conn->query(
-                "SELECT * FROM {$source_esc} LIMIT {$batch_size} OFFSET {$offset}"
-            );
-
-            if ( ! $result || $result->num_rows === 0 ) {
-                break;
-            }
-
-            $fields = $result->fetch_fields();
-            $col_names = [];
-            foreach ( $fields as $field ) {
-                $col_names[] = '`' . str_replace( '`', '``', $field->name ) . '`';
-            }
-            $col_sql = implode( ', ', $col_names );
-
-            // Build a multi-row INSERT for the batch
-            $value_groups = [];
-            while ( $row = $result->fetch_row() ) {
-                $escaped = [];
-                foreach ( $row as $val ) {
-                    if ( $val === null ) {
-                        $escaped[] = 'NULL';
-                    } else {
-                        $escaped[] = "'" . $wpdb->_real_escape( $val ) . "'";
-                    }
-                }
-                $value_groups[] = '(' . implode( ', ', $escaped ) . ')';
-                $total_rows++;
-            }
-
-            if ( ! empty( $value_groups ) ) {
-                $insert_sql = "INSERT IGNORE INTO {$local_esc} ({$col_sql}) VALUES " . implode( ', ', $value_groups );
-                $wpdb->suppress_errors( true );
-                $wpdb->query( $insert_sql );
+        } else {
+            // Drop + recreate locally
+            $wpdb->query( "DROP TABLE IF EXISTS {$local_esc}" );
+            $wpdb->suppress_errors( true );
+            $create_result = $wpdb->query( $create_sql );
+            if ( $create_result === false ) {
+                $err = $wpdb->last_error;
                 $wpdb->suppress_errors( false );
+                $src_conn->close();
+                return [ 'error' => "Failed to create local table {$local_table}: {$err}" ];
+            }
+            $wpdb->suppress_errors( false );
+
+            // Read rows from source and insert into local DB in batches
+            $total_rows  = 0;
+            $batch_size  = 500;
+            $offset      = 0;
+
+            while ( true ) {
+                $result = $src_conn->query(
+                    "SELECT * FROM {$source_esc} LIMIT {$batch_size} OFFSET {$offset}"
+                );
+
+                if ( ! $result || $result->num_rows === 0 ) {
+                    break;
+                }
+
+                $fields = $result->fetch_fields();
+                $col_names = [];
+                foreach ( $fields as $field ) {
+                    $col_names[] = '`' . str_replace( '`', '``', $field->name ) . '`';
+                }
+                $col_sql = implode( ', ', $col_names );
+
+                // Build a multi-row INSERT for the batch
+                $value_groups = [];
+                while ( $row = $result->fetch_row() ) {
+                    $escaped = [];
+                    foreach ( $row as $val ) {
+                        if ( $val === null ) {
+                            $escaped[] = 'NULL';
+                        } else {
+                            $escaped[] = "'" . $wpdb->_real_escape( $val ) . "'";
+                        }
+                    }
+                    $value_groups[] = '(' . implode( ', ', $escaped ) . ')';
+                    $total_rows++;
+                }
+
+                if ( ! empty( $value_groups ) ) {
+                    $insert_sql = "INSERT IGNORE INTO {$local_esc} ({$col_sql}) VALUES " . implode( ', ', $value_groups );
+                    $wpdb->suppress_errors( true );
+                    $wpdb->query( $insert_sql );
+                    $wpdb->suppress_errors( false );
+                }
+
+                $offset += $batch_size;
             }
 
-            $offset += $batch_size;
+            $src_conn->close();
         }
-
-        $src_conn->close();
         $copied = $table_index + 1;
 
         return [
@@ -272,7 +279,7 @@ class MealsDB_Migration {
      *
      * @return array{statements:int, byte_offset:int, file_size:int, complete:bool, percent:float, errors:string[]}
      */
-    public static function load_source( string $file_path, string $source_prefix, int $byte_offset = 0 ): array {
+    public static function load_source( string $file_path, string $source_prefix, int $byte_offset = 0, bool $dry_run = false ): array {
         global $wpdb;
 
         $target_tables = self::get_source_tables( $source_prefix );
@@ -339,13 +346,15 @@ class MealsDB_Migration {
 
             // Execute when statement is complete (ends with ;)
             if ( $in_target && substr( $trimmed, -1 ) === ';' ) {
-                // Suppress errors so wpdb doesn't bail
-                $wpdb->suppress_errors( true );
-                $result = $wpdb->query( $buffer );
-                $wpdb->suppress_errors( false );
+                if ( ! $dry_run ) {
+                    // Suppress errors so wpdb doesn't bail
+                    $wpdb->suppress_errors( true );
+                    $result = $wpdb->query( $buffer );
+                    $wpdb->suppress_errors( false );
 
-                if ( $result === false && $wpdb->last_error ) {
-                    $errors[] = substr( $wpdb->last_error, 0, 200 );
+                    if ( $result === false && $wpdb->last_error ) {
+                        $errors[] = substr( $wpdb->last_error, 0, 200 );
+                    }
                 }
 
                 $statements++;
