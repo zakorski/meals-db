@@ -73,15 +73,6 @@ add_action('plugins_loaded', function () {
     MealsDB_Sync::register_hooks();
 });
 
-// Warn and abort remaining setup if wp-config.php constants have not been configured.
-if (!defined('MEALS_DB_KEY')) {
-    add_action('admin_notices', function () {
-        echo '<div class="notice notice-error"><p><strong>Meals Database:</strong> Configuration constants are missing. Please add them to wp-config.php.</p></div>';
-    });
-
-    return;
-}
-
 /**
  * Check minimum PHP and WordPress versions before allowing activation.
  */
@@ -141,3 +132,10 @@ $updateChecker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChec
 
 $updateChecker->setBranch('main');
 $updateChecker->getVcsApi()->enableReleaseAssets();
+
+// Warn if wp-config.php constants have not been configured.
+if (!defined('MEALS_DB_KEY')) {
+    add_action('admin_notices', function () {
+        echo '<div class="notice notice-error"><p><strong>Meals Database:</strong> Configuration constants are missing. Please add them to wp-config.php.</p></div>';
+    });
+}
