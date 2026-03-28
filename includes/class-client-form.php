@@ -158,14 +158,14 @@ class MealsDB_Client_Form {
         'alt_contact_phone_secondary'    => 'Alternate Contact Phone #2',
         'alt_contact_email'              => 'Alternate Contact Email',
         'address_street_number'          => 'Street #',
-        'address_street_name'            => 'Street Name',
-        'address_unit'                   => 'Apt #',
+        'address_street_name'            => 'Address line 1',
+        'address_unit'                   => 'Address line 2',
         'address_city'                   => 'City',
         'address_province'               => 'Province',
         'address_postal'                 => 'Postal Code',
         'delivery_address_street_number' => 'Delivery Street #',
-        'delivery_address_street_name'   => 'Delivery Street Name',
-        'delivery_address_unit'          => 'Delivery Apt #',
+        'delivery_address_street_name'   => 'Delivery Address line 1',
+        'delivery_address_unit'          => 'Delivery Address line 2',
         'delivery_address_city'          => 'Delivery City',
         'delivery_address_province'      => 'Delivery Province',
         'delivery_address_postal'        => 'Delivery Postal Code',
@@ -797,8 +797,20 @@ class MealsDB_Client_Form {
             }
         }
 
+        // Decrypt encrypted fields before mapping to form names
+        foreach (self::$encrypted_fields as $field) {
+            if (!empty($record[$field]) && is_string($record[$field])) {
+                try {
+                    $record[$field] = MealsDB_Encryption::decrypt($record[$field]);
+                } catch (\Exception $e) {
+                    // Leave as-is if decryption fails (e.g. plaintext legacy data)
+                }
+            }
+        }
+
         // Map database column names to form field names
         $db_to_form_map = [
+            'wp_user_id' => 'wordpress_user_id',
             'client_phone_1' => 'phone_primary',
             'client_phone_2' => 'phone_secondary',
             'assigned_worker_name' => 'assigned_social_worker',
@@ -845,6 +857,7 @@ class MealsDB_Client_Form {
      */
     private static function map_form_to_db(array $data): array {
         $form_to_db_map = [
+            'wordpress_user_id' => 'wp_user_id',
             'phone_primary' => 'client_phone_1',
             'phone_secondary' => 'client_phone_2',
             'assigned_social_worker' => 'assigned_worker_name',
