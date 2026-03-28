@@ -900,12 +900,28 @@ class MealsDB_Migration {
             $ord_freq   = ! empty( $meta['ordering_frequency'] ) ? (int) $meta['ordering_frequency'] : null;
             $freeze_cap = $meta['freeze_capacity']     ?? null;
             $del_fee    = ! empty( $meta['delivery_fee'] ) ? (float) $meta['delivery_fee'] : null;
-            $diet       = ( ! empty( $meta['dietary_needs'] ) && $meta['dietary_needs'] !== '0' ) ? $meta['dietary_needs'] : null;
-            $comments   = ! empty( $meta['customer_comments'] ) ? $meta['customer_comments'] : null;
             $commence   = $open_date;
             $term_date  = ! empty( $meta['service_termination_date'] ) && $meta['service_termination_date'] !== '0'
                 ? $meta['service_termination_date'] : null;
             $notes_final = $notes !== '' ? $notes : null;
+
+            // Encrypt diet_concerns and customer_comments (stored encrypted in meals_clients)
+            $diet     = null;
+            $comments = null;
+            try {
+                $raw_diet = ( ! empty( $meta['dietary_needs'] ) && $meta['dietary_needs'] !== '0' ) ? $meta['dietary_needs'] : null;
+                if ( $raw_diet !== null ) {
+                    $diet = MealsDB_Encryption::encrypt( $raw_diet );
+                }
+
+                $raw_comments = ! empty( $meta['customer_comments'] ) ? $meta['customer_comments'] : null;
+                if ( $raw_comments !== null ) {
+                    $comments = MealsDB_Encryption::encrypt( $raw_comments );
+                }
+            } catch ( \Exception $e ) {
+                // Non-fatal — store as null rather than blocking the client insert
+                self::append_log( sprintf( 'Could not encrypt diet/comments for user %d: %s', $uid, $e->getMessage() ) );
+            }
 
             // Address fields – WooCommerce billing meta
             $street_number = $meta['mealsdb_street_number'] ?? null;
