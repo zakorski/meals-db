@@ -843,49 +843,10 @@ class MealsDB_Migration {
             }
             $initials_index = $initials !== '' ? MealsDB_Encryption::create_index( $initials ) : null;
 
-            // INSERT into external meals_clients
-            $sql = sprintf(
-                "INSERT INTO `%s` (
-                    wp_user_id, client_type, first_name, last_name, client_email, active,
-                    client_phone_1, client_phone_2, payment_method,
-                    open_date, individual_id, individual_id_index,
-                    service_id, requisition_id, requisition_id_index,
-                    requisition_period, units, client_contribution,
-                    vet_health_card, vet_health_card_index,
-                    service_center_charged, delivery_area_zone, service_name_zone,
-                    delivery_frequency, ordering_frequency, freezer_capacity,
-                    delivery_fee, diet_concerns, customer_comments,
-                    service_commence_date, expected_termination_date,
-                    notes_to_service_provider,
-                    delivery_initials, delivery_initials_index,
-                    use_legacy_billing
-                ) VALUES (
-                    ?, ?, ?, ?, ?, 1,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?,
-                    ?,
-                    ?, ?,
-                    1
-                )",
-                $clients_table
-            );
-
-            $stmt = $conn->prepare( $sql );
-            if ( ! MealsDB_DB::is_mysqli_stmt( $stmt ) ) {
-                $stats['errors']++;
-                continue;
-            }
-
+            // Gather all remaining fields from usermeta
             $email     = $user['user_email'] ?? null;
             $phone1    = ! empty( $meta['billing_phone'] ) ? $meta['billing_phone'] : null;
-            $phone2    = null;
+            $phone2    = $meta['mealsdb_client_phone_2'] ?? $meta['billing_phone_2'] ?? null;
             $payment   = $meta['payment_method']       ?? null;
             $service_id = $meta['service_id']           ?? null;
             $req_period = $meta['rate']                 ?? null;
@@ -902,8 +863,98 @@ class MealsDB_Migration {
                 ? $meta['service_termination_date'] : null;
             $notes_final = $notes !== '' ? $notes : null;
 
+            // Address fields – WooCommerce billing meta
+            $street_number = $meta['mealsdb_street_number'] ?? null;
+            $street_name   = $meta['mealsdb_street_name']   ?? $meta['billing_address_1'] ?? null;
+            $apt_number    = $meta['mealsdb_apartment_number'] ?? $meta['billing_address_2'] ?? null;
+            $city          = $meta['billing_city']     ?? null;
+            $province      = $meta['billing_state']    ?? null;
+            $postal_code   = $meta['billing_postcode'] ?? null;
+
+            // Delivery address fields – WooCommerce shipping meta
+            $del_street_number = $meta['mealsdb_delivery_street_number'] ?? null;
+            $del_street_name   = $meta['mealsdb_delivery_street_name']   ?? $meta['shipping_address_1'] ?? null;
+            $del_apt_number    = $meta['mealsdb_delivery_apartment_number'] ?? $meta['shipping_address_2'] ?? null;
+            $del_city          = $meta['shipping_city']     ?? null;
+            $del_province      = $meta['shipping_state']    ?? null;
+            $del_postal_code   = $meta['shipping_postcode'] ?? null;
+
+            // Alternate contact
+            $alt_name   = $meta['mealsdb_alternate_contact_name']    ?? $meta['alternate_contact_name'] ?? null;
+            $alt_phone1 = $meta['mealsdb_alternate_contact_phone_1'] ?? $meta['alternate_contact_phone_1'] ?? null;
+            $alt_phone2 = $meta['mealsdb_alternate_contact_phone_2'] ?? $meta['alternate_contact_phone_2'] ?? null;
+            $alt_email  = $meta['mealsdb_alternate_contact_email']   ?? $meta['alternate_contact_email'] ?? null;
+
+            // Additional identity / program fields
+            $gender           = $meta['gender'] ?? null;
+            $birth_date       = ! empty( $meta['date_of_birth'] ) && $meta['date_of_birth'] !== '0' ? $meta['date_of_birth'] : ( ! empty( $meta['birth_date'] ) && $meta['birth_date'] !== '0' ? $meta['birth_date'] : null );
+            $worker_name      = $meta['social_worker_name']  ?? $meta['assigned_worker_name']  ?? null;
+            $worker_email     = $meta['social_worker_email'] ?? $meta['assigned_worker_email'] ?? null;
+            $vendor_number    = $meta['vendor_number'] ?? null;
+            $meal_type        = $meta['meal_type']     ?? null;
+            $delivery_day     = $meta['delivery_day']  ?? null;
+            $do_not_call      = ! empty( $meta['do_not_call_client_phone'] ) ? 1 : 0;
+            $ordering_method  = $meta['ordering_contact_method'] ?? null;
+            $required_start   = ! empty( $meta['required_start_date'] ) && $meta['required_start_date'] !== '0' ? $meta['required_start_date'] : null;
+
+            // INSERT into external meals_clients
+            $sql = sprintf(
+                "INSERT INTO `%s` (
+                    wp_user_id, client_type, first_name, last_name, client_email, active,
+                    client_phone_1, client_phone_2, payment_method,
+                    open_date, individual_id, individual_id_index,
+                    service_id, requisition_id, requisition_id_index,
+                    requisition_period, units, client_contribution,
+                    vet_health_card, vet_health_card_index,
+                    service_center_charged, delivery_area_zone, service_name_zone,
+                    delivery_frequency, ordering_frequency, freezer_capacity,
+                    delivery_fee, diet_concerns, customer_comments,
+                    service_commence_date, expected_termination_date,
+                    notes_to_service_provider,
+                    delivery_initials, delivery_initials_index,
+                    street_number, street_name, apartment_number, city, province, postal_code,
+                    delivery_street_number, delivery_street_name, delivery_apartment_number,
+                    delivery_city, delivery_province, delivery_postal_code,
+                    alternate_contact_name, alternate_contact_phone_1,
+                    alternate_contact_phone_2, alternate_contact_email,
+                    gender, birth_date, assigned_worker_name, assigned_worker_email,
+                    vendor_number, meal_type, delivery_day,
+                    do_not_call_client_phone, ordering_contact_method, required_start_date,
+                    use_legacy_billing
+                ) VALUES (
+                    ?, ?, ?, ?, ?, 1,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    ?,
+                    ?, ?,
+                    ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    1
+                )",
+                $clients_table
+            );
+
+            $stmt = $conn->prepare( $sql );
+            if ( ! MealsDB_DB::is_mysqli_stmt( $stmt ) ) {
+                $stats['errors']++;
+                continue;
+            }
+
             $stmt->bind_param(
-                'issssssssssssssidsssssiisdsssssss',
+                'issssssssssssssidsssssiisdssssssssssssssssssssssssssssssiss',
                 $uid, $client_type, $first, $last, $email,
                 $phone1, $phone2, $payment,
                 $open_date, $individual_id, $individual_id_index,
@@ -915,7 +966,15 @@ class MealsDB_Migration {
                 $del_fee, $diet, $comments,
                 $commence, $term_date,
                 $notes_final,
-                $initials, $initials_index
+                $initials, $initials_index,
+                $street_number, $street_name, $apt_number, $city, $province, $postal_code,
+                $del_street_number, $del_street_name, $del_apt_number,
+                $del_city, $del_province, $del_postal_code,
+                $alt_name, $alt_phone1,
+                $alt_phone2, $alt_email,
+                $gender, $birth_date, $worker_name, $worker_email,
+                $vendor_number, $meal_type, $delivery_day,
+                $do_not_call, $ordering_method, $required_start
             );
 
             if ( $stmt->execute() ) {
