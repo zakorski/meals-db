@@ -684,6 +684,15 @@ class MealsDB_Migration {
 
         $clients_table = str_replace( '`', '``', MealsDB_DB::get_table_name( MealsDB_Tables::CLIENTS ) );
 
+        // Verify encryption is available before processing clients with sensitive fields.
+        if ( ! $dry_run ) {
+            try {
+                MealsDB_Encryption::encrypt( 'migration-key-check' );
+            } catch ( \Exception $e ) {
+                return [ 'error' => 'Encryption key is not configured. Set it in Settings → Meals DB or in the .env file before running this phase. (' . $e->getMessage() . ')' ];
+            }
+        }
+
         // Government / Extra Mural user IDs
         $gov_groups = [ 'sdnb', 'SDNB', 'sdnb rural', 'veterans', 'Extra Mural', 'extra mural' ];
         $placeholders = implode( ',', array_fill( 0, count( $gov_groups ), '%s' ) );
@@ -763,23 +772,34 @@ class MealsDB_Migration {
             // Encrypt sensitive fields
             $individual_id       = null;
             $individual_id_index = null;
-            if ( ! empty( $meta['individual_id'] ) ) {
-                $individual_id       = MealsDB_Encryption::encrypt( $meta['individual_id'] );
-                $individual_id_index = MealsDB_Encryption::create_index( $meta['individual_id'] );
-            }
-
             $requisition_id       = null;
             $requisition_id_index = null;
-            if ( ! empty( $meta['requisition_id'] ) ) {
-                $requisition_id       = MealsDB_Encryption::encrypt( $meta['requisition_id'] );
-                $requisition_id_index = MealsDB_Encryption::create_index( $meta['requisition_id'] );
-            }
-
             $vet_health_card       = null;
             $vet_health_card_index = null;
-            if ( $client_type === 'Veteran' && ! empty( $meta['vat_number'] ) ) {
-                $vet_health_card       = MealsDB_Encryption::encrypt( $meta['vat_number'] );
-                $vet_health_card_index = MealsDB_Encryption::create_index( $meta['vat_number'] );
+
+            try {
+                if ( ! empty( $meta['individual_id'] ) ) {
+                    $individual_id       = MealsDB_Encryption::encrypt( $meta['individual_id'] );
+                    $individual_id_index = MealsDB_Encryption::create_index( $meta['individual_id'] );
+                }
+
+                if ( ! empty( $meta['requisition_id'] ) ) {
+                    $requisition_id       = MealsDB_Encryption::encrypt( $meta['requisition_id'] );
+                    $requisition_id_index = MealsDB_Encryption::create_index( $meta['requisition_id'] );
+                }
+
+                if ( $client_type === 'Veteran' && ! empty( $meta['vat_number'] ) ) {
+                    $vet_health_card       = MealsDB_Encryption::encrypt( $meta['vat_number'] );
+                    $vet_health_card_index = MealsDB_Encryption::create_index( $meta['vat_number'] );
+                }
+            } catch ( \Exception $e ) {
+                $stats['errors']++;
+                self::append_log( sprintf(
+                    'Encryption failed for user %d: %s',
+                    $uid,
+                    $e->getMessage()
+                ) );
+                continue;
             }
 
             // Extra Mural / sdnb rural notes
@@ -883,7 +903,7 @@ class MealsDB_Migration {
             $notes_final = $notes !== '' ? $notes : null;
 
             $stmt->bind_param(
-                'issssssssssssssidsssssiisdssssss',
+                'issssssssssssssidsssssiisdsssssss',
                 $uid, $client_type, $first, $last, $email,
                 $phone1, $phone2, $payment,
                 $open_date, $individual_id, $individual_id_index,
