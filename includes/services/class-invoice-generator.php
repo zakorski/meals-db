@@ -75,6 +75,16 @@ class MealsDB_Invoice_Generator {
     ];
 
     /**
+     * VAC billing constants (contractual rates).
+     */
+    private static $vac_billing = [
+        'per_main_allowance'     => 10.64,  // Monthly allowance = mains_allowed × this
+        'sides_conversion_rate'  => 4.715,  // Remaining allowance ÷ this = sides allowed
+        'sides_cost_rate'        => 4.10,   // Cost per billable side
+        'sides_hst_rate'         => 0.15,   // HST on taxable sides (15%)
+    ];
+
+    /**
      * Shared data-fetch: resolves orders, rates, and product types for a set of clients.
      *
      * Returns one row per order, enriched with client fields, resolved rate,
@@ -777,7 +787,8 @@ class MealsDB_Invoice_Generator {
         $sql = sprintf(
             'SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
                     vet_health_card, requisition_period, client_contribution, default_rate_id,
-                    apartment_number, street_number, street_name, city, postal_code, client_phone_1
+                    apartment_number, street_number, street_name, city, postal_code, client_phone_1,
+                    allowance_mains, allowance_sides
              FROM `%s`
              WHERE client_type = ? AND active = 1 AND wp_user_id > 0',
             $clients_table
@@ -907,36 +918,78 @@ class MealsDB_Invoice_Generator {
             $sides_cost            = $agg['sides_cost'];
             $sides_tax             = $agg['sides_tax'];
 
-            // Get allowance info
-            $service = strtolower($vet['requisition_period'] ?: 'week');
-            $allowance_info = isset(self::$vac_allowances[$service]) ?
-                self::$vac_allowances[$service] : self::$vac_allowances['week'];
+            // --- Veteran allowance calculation ---
+            $user_mains   = (int) ($vet['allowance_mains'] ?? 0);
+            $user_sides   = (int) ($vet['allowance_sides'] ?? 0);
+            $service      = strtolower($vet['requisition_period'] ?: 'week');
+            $days_in_month = (int) date('t', strtotime($end_date));
 
-            $mains_allowance  = $allowance_info['mains'];
-            $monthly_allowance = $allowance_info['amount'];
+            // Calculate mains allowance from service frequency.
+            $mains_allowance     = 0;
+            $sides_allowance_raw = 0;
 
-            // Calculate billing
-            $bill_mains = min($mains_ordered, $mains_allowance);
-            $bnm_mains = max(0, $mains_ordered - $mains_allowance); // Beyond allowance
+            switch ($service) {
+                case 'month':
+                    $mains_allowance     = min($user_mains, $days_in_month);
+                    $sides_allowance_raw = min($user_sides, $days_in_month);
+                    break;
+                case 'day':
+                    $mains_allowance     = $user_mains * $days_in_month;
+                    $sides_allowance_raw = $user_sides * $days_in_month;
+                    break;
+                case 'week':
+                default:
+                    if ($user_mains == 7) {
+                        $mains_allowance = $days_in_month;
+                    } elseif ($user_mains == 14) {
+                        $mains_allowance = 2 * $days_in_month;
+                    } elseif ($user_mains <= 6) {
+                        $mains_allowance = $user_mains * 4;
+                    }
+                    if ($user_sides == 7) {
+                        $sides_allowance_raw = $days_in_month;
+                    } elseif ($user_sides == 14) {
+                        $sides_allowance_raw = 2 * $days_in_month;
+                    } elseif ($user_sides <= 6) {
+                        $sides_allowance_raw = $user_sides * 4;
+                    }
+                    break;
+            }
+
+            // 5-week month corrections.
+            if ($mains_allowance == 35) { $mains_allowance = 31; }
+            elseif ($mains_allowance == 70) { $mains_allowance = 62; }
+            if ($sides_allowance_raw == 35) { $sides_allowance_raw = 31; }
+            elseif ($sides_allowance_raw == 70) { $sides_allowance_raw = 62; }
+
+            // Mains billing.
+            $bill_mains     = min($mains_ordered, $mains_allowance);
+            $bnm_mains      = max(0, $mains_ordered - $mains_allowance);
             $vet_mains_cost = $bill_mains * $resolved_rate;
-            $allowance_remaining = $monthly_allowance - $vet_mains_cost;
 
-            // Sides allowance (example: 10 per period, adjust as needed)
-            $sides_allowance = 10;
-            $total_sides_ordered = $sides_ordered_taxable + $sides_ordered_nontax;
-            $remaining_sides = max(0, $sides_allowance - $total_sides_ordered);
+            // Monetary allowance → sides conversion.
+            $monthly_allowance   = $mains_allowance * self::$vac_billing['per_main_allowance'];
+            $allowance_remaining = max(0, $monthly_allowance - $vet_mains_cost);
+            $new_sides           = max(0, (int) floor($allowance_remaining / self::$vac_billing['sides_conversion_rate']));
 
-            // Bill taxable sides
-            $bill_tax_sides = min($sides_ordered_taxable, $sides_allowance);
-            $overage_tax_sides = max(0, $sides_ordered_taxable - $sides_allowance);
+            // Use the derived sides count as the actual sides allowance.
+            $sides_allowance = $new_sides;
 
-            // Bill non-taxable sides
-            $bill_nontax_sides = min($sides_ordered_nontax, max(0, $sides_allowance - $sides_ordered_taxable));
-            $overage_nontax_sides = max(0, $sides_ordered_nontax - (max(0, $sides_allowance - $sides_ordered_taxable)));
+            // Taxable sides first against the derived allowance.
+            $bill_tax_sides       = min($sides_ordered_taxable, $sides_allowance);
+            $overage_tax_sides    = max(0, $sides_ordered_taxable - $sides_allowance);
+            $remaining_sides      = max(0, $sides_allowance - $bill_tax_sides);
 
-            // Total billing
+            // Non-taxable sides fill the remainder.
+            $bill_nontax_sides    = min($sides_ordered_nontax, $remaining_sides);
+            $overage_nontax_sides = max(0, $sides_ordered_nontax - $bill_nontax_sides);
+
             $bill_sides = $bill_tax_sides + $bill_nontax_sides;
-            $new_total = $vet_mains_cost + $sides_cost + $sides_tax;
+
+            // Cost calculations.
+            $sides_cost = ($bill_tax_sides + $bill_nontax_sides) * self::$vac_billing['sides_cost_rate'];
+            $sides_tax  = round(($bill_tax_sides * self::$vac_billing['sides_cost_rate']) * self::$vac_billing['sides_hst_rate'], 2);
+            $new_total  = $vet_mains_cost + $sides_cost + $sides_tax;
 
             // Check for errors/warnings
             $errors = '';
