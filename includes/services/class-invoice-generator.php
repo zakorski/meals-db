@@ -45,6 +45,27 @@ class MealsDB_Invoice_Generator {
     ];
 
     /**
+     * SDNB rate tiers for two-line invoice calculations.
+     *
+     * Each primary rate maps to its secondary rates and HST multipliers.
+     * These values come from the old billing system and are contractual.
+     */
+    private static $sdnb_rate_tiers = [
+        '14.66' => [
+            'secondary_rate_mains' => 10.18,
+            'secondary_rate_sides' => 4.48,
+            'hst_multiplier_line1' => 0.672,
+            'hst_multiplier_line2' => 0.672,
+        ],
+        '15.47' => [
+            'secondary_rate_mains' => 10.93,
+            'secondary_rate_sides' => 4.54,
+            'hst_multiplier_line1' => 0.82,
+            'hst_multiplier_line2' => 0.681,
+        ],
+    ];
+
+    /**
      * VAC monthly allowances by service frequency
      */
     private static $vac_allowances = [
@@ -366,6 +387,92 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * Split a client's allowance row into one or two invoice lines.
+     *
+     * @param array $row Single client row from get_allowance_data_for_clients().
+     * @return array Array of 1 or 2 invoice line arrays.
+     */
+    private static function split_into_invoice_lines(array $row): array {
+        $rate = (float) $row['resolved_rate'];
+        $rate_key = number_format($rate, 2, '.', '');
+        $tier = isset(self::$sdnb_rate_tiers[$rate_key]) ? self::$sdnb_rate_tiers[$rate_key] : null;
+
+        $bill_mains        = (int) $row['bill_mains'];
+        $bill_sides        = (int) $row['bill_sides'];
+        $bill_tax_sides    = (int) $row['bill_tax_sides'];
+        $bill_nontax_sides = (int) $row['bill_nontax_sides'];
+        $client_contribution = (float) $row['client_contribution'];
+
+        $hst_mult_l1 = $tier ? $tier['hst_multiplier_line1'] : 0;
+        $hst_mult_l2 = $tier ? $tier['hst_multiplier_line2'] : 0;
+
+        // Line 1 calculations.
+        $mains_on_line_1 = ($bill_sides == 0) ? $bill_mains : min($bill_mains, $bill_sides);
+        $tax_sides_on_line_1 = ($bill_sides == 0 || $bill_tax_sides == 0)
+            ? 0 : min($mains_on_line_1, $bill_tax_sides);
+        $nontax_sides_on_line_1 = ($bill_sides == 0 || $bill_nontax_sides == 0)
+            ? 0 : min($mains_on_line_1 - $tax_sides_on_line_1, $bill_nontax_sides);
+        $hst_line_1 = ($tax_sides_on_line_1 != 0) ? round($tax_sides_on_line_1 * $hst_mult_l1, 2) : 0;
+
+        // Line 2 calculations.
+        $mains_on_line_2        = max(0, $bill_mains - $mains_on_line_1);
+        $tax_sides_on_line_2    = $bill_tax_sides - $tax_sides_on_line_1;
+        $nontax_sides_on_line_2 = $bill_nontax_sides - $nontax_sides_on_line_1;
+        $hst_line_2 = ($tax_sides_on_line_2 != 0) ? round($tax_sides_on_line_2 * $hst_mult_l2, 2) : 0;
+
+        $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2 + $hst_line_2) > 0;
+
+        // Determine second line rate.
+        $second_line_rate = 0;
+        if ($has_second_line && $tier) {
+            $second_line_rate = ($mains_on_line_2 > 0)
+                ? $tier['secondary_rate_mains']
+                : (($tax_sides_on_line_2 + $nontax_sides_on_line_2 > 0)
+                    ? $tier['secondary_rate_sides']
+                    : 0);
+        }
+
+        $client = $row['client'];
+        $lines = [];
+
+        // Line 1.
+        $units_l1 = $mains_on_line_1;
+        $lines[] = [
+            'service_id'          => $client['service_id'] ?? '',
+            'requisition_id'      => $client['requisition_id'] ?? '',
+            'individual_id'       => $client['individual_id'] ?? '',
+            'last_name'           => $client['last_name'] ?? '',
+            'first_name'          => $client['first_name'] ?? '',
+            'units'               => $units_l1,
+            'unit_type'           => 'Meal',
+            'rate'                => $rate,
+            'basic_cost'          => $units_l1 * $rate,
+            'client_contribution' => $client_contribution,
+            'tax'                 => $hst_line_1,
+        ];
+
+        // Line 2 (if needed).
+        if ($has_second_line) {
+            $units_l2 = $mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2;
+            $lines[] = [
+                'service_id'          => $client['service_id'] ?? '',
+                'requisition_id'      => $client['requisition_id'] ?? '',
+                'individual_id'       => $client['individual_id'] ?? '',
+                'last_name'           => $client['last_name'] ?? '',
+                'first_name'          => $client['first_name'] ?? '',
+                'units'               => $units_l2,
+                'unit_type'           => 'Meal',
+                'rate'                => $second_line_rate,
+                'basic_cost'          => $units_l2 * $second_line_rate,
+                'client_contribution' => 0, // Always 0 on second line
+                'tax'                 => $hst_line_2,
+            ];
+        }
+
+        return $lines;
+    }
+
+    /**
      * Query meals_clients from the external DB with a prepared statement.
      *
      * @param string $sql    SQL with ? placeholders.
@@ -441,26 +548,31 @@ class MealsDB_Invoice_Generator {
         // Fetch invoice data via allowance engine.
         $invoice_rows = self::get_allowance_data_for_clients($client_rows, $start_date, $end_date, $weeks_in_month);
 
-        // Compute per-row costs from allowance data for header totals.
-        // Each allowance row = one client; bill_mains × rate = basic_cost.
-        $total_invoice_amount = 0;
-        $total_tax_amount     = 0;
-        foreach ($invoice_rows as $r) {
-            $basic_cost          = $r['bill_mains'] * $r['resolved_rate'];
-            $client_contribution = $r['client_contribution'];
-            $tax                 = $r['total_tax_amount'];
-            $total_cost          = $basic_cost + $tax - $client_contribution;
-            $total_invoice_amount += $total_cost;
-            $total_tax_amount     += $tax;
+        // Apply allowance engine + two-line splits to get final invoice lines.
+        $all_invoice_lines = [];
+        foreach ($invoice_rows as $row) {
+            $lines = self::split_into_invoice_lines($row);
+            foreach ($lines as $line) {
+                $all_invoice_lines[] = $line;
+            }
         }
 
-        // Build CSV content
+        // Accumulate totals for header.
+        $total_invoice_amount = 0;
+        $total_tax_amount     = 0;
+        foreach ($all_invoice_lines as $line) {
+            $total_cost = $line['basic_cost'] + $line['tax'] - $line['client_contribution'];
+            $total_invoice_amount += $total_cost;
+            $total_tax_amount     += $line['tax'];
+        }
+
+        // Build CSV content.
         $csv = [];
 
-        // Row 1-2: Blank rows with commas
+        // Row 1: Blank row with commas (unchanged from current implementation)
         $csv[] = str_repeat(',', 99);
 
-        // Row 3: Header with version
+        // Row 3: Header with version (unchanged)
         $row3 = array_fill(0, 100, '');
         $row3[0] = '1';
         $row3[1] = 'Social Development';
@@ -468,7 +580,7 @@ class MealsDB_Invoice_Generator {
         $row3[9] = 'version 36e';
         $csv[] = implode(',', $row3);
 
-        // Row 4: Invoice metadata header row
+        // Row 4: Invoice metadata header row (unchanged from current)
         $row4 = array_fill(0, 100, '');
         $row4[0] = '1';
         $row4[1] = 'Invoice No.';
@@ -491,7 +603,7 @@ class MealsDB_Invoice_Generator {
         $row4[23] = '# of Invoice Lines';
         $csv[] = implode(',', $row4);
 
-        // Row 5: Invoice metadata values
+        // Row 5: Invoice metadata values (unchanged structure, updated totals)
         $row5 = array_fill(0, 100, '');
         $row5[0] = '2';
         $row5[1] = $invoice_number;
@@ -501,7 +613,7 @@ class MealsDB_Invoice_Generator {
         $row5[6] = $service_center['number'];
         $row5[7] = $service_center['name'];
         $row5[10] = $service_center['address'];
-        $row5[12] = str_replace('-', '', $start_date); // YYYYMMDD format
+        $row5[12] = str_replace('-', '', $start_date);
         $row5[13] = str_replace('-', '', $end_date);
         $row5[14] = 'Full';
         $row5[15] = self::HST_NUMBER;
@@ -511,11 +623,11 @@ class MealsDB_Invoice_Generator {
         $row5[20] = self::CONTACT_AREA_CODE;
         $row5[21] = self::CONTACT_PHONE;
         $row5[22] = self::CONTACT_EMAIL;
-        $row5[23] = count($invoice_rows);
-        $row5[24] = 'F'; // Unknown flag from sample
+        $row5[23] = count($all_invoice_lines);
+        $row5[24] = 'F';
         $csv[] = implode(',', $row5);
 
-        // Row 6: Column headers for data rows
+        // Row 6: Column headers for data rows (unchanged)
         $row6 = array_fill(0, 100, '');
         $row6[0] = '1';
         $row6[1] = 'Service Id';
@@ -555,34 +667,29 @@ class MealsDB_Invoice_Generator {
         $row6[35] = 'Total Invoice Line Cost';
         $csv[] = implode(',', $row6);
 
-        // Data rows — one per client (allowance-based, Phase C will add two-line splitting).
-        foreach ($invoice_rows as $trans) {
-            $client     = $trans['client'];
-            $rate       = $trans['resolved_rate'];
-            $units      = $trans['bill_mains'];
-            $basic_cost = $units * $rate;
-            $tax        = $trans['total_tax_amount'];
-            $contrib    = $trans['client_contribution'];
-            $total_cost = $basic_cost + $tax - $contrib;
+        // Data rows — one per invoice line.
+        foreach ($all_invoice_lines as $line) {
+            $basic_cost = $line['basic_cost'];
+            $total_line_cost = $basic_cost + $line['tax'] - $line['client_contribution'];
 
             $row = array_fill(0, 100, '');
             $row[0]  = '3';
-            $row[1]  = $client['service_id'] ?: '356029';
-            $row[2]  = $client['requisition_id'] ?: '';
-            $row[3]  = $client['individual_id'] ?: '';
-            $row[4]  = $client['last_name'] ?: '';
-            $row[5]  = $client['first_name'] ?: '';
-            $row[6]  = number_format($units, 2, '.', '');
+            $row[1]  = $line['service_id'] ?: '356029';
+            $row[2]  = $line['requisition_id'] ?: '';
+            $row[3]  = $line['individual_id'] ?: '';
+            $row[4]  = $line['last_name'] ?: '';
+            $row[5]  = $line['first_name'] ?: '';
+            $row[6]  = number_format($line['units'], 2, '.', '');
             $row[7]  = 'Meal';
-            $row[8]  = number_format($rate, 2, '.', '');
+            $row[8]  = number_format($line['rate'], 2, '.', '');
             $row[9]  = number_format($basic_cost, 2, '.', '');
-            $row[23] = number_format($contrib, 2, '.', '');
+            $row[23] = number_format($line['client_contribution'], 2, '.', '');
             $row[24] = number_format($basic_cost, 2, '.', '');
             $row[27] = number_format(0, 2, '.', '');
             $row[30] = number_format(0, 2, '.', '');
             $row[33] = number_format(0, 2, '.', '');
-            $row[34] = number_format($tax, 2, '.', '');
-            $row[35] = number_format($total_cost, 2, '.', '');
+            $row[34] = number_format($line['tax'], 2, '.', '');
+            $row[35] = number_format($total_line_cost, 2, '.', '');
             $row[36] = 'I';
             $csv[] = implode(',', $row);
         }
