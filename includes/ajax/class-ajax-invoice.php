@@ -42,6 +42,10 @@ class MealsDB_Ajax_Invoice {
         $start_date = sanitize_text_field($_POST['start_date'] ?? '');
         $end_date = sanitize_text_field($_POST['end_date'] ?? '');
         $zone = sanitize_text_field($_POST['zone'] ?? '');
+        $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
+        if ($weeks_in_month < 1 || $weeks_in_month > 6) {
+            $weeks_in_month = 4;
+        }
 
         // Validate dates
         if (empty($start_date) || empty($end_date)) {
@@ -66,7 +70,7 @@ class MealsDB_Ajax_Invoice {
                         wp_send_json_error(['message' => 'Zone is required for SDNB legacy invoices.']);
                         return;
                     }
-                    self::download_sdnb_legacy($zone, $start_date, $end_date);
+                    self::download_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month);
                     break;
 
                 case 'sdnb_portal':
@@ -104,8 +108,8 @@ class MealsDB_Ajax_Invoice {
     /**
      * Generate and download SDNB legacy invoice
      */
-    private static function download_sdnb_legacy($zone, $start_date, $end_date) {
-        $csv_content = MealsDB_Invoice_Generator::generate_sdnb_legacy($zone, $start_date, $end_date);
+    private static function download_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month = 4) {
+        $csv_content = MealsDB_Invoice_Generator::generate_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month);
 
         if (empty($csv_content)) {
             wp_send_json_error(['message' => 'No data found for the specified period.']);

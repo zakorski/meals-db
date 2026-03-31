@@ -63,6 +63,16 @@ if (!defined('ABSPATH')) {
                             </td>
                         </tr>
 
+                        <tr id="weeks_row" style="display: none;">
+                            <th scope="row">
+                                <label for="weeks_in_month">Number of Wednesdays</label>
+                            </th>
+                            <td>
+                                <input type="number" name="weeks_in_month" id="weeks_in_month" class="small-text" min="1" max="6" value="4">
+                                <p class="description">The number of Wednesdays in the billing month. Used to calculate weekly client allowances.</p>
+                            </td>
+                        </tr>
+
                         <tr>
                             <th scope="row">
                                 <label for="start_date">Start Date</label>

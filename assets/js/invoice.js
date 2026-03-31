@@ -34,9 +34,11 @@
             if (invoiceType === 'sdnb_legacy') {
                 $('#zone_row').show();
                 $('#zone').prop('required', true);
+                $('#weeks_row').show();
             } else {
                 $('#zone_row').hide();
                 $('#zone').prop('required', false);
+                $('#weeks_row').hide();
             }
         });
 
@@ -114,6 +116,12 @@
                 type: 'hidden',
                 name: 'end_date',
                 value: endDate
+            }));
+
+            downloadForm.append($('<input>', {
+                type: 'hidden',
+                name: 'weeks_in_month',
+                value: $('#weeks_in_month').val() || '4'
             }));
 
             // Submit in new window/tab to trigger download
