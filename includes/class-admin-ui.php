@@ -1201,6 +1201,14 @@ class MealsDB_Admin_UI {
             static function (array $client) {
                 ?>
                 <tr>
+                    <th><label for="termination_date"><?php esc_html_e('Termination Date', 'meals-db'); ?></label></th>
+                    <td><input type="date" name="termination_date" id="termination_date" class="mealsdb-datepicker" value="<?php echo esc_attr($client['termination_date'] ?? ''); ?>" /></td>
+                </tr>
+                <?php
+            },
+            static function (array $client) {
+                ?>
+                <tr>
                     <th><label for="initial_renewal_date"><?php esc_html_e('Initial Renewal Termination Date', 'meals-db'); ?></label></th>
                     <td><input type="date" name="initial_renewal_date" id="initial_renewal_date" class="mealsdb-datepicker" value="<?php echo esc_attr($client['initial_renewal_date'] ?? ''); ?>" /></td>
                 </tr>
@@ -1275,6 +1283,14 @@ class MealsDB_Admin_UI {
                 <tr>
                     <th><label for="requisition_id"><?php esc_html_e('Requisition ID', 'meals-db'); ?></label></th>
                     <td><input type="text" name="requisition_id" id="requisition_id" class="regular-text" value="<?php echo esc_attr($client['requisition_id'] ?? ''); ?>" /></td>
+                </tr>
+                <?php
+            },
+            static function (array $client) {
+                ?>
+                <tr>
+                    <th><label for="per_sdnb_req"><?php esc_html_e('Per SDNB Requirement', 'meals-db'); ?></label></th>
+                    <td><textarea name="per_sdnb_req" id="per_sdnb_req" rows="3" class="large-text"><?php echo esc_textarea($client['per_sdnb_req'] ?? ''); ?></textarea></td>
                 </tr>
                 <?php
             },

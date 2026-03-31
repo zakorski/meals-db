@@ -50,6 +50,7 @@ class MealsDB_Schema {
                     'service_name_zone'            => 'VARCHAR(10) NULL',
                     'service_commence_date'        => 'DATE NULL',
                     'expected_termination_date'    => 'DATE NULL',
+                    'termination_date'             => 'DATE NULL',
                     'initial_renewal_termination_date' => 'DATE NULL',
                     'most_recent_renewal_termination_date' => 'DATE NULL',
                     'notes_to_service_provider'    => 'TEXT NULL',
