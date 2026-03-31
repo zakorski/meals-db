@@ -95,6 +95,40 @@ $has_env_credentials = getenv( 'MEALS_DB_HOST' ) || ( defined( 'MEALS_DB_KEY' ) 
             </tbody>
         </table>
 
+        <h2><?php echo esc_html__( 'Overage Product IDs', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'WooCommerce product IDs used when creating overage orders. These must match products in your store.', 'meals-db' ); ?>
+        </p>
+        <?php $overage_ids = get_option( 'mealsdb_overage_product_ids', [] ); ?>
+        <table class="form-table">
+            <tbody>
+                <tr>
+                    <th scope="row">
+                        <label for="mealsdb-overage-mains"><?php echo esc_html__( 'Overage Main Product ID', 'meals-db' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="number" id="mealsdb-overage-mains" name="overage_mains" value="<?php echo esc_attr( $overage_ids['mains'] ?? 5056 ); ?>" class="small-text" min="0" />
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="mealsdb-overage-taxable-sides"><?php echo esc_html__( 'Overage Taxable Side Product ID', 'meals-db' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="number" id="mealsdb-overage-taxable-sides" name="overage_taxable_sides" value="<?php echo esc_attr( $overage_ids['taxable_sides'] ?? 5180 ); ?>" class="small-text" min="0" />
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="mealsdb-overage-nontax-sides"><?php echo esc_html__( 'Overage Non-Taxable Side Product ID', 'meals-db' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="number" id="mealsdb-overage-nontax-sides" name="overage_nontax_sides" value="<?php echo esc_attr( $overage_ids['nontax_sides'] ?? 5059 ); ?>" class="small-text" min="0" />
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
         <h2><?php echo esc_html__( 'Connection Test', 'meals-db' ); ?></h2>
         <p>
             <button type="button" class="button" id="mealsdb-test-connection">
@@ -169,6 +203,9 @@ $has_env_credentials = getenv( 'MEALS_DB_HOST' ) || ( defined( 'MEALS_DB_KEY' ) 
             db_user: $('#mealsdb-db-user').val(),
             db_pass: $('#mealsdb-db-pass').val(),
             encryption_key: $('#mealsdb-enc-key').val(),
+            overage_mains: $('#mealsdb-overage-mains').val(),
+            overage_taxable_sides: $('#mealsdb-overage-taxable-sides').val(),
+            overage_nontax_sides: $('#mealsdb-overage-nontax-sides').val(),
         }, function(resp) {
             if (resp.success) {
                 $result.text('Settings saved.').css('color', '#46b450');

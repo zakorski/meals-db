@@ -50,6 +50,18 @@ class MealsDB_Ajax_Settings {
 
         update_option( 'mealsdb_settings', $settings, false );
 
+        // Save overage product IDs if provided.
+        $overage_mains = intval( $_POST['overage_mains'] ?? 0 );
+        $overage_tax   = intval( $_POST['overage_taxable_sides'] ?? 0 );
+        $overage_nt    = intval( $_POST['overage_nontax_sides'] ?? 0 );
+        if ( $overage_mains > 0 || $overage_tax > 0 || $overage_nt > 0 ) {
+            update_option( 'mealsdb_overage_product_ids', [
+                'mains'         => $overage_mains,
+                'taxable_sides' => $overage_tax,
+                'nontax_sides'  => $overage_nt,
+            ], false );
+        }
+
         // Force config reload on next request
         MealsDB_Config::reset();
 

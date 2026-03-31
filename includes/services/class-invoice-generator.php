@@ -45,12 +45,43 @@ class MealsDB_Invoice_Generator {
     ];
 
     /**
+     * SDNB rate tiers for two-line invoice calculations.
+     *
+     * Each primary rate maps to its secondary rates and HST multipliers.
+     * These values come from the old billing system and are contractual.
+     */
+    private static $sdnb_rate_tiers = [
+        '14.66' => [
+            'secondary_rate_mains' => 10.18,
+            'secondary_rate_sides' => 4.48,
+            'hst_multiplier_line1' => 0.672,
+            'hst_multiplier_line2' => 0.672,
+        ],
+        '15.47' => [
+            'secondary_rate_mains' => 10.93,
+            'secondary_rate_sides' => 4.54,
+            'hst_multiplier_line1' => 0.82,
+            'hst_multiplier_line2' => 0.681,
+        ],
+    ];
+
+    /**
      * VAC monthly allowances by service frequency
      */
     private static $vac_allowances = [
         'day' => ['mains' => 7, 'amount' => 74.48],
         'week' => ['mains' => 31, 'amount' => 329.84],
         'month' => ['mains' => 124, 'amount' => 1319.36]
+    ];
+
+    /**
+     * VAC billing constants (contractual rates).
+     */
+    private static $vac_billing = [
+        'per_main_allowance'     => 10.64,  // Monthly allowance = mains_allowed × this
+        'sides_conversion_rate'  => 4.715,  // Remaining allowance ÷ this = sides allowed
+        'sides_cost_rate'        => 4.10,   // Cost per billable side
+        'sides_hst_rate'         => 0.15,   // HST on taxable sides (15%)
     ];
 
     /**
@@ -151,6 +182,376 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * Aggregate orders per client and compute allowance-based billing splits.
+     *
+     * Returns one row per client (not per order) with mains/sides broken into
+     * billable and overage quantities, with sides further split by taxable status.
+     *
+     * @param array  $client_rows     Rows from meals_clients.
+     * @param string $start_date      Y-m-d.
+     * @param string $end_date        Y-m-d.
+     * @param int    $weeks_in_month  Number of Wednesdays in the billing month.
+     *
+     * @return array One row per client with allowance calculations.
+     */
+    private static function get_allowance_data_for_clients(
+        array $client_rows,
+        string $start_date,
+        string $end_date,
+        int $weeks_in_month = 4
+    ): array {
+        if (empty($client_rows)) {
+            return [];
+        }
+
+        $clients_by_user_id = [];
+        $wp_user_ids        = [];
+        foreach ($client_rows as $c) {
+            $uid = (int) $c['wp_user_id'];
+            if ($uid > 0) {
+                $clients_by_user_id[$uid] = $c;
+                $wp_user_ids[]            = $uid;
+            }
+        }
+
+        if (empty($wp_user_ids)) {
+            return [];
+        }
+
+        $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
+        $orders      = $order_query->get_orders_with_items_for_users($wp_user_ids, $start_date, $end_date);
+
+        if (empty($orders)) {
+            return [];
+        }
+
+        // Look up product types for all items.
+        $all_product_ids = [];
+        foreach ($orders as $order) {
+            foreach ($order['items'] as $item) {
+                $pid = (int) $item['wc_product_id'];
+                if ($pid > 0) {
+                    $all_product_ids[$pid] = $pid;
+                }
+            }
+        }
+        $product_types = $order_query->get_product_types_for_ids(array_values($all_product_ids));
+
+        $days_in_month = (int) date('t', strtotime($end_date));
+
+        // Accumulate totals per client.
+        $client_aggregates = [];
+
+        foreach ($orders as $order) {
+            $uid    = (int) $order['wp_user_id'];
+            $client = isset($clients_by_user_id[$uid]) ? $clients_by_user_id[$uid] : null;
+            if (!$client) {
+                continue;
+            }
+
+            $cid = (int) $client['client_id'];
+            if (!isset($client_aggregates[$cid])) {
+                $rate_id       = isset($order['mealsdb_rate_id']) ? (int) $order['mealsdb_rate_id'] : 0;
+                $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid);
+
+                $client_aggregates[$cid] = [
+                    'client'               => $client,
+                    'resolved_rate'        => $resolved_rate,
+                    'total_mains'          => 0,
+                    'total_sides_taxable'  => 0,
+                    'total_sides_nontax'   => 0,
+                    'total_tax_amount'     => 0.0,
+                ];
+            }
+
+            foreach ($order['items'] as $item) {
+                $pid  = (int) $item['wc_product_id'];
+                $qty  = (float) $item['quantity'];
+                $prod = isset($product_types[$pid]) ? $product_types[$pid] : null;
+
+                $ptype  = $prod ? $prod['product_type'] : 'meal';
+                $is_tax = $prod ? !empty($prod['taxable']) : false;
+
+                if ($ptype === 'meal') {
+                    $client_aggregates[$cid]['total_mains'] += $qty;
+                } elseif ($ptype === 'side') {
+                    if ($is_tax) {
+                        $client_aggregates[$cid]['total_sides_taxable'] += $qty;
+                        $client_aggregates[$cid]['total_tax_amount']    += (float) ($item['line_tax'] ?? 0);
+                    } else {
+                        $client_aggregates[$cid]['total_sides_nontax'] += $qty;
+                    }
+                }
+            }
+        }
+
+        $results = [];
+
+        foreach ($client_aggregates as $cid => $agg) {
+            $client = $agg['client'];
+
+            $user_mains   = (int) ($client['allowance_mains'] ?? 0);
+            $user_sides   = (int) ($client['allowance_sides'] ?? 0);
+            $user_service = strtolower(trim($client['requisition_period'] ?? 'week'));
+
+            // --- Allowance calculation ---
+            $mains_allowed = 0;
+            $sides_allowed = 0;
+
+            switch ($user_service) {
+                case 'month':
+                    $mains_allowed = ($user_mains == 31) ? $days_in_month : $user_mains;
+                    $sides_allowed = ($user_sides == 31) ? $days_in_month : $user_sides;
+                    break;
+
+                case 'week':
+                    $mains_allowed = $user_mains * $weeks_in_month;
+                    $sides_allowed = $user_sides * $weeks_in_month;
+
+                    // Override: 7 per week = every day; 14 per week = twice per day
+                    if ($user_mains == 7) {
+                        $mains_allowed = $days_in_month;
+                    }
+                    if ($user_mains == 14) {
+                        $mains_allowed = 2 * $days_in_month;
+                    }
+                    if ($user_sides == 7) {
+                        $sides_allowed = $days_in_month;
+                    }
+                    if ($user_sides == 14) {
+                        $sides_allowed = 2 * $days_in_month;
+                    }
+                    break;
+
+                case 'day':
+                    $mains_allowed = $user_mains * $days_in_month;
+                    $sides_allowed = $user_sides * $days_in_month;
+                    break;
+            }
+
+            // --- Mains split ---
+            $total_mains = (int) $agg['total_mains'];
+            $bill_mains  = min($total_mains, $mains_allowed);
+            $bnm_mains   = max(0, $total_mains - $mains_allowed);
+
+            // --- Sides split (taxable first, then non-taxable with remaining allowance) ---
+            $taxable_sides     = (int) $agg['total_sides_taxable'];
+            $non_taxable_sides = (int) $agg['total_sides_nontax'];
+            $total_sides       = $taxable_sides + $non_taxable_sides;
+
+            // Taxable sides get priority against the allowance.
+            $bill_tax_sides    = min($sides_allowed, $taxable_sides);
+            $overage_tax_sides = $taxable_sides - $bill_tax_sides;
+
+            // Remaining allowance after taxable sides.
+            $remaining_sides = ($overage_tax_sides == 0)
+                ? max(0, $sides_allowed - $taxable_sides)
+                : 0;
+
+            // Non-taxable sides fill whatever allowance remains.
+            $bill_nontax_sides    = min($non_taxable_sides, $remaining_sides);
+            $overage_nontax_sides = $non_taxable_sides - $bill_nontax_sides;
+
+            $bill_sides = $bill_tax_sides + $bill_nontax_sides;
+
+            $results[] = [
+                'client'               => $client,
+                'resolved_rate'        => $agg['resolved_rate'],
+                'client_contribution'  => (float) ($client['client_contribution'] ?? 0),
+
+                // Mains
+                'total_mains'          => $total_mains,
+                'mains_allowed'        => $mains_allowed,
+                'bill_mains'           => $bill_mains,
+                'bnm_mains'            => $bnm_mains,
+
+                // Sides totals
+                'total_sides'          => $total_sides,
+                'sides_allowed'        => $sides_allowed,
+                'taxable_sides'        => $taxable_sides,
+                'non_taxable_sides'    => $non_taxable_sides,
+
+                // Sides splits
+                'bill_tax_sides'       => $bill_tax_sides,
+                'overage_tax_sides'    => $overage_tax_sides,
+                'remaining_sides'      => $remaining_sides,
+                'bill_nontax_sides'    => $bill_nontax_sides,
+                'overage_nontax_sides' => $overage_nontax_sides,
+                'bill_sides'           => $bill_sides,
+
+                // Tax
+                'total_tax_amount'     => $agg['total_tax_amount'],
+
+                // Service info
+                'user_service'         => $user_service,
+            ];
+        }
+
+        // Sort by last_name, first_name.
+        usort($results, function ($a, $b) {
+            $cmp = strcmp($a['client']['last_name'] ?? '', $b['client']['last_name'] ?? '');
+            return $cmp !== 0 ? $cmp : strcmp($a['client']['first_name'] ?? '', $b['client']['first_name'] ?? '');
+        });
+
+        return $results;
+    }
+
+    /**
+     * Split a client's allowance row into one or two invoice lines.
+     *
+     * @param array $row Single client row from get_allowance_data_for_clients().
+     * @return array Array of 1 or 2 invoice line arrays.
+     */
+    private static function split_into_invoice_lines(array $row): array {
+        $rate = (float) $row['resolved_rate'];
+        $rate_key = number_format($rate, 2, '.', '');
+        $tier = isset(self::$sdnb_rate_tiers[$rate_key]) ? self::$sdnb_rate_tiers[$rate_key] : null;
+
+        $bill_mains        = (int) $row['bill_mains'];
+        $bill_sides        = (int) $row['bill_sides'];
+        $bill_tax_sides    = (int) $row['bill_tax_sides'];
+        $bill_nontax_sides = (int) $row['bill_nontax_sides'];
+        $client_contribution = (float) $row['client_contribution'];
+
+        $hst_mult_l1 = $tier ? $tier['hst_multiplier_line1'] : 0;
+        $hst_mult_l2 = $tier ? $tier['hst_multiplier_line2'] : 0;
+
+        // Line 1 calculations.
+        $mains_on_line_1 = ($bill_sides == 0) ? $bill_mains : min($bill_mains, $bill_sides);
+        $tax_sides_on_line_1 = ($bill_sides == 0 || $bill_tax_sides == 0)
+            ? 0 : min($mains_on_line_1, $bill_tax_sides);
+        $nontax_sides_on_line_1 = ($bill_sides == 0 || $bill_nontax_sides == 0)
+            ? 0 : min($mains_on_line_1 - $tax_sides_on_line_1, $bill_nontax_sides);
+        $hst_line_1 = ($tax_sides_on_line_1 != 0) ? round($tax_sides_on_line_1 * $hst_mult_l1, 2) : 0;
+
+        // Line 2 calculations.
+        $mains_on_line_2        = max(0, $bill_mains - $mains_on_line_1);
+        $tax_sides_on_line_2    = $bill_tax_sides - $tax_sides_on_line_1;
+        $nontax_sides_on_line_2 = $bill_nontax_sides - $nontax_sides_on_line_1;
+        $hst_line_2 = ($tax_sides_on_line_2 != 0) ? round($tax_sides_on_line_2 * $hst_mult_l2, 2) : 0;
+
+        $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2 + $hst_line_2) > 0;
+
+        // Determine second line rate.
+        $second_line_rate = 0;
+        if ($has_second_line && $tier) {
+            $second_line_rate = ($mains_on_line_2 > 0)
+                ? $tier['secondary_rate_mains']
+                : (($tax_sides_on_line_2 + $nontax_sides_on_line_2 > 0)
+                    ? $tier['secondary_rate_sides']
+                    : 0);
+        }
+
+        $client = $row['client'];
+        $lines = [];
+
+        // Line 1.
+        $units_l1 = $mains_on_line_1;
+        $lines[] = [
+            'service_id'          => $client['service_id'] ?? '',
+            'requisition_id'      => $client['requisition_id'] ?? '',
+            'individual_id'       => $client['individual_id'] ?? '',
+            'last_name'           => $client['last_name'] ?? '',
+            'first_name'          => $client['first_name'] ?? '',
+            'units'               => $units_l1,
+            'unit_type'           => 'Meal',
+            'rate'                => $rate,
+            'basic_cost'          => $units_l1 * $rate,
+            'client_contribution' => $client_contribution,
+            'tax'                 => $hst_line_1,
+        ];
+
+        // Line 2 (if needed).
+        if ($has_second_line) {
+            $units_l2 = $mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2;
+            $lines[] = [
+                'service_id'          => $client['service_id'] ?? '',
+                'requisition_id'      => $client['requisition_id'] ?? '',
+                'individual_id'       => $client['individual_id'] ?? '',
+                'last_name'           => $client['last_name'] ?? '',
+                'first_name'          => $client['first_name'] ?? '',
+                'units'               => $units_l2,
+                'unit_type'           => 'Meal',
+                'rate'                => $second_line_rate,
+                'basic_cost'          => $units_l2 * $second_line_rate,
+                'client_contribution' => 0, // Always 0 on second line
+                'tax'                 => $hst_line_2,
+            ];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Validate a client row and return error messages.
+     *
+     * @param array  $client       Client row from meals_clients.
+     * @param string $client_type  'SDNB' or 'Veteran'.
+     * @param array  $duplicate_counts Map of individual_id_index => count of clients sharing that index.
+     * @param int    $duplicate_threshold How many is too many (SDNB = 2, Veteran = 1).
+     * @return string Comma-separated error messages, or 'No' if none.
+     */
+    private static function validate_client_row(
+        array $client,
+        string $client_type,
+        array $duplicate_counts,
+        int $duplicate_threshold = 2
+    ): string {
+        $errors = [];
+
+        // Missing field checks.
+        if ($client_type === 'SDNB') {
+            if (empty($client['service_id'])) {
+                $errors[] = 'Missing service ID';
+            }
+            if (empty($client['requisition_id'])) {
+                $errors[] = 'Missing requisition ID';
+            }
+        }
+
+        if (empty($client['individual_id'])) {
+            $errors[] = 'Missing individual ID';
+        }
+
+        // Duplicate check via deterministic index.
+        $id_index = $client['individual_id_index'] ?? '';
+        if ($id_index !== '' && isset($duplicate_counts[$id_index]) && $duplicate_counts[$id_index] > $duplicate_threshold) {
+            $errors[] = 'Duplicate person';
+        }
+
+        return !empty($errors) ? implode(', ', $errors) : 'No';
+    }
+
+    /**
+     * Check if a WordPress user was created during the billing period.
+     *
+     * @param int    $wp_user_id  WordPress user ID.
+     * @param string $start_date  Y-m-d.
+     * @param string $end_date    Y-m-d.
+     * @return string Flag text or empty string.
+     */
+    private static function check_new_user_flag(int $wp_user_id, string $start_date, string $end_date): string {
+        if ($wp_user_id <= 0) {
+            return '';
+        }
+
+        $user = get_userdata($wp_user_id);
+        if (!$user || empty($user->user_registered)) {
+            return '';
+        }
+
+        $registered   = new DateTime($user->user_registered);
+        $period_start = new DateTime($start_date);
+        $period_end   = new DateTime($end_date);
+
+        if ($registered >= $period_start && $registered <= $period_end) {
+            return 'New - account - user created on ' . $registered->format('Y-m-d');
+        }
+
+        return '';
+    }
+
+    /**
      * Query meals_clients from the external DB with a prepared statement.
      *
      * @param string $sql    SQL with ? placeholders.
@@ -200,7 +601,7 @@ class MealsDB_Invoice_Generator {
      * @param string $end_date End date (Y-m-d format)
      * @return string CSV content
      */
-    public static function generate_sdnb_legacy($zone, $start_date, $end_date) {
+    public static function generate_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month = 4) {
         // Get service center info
         $service_center = isset(self::$service_centers[$zone]) ? self::$service_centers[$zone] : self::$service_centers['M'];
 
@@ -212,7 +613,8 @@ class MealsDB_Invoice_Generator {
         $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
         $sql = sprintf(
             'SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
-                    individual_id, client_contribution, delivery_area_zone, default_rate_id
+                    individual_id, individual_id_index, client_contribution, delivery_area_zone,
+                    default_rate_id, allowance_mains, allowance_sides, requisition_period
              FROM `%s`
              WHERE client_type = ? AND use_legacy_billing = 1
                AND delivery_area_zone = ? AND active = 1 AND wp_user_id > 0',
@@ -222,24 +624,52 @@ class MealsDB_Invoice_Generator {
         $client_type = 'SDNB';
         $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
 
-        // Fetch invoice data via WC HPOS.
-        $invoice_rows = self::get_invoice_data_for_clients($client_rows, $start_date, $end_date);
+        // Pre-compute duplicate individual_id counts for error checking.
+        $sdnb_duplicate_counts = [];
+        foreach ($client_rows as $c) {
+            $idx = $c['individual_id_index'] ?? '';
+            if ($idx !== '') {
+                if (!isset($sdnb_duplicate_counts[$idx])) {
+                    $sdnb_duplicate_counts[$idx] = 0;
+                }
+                $sdnb_duplicate_counts[$idx]++;
+            }
+        }
+
+        // Fetch invoice data via allowance engine.
+        $invoice_rows = self::get_allowance_data_for_clients($client_rows, $start_date, $end_date, $weeks_in_month);
+
+        // Apply allowance engine + two-line splits to get final invoice lines.
+        $all_invoice_lines = [];
+        foreach ($invoice_rows as $row) {
+            $client = $row['client'];
+            $error_string  = self::validate_client_row($client, 'SDNB', $sdnb_duplicate_counts, 2);
+            $new_user_flag = self::check_new_user_flag((int) ($client['wp_user_id'] ?? 0), $start_date, $end_date);
+
+            $lines = self::split_into_invoice_lines($row);
+            foreach ($lines as $line) {
+                $line['errors']        = $error_string;
+                $line['new_user_flag'] = $new_user_flag;
+                $all_invoice_lines[]   = $line;
+            }
+        }
 
         // Accumulate totals for header.
         $total_invoice_amount = 0;
         $total_tax_amount     = 0;
-        foreach ($invoice_rows as $r) {
-            $total_invoice_amount += $r['total_cost'];
-            $total_tax_amount     += $r['tax_amount'];
+        foreach ($all_invoice_lines as $line) {
+            $total_cost = $line['basic_cost'] + $line['tax'] - $line['client_contribution'];
+            $total_invoice_amount += $total_cost;
+            $total_tax_amount     += $line['tax'];
         }
 
-        // Build CSV content
+        // Build CSV content.
         $csv = [];
 
-        // Row 1-2: Blank rows with commas
+        // Row 1: Blank row with commas (unchanged from current implementation)
         $csv[] = str_repeat(',', 99);
 
-        // Row 3: Header with version
+        // Row 3: Header with version (unchanged)
         $row3 = array_fill(0, 100, '');
         $row3[0] = '1';
         $row3[1] = 'Social Development';
@@ -247,7 +677,7 @@ class MealsDB_Invoice_Generator {
         $row3[9] = 'version 36e';
         $csv[] = implode(',', $row3);
 
-        // Row 4: Invoice metadata header row
+        // Row 4: Invoice metadata header row (unchanged from current)
         $row4 = array_fill(0, 100, '');
         $row4[0] = '1';
         $row4[1] = 'Invoice No.';
@@ -270,7 +700,7 @@ class MealsDB_Invoice_Generator {
         $row4[23] = '# of Invoice Lines';
         $csv[] = implode(',', $row4);
 
-        // Row 5: Invoice metadata values
+        // Row 5: Invoice metadata values (unchanged structure, updated totals)
         $row5 = array_fill(0, 100, '');
         $row5[0] = '2';
         $row5[1] = $invoice_number;
@@ -280,7 +710,7 @@ class MealsDB_Invoice_Generator {
         $row5[6] = $service_center['number'];
         $row5[7] = $service_center['name'];
         $row5[10] = $service_center['address'];
-        $row5[12] = str_replace('-', '', $start_date); // YYYYMMDD format
+        $row5[12] = str_replace('-', '', $start_date);
         $row5[13] = str_replace('-', '', $end_date);
         $row5[14] = 'Full';
         $row5[15] = self::HST_NUMBER;
@@ -290,11 +720,11 @@ class MealsDB_Invoice_Generator {
         $row5[20] = self::CONTACT_AREA_CODE;
         $row5[21] = self::CONTACT_PHONE;
         $row5[22] = self::CONTACT_EMAIL;
-        $row5[23] = count($invoice_rows);
-        $row5[24] = 'F'; // Unknown flag from sample
+        $row5[23] = count($all_invoice_lines);
+        $row5[24] = 'F';
         $csv[] = implode(',', $row5);
 
-        // Row 6: Column headers for data rows
+        // Row 6: Column headers for data rows (unchanged)
         $row6 = array_fill(0, 100, '');
         $row6[0] = '1';
         $row6[1] = 'Service Id';
@@ -334,46 +764,30 @@ class MealsDB_Invoice_Generator {
         $row6[35] = 'Total Invoice Line Cost';
         $csv[] = implode(',', $row6);
 
-        // Data rows
-        foreach ($invoice_rows as $trans) {
+        // Data rows — one per invoice line.
+        foreach ($all_invoice_lines as $line) {
+            $basic_cost = $line['basic_cost'];
+            $total_line_cost = $basic_cost + $line['tax'] - $line['client_contribution'];
+
             $row = array_fill(0, 100, '');
-            $row[0] = '3';
-            $row[1] = $trans['service_id'] ?: '356029'; // Default service ID
-            $row[2] = $trans['requisition_id'] ?: '';
-            $row[3] = $trans['individual_id'] ?: '';
-            $row[4] = $trans['last_name'] ?: '';
-            $row[5] = $trans['first_name'] ?: '';
-            $row[6] = number_format($trans['total_units'], 2, '.', '');
-            $row[7] = 'Meal';
-            $row[8] = number_format($trans['resolved_rate'], 2, '.', '');
-            $row[9] = number_format($trans['basic_cost'], 2, '.', '');
-            $row[10] = ''; // Total Kilometers - home support
-            $row[11] = ''; // Other Cost - home support
-            $row[12] = ''; // Total Kilometers - family support
-            $row[13] = ''; // Other Cost - family support
-            $row[14] = ''; // Other Cost - medical
-            $row[15] = ''; // Other Cost - daycare
-            $row[16] = ''; // Other Cost - other
-            $row[17] = ''; // Other Cost - meals
-            $row[18] = ''; // Other Cost - sundry
-            $row[19] = ''; // Other Cost - admin fees
-            $row[20] = ''; // Other Cost - lodging
-            $row[21] = ''; // Other Cost - recreation
-            $row[22] = ''; // Other Cost - parking
-            $row[23] = number_format($trans['client_contribution'], 2, '.', '');
-            $row[24] = number_format($trans['basic_cost'], 2, '.', ''); // Dept Cost = Basic Cost - Client Contribution
-            $row[25] = ''; // Mileage Cost Indicator
-            $row[26] = ''; // Mileage Cost
-            $row[27] = number_format(0, 2, '.', ''); // Stat Holiday Units
-            $row[28] = ''; // Stat Holiday Amount
-            $row[29] = ''; // Shift Diff Units
-            $row[30] = number_format(0, 2, '.', ''); // Shift Diff Rate
-            $row[31] = ''; // Shift Diff Cost
-            $row[32] = ''; // Shift Diff Stat Holiday Units
-            $row[33] = number_format(0, 2, '.', ''); // Shift Diff Stat Holiday Cost
-            $row[34] = ''; // Tax
-            $row[35] = number_format($trans['total_cost'], 2, '.', ''); // Total Line Cost
-            $row[36] = 'I'; // Unknown flag from sample
+            $row[0]  = '3';
+            $row[1]  = $line['service_id'] ?: '356029';
+            $row[2]  = $line['requisition_id'] ?: '';
+            $row[3]  = $line['individual_id'] ?: '';
+            $row[4]  = $line['last_name'] ?: '';
+            $row[5]  = $line['first_name'] ?: '';
+            $row[6]  = number_format($line['units'], 2, '.', '');
+            $row[7]  = 'Meal';
+            $row[8]  = number_format($line['rate'], 2, '.', '');
+            $row[9]  = number_format($basic_cost, 2, '.', '');
+            $row[23] = number_format($line['client_contribution'], 2, '.', '');
+            $row[24] = number_format($basic_cost, 2, '.', '');
+            $row[27] = number_format(0, 2, '.', '');
+            $row[30] = number_format(0, 2, '.', '');
+            $row[33] = number_format(0, 2, '.', '');
+            $row[34] = number_format($line['tax'], 2, '.', '');
+            $row[35] = number_format($total_line_cost, 2, '.', '');
+            $row[36] = 'I';
             $csv[] = implode(',', $row);
         }
 
@@ -460,7 +874,8 @@ class MealsDB_Invoice_Generator {
         $sql = sprintf(
             'SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
                     vet_health_card, requisition_period, client_contribution, default_rate_id,
-                    apartment_number, street_number, street_name, city, postal_code, client_phone_1
+                    apartment_number, street_number, street_name, city, postal_code, client_phone_1,
+                    allowance_mains, allowance_sides, individual_id, individual_id_index
              FROM `%s`
              WHERE client_type = ? AND active = 1 AND wp_user_id > 0',
             $clients_table
@@ -471,6 +886,18 @@ class MealsDB_Invoice_Generator {
 
         if (empty($client_rows)) {
             return '';
+        }
+
+        // Pre-compute duplicate individual_id counts for error checking.
+        $vet_duplicate_counts = [];
+        foreach ($client_rows as $c) {
+            $idx = $c['individual_id_index'] ?? '';
+            if ($idx !== '') {
+                if (!isset($vet_duplicate_counts[$idx])) {
+                    $vet_duplicate_counts[$idx] = 0;
+                }
+                $vet_duplicate_counts[$idx]++;
+            }
         }
 
         // Fetch WC HPOS orders for all veterans.
@@ -590,39 +1017,81 @@ class MealsDB_Invoice_Generator {
             $sides_cost            = $agg['sides_cost'];
             $sides_tax             = $agg['sides_tax'];
 
-            // Get allowance info
-            $service = strtolower($vet['requisition_period'] ?: 'week');
-            $allowance_info = isset(self::$vac_allowances[$service]) ?
-                self::$vac_allowances[$service] : self::$vac_allowances['week'];
+            // --- Veteran allowance calculation ---
+            $user_mains   = (int) ($vet['allowance_mains'] ?? 0);
+            $user_sides   = (int) ($vet['allowance_sides'] ?? 0);
+            $service      = strtolower($vet['requisition_period'] ?: 'week');
+            $days_in_month = (int) date('t', strtotime($end_date));
 
-            $mains_allowance  = $allowance_info['mains'];
-            $monthly_allowance = $allowance_info['amount'];
+            // Calculate mains allowance from service frequency.
+            $mains_allowance     = 0;
+            $sides_allowance_raw = 0;
 
-            // Calculate billing
-            $bill_mains = min($mains_ordered, $mains_allowance);
-            $bnm_mains = max(0, $mains_ordered - $mains_allowance); // Beyond allowance
+            switch ($service) {
+                case 'month':
+                    $mains_allowance     = min($user_mains, $days_in_month);
+                    $sides_allowance_raw = min($user_sides, $days_in_month);
+                    break;
+                case 'day':
+                    $mains_allowance     = $user_mains * $days_in_month;
+                    $sides_allowance_raw = $user_sides * $days_in_month;
+                    break;
+                case 'week':
+                default:
+                    if ($user_mains == 7) {
+                        $mains_allowance = $days_in_month;
+                    } elseif ($user_mains == 14) {
+                        $mains_allowance = 2 * $days_in_month;
+                    } elseif ($user_mains <= 6) {
+                        $mains_allowance = $user_mains * 4;
+                    }
+                    if ($user_sides == 7) {
+                        $sides_allowance_raw = $days_in_month;
+                    } elseif ($user_sides == 14) {
+                        $sides_allowance_raw = 2 * $days_in_month;
+                    } elseif ($user_sides <= 6) {
+                        $sides_allowance_raw = $user_sides * 4;
+                    }
+                    break;
+            }
+
+            // 5-week month corrections.
+            if ($mains_allowance == 35) { $mains_allowance = 31; }
+            elseif ($mains_allowance == 70) { $mains_allowance = 62; }
+            if ($sides_allowance_raw == 35) { $sides_allowance_raw = 31; }
+            elseif ($sides_allowance_raw == 70) { $sides_allowance_raw = 62; }
+
+            // Mains billing.
+            $bill_mains     = min($mains_ordered, $mains_allowance);
+            $bnm_mains      = max(0, $mains_ordered - $mains_allowance);
             $vet_mains_cost = $bill_mains * $resolved_rate;
-            $allowance_remaining = $monthly_allowance - $vet_mains_cost;
 
-            // Sides allowance (example: 10 per period, adjust as needed)
-            $sides_allowance = 10;
-            $total_sides_ordered = $sides_ordered_taxable + $sides_ordered_nontax;
-            $remaining_sides = max(0, $sides_allowance - $total_sides_ordered);
+            // Monetary allowance → sides conversion.
+            $monthly_allowance   = $mains_allowance * self::$vac_billing['per_main_allowance'];
+            $allowance_remaining = max(0, $monthly_allowance - $vet_mains_cost);
+            $new_sides           = max(0, (int) floor($allowance_remaining / self::$vac_billing['sides_conversion_rate']));
 
-            // Bill taxable sides
-            $bill_tax_sides = min($sides_ordered_taxable, $sides_allowance);
-            $overage_tax_sides = max(0, $sides_ordered_taxable - $sides_allowance);
+            // Use the derived sides count as the actual sides allowance.
+            $sides_allowance = $new_sides;
 
-            // Bill non-taxable sides
-            $bill_nontax_sides = min($sides_ordered_nontax, max(0, $sides_allowance - $sides_ordered_taxable));
-            $overage_nontax_sides = max(0, $sides_ordered_nontax - (max(0, $sides_allowance - $sides_ordered_taxable)));
+            // Taxable sides first against the derived allowance.
+            $bill_tax_sides       = min($sides_ordered_taxable, $sides_allowance);
+            $overage_tax_sides    = max(0, $sides_ordered_taxable - $sides_allowance);
+            $remaining_sides      = max(0, $sides_allowance - $bill_tax_sides);
 
-            // Total billing
+            // Non-taxable sides fill the remainder.
+            $bill_nontax_sides    = min($sides_ordered_nontax, $remaining_sides);
+            $overage_nontax_sides = max(0, $sides_ordered_nontax - $bill_nontax_sides);
+
             $bill_sides = $bill_tax_sides + $bill_nontax_sides;
-            $new_total = $vet_mains_cost + $sides_cost + $sides_tax;
+
+            // Cost calculations.
+            $sides_cost = ($bill_tax_sides + $bill_nontax_sides) * self::$vac_billing['sides_cost_rate'];
+            $sides_tax  = round(($bill_tax_sides * self::$vac_billing['sides_cost_rate']) * self::$vac_billing['sides_hst_rate'], 2);
+            $new_total  = $vet_mains_cost + $sides_cost + $sides_tax;
 
             // Check for errors/warnings
-            $errors = '';
+            $errors = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
 
             $csv[] = sprintf(
                 '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s',
@@ -661,7 +1130,7 @@ class MealsDB_Invoice_Generator {
                 number_format($sides_tax, 2, '.', ''),
                 number_format($new_total, 2, '.', ''),
                 $errors,
-                'No' // New user flag
+                self::check_new_user_flag((int) ($vet['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No'
             );
         }
 
@@ -838,5 +1307,105 @@ class MealsDB_Invoice_Generator {
         $pdf->Output($temp_file, 'F');
 
         return $temp_file;
+    }
+
+    /**
+     * Get WooCommerce product IDs for overage order items.
+     *
+     * These are stored as a WordPress option so admins can configure them
+     * without code changes. Defaults match the legacy system.
+     *
+     * @return array{mains: int, taxable_sides: int, nontax_sides: int}
+     */
+    public static function get_overage_product_ids(): array {
+        $defaults = [
+            'mains'         => 5056,
+            'taxable_sides' => 5180,
+            'nontax_sides'  => 5059,
+        ];
+
+        $saved = get_option('mealsdb_overage_product_ids', []);
+        if (!is_array($saved)) {
+            $saved = [];
+        }
+
+        return [
+            'mains'         => (int) ($saved['mains'] ?? $defaults['mains']),
+            'taxable_sides' => (int) ($saved['taxable_sides'] ?? $defaults['taxable_sides']),
+            'nontax_sides'  => (int) ($saved['nontax_sides'] ?? $defaults['nontax_sides']),
+        ];
+    }
+
+    /**
+     * Get SDNB clients with non-zero overages for a billing period.
+     *
+     * @param string $zone           Zone code (M or S).
+     * @param string $start_date     Y-m-d.
+     * @param string $end_date       Y-m-d.
+     * @param int    $weeks_in_month Number of Wednesdays.
+     * @return array Rows with overage quantities per client.
+     */
+    public static function get_sdnb_overages(string $zone, string $start_date, string $end_date, int $weeks_in_month = 4): array {
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
+                    individual_id, individual_id_index, client_contribution, delivery_area_zone,
+                    default_rate_id, allowance_mains, allowance_sides, requisition_period
+             FROM `%s`
+             WHERE client_type = ? AND use_legacy_billing = 1
+               AND delivery_area_zone = ? AND active = 1 AND wp_user_id > 0',
+            $clients_table
+        );
+
+        $client_type = 'SDNB';
+        $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
+
+        $allowance_rows = self::get_allowance_data_for_clients($client_rows, $start_date, $end_date, $weeks_in_month);
+
+        // Filter to only clients with overages.
+        return array_filter($allowance_rows, function ($row) {
+            return ($row['bnm_mains'] > 0 || $row['overage_tax_sides'] > 0 || $row['overage_nontax_sides'] > 0);
+        });
+    }
+
+    /**
+     * Get Veteran clients with non-zero overages for a billing period.
+     *
+     * @param string $start_date Y-m-d.
+     * @param string $end_date   Y-m-d.
+     * @return array Rows with overage quantities per client.
+     */
+    public static function get_vac_overages(string $start_date, string $end_date): array {
+        $csv_content = self::generate_vac_csv($start_date, $end_date);
+        if (empty($csv_content)) {
+            return [];
+        }
+
+        $lines   = explode("\n", $csv_content);
+        $headers = str_getcsv(array_shift($lines));
+        $results = [];
+
+        foreach ($lines as $line) {
+            if (empty(trim($line))) { continue; }
+            $data = array_combine($headers, str_getcsv($line));
+            if (!$data) { continue; }
+
+            $bnm_mains     = (int) ($data['BNM Mains'] ?? 0);
+            $overage_tax   = (int) ($data['Overage Tax Sides'] ?? 0);
+            $overage_nontax = (int) ($data['Overage Non Taxable Sides'] ?? 0);
+
+            if ($bnm_mains > 0 || $overage_tax > 0 || $overage_nontax > 0) {
+                $results[] = [
+                    'health_card'          => $data['K#'] ?? '',
+                    'last_name'            => $data['Client Last Name'] ?? '',
+                    'first_name'           => $data['Client First Name'] ?? '',
+                    'bnm_mains'            => $bnm_mains,
+                    'overage_tax_sides'    => $overage_tax,
+                    'overage_nontax_sides' => $overage_nontax,
+                ];
+            }
+        }
+
+        return $results;
     }
 }

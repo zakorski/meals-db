@@ -34,9 +34,11 @@
             if (invoiceType === 'sdnb_legacy') {
                 $('#zone_row').show();
                 $('#zone').prop('required', true);
+                $('#weeks_row').show();
             } else {
                 $('#zone_row').hide();
                 $('#zone').prop('required', false);
+                $('#weeks_row').hide();
             }
         });
 
@@ -116,6 +118,12 @@
                 value: endDate
             }));
 
+            downloadForm.append($('<input>', {
+                type: 'hidden',
+                name: 'weeks_in_month',
+                value: $('#weeks_in_month').val() || '4'
+            }));
+
             // Submit in new window/tab to trigger download
             downloadForm.appendTo('body').submit().remove();
 
@@ -151,6 +159,136 @@
             var month = String(date.getMonth() + 1).padStart(2, '0');
             var day = String(date.getDate()).padStart(2, '0');
             return year + '-' + month + '-' + day;
+        }
+
+        // --- Overages section ---
+
+        // Set default dates for overages fields too.
+        $('#overage_start_date').val(formatDate(firstDay));
+        $('#overage_end_date').val(formatDate(lastDay));
+
+        // Show/hide SDNB-specific fields.
+        $('#overage_client_type').on('change', function() {
+            if ($(this).val() === 'SDNB') {
+                $('#overage_zone_row').show();
+                $('#overage_weeks_row').show();
+            } else {
+                $('#overage_zone_row').hide();
+                $('#overage_weeks_row').hide();
+            }
+        });
+
+        var currentOverages = [];
+
+        // Preview overages.
+        $('#preview_overages_btn').on('click', function() {
+            var clientType = $('#overage_client_type').val();
+            var startDate  = $('#overage_start_date').val();
+            var endDate    = $('#overage_end_date').val();
+
+            if (!clientType) {
+                showOveragesMessage('error', 'Please select a client type.');
+                return;
+            }
+            if (!startDate || !endDate) {
+                showOveragesMessage('error', 'Please select start and end dates.');
+                return;
+            }
+
+            var $btn = $(this);
+            $btn.prop('disabled', true).text('Loading...');
+
+            $.post(mealsdbInvoice.ajaxUrl, {
+                action: 'mealsdb_preview_overages',
+                nonce: mealsdbInvoice.nonce,
+                client_type: clientType,
+                start_date: startDate,
+                end_date: endDate,
+                zone: $('#overage_zone').val() || '',
+                weeks_in_month: $('#overage_weeks_in_month').val() || '4'
+            }, function(resp) {
+                $btn.prop('disabled', false).html('<span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span> Preview Overages');
+
+                if (resp.success) {
+                    currentOverages = resp.data.overages;
+                    $('#overages_count').text(resp.data.count);
+
+                    var $tbody = $('#overages_table tbody');
+                    $tbody.empty();
+
+                    if (resp.data.count === 0) {
+                        $tbody.append('<tr><td colspan="4">No clients with overages found.</td></tr>');
+                        $('#create_overage_orders_btn').hide();
+                    } else {
+                        $.each(resp.data.overages, function(i, row) {
+                            var name = row.name || ((row.last_name || '') + ', ' + (row.first_name || ''));
+                            $tbody.append(
+                                '<tr>' +
+                                '<td>' + $('<span>').text(name).html() + '</td>' +
+                                '<td>' + row.bnm_mains + '</td>' +
+                                '<td>' + row.overage_tax_sides + '</td>' +
+                                '<td>' + row.overage_nontax_sides + '</td>' +
+                                '</tr>'
+                            );
+                        });
+                        $('#create_overage_orders_btn').show();
+                    }
+
+                    $('#overages_preview').show();
+                } else {
+                    showOveragesMessage('error', resp.data.message || 'Failed to load overages.');
+                }
+            }).fail(function() {
+                $btn.prop('disabled', false).html('<span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span> Preview Overages');
+                showOveragesMessage('error', 'Request failed.');
+            });
+        });
+
+        // Create overage orders.
+        $('#create_overage_orders_btn').on('click', function() {
+            if (currentOverages.length === 0) {
+                showOveragesMessage('error', 'No overages to process.');
+                return;
+            }
+
+            if (!confirm('Create overage orders for ' + currentOverages.length + ' client(s)?')) {
+                return;
+            }
+
+            var $btn = $(this);
+            $btn.prop('disabled', true).text('Creating orders...');
+
+            $.post(mealsdbInvoice.ajaxUrl, {
+                action: 'mealsdb_create_overage_orders',
+                nonce: mealsdbInvoice.nonce,
+                invoice_date: $('#overage_invoice_date').val() || '',
+                overages: JSON.stringify(currentOverages)
+            }, function(resp) {
+                $btn.prop('disabled', false).html('<span class="dashicons dashicons-cart" style="vertical-align: middle;"></span> Create Overage Orders');
+
+                if (resp.success) {
+                    var msg = resp.data.created + ' order(s) created.';
+                    if (resp.data.skipped_count > 0) {
+                        msg += ' ' + resp.data.skipped_count + ' skipped: ' + resp.data.skipped.join(', ');
+                    }
+                    showOveragesMessage('success', msg);
+                } else {
+                    showOveragesMessage('error', resp.data.message || 'Failed to create orders.');
+                }
+            }).fail(function() {
+                $btn.prop('disabled', false).html('<span class="dashicons dashicons-cart" style="vertical-align: middle;"></span> Create Overage Orders');
+                showOveragesMessage('error', 'Request failed.');
+            });
+        });
+
+        function showOveragesMessage(type, message) {
+            var $msg = $('#overages_message');
+            $msg.removeClass('notice-success notice-error notice-warning')
+                .addClass('notice notice-' + type)
+                .html('<p>' + message + '</p>')
+                .slideDown();
+
+            setTimeout(function() { $msg.slideUp(); }, 8000);
         }
     });
 

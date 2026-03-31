@@ -54,6 +54,8 @@ class MealsDB_Schema {
                     'most_recent_renewal_termination_date' => 'DATE NULL',
                     'notes_to_service_provider'    => 'TEXT NULL',
                     'units'                        => 'INT NULL',
+                    'allowance_mains'              => 'INT NULL',
+                    'allowance_sides'              => 'INT NULL',
                     'client_contribution'          => 'DECIMAL(10,2) NULL',
                     'vet_health_card'              => 'VARCHAR(50) NULL',
                     'vet_health_card_index'        => 'CHAR(64) NULL',
