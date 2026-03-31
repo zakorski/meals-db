@@ -1308,4 +1308,104 @@ class MealsDB_Invoice_Generator {
 
         return $temp_file;
     }
+
+    /**
+     * Get WooCommerce product IDs for overage order items.
+     *
+     * These are stored as a WordPress option so admins can configure them
+     * without code changes. Defaults match the legacy system.
+     *
+     * @return array{mains: int, taxable_sides: int, nontax_sides: int}
+     */
+    public static function get_overage_product_ids(): array {
+        $defaults = [
+            'mains'         => 5056,
+            'taxable_sides' => 5180,
+            'nontax_sides'  => 5059,
+        ];
+
+        $saved = get_option('mealsdb_overage_product_ids', []);
+        if (!is_array($saved)) {
+            $saved = [];
+        }
+
+        return [
+            'mains'         => (int) ($saved['mains'] ?? $defaults['mains']),
+            'taxable_sides' => (int) ($saved['taxable_sides'] ?? $defaults['taxable_sides']),
+            'nontax_sides'  => (int) ($saved['nontax_sides'] ?? $defaults['nontax_sides']),
+        ];
+    }
+
+    /**
+     * Get SDNB clients with non-zero overages for a billing period.
+     *
+     * @param string $zone           Zone code (M or S).
+     * @param string $start_date     Y-m-d.
+     * @param string $end_date       Y-m-d.
+     * @param int    $weeks_in_month Number of Wednesdays.
+     * @return array Rows with overage quantities per client.
+     */
+    public static function get_sdnb_overages(string $zone, string $start_date, string $end_date, int $weeks_in_month = 4): array {
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
+                    individual_id, individual_id_index, client_contribution, delivery_area_zone,
+                    default_rate_id, allowance_mains, allowance_sides, requisition_period
+             FROM `%s`
+             WHERE client_type = ? AND use_legacy_billing = 1
+               AND delivery_area_zone = ? AND active = 1 AND wp_user_id > 0',
+            $clients_table
+        );
+
+        $client_type = 'SDNB';
+        $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
+
+        $allowance_rows = self::get_allowance_data_for_clients($client_rows, $start_date, $end_date, $weeks_in_month);
+
+        // Filter to only clients with overages.
+        return array_filter($allowance_rows, function ($row) {
+            return ($row['bnm_mains'] > 0 || $row['overage_tax_sides'] > 0 || $row['overage_nontax_sides'] > 0);
+        });
+    }
+
+    /**
+     * Get Veteran clients with non-zero overages for a billing period.
+     *
+     * @param string $start_date Y-m-d.
+     * @param string $end_date   Y-m-d.
+     * @return array Rows with overage quantities per client.
+     */
+    public static function get_vac_overages(string $start_date, string $end_date): array {
+        $csv_content = self::generate_vac_csv($start_date, $end_date);
+        if (empty($csv_content)) {
+            return [];
+        }
+
+        $lines   = explode("\n", $csv_content);
+        $headers = str_getcsv(array_shift($lines));
+        $results = [];
+
+        foreach ($lines as $line) {
+            if (empty(trim($line))) { continue; }
+            $data = array_combine($headers, str_getcsv($line));
+            if (!$data) { continue; }
+
+            $bnm_mains     = (int) ($data['BNM Mains'] ?? 0);
+            $overage_tax   = (int) ($data['Overage Tax Sides'] ?? 0);
+            $overage_nontax = (int) ($data['Overage Non Taxable Sides'] ?? 0);
+
+            if ($bnm_mains > 0 || $overage_tax > 0 || $overage_nontax > 0) {
+                $results[] = [
+                    'health_card'          => $data['K#'] ?? '',
+                    'last_name'            => $data['Client Last Name'] ?? '',
+                    'first_name'           => $data['Client First Name'] ?? '',
+                    'bnm_mains'            => $bnm_mains,
+                    'overage_tax_sides'    => $overage_tax,
+                    'overage_nontax_sides' => $overage_nontax,
+                ];
+            }
+        }
+
+        return $results;
+    }
 }

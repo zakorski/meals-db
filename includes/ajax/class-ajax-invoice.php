@@ -19,6 +19,8 @@ class MealsDB_Ajax_Invoice {
      */
     public static function init() {
         add_action('wp_ajax_mealsdb_generate_invoice', [__CLASS__, 'generate_invoice']);
+        add_action('wp_ajax_mealsdb_preview_overages', [__CLASS__, 'preview_overages']);
+        add_action('wp_ajax_mealsdb_create_overage_orders', [__CLASS__, 'create_overage_orders']);
     }
 
     /**
@@ -224,5 +226,141 @@ class MealsDB_Ajax_Invoice {
         unlink($pdf_path);
 
         exit;
+    }
+
+    /**
+     * Preview overages for a billing period.
+     */
+    public static function preview_overages() {
+        if (!check_ajax_referer('mealsdb_invoice_nonce', 'nonce', false)) {
+            wp_send_json_error(['message' => 'Invalid security token.']);
+            return;
+        }
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Insufficient permissions.']);
+            return;
+        }
+
+        $client_type    = sanitize_text_field($_POST['client_type'] ?? '');
+        $start_date     = sanitize_text_field($_POST['start_date'] ?? '');
+        $end_date       = sanitize_text_field($_POST['end_date'] ?? '');
+        $zone           = sanitize_text_field($_POST['zone'] ?? '');
+        $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
+
+        if (empty($start_date) || empty($end_date)) {
+            wp_send_json_error(['message' => 'Start and end dates are required.']);
+            return;
+        }
+
+        try {
+            if ($client_type === 'SDNB') {
+                $overages = MealsDB_Invoice_Generator::get_sdnb_overages($zone, $start_date, $end_date, $weeks_in_month);
+                $rows = array_map(function ($row) {
+                    return [
+                        'individual_id'       => $row['client']['individual_id'] ?? '',
+                        'name'                => ($row['client']['last_name'] ?? '') . ', ' . ($row['client']['first_name'] ?? ''),
+                        'wp_user_id'          => (int) ($row['client']['wp_user_id'] ?? 0),
+                        'bnm_mains'           => $row['bnm_mains'],
+                        'overage_tax_sides'   => $row['overage_tax_sides'],
+                        'overage_nontax_sides'=> $row['overage_nontax_sides'],
+                    ];
+                }, $overages);
+            } elseif ($client_type === 'Veteran') {
+                $rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+            } else {
+                wp_send_json_error(['message' => 'Invalid client type.']);
+                return;
+            }
+
+            wp_send_json_success(['overages' => array_values($rows), 'count' => count($rows)]);
+        } catch (Exception $e) {
+            wp_send_json_error(['message' => 'Error: ' . $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Create WooCommerce orders for overages.
+     */
+    public static function create_overage_orders() {
+        if (!check_ajax_referer('mealsdb_invoice_nonce', 'nonce', false)) {
+            wp_send_json_error(['message' => 'Invalid security token.']);
+            return;
+        }
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => 'Insufficient permissions.']);
+            return;
+        }
+
+        $invoice_date  = sanitize_text_field($_POST['invoice_date'] ?? '');
+        $overages_json = stripslashes($_POST['overages'] ?? '[]');
+        $overages      = json_decode($overages_json, true);
+
+        if (!is_array($overages) || empty($overages)) {
+            wp_send_json_error(['message' => 'No overage data provided.']);
+            return;
+        }
+
+        if (empty($invoice_date)) {
+            $invoice_date = date('Y-m-d');
+        }
+
+        $product_ids = MealsDB_Invoice_Generator::get_overage_product_ids();
+        $order_count = 0;
+        $skipped     = [];
+
+        foreach ($overages as $item) {
+            $wp_user_id  = (int) ($item['wp_user_id'] ?? 0);
+            $bnm_mains   = (int) ($item['bnm_mains'] ?? 0);
+            $overage_tax = (int) ($item['overage_tax_sides'] ?? 0);
+            $overage_nt  = (int) ($item['overage_nontax_sides'] ?? 0);
+
+            if ($wp_user_id <= 0) {
+                $skipped[] = $item['name'] ?? 'Unknown';
+                continue;
+            }
+
+            if ($bnm_mains <= 0 && $overage_tax <= 0 && $overage_nt <= 0) {
+                continue;
+            }
+
+            $order = wc_create_order(['customer_id' => $wp_user_id]);
+            if (is_wp_error($order)) {
+                $skipped[] = $item['name'] ?? 'Unknown';
+                continue;
+            }
+
+            $order->update_status('completed');
+            $order->set_date_created($invoice_date . ' 00:00:00');
+            $order->set_date_paid($invoice_date . ' 00:00:00');
+
+            if ($bnm_mains > 0 && $product_ids['mains'] > 0) {
+                $product = wc_get_product($product_ids['mains']);
+                if ($product) {
+                    $order->add_product($product, $bnm_mains);
+                }
+            }
+            if ($overage_nt > 0 && $product_ids['nontax_sides'] > 0) {
+                $product = wc_get_product($product_ids['nontax_sides']);
+                if ($product) {
+                    $order->add_product($product, $overage_nt);
+                }
+            }
+            if ($overage_tax > 0 && $product_ids['taxable_sides'] > 0) {
+                $product = wc_get_product($product_ids['taxable_sides']);
+                if ($product) {
+                    $order->add_product($product, $overage_tax);
+                }
+            }
+
+            $order->calculate_totals();
+            $order->save();
+            $order_count++;
+        }
+
+        wp_send_json_success([
+            'created'       => $order_count,
+            'skipped'       => $skipped,
+            'skipped_count' => count($skipped),
+        ]);
     }
 }

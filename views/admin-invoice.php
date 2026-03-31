@@ -155,6 +155,109 @@ if (!defined('ABSPATH')) {
                 </ul>
             </div>
         </div>
+
+        <div class="card" style="margin-top: 20px;">
+            <h2 class="title">Import Overages</h2>
+
+            <div style="padding: 20px;">
+                <table class="form-table">
+                    <tbody>
+                        <tr>
+                            <th scope="row">
+                                <label for="overage_client_type">Client Type</label>
+                            </th>
+                            <td>
+                                <select name="overage_client_type" id="overage_client_type" class="regular-text" required>
+                                    <option value="">-- Select Client Type --</option>
+                                    <option value="SDNB">SDNB</option>
+                                    <option value="Veteran">Veteran</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr id="overage_zone_row" style="display: none;">
+                            <th scope="row">
+                                <label for="overage_zone">Zone</label>
+                            </th>
+                            <td>
+                                <select name="overage_zone" id="overage_zone" class="regular-text">
+                                    <option value="">-- Select Zone --</option>
+                                    <?php foreach ($zones as $zone_code): ?>
+                                        <option value="<?php echo esc_attr($zone_code); ?>">
+                                            <?php echo esc_html($zone_code); ?>
+                                            <?php if ($zone_code === 'M'): ?>(Moncton)<?php elseif ($zone_code === 'S'): ?>(Sussex)<?php endif; ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr id="overage_weeks_row" style="display: none;">
+                            <th scope="row">
+                                <label for="overage_weeks_in_month">Number of Wednesdays</label>
+                            </th>
+                            <td>
+                                <input type="number" name="overage_weeks_in_month" id="overage_weeks_in_month" class="small-text" min="1" max="6" value="4">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">
+                                <label for="overage_start_date">Start Date</label>
+                            </th>
+                            <td>
+                                <input type="text" name="overage_start_date" id="overage_start_date" class="regular-text datepicker" required placeholder="YYYY-MM-DD">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">
+                                <label for="overage_end_date">End Date</label>
+                            </th>
+                            <td>
+                                <input type="text" name="overage_end_date" id="overage_end_date" class="regular-text datepicker" required placeholder="YYYY-MM-DD">
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">
+                                <label for="overage_invoice_date">Invoice Date</label>
+                            </th>
+                            <td>
+                                <input type="text" name="overage_invoice_date" id="overage_invoice_date" class="regular-text datepicker" placeholder="YYYY-MM-DD">
+                                <p class="description">Date to stamp on created orders. Defaults to today.</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <p>
+                    <button type="button" class="button button-secondary" id="preview_overages_btn">
+                        <span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span>
+                        Preview Overages
+                    </button>
+                </p>
+
+                <div id="overages_preview" style="display: none; margin-top: 15px;">
+                    <h3>Clients with Overages (<span id="overages_count">0</span>)</h3>
+                    <table class="widefat striped" id="overages_table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>BNM Mains</th>
+                                <th>Overage Tax Sides</th>
+                                <th>Overage Non-Tax Sides</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+
+                    <p style="margin-top: 15px;">
+                        <button type="button" class="button button-primary" id="create_overage_orders_btn">
+                            <span class="dashicons dashicons-cart" style="vertical-align: middle;"></span>
+                            Create Overage Orders
+                        </button>
+                    </p>
+                </div>
+
+                <div id="overages_message" style="display: none; margin-top: 10px;"></div>
+            </div>
+        </div>
     </div>
 </div>
 
