@@ -483,6 +483,75 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * Validate a client row and return error messages.
+     *
+     * @param array  $client       Client row from meals_clients.
+     * @param string $client_type  'SDNB' or 'Veteran'.
+     * @param array  $duplicate_counts Map of individual_id_index => count of clients sharing that index.
+     * @param int    $duplicate_threshold How many is too many (SDNB = 2, Veteran = 1).
+     * @return string Comma-separated error messages, or 'No' if none.
+     */
+    private static function validate_client_row(
+        array $client,
+        string $client_type,
+        array $duplicate_counts,
+        int $duplicate_threshold = 2
+    ): string {
+        $errors = [];
+
+        // Missing field checks.
+        if ($client_type === 'SDNB') {
+            if (empty($client['service_id'])) {
+                $errors[] = 'Missing service ID';
+            }
+            if (empty($client['requisition_id'])) {
+                $errors[] = 'Missing requisition ID';
+            }
+        }
+
+        if (empty($client['individual_id'])) {
+            $errors[] = 'Missing individual ID';
+        }
+
+        // Duplicate check via deterministic index.
+        $id_index = $client['individual_id_index'] ?? '';
+        if ($id_index !== '' && isset($duplicate_counts[$id_index]) && $duplicate_counts[$id_index] > $duplicate_threshold) {
+            $errors[] = 'Duplicate person';
+        }
+
+        return !empty($errors) ? implode(', ', $errors) : 'No';
+    }
+
+    /**
+     * Check if a WordPress user was created during the billing period.
+     *
+     * @param int    $wp_user_id  WordPress user ID.
+     * @param string $start_date  Y-m-d.
+     * @param string $end_date    Y-m-d.
+     * @return string Flag text or empty string.
+     */
+    private static function check_new_user_flag(int $wp_user_id, string $start_date, string $end_date): string {
+        if ($wp_user_id <= 0) {
+            return '';
+        }
+
+        $user = get_userdata($wp_user_id);
+        if (!$user || empty($user->user_registered)) {
+            return '';
+        }
+
+        $registered   = new DateTime($user->user_registered);
+        $period_start = new DateTime($start_date);
+        $period_end   = new DateTime($end_date);
+
+        if ($registered >= $period_start && $registered <= $period_end) {
+            return 'New - account - user created on ' . $registered->format('Y-m-d');
+        }
+
+        return '';
+    }
+
+    /**
      * Query meals_clients from the external DB with a prepared statement.
      *
      * @param string $sql    SQL with ? placeholders.
@@ -544,8 +613,8 @@ class MealsDB_Invoice_Generator {
         $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
         $sql = sprintf(
             'SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
-                    individual_id, client_contribution, delivery_area_zone, default_rate_id,
-                    allowance_mains, allowance_sides, requisition_period
+                    individual_id, individual_id_index, client_contribution, delivery_area_zone,
+                    default_rate_id, allowance_mains, allowance_sides, requisition_period
              FROM `%s`
              WHERE client_type = ? AND use_legacy_billing = 1
                AND delivery_area_zone = ? AND active = 1 AND wp_user_id > 0',
@@ -555,15 +624,33 @@ class MealsDB_Invoice_Generator {
         $client_type = 'SDNB';
         $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
 
+        // Pre-compute duplicate individual_id counts for error checking.
+        $sdnb_duplicate_counts = [];
+        foreach ($client_rows as $c) {
+            $idx = $c['individual_id_index'] ?? '';
+            if ($idx !== '') {
+                if (!isset($sdnb_duplicate_counts[$idx])) {
+                    $sdnb_duplicate_counts[$idx] = 0;
+                }
+                $sdnb_duplicate_counts[$idx]++;
+            }
+        }
+
         // Fetch invoice data via allowance engine.
         $invoice_rows = self::get_allowance_data_for_clients($client_rows, $start_date, $end_date, $weeks_in_month);
 
         // Apply allowance engine + two-line splits to get final invoice lines.
         $all_invoice_lines = [];
         foreach ($invoice_rows as $row) {
+            $client = $row['client'];
+            $error_string  = self::validate_client_row($client, 'SDNB', $sdnb_duplicate_counts, 2);
+            $new_user_flag = self::check_new_user_flag((int) ($client['wp_user_id'] ?? 0), $start_date, $end_date);
+
             $lines = self::split_into_invoice_lines($row);
             foreach ($lines as $line) {
-                $all_invoice_lines[] = $line;
+                $line['errors']        = $error_string;
+                $line['new_user_flag'] = $new_user_flag;
+                $all_invoice_lines[]   = $line;
             }
         }
 
@@ -788,7 +875,7 @@ class MealsDB_Invoice_Generator {
             'SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
                     vet_health_card, requisition_period, client_contribution, default_rate_id,
                     apartment_number, street_number, street_name, city, postal_code, client_phone_1,
-                    allowance_mains, allowance_sides
+                    allowance_mains, allowance_sides, individual_id, individual_id_index
              FROM `%s`
              WHERE client_type = ? AND active = 1 AND wp_user_id > 0',
             $clients_table
@@ -799,6 +886,18 @@ class MealsDB_Invoice_Generator {
 
         if (empty($client_rows)) {
             return '';
+        }
+
+        // Pre-compute duplicate individual_id counts for error checking.
+        $vet_duplicate_counts = [];
+        foreach ($client_rows as $c) {
+            $idx = $c['individual_id_index'] ?? '';
+            if ($idx !== '') {
+                if (!isset($vet_duplicate_counts[$idx])) {
+                    $vet_duplicate_counts[$idx] = 0;
+                }
+                $vet_duplicate_counts[$idx]++;
+            }
         }
 
         // Fetch WC HPOS orders for all veterans.
@@ -992,7 +1091,7 @@ class MealsDB_Invoice_Generator {
             $new_total  = $vet_mains_cost + $sides_cost + $sides_tax;
 
             // Check for errors/warnings
-            $errors = '';
+            $errors = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
 
             $csv[] = sprintf(
                 '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s',
@@ -1031,7 +1130,7 @@ class MealsDB_Invoice_Generator {
                 number_format($sides_tax, 2, '.', ''),
                 number_format($new_total, 2, '.', ''),
                 $errors,
-                'No' // New user flag
+                self::check_new_user_flag((int) ($vet['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No'
             );
         }
 
