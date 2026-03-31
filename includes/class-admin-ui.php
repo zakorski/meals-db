@@ -897,6 +897,20 @@ class MealsDB_Admin_UI {
                     <th><label for="units"><?php esc_html_e('# of Units *', 'meals-db'); ?></label></th>
                     <td><input type="number" name="units" id="units" class="small-text" min="1" max="31" data-base-required="1" value="<?php echo esc_attr($client['units'] ?? ''); ?>" /></td>
                 </tr>
+                <tr data-client-type="sdnb,veteran">
+                    <th><label for="allowance_mains"><?php esc_html_e('Mains Allowance', 'meals-db'); ?></label></th>
+                    <td>
+                        <input type="number" name="allowance_mains" id="allowance_mains" min="0" class="regular-text" value="<?php echo esc_attr($client['allowance_mains'] ?? ''); ?>" />
+                        <p class="description"><?php esc_html_e('Number of main meals allowed per billing period (per requisition period).', 'meals-db'); ?></p>
+                    </td>
+                </tr>
+                <tr data-client-type="sdnb,veteran">
+                    <th><label for="allowance_sides"><?php esc_html_e('Sides Allowance', 'meals-db'); ?></label></th>
+                    <td>
+                        <input type="number" name="allowance_sides" id="allowance_sides" min="0" class="regular-text" value="<?php echo esc_attr($client['allowance_sides'] ?? ''); ?>" />
+                        <p class="description"><?php esc_html_e('Number of side items allowed per billing period (per requisition period).', 'meals-db'); ?></p>
+                    </td>
+                </tr>
                 <?php
             },
         ];

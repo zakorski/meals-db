@@ -87,6 +87,8 @@ class MealsDB_Client_Form {
         'termination_date',
         'most_recent_renewal_date',
         'units',
+        'allowance_mains',
+        'allowance_sides',
         'diet_concerns',
         'client_comments',
     ];
@@ -196,6 +198,8 @@ class MealsDB_Client_Form {
         'termination_date'               => 'Termination Date',
         'most_recent_renewal_date'       => 'Most Recent Renewal Date',
         'units'                          => '# of Units',
+        'allowance_mains'                => 'Mains Allowance',
+        'allowance_sides'                => 'Sides Allowance',
         'diet_concerns'                  => 'Diet Concerns',
         'client_comments'                => 'Client Comments',
     ];
