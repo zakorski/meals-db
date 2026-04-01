@@ -95,6 +95,24 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         <pre id="mealsdb-sync-log" style="display:none; max-height:200px; overflow:auto; background:#f5f5f5; padding:8px; margin-top:8px; font-size:12px;"></pre>
     </div>
 
+    <div class="mealsdb-backfill-allowances">
+        <h2><?php echo esc_html__('Backfill Allowance Data', 'meals-db'); ?></h2>
+        <div style="padding: 0 0 12px;">
+            <p class="description">
+                <?php echo esc_html__('Reads mains, sides, and service from legacy WordPress user meta and writes them to allowance_mains, allowance_sides, and requisition_period on the corresponding meals_clients record.', 'meals-db'); ?>
+            </p>
+            <p style="margin-top: 12px;">
+                <button type="button" class="button" id="backfill-dry-run">
+                    <?php echo esc_html__('Dry Run', 'meals-db'); ?>
+                </button>
+                <button type="button" class="button button-primary" id="backfill-run" disabled>
+                    <?php echo esc_html__('Run Backfill', 'meals-db'); ?>
+                </button>
+            </p>
+            <div id="backfill-result" style="margin-top: 10px;"></div>
+        </div>
+    </div>
+
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
 </div>
@@ -309,6 +327,78 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
             setBar(i, 0);
             setStatus(i, '');
         }
+    });
+
+})(jQuery);
+</script>
+
+<script>
+(function($) {
+    'use strict';
+
+    var backfillNonce = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
+
+    function showBackfillResult(msg, type) {
+        var cls = type === 'error' ? 'notice-error' : 'notice-success';
+        $('#backfill-result').html('<div class="notice ' + cls + ' inline" style="margin:0;"><p>' + msg + '</p></div>');
+    }
+
+    $('#backfill-dry-run').on('click', function() {
+        var $btn = $(this);
+        $btn.prop('disabled', true).text('Running...');
+        $('#backfill-result').empty();
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_backfill_allowances',
+            nonce: backfillNonce,
+            dry_run: 1
+        }, function(resp) {
+            $btn.prop('disabled', false).text('Dry Run');
+            if (resp.success) {
+                var d = resp.data;
+                showBackfillResult(
+                    'Dry run complete. Total: ' + d.total + ', Would update: ' + d.updated +
+                    ', Skipped (no meta): ' + d.skipped + ', Errors: ' + d.errors,
+                    'success'
+                );
+                $('#backfill-run').prop('disabled', false);
+            } else {
+                showBackfillResult(resp.data.message || 'Dry run failed.', 'error');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false).text('Dry Run');
+            showBackfillResult('Request failed.', 'error');
+        });
+    });
+
+    $('#backfill-run').on('click', function() {
+        if (!confirm('This will update allowance_mains, allowance_sides, and requisition_period on all matching meals_clients records. Continue?')) {
+            return;
+        }
+
+        var $btn = $(this);
+        $btn.prop('disabled', true).text('Running...');
+        $('#backfill-result').empty();
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_backfill_allowances',
+            nonce: backfillNonce
+        }, function(resp) {
+            $btn.prop('disabled', false).text('Run Backfill');
+            if (resp.success) {
+                var d = resp.data;
+                showBackfillResult(
+                    'Backfill complete. Total: ' + d.total + ', Updated: ' + d.updated +
+                    ', Skipped: ' + d.skipped + ', Errors: ' + d.errors,
+                    'success'
+                );
+            } else {
+                showBackfillResult(resp.data.message || 'Backfill failed.', 'error');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false).text('Run Backfill');
+            showBackfillResult('Request failed.', 'error');
+        });
     });
 
 })(jQuery);
