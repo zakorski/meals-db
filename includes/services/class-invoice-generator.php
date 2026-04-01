@@ -852,7 +852,7 @@ class MealsDB_Invoice_Generator {
                 '', // Other Cost (admin fees)
                 '', // Other Cost (recreation)
                 '', // Other Cost (parking)
-                '', // Client Contribution
+                number_format((float) ($r['client_contribution'] ?? 0), 2, '.', ''), // Client Contribution
                 '', // Stat Holiday Units
                 number_format($r['tax_amount'], 2, '.', '')
             );
