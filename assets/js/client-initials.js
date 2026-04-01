@@ -148,14 +148,10 @@
 
         const getAddressData = () => {
             const addressFields = [
-                'address_street_number',
                 'address_street_name',
-                'address_unit',
                 'address_city',
                 'address_postal_code',
-                'delivery_address_street_number',
                 'delivery_address_street_name',
-                'delivery_address_unit',
                 'delivery_address_city',
                 'delivery_address_postal_code'
             ];

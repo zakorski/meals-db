@@ -43,8 +43,7 @@ class MealsDB_Delivery_Slip_Generator {
         $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
         $sql   = sprintf(
             'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
-                    delivery_area_name, delivery_city, delivery_street_number,
-                    delivery_street_name, delivery_apartment_number
+                    delivery_area_name, delivery_city, delivery_street_name
              FROM `%s`
              WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = ?',
             $table
@@ -243,18 +242,7 @@ class MealsDB_Delivery_Slip_Generator {
                 ];
             }
 
-            // Build address.
-            $address_parts = [];
-            if (!empty($client['delivery_street_number'])) {
-                $address_parts[] = $client['delivery_street_number'];
-            }
-            if (!empty($client['delivery_street_name'])) {
-                $address_parts[] = $client['delivery_street_name'];
-            }
-            $address = implode(' ', $address_parts);
-            if (!empty($client['delivery_apartment_number'])) {
-                $address .= ', Apt ' . $client['delivery_apartment_number'];
-            }
+            $address = trim($client['delivery_street_name'] ?? '');
             if (!empty($client['delivery_city'])) {
                 $address .= ', ' . $client['delivery_city'];
             }
@@ -286,23 +274,18 @@ class MealsDB_Delivery_Slip_Generator {
                 'address'       => $address,
                 'item_summary'  => implode(' + ', $summary_parts),
                 'street_name'   => $client['delivery_street_name'] ?: '',
-                'street_number' => $client['delivery_street_number'] ?: '',
             ];
         }
 
         // Sort stops within each zone by street_name ASC, street_number ASC.
         foreach ($zones as &$group) {
             usort($group['stops'], function ($a, $b) {
-                $cmp = strcmp($a['street_name'], $b['street_name']);
-                if ($cmp !== 0) {
-                    return $cmp;
-                }
-                return strnatcmp($a['street_number'], $b['street_number']);
+                return strcmp($a['street_name'], $b['street_name']);
             });
 
             // Remove sort helper fields.
             foreach ($group['stops'] as &$stop) {
-                unset($stop['street_name'], $stop['street_number']);
+                unset($stop['street_name']);
             }
             unset($stop);
         }

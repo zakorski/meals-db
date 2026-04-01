@@ -226,18 +226,9 @@ class MealsDB_Initials_Validator {
 	 */
 	private static function normalize_delivery_address($client_data) {
 		// Use delivery address if present, otherwise use primary address
-		// Handle both form field names (address_street_number) and DB column names (street_number)
+		// Handle both form field names (address_street_name) and DB column names (street_name)
 
-		// Street number
-		$street_number = !empty($client_data['delivery_address_street_number'])
-			? $client_data['delivery_address_street_number']
-			: (!empty($client_data['delivery_street_number'])
-				? $client_data['delivery_street_number']
-				: (!empty($client_data['address_street_number'])
-					? $client_data['address_street_number']
-					: ($client_data['street_number'] ?? '')));
-
-		// Street name
+		// Street name (now contains full address including street number and unit)
 		$street_name = !empty($client_data['delivery_address_street_name'])
 			? $client_data['delivery_address_street_name']
 			: (!empty($client_data['delivery_street_name'])
@@ -245,15 +236,6 @@ class MealsDB_Initials_Validator {
 				: (!empty($client_data['address_street_name'])
 					? $client_data['address_street_name']
 					: ($client_data['street_name'] ?? '')));
-
-		// Unit/Apartment
-		$unit = !empty($client_data['delivery_address_unit'])
-			? $client_data['delivery_address_unit']
-			: (!empty($client_data['delivery_apartment_number'])
-				? $client_data['delivery_apartment_number']
-				: (!empty($client_data['address_unit'])
-					? $client_data['address_unit']
-					: ($client_data['apartment_number'] ?? '')));
 
 		// City
 		$city = !empty($client_data['delivery_address_city'])
@@ -274,9 +256,7 @@ class MealsDB_Initials_Validator {
 					: ($client_data['postal_code'] ?? '')));
 
 		return array(
-			'street_number' => trim(strtolower((string) $street_number)),
 			'street_name'   => trim(strtolower((string) $street_name)),
-			'unit'          => self::normalize_unit($unit),
 			'city'          => trim(strtolower((string) $city)),
 			'postal'        => self::normalize_postal($postal),
 		);
@@ -324,9 +304,7 @@ class MealsDB_Initials_Validator {
 	 * @return bool True if addresses match.
 	 */
 	private static function addresses_match($addr1, $addr2) {
-		return $addr1['street_number'] === $addr2['street_number']
-			&& $addr1['street_name'] === $addr2['street_name']
-			&& $addr1['unit'] === $addr2['unit']
+		return $addr1['street_name'] === $addr2['street_name']
 			&& $addr1['city'] === $addr2['city']
 			&& $addr1['postal'] === $addr2['postal'];
 	}

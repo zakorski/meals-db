@@ -60,7 +60,7 @@
 
         const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
 
-        const $addressSection = findSectionForField('#address_street_number');
+        const $addressSection = findSectionForField('#address_street_name');
         const $initialsSection = findSectionForField('#delivery_initials');
         const $sdnbSections = collectSectionsForType('sdnb');
         const $veteranSections = collectSectionsForType('veteran');
