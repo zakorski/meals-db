@@ -113,6 +113,24 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         </div>
     </div>
 
+    <div class="mealsdb-backfill-addresses">
+        <h2><?php echo esc_html__('Backfill Addresses & Rates', 'meals-db'); ?></h2>
+        <div style="padding: 0 0 12px;">
+            <p class="description">
+                <?php echo esc_html__('Fixes remaining migration data gaps: moves zone data from apartment_number to delivery_area_name, writes full address strings to street_name/delivery_street_name from WordPress usermeta, and links default_rate_id from meals_client_rates.', 'meals-db'); ?>
+            </p>
+            <p style="margin-top: 12px;">
+                <button type="button" class="button" id="backfill-addr-dry-run">
+                    <?php echo esc_html__('Dry Run', 'meals-db'); ?>
+                </button>
+                <button type="button" class="button button-primary" id="backfill-addr-run" disabled>
+                    <?php echo esc_html__('Run Backfill', 'meals-db'); ?>
+                </button>
+            </p>
+            <div id="backfill-addr-result" style="margin-top: 10px;"></div>
+        </div>
+    </div>
+
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
 </div>
@@ -398,6 +416,86 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         }).fail(function() {
             $btn.prop('disabled', false).text('Run Backfill');
             showBackfillResult('Request failed.', 'error');
+        });
+    });
+
+})(jQuery);
+</script>
+
+<script>
+(function($) {
+    'use strict';
+
+    var addrNonce = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
+
+    function showAddrResult(msg, type) {
+        var cls = type === 'error' ? 'notice-error' : 'notice-success';
+        $('#backfill-addr-result').html('<div class="notice ' + cls + ' inline" style="margin:0;"><p>' + msg + '</p></div>');
+    }
+
+    $('#backfill-addr-dry-run').on('click', function() {
+        var $btn = $(this);
+        $btn.prop('disabled', true).text('Running...');
+        $('#backfill-addr-result').empty();
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_backfill_addresses',
+            nonce: addrNonce,
+            dry_run: 1
+        }, function(resp) {
+            $btn.prop('disabled', false).text('Dry Run');
+            if (resp.success) {
+                var d = resp.data;
+                showAddrResult(
+                    'Dry run complete. Total: ' + d.total +
+                    ', Zones fixed: ' + d.zones_fixed +
+                    ', Addresses fixed: ' + d.addresses_fixed +
+                    ', Rates linked: ' + d.rates_linked +
+                    ', Skipped: ' + d.skipped +
+                    ', Errors: ' + d.errors,
+                    'success'
+                );
+                $('#backfill-addr-run').prop('disabled', false);
+            } else {
+                showAddrResult(resp.data.message || 'Dry run failed.', 'error');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false).text('Dry Run');
+            showAddrResult('Request failed.', 'error');
+        });
+    });
+
+    $('#backfill-addr-run').on('click', function() {
+        if (!confirm('This will update delivery_area_name, street_name, delivery_street_name, apartment_number, delivery_apartment_number, and default_rate_id on matching meals_clients records. Continue?')) {
+            return;
+        }
+
+        var $btn = $(this);
+        $btn.prop('disabled', true).text('Running...');
+        $('#backfill-addr-result').empty();
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_backfill_addresses',
+            nonce: addrNonce
+        }, function(resp) {
+            $btn.prop('disabled', false).text('Run Backfill');
+            if (resp.success) {
+                var d = resp.data;
+                showAddrResult(
+                    'Backfill complete. Total: ' + d.total +
+                    ', Zones fixed: ' + d.zones_fixed +
+                    ', Addresses fixed: ' + d.addresses_fixed +
+                    ', Rates linked: ' + d.rates_linked +
+                    ', Skipped: ' + d.skipped +
+                    ', Errors: ' + d.errors,
+                    'success'
+                );
+            } else {
+                showAddrResult(resp.data.message || 'Backfill failed.', 'error');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false).text('Run Backfill');
+            showAddrResult('Request failed.', 'error');
         });
     });
 

@@ -861,6 +861,8 @@ class MealsDB_Migration {
             $sc_raw   = $meta['service_centre_charged'] ?? '';
             $zone     = $zone_map[ $sc_raw ] ?? null;
 
+            $delivery_area_name = $meta['billing_address_2'] ?? null;
+
             // Determine open date
             $open_date = null;
             if ( ! empty( $meta['commence_date'] ) && $meta['commence_date'] !== '0' ) {
@@ -967,7 +969,7 @@ class MealsDB_Migration {
                     requisition_period, units, client_contribution,
                     allowance_mains, allowance_sides,
                     vet_health_card, vet_health_card_index,
-                    service_center_charged, delivery_area_zone, service_name_zone,
+                    service_center_charged, delivery_area_zone, delivery_area_name, service_name_zone,
                     delivery_frequency, ordering_frequency, freezer_capacity,
                     delivery_fee, diet_concerns, customer_comments,
                     service_commence_date, expected_termination_date,
@@ -990,7 +992,7 @@ class MealsDB_Migration {
                     ?, ?, ?,
                     ?, ?,
                     ?, ?,
-                    ?, ?, ?,
+                    ?, ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
                     ?, ?,
@@ -1016,7 +1018,7 @@ class MealsDB_Migration {
             }
 
             $stmt->bind_param(
-                'issssssssssssssidiisssssiisdssssssssssssssssssssssssssiss',
+                'issssssssssssssidiissssssiisdssssssssssssssssssssssssssiss',
                 $uid, $client_type, $first, $last, $email,
                 $phone1, $phone2, $payment,
                 $open_date, $individual_id, $individual_id_index,
@@ -1024,7 +1026,7 @@ class MealsDB_Migration {
                 $req_period, $units, $contrib,
                 $allowance_mains_val, $allowance_sides_val,
                 $vet_health_card, $vet_health_card_index,
-                $sc_raw, $zone, $service_name_zone,
+                $sc_raw, $zone, $delivery_area_name, $service_name_zone,
                 $del_freq, $ord_freq, $freeze_cap,
                 $del_fee, $diet, $comments,
                 $commence, $term_date,

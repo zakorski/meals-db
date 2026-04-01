@@ -22,6 +22,7 @@ class MealsDB_Ajax_Migration {
         add_action( 'wp_ajax_mealsdb_migration_reset',       [ self::class, 'reset' ] );
         add_action( 'wp_ajax_mealsdb_migration_log',         [ self::class, 'get_log' ] );
         add_action( 'wp_ajax_mealsdb_backfill_allowances',   [ self::class, 'backfill_allowances' ] );
+        add_action( 'wp_ajax_mealsdb_backfill_addresses',   [ self::class, 'backfill_addresses' ] );
     }
 
     /**
@@ -340,6 +341,35 @@ class MealsDB_Ajax_Migration {
         require_once dirname(dirname(__FILE__)) . '/services/class-backfill-allowances.php';
 
         $result = MealsDB_Backfill_Allowances::run($dry_run);
+
+        if (isset($result['error'])) {
+            wp_send_json_error(['message' => $result['error']]);
+            return;
+        }
+
+        wp_send_json_success($result);
+    }
+
+    /**
+     * Backfill addresses, delivery_area_name (zone data), and default_rate_id
+     * from legacy wp_usermeta values and meals_client_rates.
+     */
+    public static function backfill_addresses(): void {
+        if (!check_ajax_referer('mealsdb_nonce', 'nonce', false)) {
+            wp_send_json_error(['message' => 'Invalid security token.']);
+            return;
+        }
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Insufficient permissions.']);
+            return;
+        }
+
+        $dry_run = !empty($_POST['dry_run']);
+
+        require_once dirname(dirname(__FILE__)) . '/services/class-backfill-addresses.php';
+
+        $result = MealsDB_Backfill_Addresses::run($dry_run);
 
         if (isset($result['error'])) {
             wp_send_json_error(['message' => $result['error']]);
