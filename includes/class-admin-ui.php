@@ -532,6 +532,10 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/purchase-order.php');
                 break;
 
+            case 'fees':
+                include MealsDB_Plugin::path('views/fee-reconciliation.php');
+                break;
+
             case 'updates':
                 include MealsDB_Plugin::path('views/updates.php');
                 break;
@@ -657,6 +661,7 @@ class MealsDB_Admin_UI {
             'ignored' => __('Ignored Conflicts', 'meals-db'),
             'slips'   => __('Daily Slips', 'meals-db'),
             'po'      => __('Purchase Order', 'meals-db'),
+            'fees'     => __('Fee Reconciliation', 'meals-db'),
             'updates'  => __('Updates', 'meals-db'),
             'settings' => __('Settings', 'meals-db'),
         ];
@@ -977,24 +982,8 @@ class MealsDB_Admin_UI {
             static function (array $client) {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="address_street_number"><?php esc_html_e('Street # *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_street_number" id="address_street_number" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_street_number'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="address_street_name"><?php esc_html_e('Address line 1 *', 'meals-db'); ?></label></th>
+                    <th><label for="address_street_name"><?php esc_html_e('Address *', 'meals-db'); ?></label></th>
                     <td><input type="text" name="address_street_name" id="address_street_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_street_name'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="address_unit"><?php esc_html_e('Address line 2 *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_unit" id="address_unit" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_unit'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -1029,16 +1018,8 @@ class MealsDB_Admin_UI {
                 <div id="delivery-address-fields" class="mealsdb-collapsible" <?php if (!$delivery_address_enabled) { echo 'style="display:none;"'; } ?>>
                     <table class="form-table">
                         <tr>
-                            <th><label for="delivery_address_street_number"><?php esc_html_e('Street #', 'meals-db'); ?></label></th>
-                            <td><input type="text" name="delivery_address_street_number" id="delivery_address_street_number" class="regular-text" value="<?php echo esc_attr($form_values['delivery_address_street_number'] ?? ''); ?>" /></td>
-                        </tr>
-                        <tr>
-                            <th><label for="delivery_address_street_name"><?php esc_html_e('Address line 1', 'meals-db'); ?></label></th>
+                            <th><label for="delivery_address_street_name"><?php esc_html_e('Delivery Address', 'meals-db'); ?></label></th>
                             <td><input type="text" name="delivery_address_street_name" id="delivery_address_street_name" class="regular-text" value="<?php echo esc_attr($form_values['delivery_address_street_name'] ?? ''); ?>" /></td>
-                        </tr>
-                        <tr>
-                            <th><label for="delivery_address_unit"><?php esc_html_e('Address line 2', 'meals-db'); ?></label></th>
-                            <td><input type="text" name="delivery_address_unit" id="delivery_address_unit" class="regular-text" value="<?php echo esc_attr($form_values['delivery_address_unit'] ?? ''); ?>" /></td>
                         </tr>
                         <tr>
                             <th><label for="delivery_address_city"><?php esc_html_e('City', 'meals-db'); ?></label></th>

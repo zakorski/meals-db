@@ -861,6 +861,8 @@ class MealsDB_Migration {
             $sc_raw   = $meta['service_centre_charged'] ?? '';
             $zone     = $zone_map[ $sc_raw ] ?? null;
 
+            $delivery_area_name = $meta['billing_address_2'] ?? null;
+
             // Determine open date
             $open_date = null;
             if ( ! empty( $meta['commence_date'] ) && $meta['commence_date'] !== '0' ) {
@@ -928,17 +930,13 @@ class MealsDB_Migration {
             }
 
             // Address fields – WooCommerce billing meta
-            $street_number = $meta['mealsdb_street_number'] ?? null;
-            $street_name   = $meta['mealsdb_street_name']   ?? $meta['billing_address_1'] ?? null;
-            $apt_number    = $meta['mealsdb_apartment_number'] ?? $meta['billing_address_2'] ?? null;
+            $street_name   = $meta['billing_address_1'] ?? null;
             $city          = $meta['billing_city']     ?? null;
             $province      = $meta['billing_state']    ?? null;
             $postal_code   = $meta['billing_postcode'] ?? null;
 
             // Delivery address fields – WooCommerce shipping meta
-            $del_street_number = $meta['mealsdb_delivery_street_number'] ?? null;
-            $del_street_name   = $meta['mealsdb_delivery_street_name']   ?? $meta['shipping_address_1'] ?? null;
-            $del_apt_number    = $meta['mealsdb_delivery_apartment_number'] ?? $meta['shipping_address_2'] ?? null;
+            $del_street_name   = $meta['shipping_address_1'] ?? null;
             $del_city          = $meta['shipping_city']     ?? null;
             $del_province      = $meta['shipping_state']    ?? null;
             $del_postal_code   = $meta['shipping_postcode'] ?? null;
@@ -971,14 +969,14 @@ class MealsDB_Migration {
                     requisition_period, units, client_contribution,
                     allowance_mains, allowance_sides,
                     vet_health_card, vet_health_card_index,
-                    service_center_charged, delivery_area_zone, service_name_zone,
+                    service_center_charged, delivery_area_zone, delivery_area_name, service_name_zone,
                     delivery_frequency, ordering_frequency, freezer_capacity,
                     delivery_fee, diet_concerns, customer_comments,
                     service_commence_date, expected_termination_date,
                     notes_to_service_provider,
                     delivery_initials, delivery_initials_index,
-                    street_number, street_name, apartment_number, city, province, postal_code,
-                    delivery_street_number, delivery_street_name, delivery_apartment_number,
+                    street_name, city, province, postal_code,
+                    delivery_street_name,
                     delivery_city, delivery_province, delivery_postal_code,
                     alternate_contact_name, alternate_contact_phone_1,
                     alternate_contact_phone_2, alternate_contact_email,
@@ -994,14 +992,14 @@ class MealsDB_Migration {
                     ?, ?, ?,
                     ?, ?,
                     ?, ?,
-                    ?, ?, ?,
+                    ?, ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
                     ?, ?,
                     ?,
                     ?, ?,
-                    ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?,
                     ?, ?, ?,
                     ?, ?,
                     ?, ?,
@@ -1020,7 +1018,7 @@ class MealsDB_Migration {
             }
 
             $stmt->bind_param(
-                'issssssssssssssidiisssssiisdssssssssssssssssssssssssssssssiss',
+                'issssssssssssssidiissssssiisdssssssssssssssssssssssssssiss',
                 $uid, $client_type, $first, $last, $email,
                 $phone1, $phone2, $payment,
                 $open_date, $individual_id, $individual_id_index,
@@ -1028,14 +1026,14 @@ class MealsDB_Migration {
                 $req_period, $units, $contrib,
                 $allowance_mains_val, $allowance_sides_val,
                 $vet_health_card, $vet_health_card_index,
-                $sc_raw, $zone, $service_name_zone,
+                $sc_raw, $zone, $delivery_area_name, $service_name_zone,
                 $del_freq, $ord_freq, $freeze_cap,
                 $del_fee, $diet, $comments,
                 $commence, $term_date,
                 $notes_final,
                 $initials, $initials_index,
-                $street_number, $street_name, $apt_number, $city, $province, $postal_code,
-                $del_street_number, $del_street_name, $del_apt_number,
+                $street_name, $city, $province, $postal_code,
+                $del_street_name,
                 $del_city, $del_province, $del_postal_code,
                 $alt_name, $alt_phone1,
                 $alt_phone2, $alt_email,

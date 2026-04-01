@@ -852,7 +852,7 @@ class MealsDB_Invoice_Generator {
                 '', // Other Cost (admin fees)
                 '', // Other Cost (recreation)
                 '', // Other Cost (parking)
-                '', // Client Contribution
+                number_format((float) ($r['client_contribution'] ?? 0), 2, '.', ''), // Client Contribution
                 '', // Stat Holiday Units
                 number_format($r['tax_amount'], 2, '.', '')
             );
@@ -874,7 +874,7 @@ class MealsDB_Invoice_Generator {
         $sql = sprintf(
             'SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
                     vet_health_card, requisition_period, client_contribution, default_rate_id,
-                    apartment_number, street_number, street_name, city, postal_code, client_phone_1,
+                    street_name, city, postal_code, client_phone_1,
                     allowance_mains, allowance_sides, individual_id, individual_id_index
              FROM `%s`
              WHERE client_type = ? AND active = 1 AND wp_user_id > 0',
@@ -998,13 +998,7 @@ class MealsDB_Invoice_Generator {
                 }
             }
 
-            // Build billing address from component fields.
-            $billing_address = '';
-            if (!empty($vet['apartment_number'])) {
-                $billing_address .= $vet['apartment_number'] . ' - ';
-            }
-            $billing_address .= ($vet['street_number'] ?? '') . ' ' . ($vet['street_name'] ?? '');
-            $billing_address  = trim($billing_address);
+            $billing_address = trim($vet['street_name'] ?? '');
 
             $billing_city    = $vet['city'] ?? '';
             $billing_postcode = $vet['postal_code'] ?? '';
@@ -1333,6 +1327,28 @@ class MealsDB_Invoice_Generator {
             'mains'         => (int) ($saved['mains'] ?? $defaults['mains']),
             'taxable_sides' => (int) ($saved['taxable_sides'] ?? $defaults['taxable_sides']),
             'nontax_sides'  => (int) ($saved['nontax_sides'] ?? $defaults['nontax_sides']),
+        ];
+    }
+
+    /**
+     * Get WooCommerce product IDs for fee line items (contribution and delivery fee).
+     *
+     * @return array{client_contribution: int, delivery_fee: int}
+     */
+    public static function get_fee_product_ids(): array {
+        $defaults = [
+            'client_contribution' => 5675,
+            'delivery_fee'        => 4122,
+        ];
+
+        $saved = get_option('mealsdb_fee_product_ids', []);
+        if (!is_array($saved)) {
+            $saved = [];
+        }
+
+        return [
+            'client_contribution' => (int) ($saved['client_contribution'] ?? $defaults['client_contribution']),
+            'delivery_fee'        => (int) ($saved['delivery_fee'] ?? $defaults['delivery_fee']),
         ];
     }
 
