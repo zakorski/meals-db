@@ -429,6 +429,178 @@ class MealsDB_Reports {
     }
 
     /**
+     * Reconcile client contributions: expected (from meals_clients) vs actual paid (fee product).
+     *
+     * @param string $start_date Y-m-d
+     * @param string $end_date   Y-m-d
+     * @return array ['rows' => [...], 'summary' => [...]]
+     */
+    public function contribution_reconciliation(string $start_date, string $end_date): array {
+        if (!$this->order_query instanceof MealsDB_WC_Order_Query) {
+            return ['rows' => [], 'summary' => self::empty_contribution_summary()];
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return ['rows' => [], 'summary' => self::empty_contribution_summary()];
+        }
+
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, first_name, last_name, client_contribution, client_type
+             FROM `%s`
+             WHERE client_contribution > 0 AND active = 1 AND wp_user_id > 0',
+            $clients_table
+        );
+
+        $result = $conn->query($sql);
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return ['rows' => [], 'summary' => self::empty_contribution_summary()];
+        }
+
+        $clients = [];
+        while ($row = $result->fetch_assoc()) {
+            $clients[] = $row;
+        }
+        $result->free();
+
+        $fee_ids = MealsDB_Invoice_Generator::get_fee_product_ids();
+        $contribution_product_id = $fee_ids['client_contribution'];
+
+        $rows = [];
+        $total_expected   = 0.0;
+        $total_paid       = 0.0;
+
+        foreach ($clients as $client) {
+            $wp_user_id  = (int) $client['wp_user_id'];
+            $expected    = (float) $client['client_contribution'];
+            $actual_paid = $this->order_query->get_total_paid_for_product(
+                $wp_user_id, $contribution_product_id, $start_date, $end_date
+            );
+            $difference  = round($expected - $actual_paid, 2);
+
+            $rows[] = [
+                'client_id'   => (int) $client['client_id'],
+                'wp_user_id'  => $wp_user_id,
+                'first_name'  => $client['first_name'],
+                'last_name'   => $client['last_name'],
+                'client_type' => $client['client_type'],
+                'expected'    => $expected,
+                'actual_paid' => round($actual_paid, 2),
+                'difference'  => $difference,
+            ];
+
+            $total_expected += $expected;
+            $total_paid     += $actual_paid;
+        }
+
+        return [
+            'rows'    => $rows,
+            'summary' => [
+                'total_clients'    => count($rows),
+                'total_expected'   => round($total_expected, 2),
+                'total_paid'       => round($total_paid, 2),
+                'total_difference' => round($total_expected - $total_paid, 2),
+            ],
+        ];
+    }
+
+    /**
+     * Reconcile delivery fees: expected (num_orders x fee) vs actual paid (fee product).
+     *
+     * @param string $start_date Y-m-d
+     * @param string $end_date   Y-m-d
+     * @return array ['rows' => [...], 'summary' => [...]]
+     */
+    public function delivery_fee_reconciliation(string $start_date, string $end_date): array {
+        if (!$this->order_query instanceof MealsDB_WC_Order_Query) {
+            return ['rows' => [], 'summary' => self::empty_delivery_summary()];
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return ['rows' => [], 'summary' => self::empty_delivery_summary()];
+        }
+
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, first_name, last_name, delivery_fee, client_type
+             FROM `%s`
+             WHERE delivery_fee > 0 AND active = 1 AND wp_user_id > 0',
+            $clients_table
+        );
+
+        $result = $conn->query($sql);
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return ['rows' => [], 'summary' => self::empty_delivery_summary()];
+        }
+
+        $clients = [];
+        while ($row = $result->fetch_assoc()) {
+            $clients[] = $row;
+        }
+        $result->free();
+
+        $fee_ids = MealsDB_Invoice_Generator::get_fee_product_ids();
+        $delivery_product_id = $fee_ids['delivery_fee'];
+
+        $rows = [];
+        $total_owed = 0.0;
+        $total_paid = 0.0;
+
+        foreach ($clients as $client) {
+            $wp_user_id   = (int) $client['wp_user_id'];
+            $delivery_fee = (float) $client['delivery_fee'];
+            $num_orders   = $this->order_query->get_order_count_for_user($wp_user_id, $start_date, $end_date);
+            $owed         = round($num_orders * $delivery_fee, 2);
+            $actual_paid  = $this->order_query->get_total_paid_for_product(
+                $wp_user_id, $delivery_product_id, $start_date, $end_date
+            );
+            $difference   = round($owed - $actual_paid, 2);
+
+            $rows[] = [
+                'client_id'    => (int) $client['client_id'],
+                'wp_user_id'   => $wp_user_id,
+                'first_name'   => $client['first_name'],
+                'last_name'    => $client['last_name'],
+                'client_type'  => $client['client_type'],
+                'delivery_fee' => $delivery_fee,
+                'num_orders'   => $num_orders,
+                'total_owed'   => $owed,
+                'actual_paid'  => round($actual_paid, 2),
+                'difference'   => $difference,
+            ];
+
+            $total_owed += $owed;
+            $total_paid += $actual_paid;
+        }
+
+        return [
+            'rows'    => $rows,
+            'summary' => [
+                'total_clients'    => count($rows),
+                'total_owed'       => round($total_owed, 2),
+                'total_paid'       => round($total_paid, 2),
+                'total_difference' => round($total_owed - $total_paid, 2),
+            ],
+        ];
+    }
+
+    /**
+     * @return array
+     */
+    private static function empty_contribution_summary(): array {
+        return ['total_clients' => 0, 'total_expected' => 0, 'total_paid' => 0, 'total_difference' => 0];
+    }
+
+    /**
+     * @return array
+     */
+    private static function empty_delivery_summary(): array {
+        return ['total_clients' => 0, 'total_owed' => 0, 'total_paid' => 0, 'total_difference' => 0];
+    }
+
+    /**
      * Normalise date inputs to MySQL datetime strings.
      *
      * @param string|int $start_date

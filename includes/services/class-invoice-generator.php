@@ -1331,6 +1331,28 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * Get WooCommerce product IDs for fee line items (contribution and delivery fee).
+     *
+     * @return array{client_contribution: int, delivery_fee: int}
+     */
+    public static function get_fee_product_ids(): array {
+        $defaults = [
+            'client_contribution' => 5675,
+            'delivery_fee'        => 4122,
+        ];
+
+        $saved = get_option('mealsdb_fee_product_ids', []);
+        if (!is_array($saved)) {
+            $saved = [];
+        }
+
+        return [
+            'client_contribution' => (int) ($saved['client_contribution'] ?? $defaults['client_contribution']),
+            'delivery_fee'        => (int) ($saved['delivery_fee'] ?? $defaults['delivery_fee']),
+        ];
+    }
+
+    /**
      * Get SDNB clients with non-zero overages for a billing period.
      *
      * @param string $zone           Zone code (M or S).

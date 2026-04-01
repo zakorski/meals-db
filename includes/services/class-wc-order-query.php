@@ -333,6 +333,87 @@ class MealsDB_WC_Order_Query {
     }
 
     /**
+     * Get total paid for a specific product by a specific user in a date range.
+     *
+     * Uses HPOS tables to sum line_subtotal for matching product/user/date combinations.
+     *
+     * @param int    $wp_user_id
+     * @param int    $wc_product_id
+     * @param string $start_date Y-m-d
+     * @param string $end_date   Y-m-d
+     * @return float
+     */
+    public function get_total_paid_for_product(int $wp_user_id, int $wc_product_id, string $start_date, string $end_date): float {
+        $orders_table   = $this->orders_table();
+        $items_table    = $this->order_items_table();
+        $itemmeta_table = $this->order_itemmeta_table();
+
+        $end_exclusive = gmdate('Y-m-d', strtotime($end_date . ' +1 day'));
+
+        $sql = "
+            SELECT COALESCE(SUM(CAST(subtotal_meta.meta_value AS DECIMAL(20,6))), 0) AS total_paid
+            FROM {$orders_table} o
+            INNER JOIN {$items_table} oi ON oi.order_id = o.id
+            INNER JOIN {$itemmeta_table} product_meta
+                ON product_meta.order_item_id = oi.order_item_id
+                AND product_meta.meta_key = '_product_id'
+            INNER JOIN {$itemmeta_table} subtotal_meta
+                ON subtotal_meta.order_item_id = oi.order_item_id
+                AND subtotal_meta.meta_key = '_line_subtotal'
+            WHERE o.customer_id = %d
+                AND o.type = 'shop_order'
+                AND o.status IN ('wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid',
+                                 'pending', 'processing', 'on-hold', 'completed', 'paid')
+                AND o.date_created_gmt >= %s
+                AND o.date_created_gmt < %s
+                AND CAST(product_meta.meta_value AS UNSIGNED) = %d
+        ";
+
+        $result = $this->wpdb->get_var($this->wpdb->prepare(
+            $sql,
+            $wp_user_id,
+            $start_date,
+            $end_exclusive,
+            $wc_product_id
+        ));
+
+        return (float) ($result ?? 0);
+    }
+
+    /**
+     * Count orders for a specific user in a date range.
+     *
+     * @param int    $wp_user_id
+     * @param string $start_date Y-m-d
+     * @param string $end_date   Y-m-d
+     * @return int
+     */
+    public function get_order_count_for_user(int $wp_user_id, string $start_date, string $end_date): int {
+        $orders_table = $this->orders_table();
+
+        $end_exclusive = gmdate('Y-m-d', strtotime($end_date . ' +1 day'));
+
+        $sql = "
+            SELECT COUNT(*) FROM {$orders_table}
+            WHERE customer_id = %d
+                AND type = 'shop_order'
+                AND status IN ('wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid',
+                               'pending', 'processing', 'on-hold', 'completed', 'paid')
+                AND date_created_gmt >= %s
+                AND date_created_gmt < %s
+        ";
+
+        $result = $this->wpdb->get_var($this->wpdb->prepare(
+            $sql,
+            $wp_user_id,
+            $start_date,
+            $end_exclusive
+        ));
+
+        return (int) ($result ?? 0);
+    }
+
+    /**
      * @return string Fully-prefixed wc_order_items table name.
      */
     private function order_items_table(): string {
