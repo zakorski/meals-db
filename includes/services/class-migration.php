@@ -874,6 +874,8 @@ class MealsDB_Migration {
                 $meal_note = "Mains: {$mains}, Sides: {$sides}";
                 $notes     = $notes ? $notes . ' ' . $meal_note : $meal_note;
             }
+            $allowance_mains_val = ($mains !== '' && $mains !== '0') ? (int) $mains : null;
+            $allowance_sides_val = ($sides !== '' && $sides !== '0') ? (int) $sides : null;
 
             if ( $dry_run ) {
                 $stats['created']++;
@@ -893,7 +895,9 @@ class MealsDB_Migration {
             $phone2    = $meta['mealsdb_client_phone_2'] ?? $meta['billing_phone_2'] ?? null;
             $payment   = $meta['payment_method']       ?? null;
             $service_id = $meta['service_id']           ?? null;
-            $req_period = $meta['rate']                 ?? null;
+            $req_period = $meta['service']              ?? null;
+            $period_map = ['day' => 'Day', 'week' => 'Week', 'month' => 'Month', 'weekly' => 'Week', 'monthly' => 'Month', 'daily' => 'Day'];
+            $req_period = isset($period_map[strtolower(trim($req_period ?? ''))]) ? $period_map[strtolower(trim($req_period))] : $req_period;
             $units      = ! empty( $meta['requisition_units'] ) ? (int) $meta['requisition_units'] : null;
             $contrib    = ! empty( $meta['contribution'] ) ? (float) $meta['contribution'] : null;
             $del_freq   = ! empty( $meta['delivery_frequency'] ) ? (int) $meta['delivery_frequency'] : null;
@@ -965,6 +969,7 @@ class MealsDB_Migration {
                     open_date, individual_id, individual_id_index,
                     service_id, requisition_id, requisition_id_index,
                     requisition_period, units, client_contribution,
+                    allowance_mains, allowance_sides,
                     vet_health_card, vet_health_card_index,
                     service_center_charged, delivery_area_zone, service_name_zone,
                     delivery_frequency, ordering_frequency, freezer_capacity,
@@ -987,6 +992,7 @@ class MealsDB_Migration {
                     ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
+                    ?, ?,
                     ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
@@ -1014,12 +1020,13 @@ class MealsDB_Migration {
             }
 
             $stmt->bind_param(
-                'issssssssssssssidsssssiisdssssssssssssssssssssssssssssssiss',
+                'issssssssssssssidiisssssiisdssssssssssssssssssssssssssssssiss',
                 $uid, $client_type, $first, $last, $email,
                 $phone1, $phone2, $payment,
                 $open_date, $individual_id, $individual_id_index,
                 $service_id, $requisition_id, $requisition_id_index,
                 $req_period, $units, $contrib,
+                $allowance_mains_val, $allowance_sides_val,
                 $vet_health_card, $vet_health_card_index,
                 $sc_raw, $zone, $service_name_zone,
                 $del_freq, $ord_freq, $freeze_cap,
