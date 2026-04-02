@@ -165,24 +165,44 @@ class MealsDB_Delivery_Slip_Generator {
     /**
      * Generate a packing slip: one entry per order, sorted by zone then initials.
      *
+     * Returns structured data with zone summaries, mains/sides subtotals,
+     * freezer-ordered items, and a separate no-zone section.
+     *
      * @param string $delivery_date Y-m-d.
      *
-     * @return array
+     * @return array {entries: [...], no_zone: [...], zone_summaries: [...]}
      */
     public function generate_packing_slip(string $delivery_date): array {
         $clients = $this->get_clients_for_delivery_date($delivery_date);
         if (empty($clients)) {
-            return [];
+            return ['entries' => [], 'no_zone' => [], 'zone_summaries' => []];
         }
 
         $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
         if (empty($orders)) {
-            return [];
+            return ['entries' => [], 'no_zone' => [], 'zone_summaries' => []];
         }
 
         $product_types = $this->resolve_product_types($orders);
 
+        // Batch-fetch freezer order meta for all products.
+        $all_product_ids = [];
+        foreach ($orders as $order) {
+            foreach ($order['items'] as $item) {
+                $pid = (int) $item['wc_product_id'];
+                if ($pid > 0) {
+                    $all_product_ids[$pid] = $pid;
+                }
+            }
+        }
+        $freezer_orders = $this->get_freezer_orders(array_values($all_product_ids));
+
         $entries = [];
+        $no_zone = [];
+
+        // Track per-zone aggregates for zone summaries.
+        $zone_agg = [];
+
         foreach ($orders as $order) {
             $uid    = (int) $order['wp_user_id'];
             $client = isset($clients[$uid]) ? $clients[$uid] : null;
@@ -196,27 +216,108 @@ class MealsDB_Delivery_Slip_Generator {
                 $type = isset($product_types[$pid]) ? $product_types[$pid]['product_type'] : 'meal';
 
                 $items[] = [
-                    'name'         => $item['order_item_name'],
-                    'quantity'     => (int) $item['quantity'],
-                    'product_type' => $type,
+                    'name'          => $item['order_item_name'],
+                    'quantity'      => (int) $item['quantity'],
+                    'product_type'  => $type,
+                    'wc_product_id' => $pid,
                 ];
             }
 
-            $entries[] = [
-                'initials'  => $client['delivery_initials'] ?: '',
-                'zone'      => $client['delivery_area_zone'] ?: '',
-                'area_name' => $client['delivery_area_name'] ?: '',
-                'items'     => $items,
+            // Sort items by freezer order ASC (items without meta go last).
+            usort($items, function ($a, $b) use ($freezer_orders) {
+                $fa = $freezer_orders[$a['wc_product_id']] ?? 9999;
+                $fb = $freezer_orders[$b['wc_product_id']] ?? 9999;
+                return $fa - $fb;
+            });
+
+            // Calculate mains/sides subtotals.
+            $cats = $this->categorize_items($order['items'], $product_types);
+
+            $zone_code = $client['delivery_area_zone'] ?: '';
+            $zone_name = $client['delivery_area_name'] ?: '';
+
+            $entry = [
+                'initials'    => $client['delivery_initials'] ?: '',
+                'zone'        => $zone_code,
+                'area_name'   => $zone_name,
+                'items'       => $items,
+                'mains_count' => $cats['mains_count'],
+                'sides_count' => $cats['sides_count'],
+                'side_detail' => $cats['side_detail'],
             ];
+
+            // Separate entries with no zone assignment.
+            if (empty(trim($zone_code)) && empty(trim($zone_name))) {
+                $no_zone[] = $entry;
+            } else {
+                $entries[] = $entry;
+
+                // Accumulate zone summary data.
+                $zkey = $zone_code . '|' . $zone_name;
+                if (!isset($zone_agg[$zkey])) {
+                    $zone_agg[$zkey] = [
+                        'zone'          => $zone_name,
+                        'zone_code'     => $zone_code,
+                        'total_orders'  => 0,
+                        'total_mains'   => 0,
+                        'total_sides'   => 0,
+                        'side_breakdown' => ['soup' => 0, 'muffins' => 0, 'cereal' => 0, 'dessert' => 0],
+                        'products'      => [],
+                    ];
+                }
+                $zone_agg[$zkey]['total_orders']++;
+                $zone_agg[$zkey]['total_mains'] += $cats['mains_count'];
+                $zone_agg[$zkey]['total_sides'] += $cats['sides_count'];
+                foreach ($cats['side_detail'] as $sk => $sv) {
+                    $zone_agg[$zkey]['side_breakdown'][$sk] += $sv;
+                }
+
+                // Accumulate per-product quantities for zone.
+                foreach ($items as $item) {
+                    $pid = $item['wc_product_id'];
+                    if (!isset($zone_agg[$zkey]['products'][$pid])) {
+                        $zone_agg[$zkey]['products'][$pid] = [
+                            'name' => $item['name'],
+                            'qty'  => 0,
+                            'type' => $item['product_type'],
+                        ];
+                    }
+                    $zone_agg[$zkey]['products'][$pid]['qty'] += $item['quantity'];
+                }
+            }
         }
 
-        // Sort by zone ASC, then initials ASC.
+        // Sort entries by zone ASC, then initials ASC.
         usort($entries, function ($a, $b) {
             $cmp = strcmp($a['zone'], $b['zone']);
             return $cmp !== 0 ? $cmp : strcmp($a['initials'], $b['initials']);
         });
 
-        return $entries;
+        // Build zone summaries array.
+        $zone_summaries = [];
+        foreach ($zone_agg as $za) {
+            // Convert products map to indexed array.
+            $prods = [];
+            foreach ($za['products'] as $pid => $p) {
+                $prods[] = ['name' => $p['name'], 'qty' => $p['qty'], 'type' => $p['type']];
+            }
+            usort($prods, function ($a, $b) {
+                $cmp = strcmp($a['type'], $b['type']);
+                return $cmp !== 0 ? $cmp : strcmp($a['name'], $b['name']);
+            });
+            $za['products'] = $prods;
+            $zone_summaries[] = $za;
+        }
+
+        usort($zone_summaries, function ($a, $b) {
+            return strcmp($a['zone_code'], $b['zone_code']);
+        });
+
+        return [
+            'entries'        => $entries,
+            'no_zone'        => $no_zone,
+            'zone_summaries' => $zone_summaries,
+        ];
     }
 
     /**
@@ -268,21 +369,21 @@ class MealsDB_Delivery_Slip_Generator {
     }
 
     /**
-     * Generate a delivery slip: route-grouped list by zone/area.
+     * Generate a delivery slip: route-grouped list by zone/area with cover sheet.
      *
      * @param string $delivery_date Y-m-d.
      *
-     * @return array
+     * @return array {zones: [...], cover: [...]}
      */
     public function generate_delivery_slip(string $delivery_date): array {
         $clients = $this->get_clients_for_delivery_date($delivery_date);
         if (empty($clients)) {
-            return [];
+            return ['zones' => [], 'cover' => []];
         }
 
         $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
         if (empty($orders)) {
-            return [];
+            return ['zones' => [], 'cover' => []];
         }
 
         $product_types = $this->resolve_product_types($orders);
@@ -305,6 +406,8 @@ class MealsDB_Delivery_Slip_Generator {
                     'zone'  => $zone,
                     'area'  => $area,
                     'stops' => [],
+                    'order_count' => 0,
+                    'total_items' => 0,
                 ];
             }
 
@@ -341,9 +444,11 @@ class MealsDB_Delivery_Slip_Generator {
                 'item_summary'  => implode(' + ', $summary_parts),
                 'street_name'   => $client['delivery_street_name'] ?: '',
             ];
+            $zones[$key]['order_count']++;
+            $zones[$key]['total_items'] += $meal_count + $side_count;
         }
 
-        // Sort stops within each zone by street_name ASC, street_number ASC.
+        // Sort stops within each zone by street_name ASC.
         foreach ($zones as &$group) {
             usort($group['stops'], function ($a, $b) {
                 return strcmp($a['street_name'], $b['street_name']);
@@ -364,7 +469,21 @@ class MealsDB_Delivery_Slip_Generator {
             return $cmp !== 0 ? $cmp : strcmp($a['area'], $b['area']);
         });
 
-        return $result;
+        // Build cover sheet from zone data.
+        $cover = [];
+        foreach ($result as $z) {
+            $cover[] = [
+                'zone'        => $z['zone'],
+                'area'        => $z['area'],
+                'order_count' => $z['order_count'],
+                'total_items' => $z['total_items'],
+            ];
+        }
+
+        return [
+            'zones' => $result,
+            'cover' => $cover,
+        ];
     }
 
     /**
@@ -467,6 +586,92 @@ class MealsDB_Delivery_Slip_Generator {
         unset($zone);
 
         return $result;
+    }
+
+    /**
+     * Batch-fetch _freezer_order product meta for the given product IDs.
+     *
+     * @param array $product_ids WC product IDs.
+     * @return array<int, int> Keyed by product ID → freezer order value.
+     */
+    private function get_freezer_orders(array $product_ids): array {
+        if (empty($product_ids) || !isset($GLOBALS['wpdb'])) {
+            return [];
+        }
+        $wpdb = $GLOBALS['wpdb'];
+        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT post_id, meta_value FROM {$wpdb->postmeta}
+             WHERE meta_key = '_freezer_order' AND post_id IN ($placeholders)",
+            ...$product_ids
+        ), ARRAY_A);
+
+        $map = [];
+        if (is_array($rows)) {
+            foreach ($rows as $r) {
+                $map[(int) $r['post_id']] = (int) $r['meta_value'];
+            }
+        }
+        return $map;
+    }
+
+    /**
+     * Categorize order items into mains/sides counts with side breakdown.
+     *
+     * Side categories: Soup=43, Muffins=37, Cereal=23, Dessert=25.
+     *
+     * @param array $items         Order items with wc_product_id and quantity.
+     * @param array $product_types Product type lookup keyed by wc_product_id.
+     * @return array {mains_count, sides_count, side_detail: {soup, muffins, cereal, dessert}}
+     */
+    private function categorize_items(array $items, array $product_types): array {
+        $mains   = 0;
+        $sides   = 0;
+        $soup    = 0;
+        $muffins = 0;
+        $cereal  = 0;
+        $dessert = 0;
+
+        // WC category IDs for side breakdown fallback.
+        $side_cat_map = [43 => 'soup', 37 => 'muffins', 23 => 'cereal', 25 => 'dessert'];
+
+        foreach ($items as $item) {
+            $pid = (int) $item['wc_product_id'];
+            $qty = (int) $item['quantity'];
+            $type = isset($product_types[$pid]) ? $product_types[$pid]['product_type'] : 'meal';
+
+            if ($type === 'meal') {
+                $mains += $qty;
+            } elseif ($type === 'side') {
+                $sides += $qty;
+                // Try to determine side sub-category via WC taxonomy.
+                $categorized = false;
+                if (function_exists('has_term')) {
+                    foreach ($side_cat_map as $cat_id => $cat_key) {
+                        if (has_term($cat_id, 'product_cat', $pid)) {
+                            $$cat_key += $qty;
+                            $categorized = true;
+                            break;
+                        }
+                    }
+                }
+                if (!$categorized) {
+                    // Default uncategorized sides to dessert bucket.
+                    $dessert += $qty;
+                }
+            }
+        }
+
+        return [
+            'mains_count' => $mains,
+            'sides_count' => $sides,
+            'side_detail' => [
+                'soup'    => $soup,
+                'muffins' => $muffins,
+                'cereal'  => $cereal,
+                'dessert' => $dessert,
+            ],
+        ];
     }
 
     /**

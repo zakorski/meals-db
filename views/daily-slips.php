@@ -81,17 +81,53 @@
     }
 
     function renderPackingSlip(data) {
-        if (!data.length) return '<p>No orders found.</p>';
+        var entries = data.entries || [];
+        var noZone  = data.no_zone || [];
+        var zoneSummaries = data.zone_summaries || [];
+        if (!entries.length && !noZone.length) return '<p>No orders found.</p>';
+
         var html = '<h3>Packing Slip</h3>';
-        html += '<table><thead><tr><th>Initials</th><th>Zone</th><th>Area</th><th>Items</th></tr></thead><tbody>';
-        $.each(data, function(i, entry) {
+
+        // Zone summaries.
+        if (zoneSummaries.length) {
+            html += '<h3>Zone Summary</h3>';
+            html += '<table><thead><tr><th>Zone</th><th>Orders</th><th>Mains</th><th>Sides</th><th>Soup</th><th>Muffins</th><th>Cereal</th><th>Dessert</th></tr></thead><tbody>';
+            $.each(zoneSummaries, function(i, z) {
+                var sd = z.side_breakdown || {};
+                html += '<tr><td>' + esc(z.zone) + '</td><td>' + z.total_orders + '</td><td>' + z.total_mains + '</td><td>' + z.total_sides + '</td>';
+                html += '<td>' + (sd.soup || 0) + '</td><td>' + (sd.muffins || 0) + '</td><td>' + (sd.cereal || 0) + '</td><td>' + (sd.dessert || 0) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+
+        // Main entries table.
+        html += '<h3>Orders</h3>';
+        html += '<table><thead><tr><th>Initials</th><th>Zone</th><th>Area</th><th>Mains</th><th>Sides</th><th>Items</th></tr></thead><tbody>';
+        $.each(entries, function(i, entry) {
             var items = [];
             $.each(entry.items, function(j, item) {
                 items.push(item.quantity + 'x ' + esc(item.name) + ' (' + esc(item.product_type) + ')');
             });
-            html += '<tr><td>' + esc(entry.initials) + '</td><td>' + esc(entry.zone) + '</td><td>' + esc(entry.area_name) + '</td><td>' + items.join('<br>') + '</td></tr>';
+            html += '<tr><td>' + esc(entry.initials) + '</td><td>' + esc(entry.zone) + '</td><td>' + esc(entry.area_name) + '</td>';
+            html += '<td>' + entry.mains_count + '</td><td>' + entry.sides_count + '</td>';
+            html += '<td>' + items.join('<br>') + '</td></tr>';
         });
         html += '</tbody></table>';
+
+        // No-zone warning section.
+        if (noZone.length) {
+            html += '<h3 style="color:#d63638;">Orders With No Zone</h3>';
+            html += '<table style="border-color:#d63638;"><thead><tr><th>Initials</th><th>Mains</th><th>Sides</th><th>Items</th></tr></thead><tbody>';
+            $.each(noZone, function(i, entry) {
+                var items = [];
+                $.each(entry.items, function(j, item) {
+                    items.push(item.quantity + 'x ' + esc(item.name));
+                });
+                html += '<tr><td>' + esc(entry.initials) + '</td><td>' + entry.mains_count + '</td><td>' + entry.sides_count + '</td><td>' + items.join('<br>') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+
         return html;
     }
 
@@ -107,9 +143,23 @@
     }
 
     function renderDeliverySlip(data) {
-        if (!data.length) return '<p>No orders found.</p>';
+        var zones = data.zones || data;
+        var cover = data.cover || [];
+        if ((!zones.length && !cover.length)) return '<p>No orders found.</p>';
         var html = '<h3>Delivery Slip</h3>';
-        $.each(data, function(i, group) {
+
+        // Cover sheet / delivery schedule.
+        if (cover.length) {
+            html += '<h3>Delivery Schedule</h3>';
+            html += '<table><thead><tr><th>Zone</th><th>Area</th><th>Orders</th><th>Total Items</th></tr></thead><tbody>';
+            $.each(cover, function(i, c) {
+                html += '<tr><td>' + esc(c.zone) + '</td><td>' + esc(c.area) + '</td><td>' + c.order_count + '</td><td>' + c.total_items + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+
+        // Zone detail.
+        $.each(zones, function(i, group) {
             html += '<h3>' + esc(group.zone) + ' &mdash; ' + esc(group.area) + '</h3>';
             html += '<table><thead><tr><th>Initials</th><th>Address</th><th>Items</th></tr></thead><tbody>';
             $.each(group.stops, function(j, stop) {
