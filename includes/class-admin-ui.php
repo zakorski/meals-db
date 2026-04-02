@@ -540,6 +540,10 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/private-sales.php');
                 break;
 
+            case 'errors':
+                include MealsDB_Plugin::path('views/order-errors.php');
+                break;
+
             case 'updates':
                 include MealsDB_Plugin::path('views/updates.php');
                 break;
@@ -667,6 +671,7 @@ class MealsDB_Admin_UI {
             'po'      => __('Purchase Order', 'meals-db'),
             'fees'     => __('Fee Reconciliation', 'meals-db'),
             'privates' => __('Private Sales', 'meals-db'),
+            'errors'   => __('Order Errors', 'meals-db'),
             'updates'  => __('Updates', 'meals-db'),
             'settings' => __('Settings', 'meals-db'),
         ];

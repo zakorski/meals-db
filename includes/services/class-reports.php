@@ -810,6 +810,206 @@ class MealsDB_Reports {
     }
 
     /**
+     * Run data quality checks across WC orders in a date range.
+     *
+     * Checks for missing names, oversized initials, missing/invalid zones,
+     * missing addresses, and orders with no meals_clients record.
+     *
+     * @param string $start_date Y-m-d
+     * @param string $end_date   Y-m-d
+     * @return array ['errors' => [...], 'summary' => [...]]
+     */
+    public function order_error_report(string $start_date, string $end_date): array {
+        $empty_summary = [
+            'total_orders_checked' => 0,
+            'orders_with_errors'   => 0,
+            'error_counts'         => [],
+        ];
+
+        if (!$this->wpdb instanceof wpdb) {
+            return ['errors' => [], 'summary' => $empty_summary];
+        }
+
+        // Valid zones from option or default list.
+        $valid_zones = get_option('mealsdb_valid_zones', [
+            'Zone 1', 'Zone 2', 'Zone 3', 'Zone 4', 'Zone 5', 'Zone 6',
+        ]);
+
+        // 1. Batch-fetch all orders in the date range from HPOS.
+        $orders_table = $this->wpdb->prefix . 'wc_orders';
+        $start_dt = $start_date . ' 00:00:00';
+        $end_dt   = $end_date . ' 23:59:59';
+
+        $order_rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT id, customer_id, date_created_gmt, status
+             FROM {$orders_table}
+             WHERE date_created_gmt >= %s AND date_created_gmt <= %s
+               AND status NOT IN ('wc-trash', 'trash')
+               AND type = 'shop_order'
+             ORDER BY date_created_gmt ASC",
+            $start_dt, $end_dt
+        ), ARRAY_A);
+
+        if (!is_array($order_rows) || empty($order_rows)) {
+            return ['errors' => [], 'summary' => $empty_summary];
+        }
+
+        // 2. Collect unique customer_ids and batch-fetch meals_clients records.
+        $customer_ids = array_unique(array_filter(array_column($order_rows, 'customer_id')));
+        $clients_map  = [];
+
+        if (!empty($customer_ids)) {
+            $conn = MealsDB_DB::get_connection();
+            if (MealsDB_DB::is_mysqli($conn)) {
+                $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+                $placeholders  = implode(',', array_fill(0, count($customer_ids), '?'));
+                $sql = sprintf(
+                    "SELECT wp_user_id, delivery_initials, delivery_area_name,
+                            delivery_area_zone, delivery_street_name
+                     FROM `%s`
+                     WHERE wp_user_id IN (%s)",
+                    $clients_table, $placeholders
+                );
+
+                $stmt = $conn->prepare($sql);
+                if (MealsDB_DB::is_mysqli_stmt($stmt)) {
+                    $types = str_repeat('i', count($customer_ids));
+                    $stmt->bind_param($types, ...array_values($customer_ids));
+                    if ($stmt->execute()) {
+                        $result = $stmt->get_result();
+                        if (MealsDB_DB::is_mysqli_result($result)) {
+                            while ($row = $result->fetch_assoc()) {
+                                $clients_map[(int) $row['wp_user_id']] = $row;
+                            }
+                        }
+                    }
+                    $stmt->close();
+                }
+            }
+        }
+
+        // 3. Run checks per order.
+        $errors       = [];
+        $error_counts = [];
+        $errored_ids  = [];
+
+        foreach ($order_rows as $orow) {
+            $order_id    = (int) $orow['id'];
+            $customer_id = (int) $orow['customer_id'];
+            $order_date  = substr($orow['date_created_gmt'], 0, 10);
+            $client      = isset($clients_map[$customer_id]) ? $clients_map[$customer_id] : null;
+
+            $order_errors = [];
+
+            if (!$client && $customer_id > 0) {
+                // No meals_clients record — still check WC fields via wc_get_order.
+                $wc_order = wc_get_order($order_id);
+                if ($wc_order) {
+                    $customer_name = trim($wc_order->get_billing_first_name() . ' ' . $wc_order->get_billing_last_name());
+
+                    if (empty(trim($wc_order->get_billing_first_name()))) {
+                        $order_errors[] = ['type' => 'missing_first_name', 'detail' => 'Billing first name is empty'];
+                    }
+                    if (empty(trim($wc_order->get_billing_last_name()))) {
+                        $order_errors[] = ['type' => 'missing_last_name', 'detail' => 'Billing last name is empty'];
+                    }
+                    if (empty(trim($wc_order->get_shipping_address_1()))) {
+                        $order_errors[] = ['type' => 'missing_address', 'detail' => 'No shipping/delivery address'];
+                    }
+
+                    $order_errors[] = ['type' => 'no_client_record', 'detail' => 'Customer not found in meals_clients'];
+                } else {
+                    $customer_name = 'Unknown';
+                    $order_errors[] = ['type' => 'no_client_record', 'detail' => 'Customer not found in meals_clients'];
+                }
+            } elseif ($client) {
+                // Have a meals_clients record — check against it.
+                $wc_order = wc_get_order($order_id);
+                $customer_name = $wc_order
+                    ? trim($wc_order->get_billing_first_name() . ' ' . $wc_order->get_billing_last_name())
+                    : 'Unknown';
+
+                // Check 1: Missing first name.
+                if ($wc_order && empty(trim($wc_order->get_billing_first_name()))) {
+                    $order_errors[] = ['type' => 'missing_first_name', 'detail' => 'Billing first name is empty'];
+                }
+
+                // Check 2: Missing last name.
+                if ($wc_order && empty(trim($wc_order->get_billing_last_name()))) {
+                    $order_errors[] = ['type' => 'missing_last_name', 'detail' => 'Billing last name is empty'];
+                }
+
+                // Check 3: Initials too long.
+                $initials = $client['delivery_initials'] ?? '';
+                if (strlen($initials) > 3) {
+                    $order_errors[] = [
+                        'type'   => 'nickname_too_long',
+                        'detail' => 'Initials "' . $initials . '" is ' . strlen($initials) . ' chars (expected 3)',
+                    ];
+                }
+
+                // Check 4: Missing zone.
+                $zone = $client['delivery_area_name'] ?? '';
+                if (empty(trim($zone))) {
+                    $order_errors[] = ['type' => 'missing_zone', 'detail' => 'No delivery zone assigned'];
+                }
+
+                // Check 5: Missing address.
+                $address = $client['delivery_street_name'] ?? '';
+                if (empty(trim($address))) {
+                    $wc_address = $wc_order ? $wc_order->get_shipping_address_1() : '';
+                    if (empty(trim($wc_address))) {
+                        $order_errors[] = ['type' => 'missing_address', 'detail' => 'No shipping/delivery address'];
+                    }
+                }
+
+                // Check 6: Invalid zone format.
+                if (!empty($zone) && !in_array($zone, $valid_zones)) {
+                    $order_errors[] = [
+                        'type'   => 'invalid_zone',
+                        'detail' => 'Zone "' . $zone . '" is not a recognized zone',
+                    ];
+                }
+            } else {
+                // Guest order (customer_id = 0).
+                $wc_order = wc_get_order($order_id);
+                $customer_name = $wc_order
+                    ? trim($wc_order->get_billing_first_name() . ' ' . $wc_order->get_billing_last_name())
+                    : 'Guest';
+
+                $order_errors[] = ['type' => 'no_client_record', 'detail' => 'Guest order — no customer account'];
+            }
+
+            // Record each error as a separate row.
+            foreach ($order_errors as $err) {
+                $errors[] = [
+                    'order_id'      => $order_id,
+                    'order_date'    => $order_date,
+                    'customer_name' => $customer_name ?: 'Unknown',
+                    'wp_user_id'    => $customer_id,
+                    'error_type'    => $err['type'],
+                    'error_detail'  => $err['detail'],
+                ];
+
+                if (!isset($error_counts[$err['type']])) {
+                    $error_counts[$err['type']] = 0;
+                }
+                $error_counts[$err['type']]++;
+                $errored_ids[$order_id] = true;
+            }
+        }
+
+        return [
+            'errors'  => $errors,
+            'summary' => [
+                'total_orders_checked' => count($order_rows),
+                'orders_with_errors'   => count($errored_ids),
+                'error_counts'         => $error_counts,
+            ],
+        ];
+    }
+
+    /**
      * @return array
      */
     private static function empty_private_report_totals(): array {
