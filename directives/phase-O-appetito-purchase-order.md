@@ -1,188 +1,320 @@
-# Phase O: Appetito Purchase Order Algorithm Alignment
+# Phase O: Appetito Purchase Order — Weighted Demand with Seasonal Awareness
 
 ## Goal
 
-Align the new `generate_purchase_order()` method with the old `appetito/appetito.php` logic. The current implementation uses a fundamentally different algorithm that will produce different ordering quantities.
+Replace the current `generate_purchase_order()` with a demand projection algorithm that uses recency-weighted averaging, seasonal index adjustment from year-over-year data, and inventory awareness. WooCommerce has no built-in forecasting — all third-party options are SaaS products ($50–$300+/month) that are overkill for a single-supplier meal delivery operation. This is self-contained.
 
-## Algorithm comparison
+## Data available
 
-### Old system (appetito.php)
-```
-Input: end_date, weeks (period length, e.g. 6)
-3 equal periods, each "weeks" long, going backward from end_date
-
-Per product:
-  max_sold = MAX(period_1_qty, period_2_qty, period_3_qty)
-  qty_needed = max_sold + buffer
-  total_stock = current_wc_inventory + future_inventory_quantity
-  units_needed = MAX(qty_needed - total_stock, 0)
-  cases_to_buy = CEIL(units_needed / case_size)
-```
-
-### New system (class-reports.php)
-```
-Input: weeks_ahead, trailing_weeks
-Rolling weekly averages across trailing period
-
-Per product:
-  avg_weekly_demand = total_trailing / trailing_weeks
-  projected_units = avg_weekly_demand * weeks_ahead
-  cases_needed = CEIL(projected_units / case_size)
-```
-
-### Six differences that change ordering results
-
-| # | Issue | Old behavior | New behavior | Impact |
-|---|---|---|---|---|
-| 1 | Peak vs Average | Takes HIGHEST of 3 periods | Takes AVERAGE across all weeks | New will underorder during peak periods |
-| 2 | Buffer | Adds per-product buffer | No buffer | New will underorder by the buffer amount |
-| 3 | Inventory | Subtracts current stock + future stock | Ignores stock levels | New will overorder if stock exists |
-| 4 | Category exclusions | Excludes cats 98, 104, 103, 102, 101, 88, 109 | No exclusions | New includes fee products, non-food items |
-| 5 | SKU | Outputs SKU, sorts by SKU | No SKU in output | Staff lose the product identifier they're used to |
-| 6 | Data source for buffer/case_size | WC product meta (post_meta) | meals_products table | `buffer` doesn't exist in meals_products at all |
+The site has ~20 months of WC order history (July 2024 – March 2026, ~30,000+ orders). There is full year-over-year overlap from August through March, which is enough to compute per-product seasonal indices for those months. For months without YoY data (April–July of the first year), the algorithm gracefully falls back to non-seasonal projection.
 
 ---
 
-## Required changes
+## Algorithm: Three-Layer Demand Projection
 
-### 1. Add `buffer` column to `meals_products`
+### Layer 1: Weighted Recent Demand (baseline)
 
-**File:** `includes/class-schema.php`
+Use **exponentially weighted weekly demand** where recent weeks matter more than older weeks.
 
-In the `MealsDB_Tables::PRODUCTS` definition, add after `case_size`:
-```php
-'buffer' => 'INT NOT NULL DEFAULT 0',
+```
+For each product, over the trailing period (default 12 weeks):
+  weighted_avg = Σ(weekly_qty × decay^week_index) / Σ(decay^week_index)
+  where decay = 0.85, week_index = 0 for most recent week
 ```
 
-### 2. Rewrite `generate_purchase_order()` to use peak-of-3-periods
+This tracks trends naturally — if fish is selling more this month, the projection rises. If turkey sales dropped after Christmas, the projection falls. One-off bulk orders don't dominate because they're averaged, not max'd.
 
-**File:** `includes/services/class-reports.php`
+### Layer 2: Seasonal Index (adjustment)
 
-Replace the current `generate_purchase_order()` and `get_demand_history()` methods.
+Compare current-period demand to same-period-last-year demand to detect seasonal patterns. A seasonal index > 1.0 means demand is historically higher in the upcoming period; < 1.0 means lower.
 
-#### New method signature:
+```
+For the upcoming order horizon (e.g. the next 6 weeks):
+  Look at same calendar weeks last year for this product.
+  Look at the weeks immediately preceding those same weeks last year.
+  
+  seasonal_index = (avg demand in target weeks last year) / (avg demand in preceding weeks last year)
+  
+  If no prior-year data exists: seasonal_index = 1.0 (no adjustment)
+```
+
+**Example — fish around Good Friday:**
+- Weeks 11-12 last year (pre-Easter): fish sold 30/week
+- Weeks 13-14 last year (Easter): fish sold 55/week
+- seasonal_index = 55/30 = 1.83
+- If current weighted baseline for fish is 35/week, adjusted = 35 × 1.83 = 64/week
+
+**Example — turkey around Christmas:**
+- Weeks 48-49 last year (pre-Christmas): turkey sold 20/week
+- Weeks 50-51 last year (Christmas): turkey sold 45/week
+- seasonal_index = 45/20 = 2.25
+
+**Guardrails:** Clamp the seasonal index between 0.3 and 3.0 to prevent absurd projections from thin data. Require at least 2 weeks of prior-year data on both sides to compute the index — otherwise fall back to 1.0.
+
+### Layer 3: Inventory Subtraction (final)
+
+```
+projected_need = (weighted_avg × seasonal_index) × order_horizon_weeks
+qty_needed = projected_need + buffer
+total_available = current_stock + incoming_future_stock
+units_needed = MAX(qty_needed - total_available, 0)
+cases_to_buy = CEIL(units_needed / case_size)
+```
+
+---
+
+## Implementation
+
+### Method signature
+
 ```php
 /**
- * Generate an Appetito-style purchase order.
+ * Generate a seasonally-adjusted purchase order projection.
  *
- * @param string $end_date             Y-m-d (usually today)
- * @param int    $weeks_per_period     Weeks per period (usually 6)
- * @param string $future_inv_date      Y-m-d for future inventory arrival
+ * @param int   $trailing_weeks       Weeks of recent history for baseline (default 12)
+ * @param int   $order_horizon_weeks  Weeks of stock to order for (default 6)
+ * @param float $decay_factor         Recency weight decay, 0-1 (default 0.85)
  * @return array
  */
 public function generate_purchase_order(
-    string $end_date,
-    int $weeks_per_period = 6,
-    string $future_inv_date = ''
+    int $trailing_weeks = 12,
+    int $order_horizon_weeks = 6,
+    float $decay_factor = 0.85
 ): array
 ```
 
-#### New algorithm (matching old exactly):
+### Step 1: Query weekly demand (recent + prior year)
 
-```
-1. Calculate 3 periods backward from end_date:
-   period_1: (end_date - weeks) to end_date
-   period_2: (end_date - 2*weeks) to (end_date - weeks)
-   period_3: (end_date - 3*weeks) to (end_date - 2*weeks)
+Extend the existing `get_demand_history()` SQL to also fetch the same calendar weeks from the prior year.
 
-2. Query all WC orders across the full 3-period span.
-   Group items by wc_product_id and period.
+Two queries (or one with UNION):
 
-3. Exclude products in categories: 98, 104, 103, 102, 101, 88, 109
-   (use WC product category lookup or meals_products filtering)
-
-4. For each product:
-   - SKU from WC product or meals_products
-   - buffer from meals_products (fallback: WC post_meta 'buffer')
-   - case_size from meals_products (fallback: WC post_meta 'case_size')
-   - current_inventory from WC product stock_quantity
-   - future_inventory from WC post_meta '_future_inventory_quantity'
-   
-   max_sold = MAX(period_1, period_2, period_3)
-   qty_needed = max_sold + buffer
-   total_stock = current_inventory + future_inventory
-   units_needed = MAX(qty_needed - total_stock, 0)
-   cases_to_buy = CEIL(units_needed / case_size)
-   future_inventory_to_set = cases_to_buy * case_size
-
-5. Sort by SKU ASC.
+**Query A — Recent trailing period:**
+```sql
+SELECT product_id, YEARWEEK(date_created_gmt, 1) AS year_week,
+       SUM(quantity) AS weekly_qty
+FROM wc_orders + order_items + itemmeta
+WHERE date_created_gmt >= (today - trailing_weeks * 7 days)
+GROUP BY product_id, year_week
 ```
 
-#### Return format (matching old CSV columns):
+**Query B — Same-weeks-last-year + preceding weeks:**
+```sql
+-- Target weeks: the calendar weeks corresponding to "today + 1 week" through "today + order_horizon_weeks"
+-- Preceding weeks: the trailing_weeks before those target weeks, all from last year
+
+SELECT product_id, YEARWEEK(date_created_gmt, 1) AS year_week,
+       SUM(quantity) AS weekly_qty
+FROM wc_orders + order_items + itemmeta
+WHERE date_created_gmt >= (target_start_last_year - trailing_weeks * 7 days)
+  AND date_created_gmt < (target_end_last_year)
+GROUP BY product_id, year_week
+```
+
+The calendar week mapping: if today is 2026-W14, the target weeks are 2026-W15 through 2026-W20 (for a 6-week horizon). Last year's equivalents are 2025-W15 through 2025-W20. The preceding weeks last year are 2025-W03 through 2025-W14 (the 12 trailing weeks before the target).
+
+### Step 2: Compute seasonal index per product
+
+```php
+foreach ($products as $pid => &$product) {
+    // Last year's demand in the target weeks (upcoming period)
+    $ly_target_weeks = get_year_weeks_for_range($target_start_ly, $target_end_ly);
+    $ly_preceding_weeks = get_year_weeks_for_range($preceding_start_ly, $preceding_end_ly);
+    
+    $ly_target_total = 0;
+    $ly_target_count = 0;
+    $ly_preceding_total = 0;
+    $ly_preceding_count = 0;
+    
+    foreach ($ly_target_weeks as $yw) {
+        $ly_target_total += $ly_data[$pid][$yw] ?? 0;
+        $ly_target_count++;
+    }
+    
+    foreach ($ly_preceding_weeks as $yw) {
+        $ly_preceding_total += $ly_data[$pid][$yw] ?? 0;
+        $ly_preceding_count++;
+    }
+    
+    $ly_target_avg = $ly_target_count > 0 ? $ly_target_total / $ly_target_count : 0;
+    $ly_preceding_avg = $ly_preceding_count > 0 ? $ly_preceding_total / $ly_preceding_count : 0;
+    
+    // Need both sides with meaningful data to compute index
+    $min_weeks_required = 2;
+    if ($ly_target_count >= $min_weeks_required 
+        && $ly_preceding_count >= $min_weeks_required
+        && $ly_preceding_avg > 0) {
+        $raw_index = $ly_target_avg / $ly_preceding_avg;
+        $seasonal_index = max(0.3, min(3.0, $raw_index));  // guardrails
+    } else {
+        $seasonal_index = 1.0;  // no adjustment
+    }
+    
+    $product['seasonal_index'] = $seasonal_index;
+}
+```
+
+### Step 3: Weighted average (same as before)
+
+```php
+krsort($weekly_history);  // most recent first
+$weighted_sum = 0.0;
+$weight_sum = 0.0;
+$week_index = 0;
+
+foreach ($weekly_history as $week => $qty) {
+    $weight = pow($decay_factor, $week_index);
+    $weighted_sum += $qty * $weight;
+    $weight_sum += $weight;
+    $week_index++;
+}
+// Include zero-sale weeks in denominator
+for ($i = $week_index; $i < $trailing_weeks; $i++) {
+    $weight_sum += pow($decay_factor, $i);
+}
+$weighted_avg = $weight_sum > 0 ? $weighted_sum / $weight_sum : 0;
+```
+
+### Step 4: Category exclusion
+
+```php
+$excluded = get_option('mealsdb_appetito_excluded_categories', [98, 104, 103, 102, 101, 88, 109]);
+```
+
+Batch-fetch product→category mappings and skip excluded products.
+
+### Step 5: Stock lookup and final calculation
+
+```php
+$adjusted_weekly = $weighted_avg * $seasonal_index;
+$projected = $adjusted_weekly * $order_horizon_weeks;
+$qty_needed = $projected + $buffer;
+$total_stock = $current_stock + $future_inv;
+$units_needed = max(0, (int) ceil($qty_needed) - $total_stock);
+$cases_to_buy = $units_needed > 0 ? (int) ceil($units_needed / $case_size) : 0;
+```
+
+### Return format
 
 ```php
 [
-    'sku'                      => 'CD-001',
-    'product_name'             => 'Chicken Dinner',
-    'period_1'                 => 45,
-    'period_2'                 => 38,
-    'period_3'                 => 42,
-    'highest_sold'             => 45,
-    'buffer'                   => 5,
-    'case_size'                => 12,
-    'current_inventory'        => 8,
-    'future_inventory'         => 0,
-    'future_inventory_date'    => '2025-04-15',
-    'qty_needed'               => 50,
-    'units_needed'             => 42,
-    'cases_to_buy'             => 4,
+    'sku'                  => 'CD-001',
+    'product_name'         => 'Chicken Dinner',
+    'weighted_avg_weekly'  => 22.5,       // baseline demand
+    'seasonal_index'       => 1.83,       // 1.0 = no adjustment
+    'adjusted_weekly'      => 41.2,       // weighted_avg × seasonal_index
+    'projected_need'       => 247,        // adjusted × horizon weeks
+    'buffer'               => 5,
+    'qty_needed'           => 252,
+    'current_stock'        => 8,
+    'future_inventory'     => 24,
+    'total_available'      => 32,
+    'units_needed'         => 220,
+    'case_size'            => 12,
+    'cases_to_buy'         => 19,
+    'order_quantity'       => 228,        // cases × case_size
+    'seasonal_note'        => 'Seasonal uplift: +83% vs trailing baseline (Easter period)',
+    // Raw data for staff who want to see it:
+    'weekly_history'       => [28, 25, 22, 20, 15, 11, 12, 10],
 ]
 ```
 
-### 3. Update CSV export
+Sort by SKU ASC.
 
-**Update `export_purchase_order_csv()`** to match old column layout:
-```
-SKU, Product Name, Period 1, Period 2, Period 3, Highest Sold, Buffer,
-Case Size, Inventory, Future Inventory, Future Inv Date,
-Qty Needed, Units Needed, Cases to Buy
+### Seasonal note generation
+
+When `seasonal_index != 1.0`, generate a human-readable note:
+
+```php
+if ($seasonal_index > 1.05) {
+    $pct = round(($seasonal_index - 1) * 100);
+    $note = "Seasonal uplift: +{$pct}% vs trailing baseline";
+} elseif ($seasonal_index < 0.95) {
+    $pct = round((1 - $seasonal_index) * 100);
+    $note = "Seasonal dip: -{$pct}% vs trailing baseline";
+} else {
+    $note = '';
+}
 ```
 
-### 4. Update the UI
+---
+
+## CSV export
+
+```
+SKU, Product Name, Avg/Week, Seasonal Idx, Adj/Week, Projected, Buffer,
+Qty Needed, Stock, Future, Available, Units Needed, Case Size, Cases, Order Qty, Note
+```
+
+---
+
+## UI updates
 
 **File:** `views/purchase-order.php`
 
-Replace the trailing/horizon dropdowns with inputs matching the old plugin:
-
+Inputs:
 ```html
-<label>End Date:</label>
-<input type="date" id="mealsdb-po-end-date" value="(today)" />
+<label>Trailing Period:</label>
+<select id="mealsdb-po-trailing">
+    <option value="8">8 weeks</option>
+    <option value="12" selected>12 weeks</option>
+    <option value="16">16 weeks</option>
+</select>
 
-<label>Weeks per Period:</label>
-<input type="number" id="mealsdb-po-weeks" value="6" min="1" max="12" />
-
-<label>Future Inventory Date:</label>
-<input type="date" id="mealsdb-po-future-date" value="(today)" />
+<label>Order Horizon:</label>
+<select id="mealsdb-po-horizon">
+    <option value="4">4 weeks</option>
+    <option value="6" selected>6 weeks</option>
+    <option value="8">8 weeks</option>
+</select>
 ```
 
-Update the JS table renderer to show all the new columns.
+Table columns: SKU, Product, Avg/Wk, Seasonal, Adj/Wk, Projected, Buffer, Needed, Stock, Cases, Order Qty, Note.
 
-### 5. Excluded categories config
+Highlight rows where `seasonal_index > 1.2` (amber) or `seasonal_index > 1.5` (amber-bold) to draw attention to seasonal spikes.
 
-Store excluded category IDs as a WordPress option:
-```php
-add_option('mealsdb_appetito_excluded_categories', [98, 104, 103, 102, 101, 88, 109]);
-```
+Products with `seasonal_index < 0.8` could be shown in light blue to indicate "order less than usual."
 
-### 6. Backfill buffer values
+---
 
-The old system stored `buffer` as WC product post_meta. After adding the `buffer` column to `meals_products`, create a one-time backfill that copies `buffer` from `wp_postmeta` to `meals_products.buffer` for all synced products.
+## Data source for buffer, case_size, SKU, stock
 
-Alternatively, always fall back to reading `buffer` from WC post_meta if `meals_products.buffer` is 0. This avoids the need for a backfill and keeps the WC product edit as the source of truth for buffer values.
+All from WooCommerce, not meals_products:
+- `buffer` → `get_post_meta($pid, 'buffer', true)` (set by staff on product edit)
+- `case_size` → `meals_products.case_size` with fallback to `get_post_meta($pid, 'case_size', true)`
+- `_future_inventory_quantity` → `get_post_meta($pid, '_future_inventory_quantity', true)` (managed by future-dated-inventory plugin)
+- SKU → `wc_get_product($pid)->get_sku()`
+- Current stock → `wc_get_product($pid)->get_stock_quantity()`
+
+Batch-fetch where possible to avoid N+1 queries.
+
+---
+
+## Edge cases
+
+| Situation | Handling |
+|---|---|
+| Product didn't exist last year | seasonal_index = 1.0 (no adjustment) |
+| Product had zero sales last year in target weeks | If preceding weeks also had zero, index = 1.0. If preceding had sales but target had zero, index = 0.3 (clamped floor) |
+| First year of operation (no prior year data at all) | All products get seasonal_index = 1.0 — pure weighted-average mode |
+| April 2025 data spike (7843 orders, likely bulk import) | The weighted average naturally dampens this since it's 12+ months ago. For seasonal index, it would inflate both target and preceding equally, so the ratio stays reasonable |
+| Product discontinued but had sales last year | Excluded by category filter or by having zero recent sales (weighted_avg = 0, so cases_to_buy = 0) |
 
 ---
 
 ## Backward compatibility
 
-The current `get_demand_history()` method is also used by the resupply report. Don't delete it — keep it as-is for that purpose. The purchase order method should be rewritten independently.
+Keep `get_demand_history()` as-is for the resupply report. The purchase order rewrites `generate_purchase_order()` only. The AJAX handler signature stays the same — just add the new parameter pass-through.
 
 ---
 
 ## Key constraints
 
-- WC product stock via `wc_get_product($id)->get_stock_quantity()`
-- WC product SKU via `wc_get_product($id)->get_sku()`
-- WC product meta via `get_post_meta($id, 'buffer', true)` and `get_post_meta($id, '_future_inventory_quantity', true)`
-- meals_products via `MealsDB_DB::get_connection()` (external DB)
-- Excluded categories from WP option, not hardcoded
-- The `future-dated-inventory` plugin manages `_future_inventory_quantity` and `_future_inventory_date` — this data lives in WC `wp_postmeta`, not in meals_products
+- WC product data via `wc_get_product()` for stock and SKU
+- WC product meta via `get_post_meta()` for buffer, case_size, _future_inventory_quantity
+- Excluded categories from `get_option('mealsdb_appetito_excluded_categories')`
+- meals_products via `MealsDB_DB::get_connection()` for case_size fallback
+- Weekly demand from HPOS tables via `$wpdb`
+- decay_factor, seasonal guardrails (0.3–3.0), min_weeks_required (2) should be constants
+- Batch-fetch WC product data to avoid N+1 queries
+- The seasonal index query adds one additional SQL query (prior-year data) — acceptable for a batch report
