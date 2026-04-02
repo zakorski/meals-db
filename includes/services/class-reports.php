@@ -327,58 +327,56 @@ class MealsDB_Reports {
     }
 
     /**
-     * Generate an Appetito-style purchase order using peak-of-3-periods.
+     * Generate a seasonally-adjusted purchase order projection.
      *
-     * Calculates 3 equal periods backward from end_date, finds the highest
-     * sold quantity per product, adds buffer, subtracts current + future
-     * inventory, and determines cases to buy.
+     * Three-layer algorithm:
+     * 1. Exponentially weighted recent demand (baseline)
+     * 2. Seasonal index from year-over-year comparison
+     * 3. Inventory subtraction (stock + future)
      *
-     * @param string $end_date         Y-m-d (usually today).
-     * @param int    $weeks_per_period Weeks per period (usually 6).
-     * @param string $future_inv_date  Y-m-d for future inventory arrival.
+     * @param int   $trailing_weeks       Weeks of recent history for baseline (default 12).
+     * @param int   $order_horizon_weeks  Weeks of stock to order for (default 6).
+     * @param float $decay_factor         Recency weight decay, 0-1 (default 0.85).
      * @return array
      */
     public function generate_purchase_order(
-        string $end_date,
-        int $weeks_per_period = 6,
-        string $future_inv_date = ''
+        int $trailing_weeks = 12,
+        int $order_horizon_weeks = 6,
+        float $decay_factor = 0.85
     ): array {
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
 
-        if ($weeks_per_period < 1) {
-            $weeks_per_period = 6;
+        if ($trailing_weeks < 1) {
+            $trailing_weeks = 12;
         }
+        if ($order_horizon_weeks < 1) {
+            $order_horizon_weeks = 6;
+        }
+        $decay_factor = max(0.01, min(1.0, $decay_factor));
 
-        // 1. Calculate 3 periods backward from end_date.
-        $days_per_period = $weeks_per_period * 7;
-        $end_ts   = strtotime($end_date);
-        $p1_start = gmdate('Y-m-d', $end_ts - ($days_per_period * 1) * 86400);
-        $p1_end   = $end_date;
-        $p2_start = gmdate('Y-m-d', $end_ts - ($days_per_period * 2) * 86400);
-        $p2_end   = gmdate('Y-m-d', $end_ts - ($days_per_period * 1) * 86400);
-        $p3_start = gmdate('Y-m-d', $end_ts - ($days_per_period * 3) * 86400);
-        $p3_end   = gmdate('Y-m-d', $end_ts - ($days_per_period * 2) * 86400);
+        $seasonal_min       = 0.3;
+        $seasonal_max       = 3.0;
+        $min_weeks_required = 2;
 
-        $full_start = $p3_start . ' 00:00:00';
-        $full_end   = $p1_end . ' 23:59:59';
-
-        // Period boundaries as timestamps for grouping.
-        $p2_boundary = strtotime($p2_end . ' 23:59:59');
-        $p1_boundary = strtotime($p1_start . ' 00:00:00');
-
-        // 2. Query all WC order items across the full 3-period span.
         $orders_table   = $this->wpdb->prefix . 'wc_orders';
         $items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
         $itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
+        $status_filter  = "('wc-cancelled','wc-on-hold','wc-draft','draft','wc-trash','trash')";
 
-        $sql = "
+        $today = gmdate('Y-m-d');
+
+        // --- Query A: Recent trailing period (weekly demand). ---
+        $recent_start = gmdate('Y-m-d', strtotime("-" . ($trailing_weeks * 7) . " days"));
+        $recent_end   = gmdate('Y-m-d', strtotime('+1 day'));
+
+        $sql_recent = "
             SELECT
                 CAST(pm.meta_value AS UNSIGNED) AS wc_product_id,
                 oi.order_item_name AS product_name,
-                o.date_created_gmt,
-                SUM(CAST(qm.meta_value AS DECIMAL(10,2))) AS qty
+                YEARWEEK(o.date_created_gmt, 1) AS year_week,
+                SUM(CAST(qm.meta_value AS DECIMAL(10,2))) AS weekly_qty
             FROM {$items_table} oi
             INNER JOIN {$itemmeta_table} pm
                 ON pm.order_item_id = oi.order_item_id AND pm.meta_key = '_product_id'
@@ -387,51 +385,86 @@ class MealsDB_Reports {
             INNER JOIN {$orders_table} o
                 ON o.id = oi.order_id
                 AND o.type = 'shop_order'
-                AND o.status NOT IN ('wc-cancelled','wc-on-hold','wc-draft','draft','wc-trash','trash')
-            WHERE o.date_created_gmt >= %s AND o.date_created_gmt <= %s
+                AND o.status NOT IN {$status_filter}
+            WHERE o.date_created_gmt >= %s AND o.date_created_gmt < %s
                 AND oi.order_item_type = 'line_item'
-            GROUP BY wc_product_id, product_name, o.date_created_gmt
+            GROUP BY wc_product_id, product_name, year_week
+            ORDER BY wc_product_id, year_week
         ";
 
-        $rows = $this->wpdb->get_results(
-            $this->wpdb->prepare($sql, $full_start, $full_end),
+        $recent_rows = $this->wpdb->get_results(
+            $this->wpdb->prepare($sql_recent, $recent_start, $recent_end),
             ARRAY_A
         );
 
-        if (!is_array($rows)) {
+        if (!is_array($recent_rows) || empty($recent_rows)) {
             return [];
         }
 
-        // Group quantities by product and period.
+        // Build per-product weekly history.
         $products = [];
-        foreach ($rows as $row) {
-            $pid  = (int) $row['wc_product_id'];
-            $qty  = (float) $row['qty'];
-            $ts   = strtotime($row['date_created_gmt']);
-
+        foreach ($recent_rows as $row) {
+            $pid = (int) $row['wc_product_id'];
             if (!isset($products[$pid])) {
                 $products[$pid] = [
-                    'product_name' => (string) $row['product_name'],
-                    'period_1'     => 0,
-                    'period_2'     => 0,
-                    'period_3'     => 0,
+                    'product_name'   => (string) $row['product_name'],
+                    'weekly_history' => [],
                 ];
             }
+            $products[$pid]['weekly_history'][$row['year_week']] = (float) $row['weekly_qty'];
+        }
 
-            if ($ts >= $p1_boundary) {
-                $products[$pid]['period_1'] += $qty;
-            } elseif ($ts > $p2_boundary) {
-                $products[$pid]['period_2'] += $qty;
-            } else {
-                $products[$pid]['period_3'] += $qty;
+        // --- Query B: Prior-year data for seasonal index. ---
+        // Target weeks: the calendar weeks corresponding to the upcoming order horizon.
+        $horizon_start = gmdate('Y-m-d', strtotime('+7 days'));
+        $horizon_end   = gmdate('Y-m-d', strtotime('+' . ($order_horizon_weeks * 7) . ' days'));
+
+        // Same calendar weeks last year.
+        $ly_target_start = gmdate('Y-m-d', strtotime($horizon_start . ' -1 year'));
+        $ly_target_end   = gmdate('Y-m-d', strtotime($horizon_end . ' -1 year'));
+
+        // Preceding weeks last year (trailing_weeks before target).
+        $ly_preceding_start = gmdate('Y-m-d', strtotime($ly_target_start . " -{$trailing_weeks} weeks"));
+        $ly_preceding_end   = $ly_target_start;
+
+        $sql_ly = "
+            SELECT
+                CAST(pm.meta_value AS UNSIGNED) AS wc_product_id,
+                YEARWEEK(o.date_created_gmt, 1) AS year_week,
+                SUM(CAST(qm.meta_value AS DECIMAL(10,2))) AS weekly_qty
+            FROM {$items_table} oi
+            INNER JOIN {$itemmeta_table} pm
+                ON pm.order_item_id = oi.order_item_id AND pm.meta_key = '_product_id'
+            INNER JOIN {$itemmeta_table} qm
+                ON qm.order_item_id = oi.order_item_id AND qm.meta_key = '_qty'
+            INNER JOIN {$orders_table} o
+                ON o.id = oi.order_id
+                AND o.type = 'shop_order'
+                AND o.status NOT IN {$status_filter}
+            WHERE o.date_created_gmt >= %s AND o.date_created_gmt < %s
+                AND oi.order_item_type = 'line_item'
+            GROUP BY wc_product_id, year_week
+        ";
+
+        $ly_rows = $this->wpdb->get_results(
+            $this->wpdb->prepare($sql_ly, $ly_preceding_start, $ly_target_end),
+            ARRAY_A
+        );
+
+        // Build prior-year lookup: pid => [year_week => qty].
+        $ly_data = [];
+        if (is_array($ly_rows)) {
+            foreach ($ly_rows as $row) {
+                $pid = (int) $row['wc_product_id'];
+                $ly_data[$pid][$row['year_week']] = (float) $row['weekly_qty'];
             }
         }
 
-        if (empty($products)) {
-            return [];
-        }
+        // Compute target and preceding year-week lists.
+        $ly_target_weeks    = $this->get_year_weeks_for_range($ly_target_start, $ly_target_end);
+        $ly_preceding_weeks = $this->get_year_weeks_for_range($ly_preceding_start, $ly_preceding_end);
 
-        // 3. Exclude products in configured categories.
+        // --- Category exclusion. ---
         $excluded_cats = get_option('mealsdb_appetito_excluded_categories', [98, 104, 103, 102, 101, 88, 109]);
         if (!empty($excluded_cats) && function_exists('has_term')) {
             foreach ($products as $pid => $p) {
@@ -445,86 +478,114 @@ class MealsDB_Reports {
             return [];
         }
 
-        // 4. Get product metadata from meals_products (case_size, buffer).
+        // --- Get product metadata for case_size. ---
         $product_ids  = array_keys($products);
         $product_meta = [];
         if ($this->order_query instanceof MealsDB_WC_Order_Query) {
             $product_meta = $this->order_query->get_product_types_for_ids($product_ids);
         }
 
-        // Batch-fetch buffer from meals_products.
-        $buffer_map = [];
-        $conn = MealsDB_DB::get_connection();
-        if (MealsDB_DB::is_mysqli($conn)) {
-            $products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
-            $placeholders   = implode(',', array_fill(0, count($product_ids), '?'));
-            $buf_sql = sprintf(
-                "SELECT wc_product_id, buffer FROM `%s` WHERE wc_product_id IN (%s)",
-                $products_table, $placeholders
-            );
-            $stmt = $conn->prepare($buf_sql);
-            if (MealsDB_DB::is_mysqli_stmt($stmt)) {
-                $types = str_repeat('i', count($product_ids));
-                $stmt->bind_param($types, ...$product_ids);
-                if ($stmt->execute()) {
-                    $result = $stmt->get_result();
-                    if (MealsDB_DB::is_mysqli_result($result)) {
-                        while ($brow = $result->fetch_assoc()) {
-                            $buffer_map[(int) $brow['wc_product_id']] = (int) $brow['buffer'];
-                        }
-                    }
-                }
-                $stmt->close();
-            }
-        }
-
-        // 5. Build purchase order rows.
+        // --- Build purchase order rows. ---
         $po_rows = [];
         foreach ($products as $pid => $p) {
-            $meta      = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
-            $case_size = isset($meta['case_size']) && (int) $meta['case_size'] > 0 ? (int) $meta['case_size'] : 1;
+            // Layer 1: Weighted recent demand.
+            $weekly = $p['weekly_history'];
+            krsort($weekly); // Most recent first.
+            $weighted_sum = 0.0;
+            $weight_sum   = 0.0;
+            $week_index   = 0;
 
-            // Buffer: meals_products first, WC post_meta fallback.
-            $buffer = isset($buffer_map[$pid]) && $buffer_map[$pid] > 0
-                ? $buffer_map[$pid]
-                : (int) get_post_meta($pid, 'buffer', true);
+            foreach ($weekly as $yw => $qty) {
+                $weight = pow($decay_factor, $week_index);
+                $weighted_sum += $qty * $weight;
+                $weight_sum   += $weight;
+                $week_index++;
+            }
+            // Include zero-sale weeks in denominator.
+            for ($i = $week_index; $i < $trailing_weeks; $i++) {
+                $weight_sum += pow($decay_factor, $i);
+            }
+            $weighted_avg = $weight_sum > 0 ? round($weighted_sum / $weight_sum, 2) : 0;
 
-            // SKU and inventory from WC product.
-            $wc_product       = wc_get_product($pid);
-            $sku              = $wc_product ? $wc_product->get_sku() : '';
-            $current_inventory = $wc_product ? (int) $wc_product->get_stock_quantity() : 0;
-            if ($current_inventory < 0) {
-                $current_inventory = 0;
+            // Layer 2: Seasonal index.
+            $ly_target_total    = 0;
+            $ly_target_count    = 0;
+            $ly_preceding_total = 0;
+            $ly_preceding_count = 0;
+
+            foreach ($ly_target_weeks as $yw) {
+                $ly_target_total += $ly_data[$pid][$yw] ?? 0;
+                $ly_target_count++;
+            }
+            foreach ($ly_preceding_weeks as $yw) {
+                $ly_preceding_total += $ly_data[$pid][$yw] ?? 0;
+                $ly_preceding_count++;
             }
 
-            $future_inventory = (int) get_post_meta($pid, '_future_inventory_quantity', true);
-            $fi_date          = $future_inv_date ?: (string) get_post_meta($pid, '_future_inventory_date', true);
+            $ly_target_avg    = $ly_target_count > 0 ? $ly_target_total / $ly_target_count : 0;
+            $ly_preceding_avg = $ly_preceding_count > 0 ? $ly_preceding_total / $ly_preceding_count : 0;
 
-            $p1 = (int) $p['period_1'];
-            $p2 = (int) $p['period_2'];
-            $p3 = (int) $p['period_3'];
+            if ($ly_target_count >= $min_weeks_required
+                && $ly_preceding_count >= $min_weeks_required
+                && $ly_preceding_avg > 0) {
+                $raw_index      = $ly_target_avg / $ly_preceding_avg;
+                $seasonal_index = max($seasonal_min, min($seasonal_max, $raw_index));
+            } else {
+                $seasonal_index = 1.0;
+            }
 
-            $highest_sold = max($p1, $p2, $p3);
-            $qty_needed   = $highest_sold + $buffer;
-            $total_stock  = $current_inventory + $future_inventory;
-            $units_needed = max($qty_needed - $total_stock, 0);
+            // Layer 3: Inventory subtraction.
+            $adjusted_weekly = round($weighted_avg * $seasonal_index, 2);
+            $projected_need  = (int) ceil($adjusted_weekly * $order_horizon_weeks);
+
+            $buffer = (int) get_post_meta($pid, 'buffer', true);
+            $meta   = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
+            $case_size = isset($meta['case_size']) && (int) $meta['case_size'] > 0
+                ? (int) $meta['case_size']
+                : (int) get_post_meta($pid, 'case_size', true) ?: 1;
+
+            $wc_product    = wc_get_product($pid);
+            $sku           = $wc_product ? $wc_product->get_sku() : '';
+            $current_stock = $wc_product ? max(0, (int) $wc_product->get_stock_quantity()) : 0;
+            $future_inv    = max(0, (int) get_post_meta($pid, '_future_inventory_quantity', true));
+            $total_available = $current_stock + $future_inv;
+
+            $qty_needed   = $projected_need + $buffer;
+            $units_needed = max(0, $qty_needed - $total_available);
             $cases_to_buy = $units_needed > 0 ? (int) ceil($units_needed / $case_size) : 0;
+            $order_quantity = $cases_to_buy * $case_size;
+
+            // Seasonal note.
+            $seasonal_note = '';
+            if ($seasonal_index > 1.05) {
+                $pct = round(($seasonal_index - 1) * 100);
+                $seasonal_note = "Seasonal uplift: +{$pct}% vs trailing baseline";
+            } elseif ($seasonal_index < 0.95) {
+                $pct = round((1 - $seasonal_index) * 100);
+                $seasonal_note = "Seasonal dip: -{$pct}% vs trailing baseline";
+            }
+
+            // Weekly history as simple indexed array (most recent first).
+            $history_values = array_values($weekly);
 
             $po_rows[] = [
-                'sku'                   => $sku,
-                'product_name'          => $p['product_name'],
-                'period_1'              => $p1,
-                'period_2'              => $p2,
-                'period_3'              => $p3,
-                'highest_sold'          => $highest_sold,
-                'buffer'                => $buffer,
-                'case_size'             => $case_size,
-                'current_inventory'     => $current_inventory,
-                'future_inventory'      => $future_inventory,
-                'future_inventory_date' => $fi_date,
-                'qty_needed'            => $qty_needed,
-                'units_needed'          => $units_needed,
-                'cases_to_buy'          => $cases_to_buy,
+                'sku'                 => $sku,
+                'product_name'        => $p['product_name'],
+                'weighted_avg_weekly' => $weighted_avg,
+                'seasonal_index'      => round($seasonal_index, 2),
+                'adjusted_weekly'     => $adjusted_weekly,
+                'projected_need'      => $projected_need,
+                'buffer'              => $buffer,
+                'qty_needed'          => $qty_needed,
+                'current_stock'       => $current_stock,
+                'future_inventory'    => $future_inv,
+                'total_available'     => $total_available,
+                'units_needed'        => $units_needed,
+                'case_size'           => $case_size,
+                'cases_to_buy'        => $cases_to_buy,
+                'order_quantity'      => $order_quantity,
+                'seasonal_note'       => $seasonal_note,
+                'weekly_history'      => $history_values,
             ];
         }
 
@@ -537,7 +598,30 @@ class MealsDB_Reports {
     }
 
     /**
-     * Export an Appetito-style purchase order to CSV string.
+     * Get YEARWEEK values for a date range.
+     *
+     * @param string $start Y-m-d
+     * @param string $end   Y-m-d
+     * @return array List of YEARWEEK strings (mode 1).
+     */
+    private function get_year_weeks_for_range(string $start, string $end): array {
+        $weeks = [];
+        $current = strtotime('monday this week', strtotime($start));
+        $end_ts  = strtotime($end);
+
+        while ($current < $end_ts) {
+            // YEARWEEK mode 1: ISO week, Monday start.
+            $year = (int) gmdate('o', $current);
+            $week = (int) gmdate('W', $current);
+            $weeks[] = sprintf('%04d%02d', $year, $week);
+            $current = strtotime('+1 week', $current);
+        }
+
+        return $weeks;
+    }
+
+    /**
+     * Export a seasonally-adjusted purchase order to CSV string.
      *
      * @param array $po_rows Rows from generate_purchase_order().
      *
@@ -550,10 +634,9 @@ class MealsDB_Reports {
         }
 
         fputcsv($handle, [
-            'SKU', 'Product Name', 'Period 1', 'Period 2', 'Period 3',
-            'Highest Sold', 'Buffer', 'Case Size', 'Inventory',
-            'Future Inventory', 'Future Inv Date', 'Qty Needed',
-            'Units Needed', 'Cases to Buy',
+            'SKU', 'Product Name', 'Avg/Week', 'Seasonal Idx', 'Adj/Week',
+            'Projected', 'Buffer', 'Qty Needed', 'Stock', 'Future',
+            'Available', 'Units Needed', 'Case Size', 'Cases', 'Order Qty', 'Note',
         ]);
 
         $total_cases = 0;
@@ -562,25 +645,27 @@ class MealsDB_Reports {
             fputcsv($handle, [
                 $row['sku'],
                 $row['product_name'],
-                $row['period_1'],
-                $row['period_2'],
-                $row['period_3'],
-                $row['highest_sold'],
+                $row['weighted_avg_weekly'],
+                $row['seasonal_index'],
+                $row['adjusted_weekly'],
+                $row['projected_need'],
                 $row['buffer'],
-                $row['case_size'],
-                $row['current_inventory'],
-                $row['future_inventory'],
-                $row['future_inventory_date'],
                 $row['qty_needed'],
+                $row['current_stock'],
+                $row['future_inventory'],
+                $row['total_available'],
                 $row['units_needed'],
+                $row['case_size'],
                 $row['cases_to_buy'],
+                $row['order_quantity'],
+                $row['seasonal_note'],
             ]);
             $total_cases += $row['cases_to_buy'];
         }
 
         fputcsv($handle, []);
         fputcsv($handle, [
-            'TOTAL', '', '', '', '', '', '', '', '', '', '', '', '', $total_cases,
+            'TOTAL', '', '', '', '', '', '', '', '', '', '', '', '', $total_cases, '', '',
         ]);
 
         rewind($handle);

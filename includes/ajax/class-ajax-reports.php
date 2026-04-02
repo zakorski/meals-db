@@ -19,7 +19,7 @@ class MealsDB_Ajax_Reports {
     }
 
     /**
-     * Generate an Appetito-style purchase order.
+     * Generate a seasonally-adjusted purchase order projection.
      */
     public static function generate_purchase_order(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
@@ -35,15 +35,17 @@ class MealsDB_Ajax_Reports {
             ], 403);
         }
 
-        $end_date        = isset($_REQUEST['end_date']) ? sanitize_text_field($_REQUEST['end_date']) : gmdate('Y-m-d');
-        $weeks_per_period = isset($_REQUEST['weeks_per_period']) ? intval($_REQUEST['weeks_per_period']) : 6;
-        $future_inv_date = isset($_REQUEST['future_inv_date']) ? sanitize_text_field($_REQUEST['future_inv_date']) : '';
+        $trailing_weeks      = isset($_REQUEST['trailing_weeks']) ? intval($_REQUEST['trailing_weeks']) : 12;
+        $order_horizon_weeks = isset($_REQUEST['order_horizon_weeks']) ? intval($_REQUEST['order_horizon_weeks']) : 6;
+        $decay_factor        = isset($_REQUEST['decay_factor']) ? floatval($_REQUEST['decay_factor']) : 0.85;
 
-        // Clamp weeks.
-        $weeks_per_period = max(1, min(12, $weeks_per_period));
+        // Clamp values.
+        $trailing_weeks      = max(1, min(52, $trailing_weeks));
+        $order_horizon_weeks = max(1, min(12, $order_horizon_weeks));
+        $decay_factor        = max(0.01, min(1.0, $decay_factor));
 
         $reports  = new MealsDB_Reports($GLOBALS['wpdb']);
-        $po_rows  = $reports->generate_purchase_order($end_date, $weeks_per_period, $future_inv_date);
+        $po_rows  = $reports->generate_purchase_order($trailing_weeks, $order_horizon_weeks, $decay_factor);
         $csv      = $reports->export_purchase_order_csv($po_rows);
 
         wp_send_json([
