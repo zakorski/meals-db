@@ -1,33 +1,36 @@
 <?php
 /**
- * Purchase Order / Predictive Ordering admin view.
+ * Appetito Purchase Order admin view.
+ *
+ * Peak-of-3-periods algorithm with buffer, inventory, and category exclusions.
  */
 ?>
 <div id="mealsdb-purchase-order" class="mealsdb-purchase-order">
     <p class="description">
-        <?php echo esc_html__('Generate a purchase order projection based on historical order demand. The system averages weekly product demand over the trailing period and projects forward.', 'meals-db'); ?>
+        <?php echo esc_html__('Generate an Appetito-style purchase order. Uses the highest sold quantity across three equal periods, adds buffer, and subtracts current + future inventory.', 'meals-db'); ?>
     </p>
 
-    <div class="mealsdb-po-controls" style="margin-bottom:16px;">
-        <label for="mealsdb-po-trailing"><?php echo esc_html__('Trailing Period:', 'meals-db'); ?></label>
-        <select id="mealsdb-po-trailing">
-            <option value="4"><?php echo esc_html__('4 weeks', 'meals-db'); ?></option>
-            <option value="8" selected><?php echo esc_html__('8 weeks', 'meals-db'); ?></option>
-            <option value="12"><?php echo esc_html__('12 weeks', 'meals-db'); ?></option>
-        </select>
-
-        <label for="mealsdb-po-horizon" style="margin-left:12px;"><?php echo esc_html__('Order Horizon:', 'meals-db'); ?></label>
-        <select id="mealsdb-po-horizon">
-            <option value="1" selected><?php echo esc_html__('1 week', 'meals-db'); ?></option>
-            <option value="2"><?php echo esc_html__('2 weeks', 'meals-db'); ?></option>
-        </select>
-
-        <button type="button" class="button button-primary" id="mealsdb-po-generate" style="margin-left:12px;">
-            <?php echo esc_html__('Generate', 'meals-db'); ?>
-        </button>
-        <button type="button" class="button" id="mealsdb-po-export" style="display:none; margin-left:8px;">
-            <?php echo esc_html__('Export CSV', 'meals-db'); ?>
-        </button>
+    <div class="mealsdb-po-controls" style="margin-bottom:16px; display:flex; gap:10px; align-items:flex-end;">
+        <div>
+            <label for="mealsdb-po-end-date"><?php echo esc_html__('End Date:', 'meals-db'); ?></label><br>
+            <input type="date" id="mealsdb-po-end-date" value="<?php echo esc_attr(gmdate('Y-m-d')); ?>" />
+        </div>
+        <div>
+            <label for="mealsdb-po-weeks"><?php echo esc_html__('Weeks per Period:', 'meals-db'); ?></label><br>
+            <input type="number" id="mealsdb-po-weeks" value="6" min="1" max="12" style="width:70px;" />
+        </div>
+        <div>
+            <label for="mealsdb-po-future-date"><?php echo esc_html__('Future Inventory Date:', 'meals-db'); ?></label><br>
+            <input type="date" id="mealsdb-po-future-date" value="<?php echo esc_attr(gmdate('Y-m-d')); ?>" />
+        </div>
+        <div>
+            <button type="button" class="button button-primary" id="mealsdb-po-generate">
+                <?php echo esc_html__('Generate', 'meals-db'); ?>
+            </button>
+            <button type="button" class="button" id="mealsdb-po-export" style="display:none;">
+                <?php echo esc_html__('Export CSV', 'meals-db'); ?>
+            </button>
+        </div>
     </div>
 
     <div id="mealsdb-po-status" class="notice" style="display:none;"></div>
@@ -55,42 +58,56 @@
     }
 
     function renderTable(data) {
-        if (!data.length) return '<p>No demand data found for the trailing period.</p>';
+        if (!data.length) return '<p>No demand data found for the selected periods.</p>';
 
         var html = '<table class="widefat striped"><thead><tr>';
-        html += '<th>Product</th><th>Type</th><th>Avg Weekly</th><th>Projected</th>';
-        html += '<th>Case Size</th><th>Cases</th><th>Unit Cost</th><th>Est. Cost</th>';
+        html += '<th>SKU</th><th>Product</th>';
+        html += '<th style="text-align:right">P1</th><th style="text-align:right">P2</th><th style="text-align:right">P3</th>';
+        html += '<th style="text-align:right">Highest</th><th style="text-align:right">Buffer</th>';
+        html += '<th style="text-align:right">Case</th><th style="text-align:right">Stock</th>';
+        html += '<th style="text-align:right">Future</th><th>Future Date</th>';
+        html += '<th style="text-align:right">Need</th><th style="text-align:right">Units</th>';
+        html += '<th style="text-align:right">Cases</th>';
         html += '</tr></thead><tbody>';
 
-        var totalCases = 0, totalCost = 0;
+        var totalCases = 0;
         $.each(data, function(i, r) {
-            totalCases += r.cases_needed;
-            totalCost += r.estimated_cost;
+            totalCases += r.cases_to_buy;
             html += '<tr>';
+            html += '<td>' + esc(r.sku) + '</td>';
             html += '<td>' + esc(r.product_name) + '</td>';
-            html += '<td>' + esc(r.product_type) + '</td>';
-            html += '<td>' + r.avg_weekly_demand + '</td>';
-            html += '<td>' + r.projected_units + '</td>';
-            html += '<td>' + r.case_size + '</td>';
-            html += '<td>' + r.cases_needed + '</td>';
-            html += '<td>$' + parseFloat(r.unit_cost).toFixed(2) + '</td>';
-            html += '<td>$' + parseFloat(r.estimated_cost).toFixed(2) + '</td>';
+            html += '<td style="text-align:right">' + r.period_1 + '</td>';
+            html += '<td style="text-align:right">' + r.period_2 + '</td>';
+            html += '<td style="text-align:right">' + r.period_3 + '</td>';
+            html += '<td style="text-align:right">' + r.highest_sold + '</td>';
+            html += '<td style="text-align:right">' + r.buffer + '</td>';
+            html += '<td style="text-align:right">' + r.case_size + '</td>';
+            html += '<td style="text-align:right">' + r.current_inventory + '</td>';
+            html += '<td style="text-align:right">' + r.future_inventory + '</td>';
+            html += '<td>' + esc(r.future_inventory_date) + '</td>';
+            html += '<td style="text-align:right">' + r.qty_needed + '</td>';
+            html += '<td style="text-align:right">' + r.units_needed + '</td>';
+            html += '<td style="text-align:right"><strong>' + r.cases_to_buy + '</strong></td>';
             html += '</tr>';
         });
 
         html += '</tbody><tfoot><tr>';
-        html += '<th colspan="5">TOTAL</th>';
-        html += '<th>' + totalCases + '</th>';
-        html += '<th></th>';
-        html += '<th>$' + totalCost.toFixed(2) + '</th>';
+        html += '<th colspan="13">TOTAL</th>';
+        html += '<th style="text-align:right">' + totalCases + '</th>';
         html += '</tr></tfoot></table>';
 
         return html;
     }
 
     $('#mealsdb-po-generate').on('click', function() {
-        var trailing = $('#mealsdb-po-trailing').val();
-        var horizon  = $('#mealsdb-po-horizon').val();
+        var endDate    = $('#mealsdb-po-end-date').val();
+        var weeks      = $('#mealsdb-po-weeks').val();
+        var futureDate = $('#mealsdb-po-future-date').val();
+
+        if (!endDate) {
+            showStatus('Please select an end date.', 'warning');
+            return;
+        }
 
         showStatus('Generating...', 'info');
         $('#mealsdb-po-export').hide();
@@ -98,8 +115,9 @@
         $.post(ajaxurl, {
             action: 'mealsdb_generate_purchase_order',
             nonce: nonce,
-            weeks_ahead: horizon,
-            trailing_weeks: trailing
+            end_date: endDate,
+            weeks_per_period: weeks,
+            future_inv_date: futureDate
         }, function(res) {
             if (!res.success) {
                 showStatus(res.message || 'Error generating purchase order.', 'error');
@@ -122,7 +140,7 @@
         var url  = URL.createObjectURL(blob);
         var a    = document.createElement('a');
         a.href     = url;
-        a.download = 'purchase-order-' + new Date().toISOString().slice(0,10) + '.csv';
+        a.download = 'purchase-order-' + $('#mealsdb-po-end-date').val() + '.csv';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);

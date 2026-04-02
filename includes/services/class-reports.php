@@ -327,60 +327,217 @@ class MealsDB_Reports {
     }
 
     /**
-     * Generate a purchase order projection from historical demand.
+     * Generate an Appetito-style purchase order using peak-of-3-periods.
      *
-     * @param int $weeks_ahead    Weeks to project forward (default 1).
-     * @param int $trailing_weeks Trailing weeks for demand history (default 8).
+     * Calculates 3 equal periods backward from end_date, finds the highest
+     * sold quantity per product, adds buffer, subtracts current + future
+     * inventory, and determines cases to buy.
      *
+     * @param string $end_date         Y-m-d (usually today).
+     * @param int    $weeks_per_period Weeks per period (usually 6).
+     * @param string $future_inv_date  Y-m-d for future inventory arrival.
      * @return array
      */
-    public function generate_purchase_order(int $weeks_ahead = 1, int $trailing_weeks = 8): array {
-        $demand = $this->get_demand_history($trailing_weeks);
-        if (empty($demand)) {
+    public function generate_purchase_order(
+        string $end_date,
+        int $weeks_per_period = 6,
+        string $future_inv_date = ''
+    ): array {
+        if (!$this->wpdb instanceof wpdb) {
             return [];
         }
 
-        // Get product metadata from meals_products.
-        $product_ids = array_keys($demand);
+        if ($weeks_per_period < 1) {
+            $weeks_per_period = 6;
+        }
+
+        // 1. Calculate 3 periods backward from end_date.
+        $days_per_period = $weeks_per_period * 7;
+        $end_ts   = strtotime($end_date);
+        $p1_start = gmdate('Y-m-d', $end_ts - ($days_per_period * 1) * 86400);
+        $p1_end   = $end_date;
+        $p2_start = gmdate('Y-m-d', $end_ts - ($days_per_period * 2) * 86400);
+        $p2_end   = gmdate('Y-m-d', $end_ts - ($days_per_period * 1) * 86400);
+        $p3_start = gmdate('Y-m-d', $end_ts - ($days_per_period * 3) * 86400);
+        $p3_end   = gmdate('Y-m-d', $end_ts - ($days_per_period * 2) * 86400);
+
+        $full_start = $p3_start . ' 00:00:00';
+        $full_end   = $p1_end . ' 23:59:59';
+
+        // Period boundaries as timestamps for grouping.
+        $p2_boundary = strtotime($p2_end . ' 23:59:59');
+        $p1_boundary = strtotime($p1_start . ' 00:00:00');
+
+        // 2. Query all WC order items across the full 3-period span.
+        $orders_table   = $this->wpdb->prefix . 'wc_orders';
+        $items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
+        $itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
+
+        $sql = "
+            SELECT
+                CAST(pm.meta_value AS UNSIGNED) AS wc_product_id,
+                oi.order_item_name AS product_name,
+                o.date_created_gmt,
+                SUM(CAST(qm.meta_value AS DECIMAL(10,2))) AS qty
+            FROM {$items_table} oi
+            INNER JOIN {$itemmeta_table} pm
+                ON pm.order_item_id = oi.order_item_id AND pm.meta_key = '_product_id'
+            INNER JOIN {$itemmeta_table} qm
+                ON qm.order_item_id = oi.order_item_id AND qm.meta_key = '_qty'
+            INNER JOIN {$orders_table} o
+                ON o.id = oi.order_id
+                AND o.type = 'shop_order'
+                AND o.status NOT IN ('wc-cancelled','wc-on-hold','wc-draft','draft','wc-trash','trash')
+            WHERE o.date_created_gmt >= %s AND o.date_created_gmt <= %s
+                AND oi.order_item_type = 'line_item'
+            GROUP BY wc_product_id, product_name, o.date_created_gmt
+        ";
+
+        $rows = $this->wpdb->get_results(
+            $this->wpdb->prepare($sql, $full_start, $full_end),
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        // Group quantities by product and period.
+        $products = [];
+        foreach ($rows as $row) {
+            $pid  = (int) $row['wc_product_id'];
+            $qty  = (float) $row['qty'];
+            $ts   = strtotime($row['date_created_gmt']);
+
+            if (!isset($products[$pid])) {
+                $products[$pid] = [
+                    'product_name' => (string) $row['product_name'],
+                    'period_1'     => 0,
+                    'period_2'     => 0,
+                    'period_3'     => 0,
+                ];
+            }
+
+            if ($ts >= $p1_boundary) {
+                $products[$pid]['period_1'] += $qty;
+            } elseif ($ts > $p2_boundary) {
+                $products[$pid]['period_2'] += $qty;
+            } else {
+                $products[$pid]['period_3'] += $qty;
+            }
+        }
+
+        if (empty($products)) {
+            return [];
+        }
+
+        // 3. Exclude products in configured categories.
+        $excluded_cats = get_option('mealsdb_appetito_excluded_categories', [98, 104, 103, 102, 101, 88, 109]);
+        if (!empty($excluded_cats) && function_exists('has_term')) {
+            foreach ($products as $pid => $p) {
+                if (has_term($excluded_cats, 'product_cat', $pid)) {
+                    unset($products[$pid]);
+                }
+            }
+        }
+
+        if (empty($products)) {
+            return [];
+        }
+
+        // 4. Get product metadata from meals_products (case_size, buffer).
+        $product_ids  = array_keys($products);
         $product_meta = [];
         if ($this->order_query instanceof MealsDB_WC_Order_Query) {
             $product_meta = $this->order_query->get_product_types_for_ids($product_ids);
         }
 
-        $rows = [];
-        foreach ($demand as $pid => $d) {
-            $meta       = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
-            $case_size  = isset($meta['case_size']) && (int) $meta['case_size'] > 0 ? (int) $meta['case_size'] : 1;
-            $unit_cost  = isset($meta['unit_cost']) ? (float) $meta['unit_cost'] : 0.0;
-            $ptype      = isset($meta['product_type']) ? (string) $meta['product_type'] : 'meal';
+        // Batch-fetch buffer from meals_products.
+        $buffer_map = [];
+        $conn = MealsDB_DB::get_connection();
+        if (MealsDB_DB::is_mysqli($conn)) {
+            $products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
+            $placeholders   = implode(',', array_fill(0, count($product_ids), '?'));
+            $buf_sql = sprintf(
+                "SELECT wc_product_id, buffer FROM `%s` WHERE wc_product_id IN (%s)",
+                $products_table, $placeholders
+            );
+            $stmt = $conn->prepare($buf_sql);
+            if (MealsDB_DB::is_mysqli_stmt($stmt)) {
+                $types = str_repeat('i', count($product_ids));
+                $stmt->bind_param($types, ...$product_ids);
+                if ($stmt->execute()) {
+                    $result = $stmt->get_result();
+                    if (MealsDB_DB::is_mysqli_result($result)) {
+                        while ($brow = $result->fetch_assoc()) {
+                            $buffer_map[(int) $brow['wc_product_id']] = (int) $brow['buffer'];
+                        }
+                    }
+                }
+                $stmt->close();
+            }
+        }
 
-            $projected = $d['avg_weekly_demand'] * $weeks_ahead;
-            $cases     = $projected > 0 ? (int) ceil($projected / $case_size) : 0;
+        // 5. Build purchase order rows.
+        $po_rows = [];
+        foreach ($products as $pid => $p) {
+            $meta      = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
+            $case_size = isset($meta['case_size']) && (int) $meta['case_size'] > 0 ? (int) $meta['case_size'] : 1;
 
-            $rows[] = [
-                'wc_product_id'     => $pid,
-                'product_name'      => $d['product_name'],
-                'product_type'      => $ptype,
-                'avg_weekly_demand' => $d['avg_weekly_demand'],
-                'projected_units'   => round($projected, 2),
-                'case_size'         => $case_size,
-                'cases_needed'      => $cases,
-                'unit_cost'         => $unit_cost,
-                'estimated_cost'    => round($cases * $unit_cost, 2),
+            // Buffer: meals_products first, WC post_meta fallback.
+            $buffer = isset($buffer_map[$pid]) && $buffer_map[$pid] > 0
+                ? $buffer_map[$pid]
+                : (int) get_post_meta($pid, 'buffer', true);
+
+            // SKU and inventory from WC product.
+            $wc_product       = wc_get_product($pid);
+            $sku              = $wc_product ? $wc_product->get_sku() : '';
+            $current_inventory = $wc_product ? (int) $wc_product->get_stock_quantity() : 0;
+            if ($current_inventory < 0) {
+                $current_inventory = 0;
+            }
+
+            $future_inventory = (int) get_post_meta($pid, '_future_inventory_quantity', true);
+            $fi_date          = $future_inv_date ?: (string) get_post_meta($pid, '_future_inventory_date', true);
+
+            $p1 = (int) $p['period_1'];
+            $p2 = (int) $p['period_2'];
+            $p3 = (int) $p['period_3'];
+
+            $highest_sold = max($p1, $p2, $p3);
+            $qty_needed   = $highest_sold + $buffer;
+            $total_stock  = $current_inventory + $future_inventory;
+            $units_needed = max($qty_needed - $total_stock, 0);
+            $cases_to_buy = $units_needed > 0 ? (int) ceil($units_needed / $case_size) : 0;
+
+            $po_rows[] = [
+                'sku'                   => $sku,
+                'product_name'          => $p['product_name'],
+                'period_1'              => $p1,
+                'period_2'              => $p2,
+                'period_3'              => $p3,
+                'highest_sold'          => $highest_sold,
+                'buffer'                => $buffer,
+                'case_size'             => $case_size,
+                'current_inventory'     => $current_inventory,
+                'future_inventory'      => $future_inventory,
+                'future_inventory_date' => $fi_date,
+                'qty_needed'            => $qty_needed,
+                'units_needed'          => $units_needed,
+                'cases_to_buy'          => $cases_to_buy,
             ];
         }
 
-        // Sort by product_type ASC, then product_name ASC.
-        usort($rows, function ($a, $b) {
-            $cmp = strcmp($a['product_type'], $b['product_type']);
-            return $cmp !== 0 ? $cmp : strcmp($a['product_name'], $b['product_name']);
+        // Sort by SKU ASC.
+        usort($po_rows, function ($a, $b) {
+            return strcmp($a['sku'], $b['sku']);
         });
 
-        return $rows;
+        return $po_rows;
     }
 
     /**
-     * Export a purchase order array to CSV string.
+     * Export an Appetito-style purchase order to CSV string.
      *
      * @param array $po_rows Rows from generate_purchase_order().
      *
@@ -393,32 +550,37 @@ class MealsDB_Reports {
         }
 
         fputcsv($handle, [
-            'Product Name', 'Product Type', 'Avg Weekly Units', 'Projected Units',
-            'Case Size', 'Cases to Order', 'Unit Cost', 'Estimated Cost',
+            'SKU', 'Product Name', 'Period 1', 'Period 2', 'Period 3',
+            'Highest Sold', 'Buffer', 'Case Size', 'Inventory',
+            'Future Inventory', 'Future Inv Date', 'Qty Needed',
+            'Units Needed', 'Cases to Buy',
         ]);
 
         $total_cases = 0;
-        $total_cost  = 0.0;
 
         foreach ($po_rows as $row) {
             fputcsv($handle, [
+                $row['sku'],
                 $row['product_name'],
-                $row['product_type'],
-                $row['avg_weekly_demand'],
-                $row['projected_units'],
+                $row['period_1'],
+                $row['period_2'],
+                $row['period_3'],
+                $row['highest_sold'],
+                $row['buffer'],
                 $row['case_size'],
-                $row['cases_needed'],
-                number_format($row['unit_cost'], 2, '.', ''),
-                number_format($row['estimated_cost'], 2, '.', ''),
+                $row['current_inventory'],
+                $row['future_inventory'],
+                $row['future_inventory_date'],
+                $row['qty_needed'],
+                $row['units_needed'],
+                $row['cases_to_buy'],
             ]);
-            $total_cases += $row['cases_needed'];
-            $total_cost  += $row['estimated_cost'];
+            $total_cases += $row['cases_to_buy'];
         }
 
-        // Blank row + totals row.
         fputcsv($handle, []);
         fputcsv($handle, [
-            'TOTAL', '', '', '', '', $total_cases, '', number_format($total_cost, 2, '.', ''),
+            'TOTAL', '', '', '', '', '', '', '', '', '', '', '', '', $total_cases,
         ]);
 
         rewind($handle);
