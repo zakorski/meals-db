@@ -129,6 +129,56 @@ $has_env_credentials = getenv( 'MEALS_DB_HOST' ) || ( defined( 'MEALS_DB_KEY' ) 
             </tbody>
         </table>
 
+        <h2><?php echo esc_html__( 'Zone Delivery Schedule', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Maps each delivery zone to a day of the week. Used for zone-based slip generation and to auto-populate the delivery_day field on client records.', 'meals-db' ); ?>
+        </p>
+        <?php $zone_schedule = get_option( 'mealsdb_zone_delivery_schedule', [] ); ?>
+        <table class="form-table" id="mealsdb-zone-schedule-table">
+            <thead>
+                <tr>
+                    <th><?php echo esc_html__( 'Zone', 'meals-db' ); ?></th>
+                    <th><?php echo esc_html__( 'Delivery Day', 'meals-db' ); ?></th>
+                    <th><?php echo esc_html__( 'Label', 'meals-db' ); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php
+                $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                foreach ( $zone_schedule as $zone_name => $config ) :
+                    $zone_key = sanitize_title( $zone_name );
+                ?>
+                <tr>
+                    <td><strong><?php echo esc_html( $zone_name ); ?></strong></td>
+                    <td>
+                        <select name="zone_schedule[<?php echo esc_attr( $zone_name ); ?>][day]" class="mealsdb-zone-day">
+                            <?php foreach ( $days as $d ) : ?>
+                                <option value="<?php echo esc_attr( $d ); ?>" <?php selected( $config['day'], $d ); ?>>
+                                    <?php echo esc_html( $d ); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
+                    <td>
+                        <input type="text" name="zone_schedule[<?php echo esc_attr( $zone_name ); ?>][label]"
+                               value="<?php echo esc_attr( $config['label'] ); ?>" class="regular-text" />
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <h2><?php echo esc_html__( 'Backfill Delivery Day', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Populate the delivery_day field on client records based on their zone assignment and the schedule above. Only updates clients where delivery_day is currently empty.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-backfill-delivery-day">
+                <?php echo esc_html__( 'Populate delivery_day from Zone Schedule', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-backfill-result" style="margin-left:12px;"></span>
+        </p>
+
         <h2><?php echo esc_html__( 'Connection Test', 'meals-db' ); ?></h2>
         <p>
             <button type="button" class="button" id="mealsdb-test-connection">
@@ -188,12 +238,46 @@ $has_env_credentials = getenv( 'MEALS_DB_HOST' ) || ( defined( 'MEALS_DB_KEY' ) 
         });
     });
 
+    // Backfill delivery_day
+    $('#mealsdb-backfill-delivery-day').on('click', function() {
+        var $btn = $(this);
+        var $result = $('#mealsdb-backfill-result');
+        $btn.prop('disabled', true);
+        $result.text('Running...').css('color', '#666');
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_backfill_delivery_day',
+            nonce: '<?php echo esc_js( wp_create_nonce( 'mealsdb_nonce' ) ); ?>',
+        }, function(resp) {
+            $btn.prop('disabled', false);
+            if (resp.success) {
+                $result.text(resp.message || 'Done.').css('color', '#46b450');
+            } else {
+                $result.text(resp.message || 'Failed.').css('color', '#dc3232');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.').css('color', '#dc3232');
+        });
+    });
+
     // Save settings
     $('#mealsdb-settings-form').on('submit', function(e) {
         e.preventDefault();
 
         var $result = $('#mealsdb-save-result');
         $result.text('Saving...').css('color', '#666');
+
+        // Collect zone schedule data.
+        var zoneSchedule = {};
+        $('#mealsdb-zone-schedule-table tbody tr').each(function() {
+            var zoneName = $(this).find('td:first strong').text();
+            var day      = $(this).find('.mealsdb-zone-day').val();
+            var label    = $(this).find('input[type="text"]').val();
+            if (zoneName) {
+                zoneSchedule[zoneName] = { day: day, label: label };
+            }
+        });
 
         $.post(ajaxurl, {
             action: 'mealsdb_save_settings',
@@ -206,6 +290,7 @@ $has_env_credentials = getenv( 'MEALS_DB_HOST' ) || ( defined( 'MEALS_DB_KEY' ) 
             overage_mains: $('#mealsdb-overage-mains').val(),
             overage_taxable_sides: $('#mealsdb-overage-taxable-sides').val(),
             overage_nontax_sides: $('#mealsdb-overage-nontax-sides').val(),
+            zone_schedule: zoneSchedule,
         }, function(resp) {
             if (resp.success) {
                 $result.text('Settings saved.').css('color', '#46b450');

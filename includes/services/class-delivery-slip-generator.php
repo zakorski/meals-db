@@ -143,6 +143,118 @@ class MealsDB_Delivery_Slip_Generator {
     }
 
     /**
+     * Get active clients in the specified zones (for zone-based mode).
+     *
+     * @param array $zone_names Zone names to include (e.g. ['Zone 1', 'Zone 3']).
+     * @return array<int, array<string, mixed>> Keyed by wp_user_id.
+     */
+    public function get_clients_for_zones(array $zone_names): array {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn) || empty($zone_names)) {
+            return [];
+        }
+
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $placeholders = implode(',', array_fill(0, count($zone_names), '?'));
+
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
+                    delivery_area_name, delivery_city, delivery_street_name
+             FROM `%s`
+             WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN (%s)',
+            $table,
+            $placeholders
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return [];
+        }
+
+        $types = str_repeat('s', count($zone_names));
+        $stmt->bind_param($types, ...$zone_names);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+
+        $result  = $stmt->get_result();
+        $clients = [];
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            while ($row = $result->fetch_assoc()) {
+                $uid = (int) $row['wp_user_id'];
+                $clients[$uid] = $row;
+            }
+        }
+
+        $stmt->close();
+
+        return $clients;
+    }
+
+    /**
+     * Get clients with full PII for driver slips, filtered by zone.
+     *
+     * @param array $zone_names Zone names to include.
+     * @return array<int, array<string, mixed>> Keyed by wp_user_id.
+     */
+    public function get_clients_for_zones_driver(array $zone_names): array {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn) || empty($zone_names)) {
+            return [];
+        }
+
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $placeholders = implode(',', array_fill(0, count($zone_names), '?'));
+
+        $sql = sprintf(
+            'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
+                    delivery_area_name, delivery_city, delivery_street_name,
+                    first_name, last_name, client_phone_1, delivery_fee,
+                    payment_method, client_type
+             FROM `%s`
+             WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN (%s)',
+            $table,
+            $placeholders
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return [];
+        }
+
+        $types = str_repeat('s', count($zone_names));
+        $stmt->bind_param($types, ...$zone_names);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+
+        $result  = $stmt->get_result();
+        $clients = [];
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            while ($row = $result->fetch_assoc()) {
+                $uid = (int) $row['wp_user_id'];
+
+                if (!empty($row['first_name'])) {
+                    $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
+                }
+                if (!empty($row['last_name'])) {
+                    $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
+                }
+
+                $clients[$uid] = $row;
+            }
+        }
+
+        $stmt->close();
+
+        return $clients;
+    }
+
+    /**
      * Fetch WC HPOS orders (with items) for a single delivery date.
      *
      * @param int[]  $wp_user_ids   WordPress user IDs.
@@ -163,6 +275,27 @@ class MealsDB_Delivery_Slip_Generator {
     }
 
     /**
+     * Fetch WC HPOS orders (with items) for a date range.
+     *
+     * @param int[]  $wp_user_ids WordPress user IDs.
+     * @param string $start_date  Start date (Y-m-d).
+     * @param string $end_date    End date (Y-m-d).
+     *
+     * @return array
+     */
+    public function get_orders_for_range(array $wp_user_ids, string $start_date, string $end_date): array {
+        if (empty($wp_user_ids)) {
+            return [];
+        }
+
+        return $this->order_query->get_orders_with_items_for_users(
+            $wp_user_ids,
+            $start_date,
+            $end_date
+        );
+    }
+
+    /**
      * Generate a packing slip: one entry per order, sorted by zone then initials.
      *
      * Returns structured data with zone summaries, mains/sides subtotals,
@@ -179,6 +312,39 @@ class MealsDB_Delivery_Slip_Generator {
         }
 
         $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
+
+        return $this->build_packing_slip($clients, $orders);
+    }
+
+    /**
+     * Generate a packing slip from zone-based selection.
+     *
+     * @param array  $zone_names Zone names (e.g. ['Zone 1', 'Zone 3']).
+     * @param string $start_date Start date (Y-m-d).
+     * @param string $end_date   End date (Y-m-d).
+     *
+     * @return array {entries: [...], no_zone: [...], zone_summaries: [...]}
+     */
+    public function generate_packing_slip_by_zones(array $zone_names, string $start_date, string $end_date): array {
+        $clients = $this->get_clients_for_zones($zone_names);
+        if (empty($clients)) {
+            return ['entries' => [], 'no_zone' => [], 'zone_summaries' => []];
+        }
+
+        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
+
+        return $this->build_packing_slip($clients, $orders);
+    }
+
+    /**
+     * Build packing slip data from pre-fetched clients and orders.
+     *
+     * @param array $clients Keyed by wp_user_id.
+     * @param array $orders  Orders with items attached.
+     *
+     * @return array {entries: [...], no_zone: [...], zone_summaries: [...]}
+     */
+    private function build_packing_slip(array $clients, array $orders): array {
         if (empty($orders)) {
             return ['entries' => [], 'no_zone' => [], 'zone_summaries' => []];
         }
@@ -334,6 +500,38 @@ class MealsDB_Delivery_Slip_Generator {
         }
 
         $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
+
+        return $this->build_picking_slip($orders);
+    }
+
+    /**
+     * Generate a picking slip from zone-based selection.
+     *
+     * @param array  $zone_names Zone names.
+     * @param string $start_date Start date (Y-m-d).
+     * @param string $end_date   End date (Y-m-d).
+     *
+     * @return array
+     */
+    public function generate_picking_slip_by_zones(array $zone_names, string $start_date, string $end_date): array {
+        $clients = $this->get_clients_for_zones($zone_names);
+        if (empty($clients)) {
+            return [];
+        }
+
+        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
+
+        return $this->build_picking_slip($orders);
+    }
+
+    /**
+     * Build picking slip data from pre-fetched orders.
+     *
+     * @param array $orders Orders with items attached.
+     *
+     * @return array
+     */
+    private function build_picking_slip(array $orders): array {
         if (empty($orders)) {
             return [];
         }
@@ -382,6 +580,39 @@ class MealsDB_Delivery_Slip_Generator {
         }
 
         $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
+
+        return $this->build_delivery_slip($clients, $orders);
+    }
+
+    /**
+     * Generate a delivery slip from zone-based selection.
+     *
+     * @param array  $zone_names Zone names.
+     * @param string $start_date Start date (Y-m-d).
+     * @param string $end_date   End date (Y-m-d).
+     *
+     * @return array {zones: [...], cover: [...]}
+     */
+    public function generate_delivery_slip_by_zones(array $zone_names, string $start_date, string $end_date): array {
+        $clients = $this->get_clients_for_zones($zone_names);
+        if (empty($clients)) {
+            return ['zones' => [], 'cover' => []];
+        }
+
+        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
+
+        return $this->build_delivery_slip($clients, $orders);
+    }
+
+    /**
+     * Build delivery slip data from pre-fetched clients and orders.
+     *
+     * @param array $clients Keyed by wp_user_id.
+     * @param array $orders  Orders with items attached.
+     *
+     * @return array {zones: [...], cover: [...]}
+     */
+    private function build_delivery_slip(array $clients, array $orders): array {
         if (empty($orders)) {
             return ['zones' => [], 'cover' => []];
         }
@@ -504,6 +735,39 @@ class MealsDB_Delivery_Slip_Generator {
         }
 
         $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
+
+        return $this->build_driver_slips($clients, $orders);
+    }
+
+    /**
+     * Generate driver slips from zone-based selection.
+     *
+     * @param array  $zone_names Zone names.
+     * @param string $start_date Start date (Y-m-d).
+     * @param string $end_date   End date (Y-m-d).
+     *
+     * @return array
+     */
+    public function generate_driver_slips_by_zones(array $zone_names, string $start_date, string $end_date): array {
+        $clients = $this->get_clients_for_zones_driver($zone_names);
+        if (empty($clients)) {
+            return [];
+        }
+
+        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
+
+        return $this->build_driver_slips($clients, $orders);
+    }
+
+    /**
+     * Build driver slip data from pre-fetched clients and orders.
+     *
+     * @param array $clients Keyed by wp_user_id (with PII fields).
+     * @param array $orders  Orders with items attached.
+     *
+     * @return array
+     */
+    private function build_driver_slips(array $clients, array $orders): array {
         if (empty($orders)) {
             return [];
         }
