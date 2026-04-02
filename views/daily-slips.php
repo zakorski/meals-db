@@ -3,14 +3,51 @@
  * Daily Slips admin view — packing, picking, and delivery slips.
  */
 ?>
+<?php
+$zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
+?>
 <div id="mealsdb-daily-slips" class="mealsdb-daily-slips">
     <p class="description">
-        <?php echo esc_html__('Generate packing, picking, delivery, and driver slips for a given delivery date.', 'meals-db'); ?>
+        <?php echo esc_html__('Generate packing, picking, delivery, and driver slips. Use zone mode for the familiar zone + date range workflow, or delivery day mode to select by day-of-week.', 'meals-db'); ?>
     </p>
 
     <div class="mealsdb-slip-controls" style="margin-bottom:16px;">
-        <label for="mealsdb-slip-date"><?php echo esc_html__('Delivery Date:', 'meals-db'); ?></label>
-        <input type="date" id="mealsdb-slip-date" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
+        <!-- Mode toggle -->
+        <div style="margin-bottom:12px;">
+            <label>
+                <input type="radio" name="slip-mode" value="zone" checked />
+                <?php echo esc_html__('By Zone + Date Range', 'meals-db'); ?>
+            </label>
+            <label style="margin-left:16px;">
+                <input type="radio" name="slip-mode" value="day" />
+                <?php echo esc_html__('By Delivery Day', 'meals-db'); ?>
+            </label>
+        </div>
+
+        <!-- Zone mode controls (shown by default) -->
+        <div id="mealsdb-zone-controls" style="margin-bottom:10px;">
+            <label for="mealsdb-zone-start"><?php echo esc_html__('Start Date:', 'meals-db'); ?></label>
+            <input type="date" id="mealsdb-zone-start" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
+
+            <label for="mealsdb-zone-end" style="margin-left:8px;"><?php echo esc_html__('End Date:', 'meals-db'); ?></label>
+            <input type="date" id="mealsdb-zone-end" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
+
+            <label for="mealsdb-zone-select" style="margin-left:8px;"><?php echo esc_html__('Zones:', 'meals-db'); ?></label>
+            <select id="mealsdb-zone-select" multiple style="min-width:220px; height:auto; vertical-align:middle;">
+                <?php foreach ($zone_schedule as $zone_name => $config) : ?>
+                    <option value="<?php echo esc_attr($zone_name); ?>">
+                        <?php echo esc_html($zone_name . ' - ' . $config['label']); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <!-- Day mode controls (hidden by default) -->
+        <div id="mealsdb-day-controls" style="display:none; margin-bottom:10px;">
+            <label for="mealsdb-slip-date"><?php echo esc_html__('Delivery Date:', 'meals-db'); ?></label>
+            <input type="date" id="mealsdb-slip-date" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
+        </div>
+
         <button type="button" class="button" id="mealsdb-gen-packing">
             <?php echo esc_html__('Packing Slip', 'meals-db'); ?>
         </button>
@@ -58,6 +95,21 @@
     'use strict';
 
     var nonce = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
+
+    // Mode toggle visibility.
+    $('input[name="slip-mode"]').on('change', function() {
+        if ($(this).val() === 'zone') {
+            $('#mealsdb-zone-controls').show();
+            $('#mealsdb-day-controls').hide();
+        } else {
+            $('#mealsdb-zone-controls').hide();
+            $('#mealsdb-day-controls').show();
+        }
+    });
+
+    function getMode() {
+        return $('input[name="slip-mode"]:checked').val();
+    }
 
     function getDate() {
         return $('#mealsdb-slip-date').val();
@@ -211,14 +263,36 @@
         return html;
     }
 
-    function generate(action, renderer) {
-        var date = getDate();
-        if (!date) {
-            showStatus('Please select a date.', 'warning');
-            return;
+    function generate(slipType, renderer) {
+        var mode = getMode();
+        var data = { nonce: nonce };
+
+        if (mode === 'zone') {
+            data.action     = 'mealsdb_zone_' + slipType;
+            data.zones      = $('#mealsdb-zone-select').val();
+            data.start_date = $('#mealsdb-zone-start').val();
+            data.end_date   = $('#mealsdb-zone-end').val();
+
+            if (!data.zones || !data.zones.length) {
+                showStatus('Please select at least one zone.', 'warning');
+                return;
+            }
+            if (!data.start_date || !data.end_date) {
+                showStatus('Please select a start and end date.', 'warning');
+                return;
+            }
+        } else {
+            data.action        = 'mealsdb_generate_' + slipType;
+            data.delivery_date = getDate();
+
+            if (!data.delivery_date) {
+                showStatus('Please select a date.', 'warning');
+                return;
+            }
         }
+
         showStatus('Generating...', 'info');
-        $.post(ajaxurl, { action: action, nonce: nonce, delivery_date: date }, function(res) {
+        $.post(ajaxurl, data, function(res) {
             if (!res.success) {
                 showStatus(res.message || 'Error.', 'error');
                 return;
@@ -230,10 +304,10 @@
         });
     }
 
-    $('#mealsdb-gen-packing').on('click', function() { generate('mealsdb_generate_packing_slip', renderPackingSlip); });
-    $('#mealsdb-gen-picking').on('click', function() { generate('mealsdb_generate_picking_slip', renderPickingSlip); });
-    $('#mealsdb-gen-delivery').on('click', function() { generate('mealsdb_generate_delivery_slip', renderDeliverySlip); });
-    $('#mealsdb-gen-driver').on('click', function() { generate('mealsdb_generate_driver_slips', renderDriverSlips); });
+    $('#mealsdb-gen-packing').on('click', function() { generate('packing_slip', renderPackingSlip); });
+    $('#mealsdb-gen-picking').on('click', function() { generate('picking_slip', renderPickingSlip); });
+    $('#mealsdb-gen-delivery').on('click', function() { generate('delivery_slip', renderDeliverySlip); });
+    $('#mealsdb-gen-driver').on('click', function() { generate('driver_slips', renderDriverSlips); });
     $('#mealsdb-slip-print').on('click', function() { window.print(); });
 })(jQuery);
 </script>

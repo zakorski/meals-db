@@ -119,6 +119,18 @@ function meals_db_check_requirements() {
     // Load DB schema and run installer
     require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
     MealsDB_Installer::install();
+
+    // Seed the zone delivery schedule option (Phase Q).
+    if (false === get_option('mealsdb_zone_delivery_schedule')) {
+        add_option('mealsdb_zone_delivery_schedule', [
+            'Zone 1' => ['day' => 'Wednesday', 'label' => 'Wednesday morning - Moncton Downtown'],
+            'Zone 2' => ['day' => 'Wednesday', 'label' => 'Wednesday afternoon - Sackville / Amherst'],
+            'Zone 3' => ['day' => 'Thursday',  'label' => 'Thursday morning - Moncton Other / Sussex'],
+            'Zone 4' => ['day' => 'Thursday',  'label' => 'Thursday afternoon - Shediac'],
+            'Zone 5' => ['day' => 'Friday',    'label' => 'Friday - Dieppe / Riverview'],
+            'Zone 6' => ['day' => 'Thursday',  'label' => 'Thursday morning - Sussex (combined with Zone 3)'],
+        ]);
+    }
 }
 
 // Register the plugin update checker against the GitHub repository.
