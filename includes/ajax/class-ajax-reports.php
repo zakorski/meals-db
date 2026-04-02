@@ -14,6 +14,7 @@ class MealsDB_Ajax_Reports {
         add_action('wp_ajax_mealsdb_generate_purchase_order', [self::class, 'generate_purchase_order']);
         add_action('wp_ajax_mealsdb_contribution_reconciliation', [self::class, 'contribution_reconciliation']);
         add_action('wp_ajax_mealsdb_delivery_fee_reconciliation', [self::class, 'delivery_fee_reconciliation']);
+        add_action('wp_ajax_mealsdb_private_customer_report', [self::class, 'private_customer_report']);
     }
 
     /**
@@ -99,5 +100,35 @@ class MealsDB_Ajax_Reports {
         $result  = $reports->delivery_fee_reconciliation($start_date, $end_date);
 
         wp_send_json_success($result);
+    }
+
+    /**
+     * Run private customer sales report.
+     */
+    public static function private_customer_report(): void {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Insufficient permissions.', 'meals-db')]);
+            return;
+        }
+
+        $start_date = isset($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : '';
+        $end_date   = isset($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : '';
+
+        if (!$start_date || !$end_date) {
+            wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+            return;
+        }
+
+        $reports = new MealsDB_Reports($GLOBALS['wpdb']);
+        $result  = $reports->private_customer_report($start_date, $end_date);
+        $csv     = $reports->export_private_report_csv($result);
+
+        wp_send_json([
+            'success' => true,
+            'data'    => $result,
+            'csv'     => $csv,
+        ]);
     }
 }

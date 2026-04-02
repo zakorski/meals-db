@@ -587,6 +587,239 @@ class MealsDB_Reports {
     }
 
     /**
+     * Generate private customer sales report.
+     *
+     * Per-client totals of mains, sides, subtotals, tax, and final totals
+     * for private (non-government) customers within a date range.
+     *
+     * @param string $start_date Y-m-d
+     * @param string $end_date   Y-m-d
+     * @return array ['rows' => [...], 'grand_totals' => [...]]
+     */
+    public function private_customer_report(string $start_date, string $end_date): array {
+        $empty = ['rows' => [], 'grand_totals' => self::empty_private_report_totals()];
+
+        if (!$this->wpdb instanceof wpdb) {
+            return $empty;
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return $empty;
+        }
+
+        // 1. Get active private clients with WP user IDs.
+        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql = sprintf(
+            "SELECT client_id, wp_user_id, first_name, last_name
+             FROM `%s`
+             WHERE client_type = 'Private' AND active = 1 AND wp_user_id > 0",
+            $clients_table
+        );
+
+        $result = $conn->query($sql);
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return $empty;
+        }
+
+        $clients = [];
+        while ($row = $result->fetch_assoc()) {
+            $row['first_name'] = !empty($row['first_name']) ? MealsDB_Encryption::decrypt($row['first_name']) : '';
+            $row['last_name']  = !empty($row['last_name']) ? MealsDB_Encryption::decrypt($row['last_name']) : '';
+            $clients[] = $row;
+        }
+        $result->free();
+
+        if (empty($clients)) {
+            return $empty;
+        }
+
+        // 2. Build product type lookup from meals_products, with WC category fallback.
+        $product_type_map = [];
+        if ($this->order_query instanceof MealsDB_WC_Order_Query) {
+            $products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
+            $prod_result = $conn->query(sprintf(
+                "SELECT wc_product_id, product_type FROM `%s` WHERE product_type IN ('meal', 'side')",
+                $products_table
+            ));
+            if (MealsDB_DB::is_mysqli_result($prod_result)) {
+                while ($prow = $prod_result->fetch_assoc()) {
+                    $product_type_map[(int) $prow['wc_product_id']] = $prow['product_type'];
+                }
+                $prod_result->free();
+            }
+        }
+
+        // WC category IDs for fallback: Mains=35, Sides=25,23,37,43.
+        $mains_cat_ids = [35];
+        $sides_cat_ids = [25, 23, 37, 43];
+
+        // 3. Date range for WC order query.
+        $start_datetime = $start_date . ' 00:00:00';
+        $end_datetime   = $end_date . ' 23:59:59';
+        $valid_statuses = ['wc-processing', 'wc-completed', 'wc-paid'];
+
+        $orders_table     = $this->wpdb->prefix . 'wc_orders';
+        $items_table      = $this->wpdb->prefix . 'woocommerce_order_items';
+        $itemmeta_table   = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
+
+        $rows = [];
+        $grand = self::empty_private_report_totals();
+
+        foreach ($clients as $client) {
+            $wp_user_id = (int) $client['wp_user_id'];
+
+            // Get orders for this user in the date range.
+            $order_sql = $this->wpdb->prepare(
+                "SELECT id FROM {$orders_table}
+                 WHERE customer_id = %d
+                   AND date_created_gmt >= %s AND date_created_gmt <= %s
+                   AND status IN ('wc-processing', 'wc-completed', 'wc-paid')
+                   AND type = 'shop_order'",
+                $wp_user_id, $start_datetime, $end_datetime
+            );
+            $order_ids = $this->wpdb->get_col($order_sql);
+
+            if (empty($order_ids)) {
+                continue;
+            }
+
+            $total_mains      = 0;
+            $total_sides      = 0;
+            $total_before_tax = 0.0;
+            $total_tax        = 0.0;
+
+            foreach ($order_ids as $order_id) {
+                $wc_order = wc_get_order((int) $order_id);
+                if (!$wc_order) {
+                    continue;
+                }
+
+                $total_before_tax += (float) $wc_order->get_subtotal();
+                $total_tax        += (float) $wc_order->get_total_tax();
+
+                foreach ($wc_order->get_items() as $item) {
+                    $product_id = (int) $item->get_product_id();
+                    $qty        = (int) $item->get_quantity();
+
+                    // Determine type: meals_products first, WC category fallback.
+                    if (isset($product_type_map[$product_id])) {
+                        if ($product_type_map[$product_id] === 'meal') {
+                            $total_mains += $qty;
+                        } elseif ($product_type_map[$product_id] === 'side') {
+                            $total_sides += $qty;
+                        }
+                    } else {
+                        // WC category fallback using hardcoded IDs.
+                        if (function_exists('has_term') && has_term($mains_cat_ids, 'product_cat', $product_id)) {
+                            $total_mains += $qty;
+                        } elseif (function_exists('has_term') && has_term($sides_cat_ids, 'product_cat', $product_id)) {
+                            $total_sides += $qty;
+                        }
+                    }
+                }
+            }
+
+            // Skip clients with zero activity.
+            if ($total_mains === 0 && $total_sides === 0 && $total_before_tax == 0) {
+                continue;
+            }
+
+            $final_total = round($total_before_tax + $total_tax, 2);
+
+            $rows[] = [
+                'first_name'       => $client['first_name'],
+                'last_name'        => $client['last_name'],
+                'total_mains'      => $total_mains,
+                'total_sides'      => $total_sides,
+                'total_before_tax' => round($total_before_tax, 2),
+                'total_tax'        => round($total_tax, 2),
+                'final_total'      => $final_total,
+            ];
+
+            $grand['total_mains']      += $total_mains;
+            $grand['total_sides']      += $total_sides;
+            $grand['total_before_tax'] += $total_before_tax;
+            $grand['total_tax']        += $total_tax;
+            $grand['final_total']      += $final_total;
+        }
+
+        // Round grand totals.
+        $grand['total_before_tax'] = round($grand['total_before_tax'], 2);
+        $grand['total_tax']        = round($grand['total_tax'], 2);
+        $grand['final_total']      = round($grand['final_total'], 2);
+
+        // Sort by first_name ASC, then last_name ASC.
+        usort($rows, function ($a, $b) {
+            $cmp = strcasecmp($a['first_name'], $b['first_name']);
+            return $cmp !== 0 ? $cmp : strcasecmp($a['last_name'], $b['last_name']);
+        });
+
+        return [
+            'rows'         => $rows,
+            'grand_totals' => $grand,
+        ];
+    }
+
+    /**
+     * Export private customer report to CSV string.
+     *
+     * @param array $data Result from private_customer_report().
+     * @return string CSV content.
+     */
+    public function export_private_report_csv(array $data): string {
+        $handle = fopen('php://temp', 'r+');
+        if ($handle === false) {
+            return '';
+        }
+
+        fputcsv($handle, [
+            'First Name', 'Last Name', 'Total Mains', 'Total Sides',
+            'Total Purchased Before Tax', 'Total Tax Charged', 'Final Total',
+        ]);
+
+        $rows = isset($data['rows']) ? $data['rows'] : [];
+        foreach ($rows as $row) {
+            fputcsv($handle, [
+                $row['first_name'],
+                $row['last_name'],
+                $row['total_mains'],
+                $row['total_sides'],
+                number_format($row['total_before_tax'], 2, '.', ''),
+                number_format($row['total_tax'], 2, '.', ''),
+                number_format($row['final_total'], 2, '.', ''),
+            ]);
+        }
+
+        // Grand Total row.
+        $grand = isset($data['grand_totals']) ? $data['grand_totals'] : self::empty_private_report_totals();
+        fputcsv($handle, [
+            'Grand Total', '',
+            $grand['total_mains'],
+            $grand['total_sides'],
+            number_format($grand['total_before_tax'], 2, '.', ''),
+            number_format($grand['total_tax'], 2, '.', ''),
+            number_format($grand['final_total'], 2, '.', ''),
+        ]);
+
+        rewind($handle);
+        $csv = stream_get_contents($handle);
+        fclose($handle);
+
+        return is_string($csv) ? $csv : '';
+    }
+
+    /**
+     * @return array
+     */
+    private static function empty_private_report_totals(): array {
+        return [
+            'total_mains' => 0, 'total_sides' => 0,
+            'total_before_tax' => 0, 'total_tax' => 0, 'final_total' => 0,
+        ];
+    }
+
+    /**
      * @return array
      */
     private static function empty_contribution_summary(): array {
