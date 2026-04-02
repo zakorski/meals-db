@@ -5,7 +5,7 @@
 ?>
 <div id="mealsdb-daily-slips" class="mealsdb-daily-slips">
     <p class="description">
-        <?php echo esc_html__('Generate packing, picking, and delivery slips for a given delivery date.', 'meals-db'); ?>
+        <?php echo esc_html__('Generate packing, picking, delivery, and driver slips for a given delivery date.', 'meals-db'); ?>
     </p>
 
     <div class="mealsdb-slip-controls" style="margin-bottom:16px;">
@@ -19,6 +19,9 @@
         </button>
         <button type="button" class="button" id="mealsdb-gen-delivery">
             <?php echo esc_html__('Delivery Slip', 'meals-db'); ?>
+        </button>
+        <button type="button" class="button" id="mealsdb-gen-driver">
+            <?php echo esc_html__('Driver Slips', 'meals-db'); ?>
         </button>
         <button type="button" class="button" id="mealsdb-slip-print" style="display:none;">
             <?php echo esc_html__('Print', 'meals-db'); ?>
@@ -42,6 +45,7 @@
     .mealsdb-slip-output th, .mealsdb-slip-output td { border: 1px solid #333; padding: 4px 6px; }
     .mealsdb-slip-output th { background: #eee; }
     .mealsdb-slip-output h3 { margin: 12px 0 4px; }
+    .mealsdb-slip-output .mealsdb-driver-zone + .mealsdb-driver-zone { page-break-before: always; }
 }
 .mealsdb-slip-output table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
 .mealsdb-slip-output th, .mealsdb-slip-output td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
@@ -116,6 +120,47 @@
         return html;
     }
 
+    function fmt(n) {
+        return parseFloat(n).toFixed(2);
+    }
+
+    function renderDriverSlips(data) {
+        if (!data.length) return '<p>No orders found.</p>';
+        var html = '<h3>Driver Delivery Slips</h3>';
+
+        $.each(data, function(i, zone) {
+            html += '<div class="mealsdb-driver-zone">';
+            html += '<h3>' + esc(zone.zone) + '</h3>';
+            html += '<table><thead><tr>';
+            html += '<th>Name</th><th>Address</th><th>City</th><th>Phone</th>';
+            html += '<th style="text-align:right">Subtotal</th>';
+            html += '<th style="text-align:right">Tax</th>';
+            html += '<th style="text-align:right">Total</th>';
+            html += '<th style="text-align:right">Collect</th>';
+            html += '<th style="text-align:right">Delivery Fee</th>';
+            html += '</tr></thead><tbody>';
+
+            $.each(zone.orders, function(j, o) {
+                html += '<tr>';
+                html += '<td>' + esc(o.first_name) + ' ' + esc(o.last_name) + '</td>';
+                html += '<td>' + esc(o.address) + '</td>';
+                html += '<td>' + esc(o.city) + '</td>';
+                html += '<td>' + esc(o.phone) + '</td>';
+                html += '<td style="text-align:right">$' + fmt(o.subtotal) + '</td>';
+                html += '<td style="text-align:right">$' + fmt(o.tax) + '</td>';
+                html += '<td style="text-align:right">$' + fmt(o.total) + '</td>';
+                html += '<td style="text-align:right">' + (o.collect !== null ? '$' + fmt(o.collect) : '') + '</td>';
+                html += '<td style="text-align:right">' + (o.delivery_fee > 0 ? '$' + fmt(o.delivery_fee) : '') + '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            html += '</div>';
+        });
+
+        return html;
+    }
+
     function generate(action, renderer) {
         var date = getDate();
         if (!date) {
@@ -138,6 +183,7 @@
     $('#mealsdb-gen-packing').on('click', function() { generate('mealsdb_generate_packing_slip', renderPackingSlip); });
     $('#mealsdb-gen-picking').on('click', function() { generate('mealsdb_generate_picking_slip', renderPickingSlip); });
     $('#mealsdb-gen-delivery').on('click', function() { generate('mealsdb_generate_delivery_slip', renderDeliverySlip); });
+    $('#mealsdb-gen-driver').on('click', function() { generate('mealsdb_generate_driver_slips', renderDriverSlips); });
     $('#mealsdb-slip-print').on('click', function() { window.print(); });
 })(jQuery);
 </script>

@@ -77,6 +77,72 @@ class MealsDB_Delivery_Slip_Generator {
     }
 
     /**
+     * Get clients with full PII for driver delivery slips.
+     *
+     * Unlike get_clients_for_delivery_date() which fetches only initials,
+     * this includes first_name, last_name, phone, delivery_fee, payment_method,
+     * and client_type — all needed for the driver-facing slip.
+     *
+     * @param string $delivery_date Y-m-d.
+     *
+     * @return array<int, array<string, mixed>> Keyed by wp_user_id.
+     */
+    public function get_clients_for_driver_slips(string $delivery_date): array {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return [];
+        }
+
+        $day_name = date('l', strtotime($delivery_date));
+
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql   = sprintf(
+            'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
+                    delivery_area_name, delivery_city, delivery_street_name,
+                    first_name, last_name, client_phone_1, delivery_fee,
+                    payment_method, client_type
+             FROM `%s`
+             WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = ?',
+            $table
+        );
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return [];
+        }
+
+        $day_lower = strtolower($day_name);
+        $stmt->bind_param('s', $day_lower);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
+        }
+
+        $result  = $stmt->get_result();
+        $clients = [];
+        if (MealsDB_DB::is_mysqli_result($result)) {
+            while ($row = $result->fetch_assoc()) {
+                $uid = (int) $row['wp_user_id'];
+
+                // Decrypt encrypted PII fields.
+                if (!empty($row['first_name'])) {
+                    $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
+                }
+                if (!empty($row['last_name'])) {
+                    $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
+                }
+
+                $clients[$uid] = $row;
+            }
+        }
+
+        $stmt->close();
+
+        return $clients;
+    }
+
+    /**
      * Fetch WC HPOS orders (with items) for a single delivery date.
      *
      * @param int[]  $wp_user_ids   WordPress user IDs.
@@ -297,6 +363,108 @@ class MealsDB_Delivery_Slip_Generator {
             $cmp = strcmp($a['zone'], $b['zone']);
             return $cmp !== 0 ? $cmp : strcmp($a['area'], $b['area']);
         });
+
+        return $result;
+    }
+
+    /**
+     * Generate driver delivery slips for a specific date.
+     *
+     * Unlike packing/picking/delivery slips which use initials for privacy,
+     * these show full customer info for the delivery driver plus cash
+     * collection amounts.
+     *
+     * @param string $delivery_date Y-m-d.
+     *
+     * @return array Array of slip data grouped by zone.
+     */
+    public function generate_driver_slips(string $delivery_date): array {
+        $clients = $this->get_clients_for_driver_slips($delivery_date);
+        if (empty($clients)) {
+            return [];
+        }
+
+        $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
+        if (empty($orders)) {
+            return [];
+        }
+
+        // Group orders by zone, keyed by zone code.
+        $zones = [];
+        foreach ($orders as $order) {
+            $uid    = (int) $order['wp_user_id'];
+            $client = isset($clients[$uid]) ? $clients[$uid] : null;
+            if (!$client) {
+                continue;
+            }
+
+            $zone_name = $client['delivery_area_name'] ?: '';
+            $zone_code = $client['delivery_area_zone'] ?: '';
+            $zone_key  = $zone_code . '|' . $zone_name;
+
+            if (!isset($zones[$zone_key])) {
+                $zones[$zone_key] = [
+                    'zone'      => $zone_name,
+                    'zone_code' => $zone_code,
+                    'orders'    => [],
+                ];
+            }
+
+            // Get financial data from the WC order object (Option B per directive).
+            $order_id = (int) $order['order_id'];
+            $wc_order = wc_get_order($order_id);
+
+            if (!$wc_order) {
+                continue;
+            }
+
+            $subtotal       = (float) $wc_order->get_subtotal();
+            $tax            = (float) $wc_order->get_total_tax();
+            $total          = (float) $wc_order->get_total();
+            $payment_method = $wc_order->get_payment_method();
+
+            // Collection calculation — reproduces old export-orders.php logic exactly.
+            $collect      = null;
+            $client_type  = strtolower($client['client_type'] ?? '');
+            $delivery_fee = (float) ($client['delivery_fee'] ?? 0);
+
+            if ($payment_method === 'cash' && $client_type === 'private') {
+                $collect = $total + $delivery_fee;
+            } elseif ($payment_method !== 'cash' && $delivery_fee > 0) {
+                $collect = $delivery_fee;
+            }
+
+            $zones[$zone_key]['orders'][] = [
+                'order_id'       => $order_id,
+                'first_name'     => $client['first_name'] ?? '',
+                'last_name'      => $client['last_name'] ?? '',
+                'address'        => trim($client['delivery_street_name'] ?? ''),
+                'city'           => $client['delivery_city'] ?? '',
+                'phone'          => $client['client_phone_1'] ?? '',
+                'subtotal'       => $subtotal,
+                'tax'            => $tax,
+                'total'          => $total,
+                'collect'        => $collect,
+                'delivery_fee'   => $delivery_fee,
+                'payment_method' => $payment_method,
+                'client_type'    => $client_type,
+            ];
+        }
+
+        // Sort zones by zone_code ASC.
+        $result = array_values($zones);
+        usort($result, function ($a, $b) {
+            return strcmp($a['zone_code'], $b['zone_code']);
+        });
+
+        // Sort orders within each zone by last_name ASC, then first_name ASC.
+        foreach ($result as &$zone) {
+            usort($zone['orders'], function ($a, $b) {
+                $cmp = strcmp($a['last_name'], $b['last_name']);
+                return $cmp !== 0 ? $cmp : strcmp($a['first_name'], $b['first_name']);
+            });
+        }
+        unset($zone);
 
         return $result;
     }

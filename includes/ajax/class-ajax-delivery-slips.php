@@ -14,6 +14,7 @@ class MealsDB_Ajax_Delivery_Slips {
         add_action('wp_ajax_mealsdb_generate_packing_slip',  [self::class, 'packing_slip']);
         add_action('wp_ajax_mealsdb_generate_picking_slip',  [self::class, 'picking_slip']);
         add_action('wp_ajax_mealsdb_generate_delivery_slip', [self::class, 'delivery_slip']);
+        add_action('wp_ajax_mealsdb_generate_driver_slips', [self::class, 'driver_slips']);
     }
 
     /**
@@ -55,6 +56,20 @@ class MealsDB_Ajax_Delivery_Slips {
         wp_send_json([
             'success' => true,
             'data'    => $generator->generate_delivery_slip($date),
+        ]);
+    }
+
+    /**
+     * Generate driver delivery slips.
+     */
+    public static function driver_slips(): void {
+        self::verify_request();
+        $date      = self::get_delivery_date();
+        $generator = self::make_generator();
+
+        wp_send_json([
+            'success' => true,
+            'data'    => $generator->generate_driver_slips($date),
         ]);
     }
 
