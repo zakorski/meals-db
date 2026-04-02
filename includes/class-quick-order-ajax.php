@@ -209,6 +209,11 @@ class MealsDB_Quick_Order_Ajax {
 
             $order->save();
 
+            // Update operational wp_usermeta fields (matches old admin-pos-order behavior).
+            // These are read by the call-log-manager to schedule follow-up calls.
+            update_user_meta($client_id, 'last_order_date', current_time('mysql'));
+            update_user_meta($client_id, 'last_call_date', current_time('mysql'));
+
             $order_id = $order->get_id();
             wp_send_json([
                 'success' => true,
