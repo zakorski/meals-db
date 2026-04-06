@@ -180,7 +180,7 @@ class MealsDB_Products_Loader {
      *
      * @return array<int, array<string, mixed>> Keyed by product ID.
      */
-    private static function batch_get_product_data(array $product_ids): array {
+    public static function batch_get_product_data(array $product_ids): array {
         if (empty($product_ids)) {
             return [];
         }
