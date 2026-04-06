@@ -209,6 +209,55 @@
                     this.updateSummaryRate();
                 });
             }
+
+            if (this.$search && this.$search.length) {
+                let searchTimer = null;
+                this.$search.on('input', () => {
+                    clearTimeout(searchTimer);
+                    const keyword = (this.$search.val() || '').trim();
+                    if (keyword.length < 2) {
+                        if (keyword.length === 0 && this.state.activeCategorySlug) {
+                            this.activateCategory(this.state.activeCategorySlug);
+                        }
+                        return;
+                    }
+                    searchTimer = setTimeout(() => {
+                        this.searchProducts(keyword);
+                    }, 300);
+                });
+            }
+        },
+
+        searchProducts(keyword) {
+            this.renderProductsLoading();
+
+            // Deselect category tabs during search
+            if (this.$categories && this.$categories.length) {
+                this.$categories.find('.qo-tab').removeClass('active');
+            }
+
+            $.ajax({
+                url: this.getAjaxUrl(),
+                method: 'GET',
+                dataType: 'json',
+                data: {
+                    action: 'mealsdb_qo_search_products',
+                    keyword: keyword,
+                    nonce: this.getSecurityNonce(),
+                },
+            }).done((response) => {
+                const payload = this.getResponsePayload(response);
+
+                if (!this.isSuccessfulResponse(response) || !Array.isArray(payload.products)) {
+                    const message = this.getResponseMessage(response, 'Search failed.');
+                    this.renderProductsError(message);
+                    return;
+                }
+
+                this.renderProducts(payload.products);
+            }).fail(() => {
+                this.renderProductsError('Search failed. Check connection.');
+            });
         },
 
         initialiseCategories() {
@@ -599,6 +648,21 @@
 
             const $tabsWrap = $('<div>', { class: 'mealsdb-qo-tabs' });
 
+            const $allButton = $('<button>', {
+                type: 'button',
+                class: 'qo-tab',
+                text: 'All',
+            }).attr({
+                'data-cat': 'all',
+                'data-cat-id': 0,
+            });
+
+            if (this.state.activeCategorySlug === 'all') {
+                $allButton.addClass('active');
+            }
+
+            $tabsWrap.append($allButton);
+
             this.state.categories.forEach((category) => {
                 const categoryId = parseInt(category.id, 10);
                 if (!Number.isInteger(categoryId) || categoryId <= 0) {
@@ -717,6 +781,10 @@
                 return null;
             }
 
+            if (slug === 'all') {
+                return this.fetchAllProducts();
+            }
+
             if (Number.isInteger(categoryId) && categoryId > 0) {
                 return this.fetchProductsByCategory(categoryId, slug);
             }
@@ -769,6 +837,39 @@
                     }
                 });
                 qoShowToast('Connection error — click to retry.', 'warning');
+            });
+        },
+
+        fetchAllProducts() {
+            this.renderProductsLoading();
+
+            if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts['all'])) {
+                this.renderProducts(this.state.categoryProducts['all']);
+                return $.Deferred().resolve().promise();
+            }
+
+            return $.ajax({
+                url: this.getAjaxUrl(),
+                method: 'GET',
+                dataType: 'json',
+                data: {
+                    action: 'mealsdb_qo_get_all_products',
+                    nonce: this.getSecurityNonce(),
+                },
+            }).done((response) => {
+                const payload = this.getResponsePayload(response);
+
+                if (!this.isSuccessfulResponse(response) || !Array.isArray(payload.products)) {
+                    const message = this.getResponseMessage(response, 'Unable to load products.');
+                    this.renderProductsError(message);
+                    return;
+                }
+
+                this.state.categoryProducts = this.state.categoryProducts || {};
+                this.state.categoryProducts['all'] = payload.products;
+                this.renderProducts(payload.products);
+            }).fail(() => {
+                this.renderProductsError('Unable to load products.');
             });
         },
 
@@ -1733,8 +1834,10 @@
         },
 
         getSecurityNonce(type) {
+            const config = window.mealsdbQuickOrder || {};
+            const quickOrderNonces = config.nonces || {};
+            const quickOrderNonce = config.nonce || '';
             const globalNonce = window.mealsdb && window.mealsdb.nonce ? window.mealsdb.nonce : '';
-            const quickOrderNonces = window.mealsdbQuickOrder && window.mealsdbQuickOrder.nonces ? window.mealsdbQuickOrder.nonces : {};
 
             if (type === 'createOrder' && quickOrderNonces.createOrder) {
                 return quickOrderNonces.createOrder;
@@ -1744,14 +1847,12 @@
                 return quickOrderNonces.cloneOrder;
             }
 
-            if (globalNonce) {
-                return globalNonce;
+            if (quickOrderNonce) {
+                return quickOrderNonce;
             }
 
-            // On the Quick Order page, mealsdb.nonce is not available.
-            // Fall back to the cloneOrder nonce which uses 'mealsdb_nonce'.
-            if (quickOrderNonces.cloneOrder) {
-                return quickOrderNonces.cloneOrder;
+            if (globalNonce) {
+                return globalNonce;
             }
 
             return '';

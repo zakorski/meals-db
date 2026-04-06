@@ -287,6 +287,7 @@ class MealsDB_Admin_UI {
             wp_localize_script('mealsdb-quick-order', 'mealsdbQuickOrder', [
                 'ajaxUrl'       => admin_url('admin-ajax.php'),
                 'cloneOrderId'  => $clone_order_id,
+                'nonce'         => wp_create_nonce('mealsdb_nonce'),
                 'nonces'        => [
                     'createOrder'    => wp_create_nonce('mealsdb_quick_order_create_order'),
                     'cloneOrder'     => wp_create_nonce('mealsdb_nonce'),

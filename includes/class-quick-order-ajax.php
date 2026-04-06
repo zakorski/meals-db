@@ -11,6 +11,8 @@ class MealsDB_Quick_Order_Ajax {
         add_action('wp_ajax_mealsdb_qo_get_categories', [self::class, 'get_categories']);
         add_action('wp_ajax_mealsdb_qo_get_products_by_category', [self::class, 'get_products_by_category']);
         add_action('wp_ajax_mealsdb_qo_search_clients', [self::class, 'search_clients']);
+        add_action('wp_ajax_mealsdb_qo_search_products', [self::class, 'search_products']);
+        add_action('wp_ajax_mealsdb_qo_get_all_products', [self::class, 'get_all_products']);
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
         add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
@@ -139,6 +141,67 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
+     * AJAX endpoint to fetch all products across allowed categories.
+     */
+    public static function get_all_products(): void {
+        self::verify_request();
+
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
+        try {
+            $products = MealsDB_Quick_Order_Products::get_all_products();
+            wp_send_json([
+                'success'  => true,
+                'products' => $products,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] get_all_products error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => __('An error occurred. Please try again.', 'meals-db'),
+            ]);
+        }
+    }
+
+    /**
+     * AJAX endpoint to search products by keyword.
+     */
+    public static function search_products(): void {
+        self::verify_request();
+
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
+        $keyword = isset($_REQUEST['keyword']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['keyword'])) : '';
+        if (strlen($keyword) < 2) {
+            wp_send_json(['success' => true, 'products' => []]);
+        }
+
+        try {
+            $products = MealsDB_Quick_Order_Products::search_products($keyword);
+            wp_send_json([
+                'success'  => true,
+                'products' => $products,
+            ]);
+        } catch (Exception $e) {
+            error_log('[MealsDB QuickOrder] search_products error: ' . $e->getMessage());
+            wp_send_json([
+                'success' => false,
+                'message' => __('An error occurred. Please try again.', 'meals-db'),
+            ]);
+        }
+    }
+
+    /**
      * AJAX endpoint to search active clients by name.
      */
     public static function search_clients(): void {
@@ -212,7 +275,7 @@ class MealsDB_Quick_Order_Ajax {
      */
     public static function create_order(): void {
         $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
-        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
+        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_quick_order_create_order')) {
             wp_send_json([
                 'success' => false,
                 'message' => __('Invalid request.', 'meals-db'),
