@@ -84,11 +84,12 @@ class MealsDB_Invoice_Page {
      * @return array Array of zone codes
      */
     private static function get_available_zones() {
-        $conn = MealsDB_DB::get_connection();
+        global $wpdb;
 
+        $table = MealsDB_DB::table(MealsDB_Tables::CLIENTS);
         $query = "
             SELECT DISTINCT delivery_area_zone
-            FROM " . MealsDB_DB::table(MealsDB_Tables::CLIENTS) . "
+            FROM `{$table}`
             WHERE client_type = 'SDNB'
                 AND use_legacy_billing = 1
                 AND delivery_area_zone IS NOT NULL
@@ -96,14 +97,7 @@ class MealsDB_Invoice_Page {
             ORDER BY delivery_area_zone
         ";
 
-        $result = $conn->query($query);
-        $zones = [];
-
-        if ($result) {
-            while ($row = $result->fetch_assoc()) {
-                $zones[] = $row['delivery_area_zone'];
-            }
-        }
+        $zones = $wpdb->get_col($query);
 
         // Default zones if none found
         if (empty($zones)) {

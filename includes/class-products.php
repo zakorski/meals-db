@@ -10,28 +10,21 @@ class MealsDB_Products {
      * Create the meals_products table within the external Meals DB.
      */
     public static function install_table(): void {
-        $conn = MealsDB_DB::get_connection();
+        global $wpdb;
 
-        if (!MealsDB_DB::is_mysqli($conn)) {
+        if (!$wpdb) {
             error_log('[MealsDB Products] Unable to establish database connection.');
             return;
         }
 
         $table = MealsDB_DB::get_table_name(self::TABLE);
-        $table = str_replace('`', '``', $table);
+
+        $charset = $wpdb->charset;
+        $collate = $wpdb->collate;
 
         $charset_sql = 'DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
-
-        $charset   = $conn->character_set_name();
-        $collation = method_exists($conn, 'get_charset') ? $conn->get_charset() : null;
-
         if (!empty($charset)) {
-            $collation_name = 'utf8mb4_unicode_ci';
-
-            if (is_object($collation) && property_exists($collation, 'collation') && !empty($collation->collation)) {
-                $collation_name = $collation->collation;
-            }
-
+            $collation_name = !empty($collate) ? $collate : 'utf8mb4_unicode_ci';
             $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
         }
 
@@ -56,8 +49,8 @@ class MealsDB_Products {
             KEY idx_product_name (product_name)
         ) ENGINE=InnoDB {$charset_sql};";
 
-        if (!$conn->query($sql)) {
-            error_log('[MealsDB Products] Failed creating ' . MealsDB_Tables::PRODUCTS . ' table: ' . $conn->error);
+        if ($wpdb->query($sql) === false) {
+            error_log('[MealsDB Products] Failed creating ' . MealsDB_Tables::PRODUCTS . ' table: ' . $wpdb->last_error);
         }
     }
 
@@ -71,67 +64,17 @@ class MealsDB_Products {
     public static function get_product_data(int $product_id): array {
         $defaults = self::get_default_row($product_id);
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
+        global $wpdb;
+        if (!$wpdb) {
             return $defaults;
         }
 
         $table = MealsDB_DB::get_table_name(self::TABLE);
-        $table = str_replace('`', '``', $table);
 
-        $sql = "SELECT wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost, last_updated FROM `{$table}` WHERE wc_product_id = ? LIMIT 1";
-        $stmt = $conn->prepare($sql);
-
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return $defaults;
-        }
-
-        $stmt->bind_param('i', $product_id);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return $defaults;
-        }
-
-        $row = null;
-
-        if (method_exists($stmt, 'get_result')) {
-            $result = $stmt->get_result();
-            if (MealsDB_DB::is_mysqli_result($result)) {
-                $row = $result->fetch_assoc();
-                $result->free();
-            }
-        } else {
-            $statement_row = [
-                'wc_product_id'   => null,
-                'product_type'    => null,
-                'taxable'         => null,
-                'main_ingredient' => null,
-                'dietary_tags'    => null,
-                'allergen_flags'  => null,
-                'case_size'       => null,
-                'unit_cost'       => null,
-                'last_updated'    => null,
-            ];
-
-            $bound = $stmt->bind_result(
-                $statement_row['wc_product_id'],
-                $statement_row['product_type'],
-                $statement_row['taxable'],
-                $statement_row['main_ingredient'],
-                $statement_row['dietary_tags'],
-                $statement_row['allergen_flags'],
-                $statement_row['case_size'],
-                $statement_row['unit_cost'],
-                $statement_row['last_updated']
-            );
-
-            if ($bound && $stmt->fetch()) {
-                $row = $statement_row;
-            }
-        }
-
-        $stmt->close();
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost, last_updated FROM `{$table}` WHERE wc_product_id = %d LIMIT 1",
+            $product_id
+        ), ARRAY_A);
 
         if (!is_array($row)) {
             return $defaults;
@@ -159,18 +102,18 @@ class MealsDB_Products {
      * @return bool True on success, false otherwise.
      */
     public static function save_product_data(int $product_id, array $data): bool {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
         $prepared = self::prepare_row_data($product_id, $data);
 
         $table = MealsDB_DB::get_table_name(self::TABLE);
-        $table = str_replace('`', '``', $table);
 
-        $sql = "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        $sql = $wpdb->prepare(
+            "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
+                VALUES (%d, %s, %d, %s, %s, %s, %d, %f)
                 ON DUPLICATE KEY UPDATE
                     product_type = VALUES(product_type),
                     taxable = VALUES(taxable),
@@ -178,15 +121,7 @@ class MealsDB_Products {
                     dietary_tags = VALUES(dietary_tags),
                     allergen_flags = VALUES(allergen_flags),
                     case_size = VALUES(case_size),
-                    unit_cost = VALUES(unit_cost)";
-
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return false;
-        }
-
-        $stmt->bind_param(
-            'isisssid',
+                    unit_cost = VALUES(unit_cost)",
             $prepared['wc_product_id'],
             $prepared['product_type'],
             $prepared['taxable'],
@@ -197,10 +132,9 @@ class MealsDB_Products {
             $prepared['unit_cost']
         );
 
-        $result = $stmt->execute();
-        $stmt->close();
+        $result = $wpdb->query($sql);
 
-        return (bool) $result;
+        return $result !== false;
     }
 
     /**
@@ -276,13 +210,12 @@ class MealsDB_Products {
      * @return bool True on success.
      */
     public static function update_display_fields(int $product_id, array $display): bool {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
         $table = MealsDB_DB::get_table_name(self::TABLE);
-        $table = str_replace('`', '``', $table);
 
         $product_name = isset($display['product_name']) ? mb_substr((string) $display['product_name'], 0, 200) : '';
         $price        = isset($display['price']) ? (float) $display['price'] : 0.00;
@@ -295,23 +228,16 @@ class MealsDB_Products {
             $category_data = json_encode($display['category_data']);
         }
 
-        $sql = "INSERT INTO `{$table}` (wc_product_id, product_name, price, image_url, sku, category_data, is_published, product_type, taxable, main_ingredient, case_size, buffer, unit_cost)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'meal', 0, '', 1, 0, 0.00)
+        $sql = $wpdb->prepare(
+            "INSERT INTO `{$table}` (wc_product_id, product_name, price, image_url, sku, category_data, is_published, product_type, taxable, main_ingredient, case_size, buffer, unit_cost)
+                VALUES (%d, %s, %f, %s, %s, %s, %d, 'meal', 0, '', 1, 0, 0.00)
                 ON DUPLICATE KEY UPDATE
                     product_name = VALUES(product_name),
                     price = VALUES(price),
                     image_url = VALUES(image_url),
                     sku = VALUES(sku),
                     category_data = VALUES(category_data),
-                    is_published = VALUES(is_published)";
-
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return false;
-        }
-
-        $stmt->bind_param(
-            'isdsssi',
+                    is_published = VALUES(is_published)",
             $product_id,
             $product_name,
             $price,
@@ -321,10 +247,9 @@ class MealsDB_Products {
             $is_published
         );
 
-        $result = $stmt->execute();
-        $stmt->close();
+        $result = $wpdb->query($sql);
 
-        return (bool) $result;
+        return $result !== false;
     }
 
     /**
@@ -336,26 +261,23 @@ class MealsDB_Products {
      * @return bool True on success.
      */
     public static function set_published(int $product_id, bool $is_published): bool {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
         $table = MealsDB_DB::get_table_name(self::TABLE);
-        $table = str_replace('`', '``', $table);
-
-        $sql  = "UPDATE `{$table}` SET is_published = ? WHERE wc_product_id = ?";
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return false;
-        }
 
         $flag = $is_published ? 1 : 0;
-        $stmt->bind_param('ii', $flag, $product_id);
-        $result = $stmt->execute();
-        $stmt->close();
+        $sql = $wpdb->prepare(
+            "UPDATE `{$table}` SET is_published = %d WHERE wc_product_id = %d",
+            $flag,
+            $product_id
+        );
 
-        return (bool) $result;
+        $result = $wpdb->query($sql);
+
+        return $result !== false;
     }
 
     /**

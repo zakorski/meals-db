@@ -40,7 +40,7 @@ MealsDB_Autoloader::register(MEALS_DB_PLUGIN_DIR);
 
 add_action('plugins_loaded', function() {
     if (class_exists('MealsDB_Config')) {
-        MealsDB_Config::instance(); // Ensure .env is always loaded early
+        MealsDB_Config::instance();
     }
 });
 

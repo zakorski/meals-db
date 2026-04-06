@@ -552,45 +552,25 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
-     * Query meals_clients from the external DB with a prepared statement.
+     * Query meals_clients from the DB with a prepared statement.
      *
-     * @param string $sql    SQL with ? placeholders.
-     * @param string $types  bind_param type string.
-     * @param array  $params Parameters to bind.
+     * @param string $sql    SQL with %s/%d placeholders (wpdb format).
+     * @param array  $params Parameters to bind (empty array if none).
      *
      * @return array Client rows.
      */
-    private static function query_clients(string $sql, string $types = '', array $params = []): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return [];
+    private static function query_clients(string $sql, array $params = []): array {
+        global $wpdb;
+
+        if (!empty($params)) {
+            $prepared = $wpdb->prepare($sql, ...$params);
+        } else {
+            $prepared = $sql;
         }
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return [];
-        }
+        $rows = $wpdb->get_results($prepared, ARRAY_A);
 
-        if ($types !== '' && !empty($params)) {
-            $stmt->bind_param($types, ...$params);
-        }
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return [];
-        }
-
-        $result = $stmt->get_result();
-        $rows   = [];
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            while ($row = $result->fetch_assoc()) {
-                $rows[] = $row;
-            }
-        }
-
-        $stmt->close();
-
-        return $rows;
+        return is_array($rows) ? $rows : [];
     }
 
     /**
@@ -610,19 +590,16 @@ class MealsDB_Invoice_Generator {
         $invoice_number = $end_date_obj->format('Y M d') . ' ' . $zone;
 
         // Query eligible clients from external DB.
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf(
-            'SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
                     individual_id, individual_id_index, client_contribution, delivery_area_zone,
                     default_rate_id, allowance_mains, allowance_sides, requisition_period
-             FROM `%s`
-             WHERE client_type = ? AND use_legacy_billing = 1
-               AND delivery_area_zone = ? AND active = 1 AND wp_user_id > 0',
-            $clients_table
-        );
+             FROM `{$clients_table}`
+             WHERE client_type = %s AND use_legacy_billing = 1
+               AND delivery_area_zone = %s AND active = 1 AND wp_user_id > 0";
 
         $client_type = 'SDNB';
-        $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
+        $client_rows = self::query_clients($sql, [$client_type, $zone]);
 
         // Pre-compute duplicate individual_id counts for error checking.
         $sdnb_duplicate_counts = [];
@@ -803,18 +780,15 @@ class MealsDB_Invoice_Generator {
      */
     public static function generate_sdnb_new_portal($start_date, $end_date) {
         // Query eligible clients from external DB.
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf(
-            'SELECT client_id, wp_user_id, first_name, last_name, sdnb_service_request_id,
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, sdnb_service_request_id,
                     client_contribution, default_rate_id
-             FROM `%s`
-             WHERE client_type = ? AND use_legacy_billing = 0
-               AND active = 1 AND wp_user_id > 0',
-            $clients_table
-        );
+             FROM `{$clients_table}`
+             WHERE client_type = %s AND use_legacy_billing = 0
+               AND active = 1 AND wp_user_id > 0";
 
         $client_type = 'SDNB';
-        $client_rows = self::query_clients($sql, 's', [$client_type]);
+        $client_rows = self::query_clients($sql, [$client_type]);
 
         // Fetch invoice data via WC HPOS.
         $invoice_rows = self::get_invoice_data_for_clients($client_rows, $start_date, $end_date);
@@ -870,19 +844,16 @@ class MealsDB_Invoice_Generator {
      */
     public static function generate_vac_csv($start_date, $end_date) {
         // Query eligible veteran clients from external DB.
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf(
-            'SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
                     vet_health_card, requisition_period, client_contribution, default_rate_id,
                     street_name, city, postal_code, client_phone_1,
                     allowance_mains, allowance_sides, individual_id, individual_id_index
-             FROM `%s`
-             WHERE client_type = ? AND active = 1 AND wp_user_id > 0',
-            $clients_table
-        );
+             FROM `{$clients_table}`
+             WHERE client_type = %s AND active = 1 AND wp_user_id > 0";
 
         $client_type = 'Veteran';
-        $client_rows = self::query_clients($sql, 's', [$client_type]);
+        $client_rows = self::query_clients($sql, [$client_type]);
 
         if (empty($client_rows)) {
             return '';

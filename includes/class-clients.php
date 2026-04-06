@@ -15,12 +15,12 @@ class MealsDB_Clients {
      * @return string[]
      */
     public static function get_client_types(): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             return [];
         }
 
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
 
         return $repository->get_client_types();
     }
@@ -34,12 +34,12 @@ class MealsDB_Clients {
      * @return array<int, array<string, string|null>>
      */
     public static function get_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             return [];
         }
 
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
 
         return $repository->search_clients($client_type, $search, $show_inactive);
     }
@@ -66,12 +66,12 @@ class MealsDB_Clients {
      * Permanently delete a client and any optionally related rows.
      */
     public static function delete_client(int $client_id): bool {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
 
         $client_snapshot = null;
         $client_record = $repository->get_client_by_id($client_id);
@@ -84,13 +84,8 @@ class MealsDB_Clients {
             ];
         }
 
-        $transaction_started = false;
-        if (method_exists($conn, 'begin_transaction')) {
-            $transaction_started = $conn->begin_transaction();
-            if (!$transaction_started) {
-                error_log('[MealsDB] Failed to begin transaction for client deletion.');
-            }
-        }
+        $wpdb->query('START TRANSACTION');
+        $transaction_started = true;
 
         $success = true;
 
@@ -103,36 +98,21 @@ class MealsDB_Clients {
             $table_name = MealsDB_DB::get_table_name($cleanup['table']);
             $column = $cleanup['column'];
 
-            if (!self::table_has_column($conn, $table_name, $column)) {
+            if (!self::table_has_column($table_name, $column)) {
                 continue;
             }
 
-            $escaped_table = str_replace('`', '``', $table_name);
-            $escaped_column = str_replace('`', '``', $column);
-            $sql = sprintf('DELETE FROM `%s` WHERE `%s` = ?', $escaped_table, $escaped_column);
+            $sql = $wpdb->prepare(
+                sprintf('DELETE FROM `%s` WHERE `%s` = %%d', $table_name, $column),
+                $client_id
+            );
 
-            $stmt = $conn->prepare($sql);
-            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-                error_log(sprintf('[MealsDB] Failed to prepare cleanup delete for %s.', $cleanup['table']));
+            $result = $wpdb->query($sql);
+            if ($result === false) {
+                error_log(sprintf('[MealsDB] Failed to execute cleanup delete for %s: %s', $cleanup['table'], $wpdb->last_error));
                 $success = false;
                 break;
             }
-
-            if (!$stmt->bind_param('i', $client_id)) {
-                error_log(sprintf('[MealsDB] Failed to bind cleanup delete parameters for %s.', $cleanup['table']));
-                $stmt->close();
-                $success = false;
-                break;
-            }
-
-            if (!$stmt->execute()) {
-                error_log(sprintf('[MealsDB] Failed to execute cleanup delete for %s: %s', $cleanup['table'], $stmt->error ?? 'unknown error'));
-                $stmt->close();
-                $success = false;
-                break;
-            }
-
-            $stmt->close();
         }
 
         if ($success) {
@@ -143,13 +123,13 @@ class MealsDB_Clients {
 
         if ($transaction_started) {
             if ($success) {
-                if (!$conn->commit()) {
+                if ($wpdb->query('COMMIT') === false) {
                     error_log('[MealsDB] Failed to commit client deletion transaction.');
-                    $conn->rollback();
+                    $wpdb->query('ROLLBACK');
                     $success = false;
                 }
             } else {
-                $conn->rollback();
+                $wpdb->query('ROLLBACK');
             }
         }
 
@@ -173,12 +153,12 @@ class MealsDB_Clients {
      * @return bool
      */
     private static function set_client_active_status(int $client_id, int $active, string $action): bool {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
 
         $old_value = null;
         $existing = $repository->get_client_by_id($client_id);
@@ -198,33 +178,20 @@ class MealsDB_Clients {
     /**
      * Check if a table contains a specific column.
      */
-    private static function table_has_column($conn, string $table_name, string $column): bool {
-        if (!self::table_exists($conn, $table_name)) {
+    private static function table_has_column(string $table_name, string $column): bool {
+        if (!self::table_exists($table_name)) {
             return false;
         }
 
-        $escaped_table = str_replace('`', '``', $table_name);
-        $escaped_column = $column;
+        global $wpdb;
 
-        if (method_exists($conn, 'real_escape_string')) {
-            $escaped_column = $conn->real_escape_string($escaped_column);
-        }
+        $escaped_column = $wpdb->_real_escape($column);
 
-        $sql = sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $escaped_table, $escaped_column);
-        $result = $conn->query($sql);
+        $sql = sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table_name, $escaped_column);
+        $result = $wpdb->get_results($sql, ARRAY_A);
 
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            $exists = $result->num_rows > 0;
-            $result->free();
-            return $exists;
-        }
-
-        if ($result && isset($result->num_rows)) {
-            $exists = $result->num_rows > 0;
-            if (method_exists($result, 'free')) {
-                $result->free();
-            }
-            return $exists;
+        if (is_array($result)) {
+            return count($result) > 0;
         }
 
         return false;
@@ -233,26 +200,17 @@ class MealsDB_Clients {
     /**
      * Determine if the target table exists in the configured database.
      */
-    private static function table_exists($conn, string $table_name): bool {
-        if (!MealsDB_DB::is_mysqli($conn)) {
+    private static function table_exists(string $table_name): bool {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
-        $sql = 'SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1';
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return false;
-        }
+        $row = $wpdb->get_var($wpdb->prepare(
+            'SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = %s LIMIT 1',
+            $table_name
+        ));
 
-        if (!$stmt->bind_param('s', $table_name) || !$stmt->execute()) {
-            $stmt->close();
-            return false;
-        }
-
-        $stmt->store_result();
-        $exists = $stmt->num_rows > 0;
-        $stmt->close();
-
-        return $exists;
+        return $row !== null;
     }
 }

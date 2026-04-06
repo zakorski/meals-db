@@ -244,31 +244,23 @@ class MealsDB_Sync {
      * Nightly cron sweep: compare all linked government clients and push WP-authoritative diffs.
      */
     public static function run_nightly_sync(): void {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
-            error_log('[MealsDB Sync] Nightly sync aborted: no database connection.');
-            return;
-        }
+        global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $escaped_table = str_replace('`', '``', $clients_table);
 
-        $sql = sprintf(
-            "SELECT * FROM `%s` WHERE client_type IN ('SDNB', 'Veteran') AND wp_user_id > 0",
-            $escaped_table
-        );
+        $sql = "SELECT * FROM `{$clients_table}` WHERE client_type IN ('SDNB', 'Veteran') AND wp_user_id > 0";
 
         // Try the preferred column name first; fall back to the alternate.
-        $result = $conn->query($sql);
-        if (!($result instanceof \mysqli_result)) {
-            $sql = sprintf(
-                "SELECT * FROM `%s` WHERE client_type IN ('SDNB', 'Veteran') AND wordpress_user_id > 0",
-                $escaped_table
-            );
-            $result = $conn->query($sql);
+        $wpdb->suppress_errors(true);
+        $clients = $wpdb->get_results($sql, ARRAY_A);
+        $wpdb->suppress_errors(false);
+
+        if (!is_array($clients) || empty($clients)) {
+            $sql = "SELECT * FROM `{$clients_table}` WHERE client_type IN ('SDNB', 'Veteran') AND wordpress_user_id > 0";
+            $clients = $wpdb->get_results($sql, ARRAY_A);
         }
 
-        if (!($result instanceof \mysqli_result)) {
+        if (!is_array($clients) || empty($clients)) {
             error_log('[MealsDB Sync] Nightly sync aborted: failed to query clients.');
             return;
         }
@@ -279,7 +271,7 @@ class MealsDB_Sync {
         $field_map      = self::get_field_to_wp_meta_map();
         $wp_fields      = self::get_wp_authoritative_fields();
 
-        while ($client = $result->fetch_assoc()) {
+        foreach ($clients as $client) {
             $wp_user_id = (int) ($client['wp_user_id'] ?? $client['wordpress_user_id'] ?? 0);
             $client_id  = (int) ($client['client_id'] ?? 0);
 
@@ -329,8 +321,6 @@ class MealsDB_Sync {
                 $synced_count++;
             }
         }
-
-        $result->free();
 
         $summary = wp_json_encode([
             'synced'  => $synced_count,
@@ -436,66 +426,25 @@ class MealsDB_Sync {
      * @return array<string, mixed>|null Client row, or null if not found or not government.
      */
     private static function find_government_client_by_wp_user(int $wp_user_id): ?array {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
-            return null;
-        }
+        global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $escaped_table = str_replace('`', '``', $clients_table);
 
         // Try the preferred column name first; fall back to the alternate.
         $wp_columns = ['wp_user_id', 'wordpress_user_id'];
         foreach ($wp_columns as $wp_col) {
             $escaped_col = str_replace('`', '``', $wp_col);
-            $sql = sprintf(
-                "SELECT * FROM `%s` WHERE `%s` = ? AND client_type IN ('SDNB', 'Veteran') LIMIT 1",
-                $escaped_table,
-                $escaped_col
+            $sql = $wpdb->prepare(
+                "SELECT * FROM `{$clients_table}` WHERE `{$escaped_col}` = %d AND client_type IN ('SDNB', 'Veteran') LIMIT 1",
+                $wp_user_id
             );
 
-            $stmt = $conn->prepare($sql);
-            if (!$stmt) {
-                continue;
-            }
+            $wpdb->suppress_errors(true);
+            $row = $wpdb->get_row($sql, ARRAY_A);
+            $wpdb->suppress_errors(false);
 
-            if (!$stmt->bind_param('i', $wp_user_id) || !$stmt->execute()) {
-                $stmt->close();
-                continue;
-            }
-
-            if (method_exists($stmt, 'get_result')) {
-                $res = $stmt->get_result();
-                if ($res instanceof \mysqli_result) {
-                    $row = $res->fetch_assoc();
-                    $res->free();
-                    $stmt->close();
-                    if (is_array($row)) {
-                        return $row;
-                    }
-                } else {
-                    $stmt->close();
-                }
-            } else {
-                $stmt->store_result();
-                if ($stmt->num_rows > 0) {
-                    $stmt->close();
-                    // Fall back to a plain query for environments without get_result.
-                    $fallback_sql = sprintf(
-                        "SELECT * FROM `%s` WHERE `%s` = %d AND client_type IN ('SDNB', 'Veteran') LIMIT 1",
-                        $escaped_table,
-                        $escaped_col,
-                        $wp_user_id
-                    );
-                    $fallback_result = $conn->query($fallback_sql);
-                    if ($fallback_result instanceof \mysqli_result) {
-                        $row = $fallback_result->fetch_assoc();
-                        $fallback_result->free();
-                        return is_array($row) ? $row : null;
-                    }
-                } else {
-                    $stmt->close();
-                }
+            if (is_array($row)) {
+                return $row;
             }
         }
 

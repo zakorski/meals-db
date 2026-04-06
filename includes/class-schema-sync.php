@@ -11,8 +11,9 @@ class MealsDB_Schema_Sync {
      * @return array<string, mixed>|WP_Error Summary of sync actions or WP_Error on connection failure.
      */
     public static function run_full_sync() {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
+        global $wpdb;
+
+        if (!$wpdb) {
             return new WP_Error('db_error', 'Unable to connect to external Meals DB.');
         }
 
@@ -29,7 +30,7 @@ class MealsDB_Schema_Sync {
             $escaped_table = str_replace('`', '``', $table_name);
 
             try {
-                $exists = self::table_exists($conn, $table_name);
+                $exists = self::table_exists($wpdb, $table_name);
             } catch (Throwable $exception) {
                 $results['errors'][] = [
                     'table'  => $table_name,
@@ -40,14 +41,15 @@ class MealsDB_Schema_Sync {
             }
 
             if (!$exists) {
-                $create_sql = MealsDB_Schema::generate_create_table_sql($conn, $schema, false);
-                if ($conn->query($create_sql) !== false) {
+                $create_sql = MealsDB_Schema::generate_create_table_sql($wpdb, $schema, false);
+                $query_result = $wpdb->query($create_sql);
+                if ($query_result !== false) {
                     $results['tables_created'][] = $table_name;
                 } else {
                     $results['errors'][] = [
                         'table'  => $table_name,
                         'column' => null,
-                        'error'  => $conn->error,
+                        'error'  => $wpdb->last_error,
                     ];
                     // Table creation failed; continue to next table without column checks
                     continue;
@@ -56,7 +58,7 @@ class MealsDB_Schema_Sync {
 
             $existing_columns = [];
             try {
-                $existing_columns = self::fetch_existing_columns($conn, $table_name);
+                $existing_columns = self::fetch_existing_columns($wpdb, $table_name);
             } catch (Throwable $exception) {
                 $results['errors'][] = [
                     'table'  => $table_name,
@@ -68,7 +70,7 @@ class MealsDB_Schema_Sync {
 
             $expected_primary = array_values((array) ($schema['primary_key'] ?? []));
             try {
-                $actual_primary = self::fetch_primary_key_columns($conn, $table_name);
+                $actual_primary = self::fetch_primary_key_columns($wpdb, $table_name);
                 if ($expected_primary !== $actual_primary) {
                     $results['column_mismatches'][] = [
                         'table'    => $table_name,
@@ -92,7 +94,8 @@ class MealsDB_Schema_Sync {
                     $alter_sql = sprintf('ALTER TABLE `%s` ADD COLUMN `%s` %s', $escaped_table, $column, $clean_definition);
 
                     try {
-                        if ($conn->query($alter_sql) !== false) {
+                        $query_result = $wpdb->query($alter_sql);
+                        if ($query_result !== false) {
                             $results['columns_added'][] = [
                                 'table'  => $table_name,
                                 'column' => $column,
@@ -101,7 +104,7 @@ class MealsDB_Schema_Sync {
                             $results['errors'][] = [
                                 'table'  => $table_name,
                                 'column' => $column,
-                                'error'  => $conn->error,
+                                'error'  => $wpdb->last_error,
                             ];
                         }
                     } catch (Throwable $exception) {
@@ -132,16 +135,13 @@ class MealsDB_Schema_Sync {
     /**
      * Determine if the target table exists.
      */
-    private static function table_exists(mysqli $conn, string $table): bool {
-        $safe_table = $conn->real_escape_string($table);
-        $sql        = "SHOW TABLES LIKE '{$safe_table}'";
-
-        $result = $conn->query($sql);
-        if ($result === false) {
-            throw new RuntimeException($conn->error);
+    private static function table_exists($wpdb, string $table): bool {
+        $result = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+        if ($result === null && $wpdb->last_error) {
+            throw new RuntimeException($wpdb->last_error);
         }
 
-        return $result && $result->num_rows > 0;
+        return $result !== null;
     }
 
     /**
@@ -149,23 +149,29 @@ class MealsDB_Schema_Sync {
      *
      * @return array<string, array<string, mixed>>
      */
-    private static function fetch_existing_columns(mysqli $conn, string $table): array {
-        $safe_table = $conn->real_escape_string($table);
-        $sql        = "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{$safe_table}'";
+    private static function fetch_existing_columns($wpdb, string $table): array {
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                $table
+            ),
+            ARRAY_A
+        );
 
-        $result = $conn->query($sql);
-        if ($result === false) {
-            throw new RuntimeException($conn->error);
+        if ($rows === null && $wpdb->last_error) {
+            throw new RuntimeException($wpdb->last_error);
         }
 
         $columns = [];
-        while ($row = $result->fetch_assoc()) {
-            $columns[$row['COLUMN_NAME']] = [
-                'column_type'   => $row['COLUMN_TYPE'] ?? '',
-                'is_nullable'   => $row['IS_NULLABLE'] ?? '',
-                'column_default'=> $row['COLUMN_DEFAULT'] ?? null,
-                'extra'         => $row['EXTRA'] ?? '',
-            ];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $columns[$row['COLUMN_NAME']] = [
+                    'column_type'   => $row['COLUMN_TYPE'] ?? '',
+                    'is_nullable'   => $row['IS_NULLABLE'] ?? '',
+                    'column_default'=> $row['COLUMN_DEFAULT'] ?? null,
+                    'extra'         => $row['EXTRA'] ?? '',
+                ];
+            }
         }
 
         return $columns;
@@ -176,19 +182,25 @@ class MealsDB_Schema_Sync {
      *
      * @return array<int, string>
      */
-    private static function fetch_primary_key_columns(mysqli $conn, string $table): array {
-        $safe_table = $conn->real_escape_string($table);
-        $sql        = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{$safe_table}' AND CONSTRAINT_NAME = 'PRIMARY' ORDER BY ORDINAL_POSITION";
+    private static function fetch_primary_key_columns($wpdb, string $table): array {
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND CONSTRAINT_NAME = 'PRIMARY' ORDER BY ORDINAL_POSITION",
+                $table
+            ),
+            ARRAY_A
+        );
 
-        $result = $conn->query($sql);
-        if ($result === false) {
-            throw new RuntimeException($conn->error);
+        if ($rows === null && $wpdb->last_error) {
+            throw new RuntimeException($wpdb->last_error);
         }
 
         $columns = [];
-        while ($row = $result->fetch_assoc()) {
-            if (!empty($row['COLUMN_NAME'])) {
-                $columns[] = (string) $row['COLUMN_NAME'];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                if (!empty($row['COLUMN_NAME'])) {
+                    $columns[] = (string) $row['COLUMN_NAME'];
+                }
             }
         }
 

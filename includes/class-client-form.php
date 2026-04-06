@@ -622,8 +622,8 @@ class MealsDB_Client_Form {
      * @return bool
      */
     public static function save(array $data): bool {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) return false;
+        global $wpdb;
+        if (!$wpdb) return false;
 
         $unknown_keys = [];
         $sanitized = self::sanitize_payload($data, $unknown_keys);
@@ -648,7 +648,7 @@ class MealsDB_Client_Form {
         $sanitized = self::apply_insert_defaults($sanitized);
 
         $encrypted = $sanitized;
-        if (!self::ensure_index_columns_exist($conn)) {
+        if (!self::ensure_index_columns_exist()) {
             error_log('[MealsDB] Save aborted: deterministic index columns are unavailable.');
             return false;
         }
@@ -677,7 +677,7 @@ class MealsDB_Client_Form {
             unset($encrypted['units']);
         }
 
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
 
         return $repository->create_client($encrypted);
     }
@@ -694,8 +694,8 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
@@ -720,7 +720,7 @@ class MealsDB_Client_Form {
         $sanitized = self::map_form_to_db($sanitized);
 
         $encrypted = $sanitized;
-        if (!self::ensure_index_columns_exist($conn)) {
+        if (!self::ensure_index_columns_exist()) {
             error_log('[MealsDB] Update aborted: deterministic index columns are unavailable.');
             return false;
         }
@@ -759,7 +759,7 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
 
         return $repository->update_client($client_id, $encrypted);
     }
@@ -775,12 +775,12 @@ class MealsDB_Client_Form {
             return null;
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             return null;
         }
 
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
         $record = $repository->get_client_by_id($client_id);
 
         if (empty($record)) {
@@ -893,13 +893,13 @@ class MealsDB_Client_Form {
      * @return int|false Draft identifier on success, false on failure
      */
     public static function save_draft(array $data, ?int $draft_id = null) {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             error_log('[MealsDB] Draft save aborted: database connection unavailable.');
             return false;
         }
 
-        $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
+        $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
 
         if ($draft_id === null && isset($data['draft_id'])) {
             $draft_id = intval($data['draft_id']);
@@ -916,61 +916,45 @@ class MealsDB_Client_Form {
         $user_id = get_current_user_id();
 
         if ($draft_id && $draft_id > 0) {
-            if (!self::draft_exists($conn, $draft_id)) {
+            if (!self::draft_exists($draft_id)) {
                 error_log('[MealsDB] Draft update failed: draft ID ' . $draft_id . ' not found.');
                 return false;
             }
 
-            if (!self::draft_exists($conn, $draft_id, $user_id)) {
+            if (!self::draft_exists($draft_id, $user_id)) {
                 error_log('[MealsDB] Draft update failed: user ' . $user_id . ' does not own draft ID ' . $draft_id . '.');
                 return false;
             }
 
-            $stmt = $conn->prepare(sprintf('UPDATE `%s` SET data = ? WHERE id = ? AND created_by = ?', $drafts_table));
-            if (!$stmt) {
-                error_log('[MealsDB] Draft update failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+            $sql = $wpdb->prepare(
+                "UPDATE `{$drafts_table}` SET data = %s WHERE id = %d AND created_by = %d",
+                $json,
+                $draft_id,
+                $user_id
+            );
+
+            $result = $wpdb->query($sql);
+            if ($result === false) {
+                error_log('[MealsDB] Draft update failed to execute: ' . $wpdb->last_error);
                 return false;
             }
-
-            if (!$stmt->bind_param('sii', $json, $draft_id, $user_id)) {
-                $stmt->close();
-                error_log('[MealsDB] Draft update failed to bind parameters.');
-                return false;
-            }
-
-            $executed = $stmt->execute();
-            if (!$executed) {
-                error_log('[MealsDB] Draft update failed to execute: ' . ($stmt->error ?? 'unknown error'));
-                $stmt->close();
-                return false;
-            }
-
-            $stmt->close();
 
             return $draft_id;
         }
 
-        $stmt = $conn->prepare(sprintf('INSERT INTO `%s` (data, created_by) VALUES (?, ?)', $drafts_table));
-        if (!$stmt) {
-            error_log('[MealsDB] Draft save failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+        $sql = $wpdb->prepare(
+            "INSERT INTO `{$drafts_table}` (data, created_by) VALUES (%s, %d)",
+            $json,
+            $user_id
+        );
+
+        $result = $wpdb->query($sql);
+        if ($result === false) {
+            error_log('[MealsDB] Draft save failed to execute: ' . $wpdb->last_error);
             return false;
         }
 
-        if (!$stmt->bind_param("si", $json, $user_id)) {
-            $stmt->close();
-            error_log('[MealsDB] Draft save failed to bind parameters.');
-            return false;
-        }
-
-        $executed = $stmt->execute();
-        if (!$executed) {
-            error_log('[MealsDB] Draft save failed to execute: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return false;
-        }
-
-        $new_id = intval($conn->insert_id ?? 0);
-        $stmt->close();
+        $new_id = intval($wpdb->insert_id ?? 0);
 
         if ($new_id <= 0) {
             error_log('[MealsDB] Draft save failed: unable to determine inserted ID.');
@@ -991,47 +975,39 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) {
+        global $wpdb;
+        if (!$wpdb) {
             error_log('[MealsDB] Draft delete aborted: database connection unavailable.');
             return false;
         }
 
-        $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
+        $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
 
-        if (!self::draft_exists($conn, $draft_id)) {
+        if (!self::draft_exists($draft_id)) {
             error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' not found.');
             return false;
         }
 
         $user_id = get_current_user_id();
 
-        if (!self::draft_exists($conn, $draft_id, $user_id)) {
+        if (!self::draft_exists($draft_id, $user_id)) {
             error_log('[MealsDB] Draft delete failed: user ' . $user_id . ' does not own draft ID ' . $draft_id . '.');
             return false;
         }
 
-        $stmt = $conn->prepare(sprintf('DELETE FROM `%s` WHERE id = ? AND created_by = ?', $drafts_table));
-        if (!$stmt) {
-            error_log('[MealsDB] Draft delete failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
+        $sql = $wpdb->prepare(
+            "DELETE FROM `{$drafts_table}` WHERE id = %d AND created_by = %d",
+            $draft_id,
+            $user_id
+        );
+
+        $result = $wpdb->query($sql);
+        if ($result === false) {
+            error_log('[MealsDB] Draft delete failed to execute: ' . $wpdb->last_error);
             return false;
         }
 
-        if (!$stmt->bind_param('ii', $draft_id, $user_id)) {
-            $stmt->close();
-            error_log('[MealsDB] Draft delete failed to bind parameters.');
-            return false;
-        }
-
-        $executed = $stmt->execute();
-        if (!$executed) {
-            error_log('[MealsDB] Draft delete failed to execute: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return false;
-        }
-
-        $affected = $stmt->affected_rows ?? 0;
-        $stmt->close();
+        $affected = $wpdb->rows_affected;
 
         if ($affected <= 0) {
             error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' could not be removed.');
@@ -1044,57 +1020,34 @@ class MealsDB_Client_Form {
     /**
      * Determine whether a draft exists.
      *
-     * @param \mysqli   $conn
      * @param int       $draft_id
      * @param int|null  $owner_id Restrict check to a specific owner when provided.
      * @return bool
      */
-    private static function draft_exists($conn, int $draft_id, ?int $owner_id = null): bool {
-        if (!($conn instanceof \mysqli)) {
+    private static function draft_exists(int $draft_id, ?int $owner_id = null): bool {
+        global $wpdb;
+        if (!$wpdb) {
             return false;
         }
 
-        $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
-        $sql = sprintf('SELECT id FROM `%s` WHERE id = ?', $drafts_table);
-        if ($owner_id !== null) {
-            $sql .= ' AND created_by = ?';
-        }
-        $sql .= ' LIMIT 1';
-
-        $stmt = $conn->prepare($sql);
-        if (!$stmt) {
-            error_log('[MealsDB] Draft existence check failed to prepare statement: ' . ($conn->error ?? 'unknown error'));
-            return false;
-        }
+        $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
 
         if ($owner_id !== null) {
-            if (!$stmt->bind_param('ii', $draft_id, $owner_id)) {
-                $stmt->close();
-                error_log('[MealsDB] Draft existence check failed to bind parameters.');
-                return false;
-            }
+            $sql = $wpdb->prepare(
+                "SELECT id FROM `{$drafts_table}` WHERE id = %d AND created_by = %d LIMIT 1",
+                $draft_id,
+                $owner_id
+            );
         } else {
-            if (!$stmt->bind_param('i', $draft_id)) {
-                $stmt->close();
-                error_log('[MealsDB] Draft existence check failed to bind parameters.');
-                return false;
-            }
+            $sql = $wpdb->prepare(
+                "SELECT id FROM `{$drafts_table}` WHERE id = %d LIMIT 1",
+                $draft_id
+            );
         }
 
-        if (!$stmt->execute()) {
-            error_log('[MealsDB] Draft existence check failed to execute: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return false;
-        }
+        $row = $wpdb->get_var($sql);
 
-        if (method_exists($stmt, 'store_result')) {
-            $stmt->store_result();
-        }
-
-        $exists = $stmt->num_rows > 0;
-        $stmt->close();
-
-        return $exists;
+        return $row !== null;
     }
 
     /**
@@ -1104,16 +1057,16 @@ class MealsDB_Client_Form {
      * @return array List of friendly error messages
      */
     private static function check_unique_fields(array $data, ?int $exclude_id = null): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn) return [];
+        global $wpdb;
+        if (!$wpdb) return [];
 
-        $indexes_ready = self::ensure_index_columns_exist($conn);
+        $indexes_ready = self::ensure_index_columns_exist();
         if (!$indexes_ready) {
             error_log('[MealsDB] Duplicate check skipped: deterministic index columns are unavailable.');
         }
 
         $errors = [];
-        $repository = new MealsDB_Clients_Repository($conn);
+        $repository = new MealsDB_Clients_Repository();
 
         foreach (self::$unique_fields as $field) {
             if (!array_key_exists($field, $data)) {
@@ -1421,10 +1374,9 @@ class MealsDB_Client_Form {
     /**
      * Ensure the deterministic index columns exist on the meals_clients table.
      *
-     * @param mysqli $conn
      * @return bool
      */
-    private static function ensure_index_columns_exist($conn): bool {
+    private static function ensure_index_columns_exist(): bool {
         if (empty(self::$deterministic_index_map)) {
             self::$indexes_ensured = true;
             return true;
@@ -1434,35 +1386,31 @@ class MealsDB_Client_Form {
             return true;
         }
 
+        global $wpdb;
+        if (!$wpdb) {
+            return false;
+        }
+
         $allEnsured = true;
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
         foreach (self::$deterministic_index_map as $indexColumn) {
-            $escapedColumn = method_exists($conn, 'real_escape_string')
-                ? $conn->real_escape_string($indexColumn)
-                : $indexColumn;
+            $escapedColumn = $wpdb->_real_escape($indexColumn);
 
             $columnExists = false;
-            $result = $conn->query("SHOW COLUMNS FROM `{$clients_table}` LIKE '{$escapedColumn}'");
-            if (MealsDB_DB::is_mysqli_result($result)) {
-                $columnExists = $result->num_rows > 0;
-                $result->free();
-            } elseif ($result && isset($result->num_rows)) {
-                // Allow mock result sets in tests
-                $columnExists = $result->num_rows > 0;
-                if (method_exists($result, 'free')) {
-                    $result->free();
-                }
-            } elseif ($result === false) {
-                error_log('[MealsDB] Failed to inspect deterministic index column: ' . ($conn->error ?? 'unknown error'));
+            $colResult = $wpdb->get_results("SHOW COLUMNS FROM `{$clients_table}` LIKE '{$escapedColumn}'", ARRAY_A);
+            if (is_array($colResult)) {
+                $columnExists = count($colResult) > 0;
+            } else {
+                error_log('[MealsDB] Failed to inspect deterministic index column: ' . $wpdb->last_error);
                 $allEnsured = false;
                 continue;
             }
 
             if (!$columnExists) {
                 $addColumnSql = "ALTER TABLE `{$clients_table}` ADD COLUMN `{$indexColumn}` CHAR(64) NULL";
-                if (!$conn->query($addColumnSql)) {
-                    error_log('[MealsDB] Failed to add deterministic index column: ' . ($conn->error ?? 'unknown error'));
+                if ($wpdb->query($addColumnSql) === false) {
+                    error_log('[MealsDB] Failed to add deterministic index column: ' . $wpdb->last_error);
                     $allEnsured = false;
                     continue;
                 }
@@ -1470,35 +1418,20 @@ class MealsDB_Client_Form {
             }
 
             $indexName = 'unique_' . $indexColumn;
-            $escapedIndex = method_exists($conn, 'real_escape_string')
-                ? $conn->real_escape_string($indexName)
-                : $indexName;
+            $escapedIndex = $wpdb->_real_escape($indexName);
 
             $legacyIndexName = 'idx_' . $indexColumn;
-            $escapedLegacy = method_exists($conn, 'real_escape_string')
-                ? $conn->real_escape_string($legacyIndexName)
-                : $legacyIndexName;
+            $escapedLegacy = $wpdb->_real_escape($legacyIndexName);
 
-            $legacyIndexResult = $conn->query("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedLegacy}'");
-            $legacyIndexExists = false;
-            if (MealsDB_DB::is_mysqli_result($legacyIndexResult)) {
-                $legacyIndexExists = $legacyIndexResult->num_rows > 0;
-                $legacyIndexResult->free();
-            } elseif ($legacyIndexResult && isset($legacyIndexResult->num_rows)) {
-                $legacyIndexExists = $legacyIndexResult->num_rows > 0;
-                if (method_exists($legacyIndexResult, 'free')) {
-                    $legacyIndexResult->free();
-                }
-            } elseif ($legacyIndexResult === false) {
-                error_log('[MealsDB] Failed to inspect legacy deterministic index: ' . ($conn->error ?? 'unknown error'));
-                $allEnsured = false;
-            }
+            $legacyIndexRows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedLegacy}'", ARRAY_A);
+            $legacyIndexExists = is_array($legacyIndexRows) && count($legacyIndexRows) > 0;
 
             if ($legacyIndexExists) {
-                if ($conn->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$legacyIndexName}`") !== true) {
-                    $errno = $conn->errno ?? null;
-                    if ($errno !== 1091) {
-                        error_log('[MealsDB] Failed to drop legacy deterministic index: ' . ($conn->error ?? 'unknown error'));
+                $dropResult = $wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$legacyIndexName}`");
+                if ($dropResult === false) {
+                    // Check if the error is "index doesn't exist" (errno 1091) by inspecting last_error
+                    if (strpos($wpdb->last_error, '1091') === false) {
+                        error_log('[MealsDB] Failed to drop legacy deterministic index: ' . $wpdb->last_error);
                         $allEnsured = false;
                     }
                 }
@@ -1506,40 +1439,24 @@ class MealsDB_Client_Form {
 
             $indexExists = false;
             $indexIsUnique = false;
-            $indexResult = $conn->query("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedIndex}'");
-            if (MealsDB_DB::is_mysqli_result($indexResult)) {
-                while ($row = $indexResult->fetch_assoc()) {
+            $indexRows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedIndex}'", ARRAY_A);
+            if (is_array($indexRows)) {
+                foreach ($indexRows as $row) {
                     $indexExists = true;
                     if (isset($row['Non_unique']) && intval($row['Non_unique']) === 0) {
                         $indexIsUnique = true;
                         break;
                     }
                 }
-                $indexResult->free();
-            } elseif ($indexResult && isset($indexResult->num_rows)) {
-                $indexExists = $indexResult->num_rows > 0;
-                if ($indexExists && method_exists($indexResult, 'fetch_assoc')) {
-                    $row = $indexResult->fetch_assoc();
-                    if ($row && isset($row['Non_unique'])) {
-                        $indexIsUnique = intval($row['Non_unique']) === 0;
-                    }
-                }
-                if (method_exists($indexResult, 'free')) {
-                    $indexResult->free();
-                }
-                if ($indexExists && !method_exists($indexResult, 'fetch_assoc')) {
-                    // Assume mocked result sets in tests represent unique indexes
-                    $indexIsUnique = true;
-                }
-            } elseif ($indexResult === false) {
-                error_log('[MealsDB] Failed to inspect deterministic index status: ' . ($conn->error ?? 'unknown error'));
+            } else {
+                error_log('[MealsDB] Failed to inspect deterministic index status: ' . $wpdb->last_error);
                 $allEnsured = false;
                 continue;
             }
 
             if ($indexExists && !$indexIsUnique) {
-                if ($conn->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$indexName}`") !== true) {
-                    error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . ($conn->error ?? 'unknown error'));
+                if ($wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$indexName}`") === false) {
+                    error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . $wpdb->last_error);
                     $allEnsured = false;
                 } else {
                     $indexExists = false;
@@ -1548,21 +1465,21 @@ class MealsDB_Client_Form {
 
             if (!$indexExists) {
                 $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON `{$clients_table}` (`{$indexColumn}`)";
-                if (!$conn->query($createIndexSql)) {
-                    $errno = $conn->errno ?? null;
-                    if ($errno !== 1061) { // ignore duplicate index error
-                        error_log('[MealsDB] Failed to create deterministic index: ' . ($conn->error ?? 'unknown error'));
+                if ($wpdb->query($createIndexSql) === false) {
+                    // ignore duplicate index error (1061)
+                    if (strpos($wpdb->last_error, '1061') === false) {
+                        error_log('[MealsDB] Failed to create deterministic index: ' . $wpdb->last_error);
                         $allEnsured = false;
                     }
                 }
-                [$indexExists, $indexIsUnique] = self::deterministic_index_status($conn, $indexName);
+                [$indexExists, $indexIsUnique] = self::deterministic_index_status($indexName);
                 if (!$indexExists || !$indexIsUnique) {
                     $allEnsured = false;
                 }
             }
         }
 
-        if ($allEnsured && self::backfill_deterministic_indexes($conn)) {
+        if ($allEnsured && self::backfill_deterministic_indexes()) {
             self::$indexes_ensured = true;
             return true;
         }
@@ -1573,58 +1490,32 @@ class MealsDB_Client_Form {
     /**
      * Backfill deterministic hash columns for legacy records lacking values.
      *
-     * @param mysqli $conn
      * @return bool
      */
-    private static function backfill_deterministic_indexes($conn): bool {
+    private static function backfill_deterministic_indexes(): bool {
         if (empty(self::$deterministic_index_map)) {
             return true;
         }
 
+        global $wpdb;
+        if (!$wpdb) {
+            return false;
+        }
+
         $allSuccessful = true;
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
             $selectSql = "SELECT id, `{$field}` FROM `{$clients_table}` WHERE (`{$indexColumn}` IS NULL OR `{$indexColumn}` = '') AND `{$field}` IS NOT NULL AND `{$field}` <> ''";
-            $result = $conn->query($selectSql);
+            $rows = $wpdb->get_results($selectSql, ARRAY_A);
 
-            if ($result === false) {
-                error_log('[MealsDB] Failed to query legacy deterministic values for ' . $field . ': ' . ($conn->error ?? 'unknown error'));
+            if (!is_array($rows)) {
+                error_log('[MealsDB] Failed to query legacy deterministic values for ' . $field . ': ' . $wpdb->last_error);
                 $allSuccessful = false;
                 continue;
             }
 
-            if (!MealsDB_DB::is_mysqli_result($result)) {
-                // Nothing to backfill or using a mock result set without rows.
-                continue;
-            }
-
-            $updateSql = "UPDATE `{$clients_table}` SET `{$indexColumn}` = ? WHERE id = ?";
-            $stmt = $conn->prepare($updateSql);
-
-            if (!$stmt) {
-                error_log('[MealsDB] Failed to prepare deterministic backfill statement for ' . $indexColumn . ': ' . ($conn->error ?? 'unknown error'));
-                if (method_exists($result, 'free')) {
-                    $result->free();
-                }
-                $allSuccessful = false;
-                continue;
-            }
-
-            $hashValue = null;
-            $idValue = null;
-
-            if (!$stmt->bind_param('si', $hashValue, $idValue)) {
-                error_log('[MealsDB] Failed to bind deterministic backfill parameters for ' . $indexColumn . '.');
-                $stmt->close();
-                if (method_exists($result, 'free')) {
-                    $result->free();
-                }
-                $allSuccessful = false;
-                continue;
-            }
-
-            while ($row = $result->fetch_assoc()) {
+            foreach ($rows as $row) {
                 $rawValue = $row[$field] ?? '';
 
                 if ($rawValue === null || $rawValue === '') {
@@ -1639,16 +1530,16 @@ class MealsDB_Client_Form {
                     continue;
                 }
 
-                if (!$stmt->execute()) {
-                    error_log('[MealsDB] Failed to backfill deterministic index for client ID ' . $idValue . ': ' . ($stmt->error ?? 'unknown error'));
+                $updateSql = $wpdb->prepare(
+                    "UPDATE `{$clients_table}` SET `{$indexColumn}` = %s WHERE id = %d",
+                    $hashValue,
+                    $idValue
+                );
+
+                if ($wpdb->query($updateSql) === false) {
+                    error_log('[MealsDB] Failed to backfill deterministic index for client ID ' . $idValue . ': ' . $wpdb->last_error);
                     $allSuccessful = false;
                 }
-            }
-
-            $stmt->close();
-
-            if (method_exists($result, 'free')) {
-                $result->free();
             }
         }
 
@@ -1668,48 +1559,33 @@ class MealsDB_Client_Form {
     /**
      * Inspect the status of a deterministic index.
      *
-     * @param mysqli $conn
      * @param string $indexName
      * @return array{0: bool, 1: bool} [exists, isUnique]
      */
-    private static function deterministic_index_status($conn, string $indexName): array {
-        $escapedIndex = method_exists($conn, 'real_escape_string')
-            ? $conn->real_escape_string($indexName)
-            : $indexName;
+    private static function deterministic_index_status(string $indexName): array {
+        global $wpdb;
+        if (!$wpdb) {
+            return [false, false];
+        }
+
+        $escapedIndex = $wpdb->_real_escape($indexName);
 
         $exists = false;
         $isUnique = false;
 
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
-        $result = $conn->query("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedIndex}'");
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            while ($row = $result->fetch_assoc()) {
+        $rows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedIndex}'", ARRAY_A);
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
                 $exists = true;
                 if (isset($row['Non_unique']) && intval($row['Non_unique']) === 0) {
                     $isUnique = true;
                     break;
                 }
             }
-            $result->free();
-        } elseif ($result && isset($result->num_rows)) {
-            $exists = $result->num_rows > 0;
-            if ($exists) {
-                if (method_exists($result, 'fetch_assoc')) {
-                    $row = $result->fetch_assoc();
-                    if ($row && isset($row['Non_unique'])) {
-                        $isUnique = intval($row['Non_unique']) === 0;
-                    }
-                } else {
-                    // Assume mocked result sets in tests are unique when they report presence
-                    $isUnique = true;
-                }
-            }
-            if (method_exists($result, 'free')) {
-                $result->free();
-            }
-        } elseif ($result === false) {
-            error_log('[MealsDB] Failed to inspect deterministic index status: ' . ($conn->error ?? 'unknown error'));
+        } else {
+            error_log('[MealsDB] Failed to inspect deterministic index status: ' . $wpdb->last_error);
         }
 
         return [$exists, $isUnique];

@@ -22,19 +22,7 @@ $plugin_dir = plugin_dir_path(__FILE__);
 require_once $plugin_dir . 'includes/class-autoloader.php';
 MealsDB_Autoloader::register($plugin_dir);
 
-// Confirm required constants exist before proceeding.
-if (!defined('MEALS_DB_HOST') || !defined('MEALS_DB_USER') || !defined('MEALS_DB_NAME')) {
-    error_log('Meals DB uninstall aborted: configuration constants are missing.');
-    return;
-}
-
-// Connect to external Meals DB using the same logic as the runtime plugin.
-$conn = MealsDB_DB::get_connection();
-
-if (!MealsDB_DB::is_mysqli($conn)) {
-    error_log('Meals DB uninstall: failed to connect to database.');
-    return;
-}
+global $wpdb;
 
 // Drop plugin-specific tables (order respects FK dependencies: CLIENT_RATES before CLIENTS)
 $tables = [
@@ -48,14 +36,13 @@ $tables = [
 ];
 
 foreach ($tables as $table) {
-    $tableSafe = $conn->real_escape_string($table);
-    $sql       = "DROP TABLE IF EXISTS `{$tableSafe}`";
-    if (!$conn->query($sql)) {
-        error_log("Failed to drop $table: " . $conn->error);
+    $escaped = str_replace('`', '``', $table);
+    $sql     = "DROP TABLE IF EXISTS `{$escaped}`";
+    $wpdb->query($sql);
+    if ($wpdb->last_error) {
+        error_log("Failed to drop $table: " . $wpdb->last_error);
     }
 }
-
-MealsDB_DB::close_connection();
 
 // Clear scheduled events
 wp_clear_scheduled_hook('mealsdb_nightly_sync');
@@ -63,5 +50,3 @@ wp_clear_scheduled_hook('mealsdb_nightly_sync');
 // Optional: remove plugin options or transients
 // delete_option('mealsdb_plugin_version');
 // delete_transient('mealsdb_sync_cache');
-
-?>

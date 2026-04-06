@@ -198,38 +198,21 @@ class MealsDB_WC_Order_Query {
             return [];
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return [];
-        }
+        global $wpdb;
 
-        $products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
-        $placeholders   = implode(',', array_fill(0, count($wc_product_ids), '?'));
+        $products_table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+        $placeholders   = implode(',', array_fill(0, count($wc_product_ids), '%d'));
 
-        $sql  = sprintf(
-            'SELECT wc_product_id, product_type, taxable, case_size, unit_cost FROM `%s` WHERE wc_product_id IN (%s)',
-            $products_table,
-            $placeholders
+        $sql = $wpdb->prepare(
+            "SELECT wc_product_id, product_type, taxable, case_size, unit_cost FROM `{$products_table}` WHERE wc_product_id IN ({$placeholders})",
+            ...$wc_product_ids
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return [];
-        }
-
-        $types  = str_repeat('i', count($wc_product_ids));
-        $stmt->bind_param($types, ...$wc_product_ids);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return [];
-        }
-
-        $result   = $stmt->get_result();
+        $rows = $wpdb->get_results($sql, ARRAY_A);
         $products = [];
 
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            while ($row = $result->fetch_assoc()) {
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
                 $pid = (int) $row['wc_product_id'];
                 $products[$pid] = [
                     'wc_product_id' => $pid,
@@ -240,8 +223,6 @@ class MealsDB_WC_Order_Query {
                 ];
             }
         }
-
-        $stmt->close();
 
         return $products;
     }
@@ -258,62 +239,32 @@ class MealsDB_WC_Order_Query {
      * @return float
      */
     public function resolve_rate_for_order(int $rate_id, int $client_id): float {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return 0.00;
-        }
+        global $wpdb;
 
-        $rates_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES));
+        $rates_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
 
         // Try the explicit rate_id first.
         if ($rate_id > 0) {
-            $sql  = sprintf(
-                'SELECT rate FROM `%s` WHERE rate_id = ? AND client_id = ? LIMIT 1',
-                $rates_table
-            );
-            $stmt = $conn->prepare($sql);
-            if (MealsDB_DB::is_mysqli_stmt($stmt)) {
-                $stmt->bind_param('ii', $rate_id, $client_id);
-                if ($stmt->execute()) {
-                    $result = $stmt->get_result();
-                    if (MealsDB_DB::is_mysqli_result($result)) {
-                        $row = $result->fetch_assoc();
-                        if (is_array($row) && isset($row['rate'])) {
-                            $stmt->close();
-                            return (float) $row['rate'];
-                        }
-                    }
-                }
-                $stmt->close();
-            }
-        }
+            $row = $wpdb->get_row($wpdb->prepare(
+                "SELECT rate FROM `{$rates_table}` WHERE rate_id = %d AND client_id = %d LIMIT 1",
+                $rate_id,
+                $client_id
+            ), ARRAY_A);
 
-        // Fall back to the client's default rate.
-        $sql  = sprintf(
-            'SELECT rate FROM `%s` WHERE client_id = ? AND is_default = 1 LIMIT 1',
-            $rates_table
-        );
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return 0.00;
-        }
-
-        $stmt->bind_param('i', $client_id);
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return 0.00;
-        }
-
-        $result = $stmt->get_result();
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            $row = $result->fetch_assoc();
             if (is_array($row) && isset($row['rate'])) {
-                $stmt->close();
                 return (float) $row['rate'];
             }
         }
 
-        $stmt->close();
+        // Fall back to the client's default rate.
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT rate FROM `{$rates_table}` WHERE client_id = %d AND is_default = 1 LIMIT 1",
+            $client_id
+        ), ARRAY_A);
+
+        if (is_array($row) && isset($row['rate'])) {
+            return (float) $row['rate'];
+        }
 
         return 0.00;
     }

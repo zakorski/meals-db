@@ -1,38 +1,32 @@
 <?php
 MealsDB_Permissions::enforce();
 
-$conn = MealsDB_DB::get_connection();
+global $wpdb;
+
 $drafts = [];
 $draft_error = null;
 
-if ($conn) {
-    $drafts_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS));
-    $res = $conn->query("SELECT id, data, created_at FROM `{$drafts_table}` ORDER BY created_at DESC");
+$drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
+$results = $wpdb->get_results("SELECT id, data, created_at FROM `{$drafts_table}` ORDER BY created_at DESC", ARRAY_A);
 
-    if (MealsDB_DB::is_mysqli_result($res)) {
-        while ($row = $res->fetch_assoc()) {
-            $decoded = json_decode($row['data'], true);
-            if (!is_array($decoded)) {
-                error_log('[MealsDB] Skipping corrupted draft payload for draft ID ' . ($row['id'] ?? 'unknown') . '.');
-                continue;
-            }
-
-            $row['data'] = $decoded;
-            $drafts[] = $row;
+if ($results === null && $wpdb->last_error) {
+    error_log('[MealsDB] Failed to load draft list: ' . $wpdb->last_error);
+    $draft_error = sprintf(
+        /* translators: %s: database error message */
+        __('Unable to load client drafts: %s', 'meals-db'),
+        $wpdb->last_error
+    );
+} elseif (is_array($results)) {
+    foreach ($results as $row) {
+        $decoded = json_decode($row['data'], true);
+        if (!is_array($decoded)) {
+            error_log('[MealsDB] Skipping corrupted draft payload for draft ID ' . ($row['id'] ?? 'unknown') . '.');
+            continue;
         }
 
-        $res->free();
-    } elseif ($res === false) {
-        $message = $conn->error ?? __('unknown error', 'meals-db');
-        error_log('[MealsDB] Failed to load draft list: ' . $message);
-        $draft_error = sprintf(
-            /* translators: %s: database error message */
-            __('Unable to load client drafts: %s', 'meals-db'),
-            $message
-        );
+        $row['data'] = $decoded;
+        $drafts[] = $row;
     }
-} else {
-    $draft_error = __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db');
 }
 ?>
 

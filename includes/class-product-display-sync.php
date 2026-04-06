@@ -264,23 +264,18 @@ class MealsDB_Product_Display_Sync {
      * published WC product in an allowed category.
      */
     private static function mark_unlisted_products_unpublished(): void {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return;
-        }
+        global $wpdb;
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
-        $table = str_replace('`', '``', $table);
 
         // Fetch all wc_product_ids that are currently marked published.
-        $sql = "SELECT wc_product_id FROM `{$table}` WHERE is_published = 1";
-        $result = $conn->query($sql);
-        if (!MealsDB_DB::is_mysqli_result($result)) {
+        $rows = $wpdb->get_results("SELECT wc_product_id FROM `{$table}` WHERE is_published = 1", ARRAY_A);
+        if (!is_array($rows)) {
             return;
         }
 
         $ids_to_unpublish = [];
-        while ($row = $result->fetch_assoc()) {
+        foreach ($rows as $row) {
             $wc_id = (int) $row['wc_product_id'];
             if ($wc_id <= 0) {
                 continue;
@@ -291,22 +286,16 @@ class MealsDB_Product_Display_Sync {
                 $ids_to_unpublish[] = $wc_id;
             }
         }
-        $result->free();
 
         if (empty($ids_to_unpublish)) {
             return;
         }
 
-        $placeholders = implode(',', array_fill(0, count($ids_to_unpublish), '?'));
-        $sql          = "UPDATE `{$table}` SET is_published = 0 WHERE wc_product_id IN ({$placeholders})";
-        $stmt         = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return;
-        }
-
-        $types = str_repeat('i', count($ids_to_unpublish));
-        $stmt->bind_param($types, ...$ids_to_unpublish);
-        $stmt->execute();
-        $stmt->close();
+        $placeholders = implode(',', array_fill(0, count($ids_to_unpublish), '%d'));
+        $sql = $wpdb->prepare(
+            "UPDATE `{$table}` SET is_published = 0 WHERE wc_product_id IN ({$placeholders})",
+            ...$ids_to_unpublish
+        );
+        $wpdb->query($sql);
     }
 }

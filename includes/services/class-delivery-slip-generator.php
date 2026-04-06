@@ -33,45 +33,30 @@ class MealsDB_Delivery_Slip_Generator {
      * @return array<int, array<string, mixed>> Keyed by wp_user_id.
      */
     public function get_clients_for_delivery_date(string $delivery_date): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return [];
-        }
+        global $wpdb;
 
-        $day_name = date('l', strtotime($delivery_date));
+        $day_name  = date('l', strtotime($delivery_date));
+        $day_lower = strtolower($day_name);
 
-        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql   = sprintf(
-            'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql   = $wpdb->prepare(
+            "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name
-             FROM `%s`
-             WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = ?',
-            $table
+             FROM `{$table}`
+             WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s",
+            $day_lower
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!is_array($rows)) {
             return [];
         }
 
-        $day_lower = strtolower($day_name);
-        $stmt->bind_param('s', $day_lower);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return [];
-        }
-
-        $result  = $stmt->get_result();
         $clients = [];
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            while ($row = $result->fetch_assoc()) {
-                $uid = (int) $row['wp_user_id'];
-                $clients[$uid] = $row;
-            }
+        foreach ($rows as $row) {
+            $uid = (int) $row['wp_user_id'];
+            $clients[$uid] = $row;
         }
-
-        $stmt->close();
 
         return $clients;
     }
@@ -88,56 +73,41 @@ class MealsDB_Delivery_Slip_Generator {
      * @return array<int, array<string, mixed>> Keyed by wp_user_id.
      */
     public function get_clients_for_driver_slips(string $delivery_date): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return [];
-        }
+        global $wpdb;
 
-        $day_name = date('l', strtotime($delivery_date));
+        $day_name  = date('l', strtotime($delivery_date));
+        $day_lower = strtolower($day_name);
 
-        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql   = sprintf(
-            'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql   = $wpdb->prepare(
+            "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
                     payment_method, client_type
-             FROM `%s`
-             WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = ?',
-            $table
+             FROM `{$table}`
+             WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s",
+            $day_lower
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!is_array($rows)) {
             return [];
         }
 
-        $day_lower = strtolower($day_name);
-        $stmt->bind_param('s', $day_lower);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return [];
-        }
-
-        $result  = $stmt->get_result();
         $clients = [];
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            while ($row = $result->fetch_assoc()) {
-                $uid = (int) $row['wp_user_id'];
+        foreach ($rows as $row) {
+            $uid = (int) $row['wp_user_id'];
 
-                // Decrypt encrypted PII fields.
-                if (!empty($row['first_name'])) {
-                    $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
-                }
-                if (!empty($row['last_name'])) {
-                    $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
-                }
-
-                $clients[$uid] = $row;
+            // Decrypt encrypted PII fields.
+            if (!empty($row['first_name'])) {
+                $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
             }
-        }
+            if (!empty($row['last_name'])) {
+                $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
+            }
 
-        $stmt->close();
+            $clients[$uid] = $row;
+        }
 
         return $clients;
     }
@@ -149,46 +119,33 @@ class MealsDB_Delivery_Slip_Generator {
      * @return array<int, array<string, mixed>> Keyed by wp_user_id.
      */
     public function get_clients_for_zones(array $zone_names): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn) || empty($zone_names)) {
+        global $wpdb;
+
+        if (empty($zone_names)) {
             return [];
         }
 
-        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $placeholders = implode(',', array_fill(0, count($zone_names), '?'));
+        $table        = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $placeholders = implode(',', array_fill(0, count($zone_names), '%s'));
 
-        $sql = sprintf(
-            'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
+        $sql = $wpdb->prepare(
+            "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name
-             FROM `%s`
-             WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN (%s)',
-            $table,
-            $placeholders
+             FROM `{$table}`
+             WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN ({$placeholders})",
+            ...$zone_names
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!is_array($rows)) {
             return [];
         }
 
-        $types = str_repeat('s', count($zone_names));
-        $stmt->bind_param($types, ...$zone_names);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return [];
-        }
-
-        $result  = $stmt->get_result();
         $clients = [];
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            while ($row = $result->fetch_assoc()) {
-                $uid = (int) $row['wp_user_id'];
-                $clients[$uid] = $row;
-            }
+        foreach ($rows as $row) {
+            $uid = (int) $row['wp_user_id'];
+            $clients[$uid] = $row;
         }
-
-        $stmt->close();
 
         return $clients;
     }
@@ -200,56 +157,43 @@ class MealsDB_Delivery_Slip_Generator {
      * @return array<int, array<string, mixed>> Keyed by wp_user_id.
      */
     public function get_clients_for_zones_driver(array $zone_names): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn) || empty($zone_names)) {
+        global $wpdb;
+
+        if (empty($zone_names)) {
             return [];
         }
 
-        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $placeholders = implode(',', array_fill(0, count($zone_names), '?'));
+        $table        = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $placeholders = implode(',', array_fill(0, count($zone_names), '%s'));
 
-        $sql = sprintf(
-            'SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
+        $sql = $wpdb->prepare(
+            "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
                     payment_method, client_type
-             FROM `%s`
-             WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN (%s)',
-            $table,
-            $placeholders
+             FROM `{$table}`
+             WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN ({$placeholders})",
+            ...$zone_names
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!is_array($rows)) {
             return [];
         }
 
-        $types = str_repeat('s', count($zone_names));
-        $stmt->bind_param($types, ...$zone_names);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return [];
-        }
-
-        $result  = $stmt->get_result();
         $clients = [];
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            while ($row = $result->fetch_assoc()) {
-                $uid = (int) $row['wp_user_id'];
+        foreach ($rows as $row) {
+            $uid = (int) $row['wp_user_id'];
 
-                if (!empty($row['first_name'])) {
-                    $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
-                }
-                if (!empty($row['last_name'])) {
-                    $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
-                }
-
-                $clients[$uid] = $row;
+            if (!empty($row['first_name'])) {
+                $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
             }
-        }
+            if (!empty($row['last_name'])) {
+                $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
+            }
 
-        $stmt->close();
+            $clients[$uid] = $row;
+        }
 
         return $clients;
     }
