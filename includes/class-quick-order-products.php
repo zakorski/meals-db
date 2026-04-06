@@ -237,6 +237,55 @@ class MealsDB_Quick_Order_Products {
     }
 
     /**
+     * Retrieve all published products across allowed categories.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function get_all_products(): array {
+        if (!function_exists('wc_get_products')) {
+            return [];
+        }
+
+        $allowed_slugs = self::get_allowed_category_slugs();
+
+        $products = wc_get_products([
+            'status'   => 'publish',
+            'limit'    => 500,
+            'orderby'  => 'title',
+            'order'    => 'ASC',
+            'return'   => 'objects',
+            'category' => $allowed_slugs,
+        ]);
+
+        if (!is_array($products) || empty($products)) {
+            return [];
+        }
+
+        $product_ids = [];
+        foreach ($products as $product) {
+            if ($product instanceof WC_Product) {
+                $product_ids[] = $product->get_id();
+            }
+        }
+
+        $metadata_batch = MealsDB_Products_Loader::batch_get_product_data($product_ids);
+
+        $formatted = [];
+        foreach ($products as $product) {
+            if (!$product instanceof WC_Product) {
+                continue;
+            }
+
+            $entry = self::build_product_cache_entry_from_wc_product($product, $metadata_batch);
+            if (!empty($entry)) {
+                $formatted[] = self::product_cache_entry_to_quick_order($entry);
+            }
+        }
+
+        return array_values(array_filter($formatted));
+    }
+
+    /**
      * Search published products by keyword.
      *
      * Queries WooCommerce directly with a bounded limit instead of
