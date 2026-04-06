@@ -129,8 +129,19 @@ class MealsDB_Installer {
             'meals_transactions',
         ];
 
+        $prefix = '';
+        if (class_exists('MealsDB_Config')) {
+            try {
+                $prefix = MealsDB_Config::instance()->table_prefix() ?: '';
+            } catch (\Throwable $e) {
+                $prefix = '';
+            }
+        }
+
         foreach ($tables_to_drop as $base_name) {
-            $table_name = MealsDB_DB::get_table_name($base_name);
+            $table_name = (($prefix !== '') && strpos($base_name, $prefix) !== 0)
+                ? $prefix . $base_name
+                : $base_name;
             $escaped    = str_replace('`', '``', $table_name);
             $sql        = sprintf("DROP TABLE IF EXISTS `%s`", $escaped);
 
