@@ -38,6 +38,12 @@ class MealsDB_Products {
         $sql = "CREATE TABLE IF NOT EXISTS `{$table}` (
             id INT AUTO_INCREMENT PRIMARY KEY,
             wc_product_id INT NOT NULL UNIQUE,
+            product_name VARCHAR(200) NOT NULL DEFAULT '',
+            price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            image_url VARCHAR(500) NULL,
+            sku VARCHAR(100) NULL,
+            category_data JSON NULL,
+            is_published TINYINT(1) NOT NULL DEFAULT 1,
             product_type ENUM('meal','side') NOT NULL DEFAULT 'meal',
             taxable TINYINT(1) NOT NULL DEFAULT 0,
             main_ingredient VARCHAR(40) NOT NULL,
@@ -45,7 +51,9 @@ class MealsDB_Products {
             allergen_flags JSON NULL,
             case_size INT NOT NULL DEFAULT 1,
             unit_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            KEY idx_is_published (is_published),
+            KEY idx_product_name (product_name)
         ) ENGINE=InnoDB {$charset_sql};";
 
         if (!$conn->query($sql)) {
@@ -255,6 +263,99 @@ class MealsDB_Products {
             'case_size'       => $case_size,
             'unit_cost'       => $unit_cost,
         ];
+    }
+
+    /**
+     * Update display-only fields cached from WooCommerce.
+     *
+     * This upserts the row so it works even if the product has no prior meals_products entry.
+     *
+     * @param int                          $product_id WooCommerce product ID.
+     * @param array<string, mixed>         $display    Display fields: product_name, price, image_url, sku, category_data, is_published.
+     *
+     * @return bool True on success.
+     */
+    public static function update_display_fields(int $product_id, array $display): bool {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return false;
+        }
+
+        $table = MealsDB_DB::get_table_name(self::TABLE);
+        $table = str_replace('`', '``', $table);
+
+        $product_name = isset($display['product_name']) ? mb_substr((string) $display['product_name'], 0, 200) : '';
+        $price        = isset($display['price']) ? (float) $display['price'] : 0.00;
+        $image_url    = isset($display['image_url']) ? mb_substr((string) $display['image_url'], 0, 500) : null;
+        $sku          = isset($display['sku']) ? mb_substr((string) $display['sku'], 0, 100) : null;
+        $is_published = isset($display['is_published']) ? (int) (bool) $display['is_published'] : 1;
+
+        $category_data = null;
+        if (isset($display['category_data']) && is_array($display['category_data'])) {
+            $category_data = json_encode($display['category_data']);
+        }
+
+        $sql = "INSERT INTO `{$table}` (wc_product_id, product_name, price, image_url, sku, category_data, is_published)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    product_name = VALUES(product_name),
+                    price = VALUES(price),
+                    image_url = VALUES(image_url),
+                    sku = VALUES(sku),
+                    category_data = VALUES(category_data),
+                    is_published = VALUES(is_published)";
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return false;
+        }
+
+        $stmt->bind_param(
+            'isdsssi',
+            $product_id,
+            $product_name,
+            $price,
+            $image_url,
+            $sku,
+            $category_data,
+            $is_published
+        );
+
+        $result = $stmt->execute();
+        $stmt->close();
+
+        return (bool) $result;
+    }
+
+    /**
+     * Toggle the is_published flag for a product.
+     *
+     * @param int  $product_id   WooCommerce product ID.
+     * @param bool $is_published Whether the product is published.
+     *
+     * @return bool True on success.
+     */
+    public static function set_published(int $product_id, bool $is_published): bool {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return false;
+        }
+
+        $table = MealsDB_DB::get_table_name(self::TABLE);
+        $table = str_replace('`', '``', $table);
+
+        $sql  = "UPDATE `{$table}` SET is_published = ? WHERE wc_product_id = ?";
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            return false;
+        }
+
+        $flag = $is_published ? 1 : 0;
+        $stmt->bind_param('ii', $flag, $product_id);
+        $result = $stmt->execute();
+        $stmt->close();
+
+        return (bool) $result;
     }
 
     /**

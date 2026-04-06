@@ -179,6 +179,17 @@ $has_env_credentials = getenv( 'MEALS_DB_HOST' ) || ( defined( 'MEALS_DB_KEY' ) 
             <span id="mealsdb-backfill-result" style="margin-left:12px;"></span>
         </p>
 
+        <h2><?php echo esc_html__( 'Sync Product Display Data', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Rebuild the cached product display data (name, price, image, categories) used by the Quick Order page. This is done automatically when products are saved, but you can run a full sync here.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-sync-products">
+                <?php echo esc_html__( 'Sync Products', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-sync-products-result" style="margin-left:12px;"></span>
+        </p>
+
         <h2><?php echo esc_html__( 'Connection Test', 'meals-db' ); ?></h2>
         <p>
             <button type="button" class="button" id="mealsdb-test-connection">
@@ -254,6 +265,29 @@ $has_env_credentials = getenv( 'MEALS_DB_HOST' ) || ( defined( 'MEALS_DB_KEY' ) 
                 $result.text(resp.message || 'Done.').css('color', '#46b450');
             } else {
                 $result.text(resp.message || 'Failed.').css('color', '#dc3232');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.').css('color', '#dc3232');
+        });
+    });
+
+    // Sync product display data
+    $('#mealsdb-sync-products').on('click', function() {
+        var $btn = $(this);
+        var $result = $('#mealsdb-sync-products-result');
+        $btn.prop('disabled', true);
+        $result.text('Syncing...').css('color', '#666');
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_sync_product_display',
+            nonce: '<?php echo esc_js( wp_create_nonce( 'mealsdb_nonce' ) ); ?>',
+        }, function(resp) {
+            $btn.prop('disabled', false);
+            if (resp.success) {
+                $result.text(resp.message || 'Done.').css('color', '#46b450');
+            } else {
+                $result.text(resp.message || 'Sync failed.').css('color', '#dc3232');
             }
         }).fail(function() {
             $btn.prop('disabled', false);
