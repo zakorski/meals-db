@@ -601,6 +601,20 @@ class MealsDB_Invoice_Generator {
         $client_type = 'SDNB';
         $client_rows = self::query_clients($sql, [$client_type, $zone]);
 
+        // Decrypt encrypted PII fields.
+        foreach ($client_rows as &$c) {
+            foreach (['requisition_id', 'individual_id'] as $field) {
+                if (!empty($c[$field])) {
+                    try {
+                        $c[$field] = MealsDB_Encryption::decrypt($c[$field]);
+                    } catch (Exception $e) {
+                        // Legacy plaintext data — keep as-is.
+                    }
+                }
+            }
+        }
+        unset($c);
+
         // Pre-compute duplicate individual_id counts for error checking.
         $sdnb_duplicate_counts = [];
         foreach ($client_rows as $c) {
@@ -854,6 +868,20 @@ class MealsDB_Invoice_Generator {
 
         $client_type = 'Veteran';
         $client_rows = self::query_clients($sql, [$client_type]);
+
+        // Decrypt encrypted PII fields.
+        foreach ($client_rows as &$c) {
+            foreach (['requisition_id', 'individual_id'] as $field) {
+                if (!empty($c[$field])) {
+                    try {
+                        $c[$field] = MealsDB_Encryption::decrypt($c[$field]);
+                    } catch (Exception $e) {
+                        // Legacy plaintext data — keep as-is.
+                    }
+                }
+            }
+        }
+        unset($c);
 
         if (empty($client_rows)) {
             return '';

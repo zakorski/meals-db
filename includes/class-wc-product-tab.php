@@ -180,8 +180,10 @@ class MealsDB_WC_Product_Tab {
             : 'meal';
 
         $taxable = 0;
-        if ($product_type !== 'meal' && isset($_POST['_mealsdb_taxable'])) {
-            $taxable = 1;
+        if ($product_type !== 'meal') {
+            // Auto-determine taxable status from category: dessert and muffin are taxable,
+            // cereal and soup are non-taxable.
+            $taxable = self::determine_side_taxable($product_id);
         }
 
         $existing_data  = MealsDB_Products::get_product_data($product_id);
@@ -225,6 +227,36 @@ class MealsDB_WC_Product_Tab {
             'case_size'       => $case_size,
             'unit_cost'       => $unit_cost,
         ]);
+    }
+
+    /**
+     * Determine whether a side product is taxable based on its WooCommerce categories.
+     *
+     * Desserts and muffins are taxable; cereal and soup are non-taxable.
+     *
+     * @param int $product_id WooCommerce product ID.
+     *
+     * @return int 1 if taxable, 0 otherwise.
+     */
+    private static function determine_side_taxable(int $product_id): int {
+        $taxable_slugs   = ['dessert', 'muffin'];
+        $nontaxable_slugs = ['cereal', 'soup'];
+
+        $terms = get_the_terms($product_id, 'product_cat');
+        if (!is_array($terms)) {
+            return 0;
+        }
+
+        foreach ($terms as $term) {
+            if (!$term instanceof WP_Term) {
+                continue;
+            }
+            if (in_array($term->slug, $taxable_slugs, true)) {
+                return 1;
+            }
+        }
+
+        return 0;
     }
 
     /**

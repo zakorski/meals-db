@@ -73,6 +73,7 @@ class MealsDB_Schema {
                     'delivery_fee'                 => 'DECIMAL(10,2) NULL',
                     'diet_concerns'                => 'TEXT NULL',
                     'customer_comments'            => 'TEXT NULL',
+                    'per_sdnb_req'                 => 'TEXT NULL',
                     'delivery_initials'            => "VARCHAR(3) NOT NULL DEFAULT ''",
                     'delivery_initials_index'      => 'CHAR(64) NULL',
                     'street_name'                  => 'VARCHAR(255) NULL',
