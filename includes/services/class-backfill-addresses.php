@@ -23,34 +23,22 @@ class MealsDB_Backfill_Addresses {
     public static function run(bool $dry_run = true): array {
         global $wpdb;
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return ['error' => 'Cannot connect to external Meals DB.'];
-        }
-
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $rates_table   = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $rates_table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
 
         // Get all meals_clients rows that have a wp_user_id.
-        $sql = sprintf(
+        $clients = $wpdb->get_results(
             "SELECT client_id, wp_user_id, delivery_area_name, apartment_number, delivery_apartment_number,
                     street_name, delivery_street_name, default_rate_id
-             FROM `%s`
+             FROM `{$clients_table}`
              WHERE wp_user_id > 0
              ORDER BY client_id ASC",
-            $clients_table
+            ARRAY_A
         );
 
-        $result = $conn->query($sql);
-        if (!MealsDB_DB::is_mysqli_result($result)) {
+        if (!is_array($clients)) {
             return ['error' => 'Failed to query meals_clients.'];
         }
-
-        $clients = [];
-        while ($row = $result->fetch_assoc()) {
-            $clients[] = $row;
-        }
-        $result->free();
 
         $stats = [
             'total'           => count($clients),
@@ -105,37 +93,34 @@ class MealsDB_Backfill_Addresses {
             $wp_user_id = (int) $client['wp_user_id'];
             $meta       = $meta_lookup[$wp_user_id] ?? [];
 
-            $updates     = [];
-            $bind_types  = '';
-            $bind_values = [];
-            $changes     = [];
+            $set_clauses  = [];
+            $bind_values  = [];
+            $changes      = [];
 
             // 1. Fix delivery_area_name from billing_address_2 (zone data).
             $billing_address_2 = $meta['billing_address_2'] ?? '';
             if (empty($client['delivery_area_name']) && $billing_address_2 !== '') {
-                $updates[]     = 'delivery_area_name = ?';
-                $bind_types   .= 's';
+                $set_clauses[] = 'delivery_area_name = %s';
                 $bind_values[] = $billing_address_2;
                 $changes[]     = "delivery_area_name={$billing_address_2}";
             }
 
             // 2. Clear zone data from apartment_number.
             if (!empty($client['apartment_number']) && strpos($client['apartment_number'], 'Zone') === 0) {
-                $updates[]     = 'apartment_number = NULL';
+                $set_clauses[] = 'apartment_number = NULL';
                 $changes[]     = 'apartment_number=NULL';
             }
 
             // 3. Clear zone data from delivery_apartment_number.
             if (!empty($client['delivery_apartment_number']) && strpos($client['delivery_apartment_number'], 'Zone') === 0) {
-                $updates[]     = 'delivery_apartment_number = NULL';
+                $set_clauses[] = 'delivery_apartment_number = NULL';
                 $changes[]     = 'delivery_apartment_number=NULL';
             }
 
             // 4. Fix street_name from billing_address_1.
             $billing_address_1 = $meta['billing_address_1'] ?? '';
             if ($billing_address_1 !== '' && (empty($client['street_name']) || $client['street_name'] !== $billing_address_1)) {
-                $updates[]     = 'street_name = ?';
-                $bind_types   .= 's';
+                $set_clauses[] = 'street_name = %s';
                 $bind_values[] = $billing_address_1;
                 $changes[]     = "street_name={$billing_address_1}";
             }
@@ -143,39 +128,28 @@ class MealsDB_Backfill_Addresses {
             // 5. Fix delivery_street_name from shipping_address_1.
             $shipping_address_1 = $meta['shipping_address_1'] ?? '';
             if ($shipping_address_1 !== '' && ($client['delivery_street_name'] ?? '') !== $shipping_address_1) {
-                $updates[]     = 'delivery_street_name = ?';
-                $bind_types   .= 's';
+                $set_clauses[] = 'delivery_street_name = %s';
                 $bind_values[] = $shipping_address_1;
                 $changes[]     = "delivery_street_name={$shipping_address_1}";
             }
 
             // 6. Link default_rate_id if empty.
             if (empty($client['default_rate_id'])) {
-                $rate_sql = sprintf(
-                    "SELECT rate_id FROM `%s` WHERE client_id = ? AND is_default = 1 LIMIT 1",
-                    $rates_table
-                );
-                $rate_stmt = $conn->prepare($rate_sql);
-                if (MealsDB_DB::is_mysqli_stmt($rate_stmt)) {
-                    $rate_stmt->bind_param('i', $client_id);
-                    $rate_stmt->execute();
-                    $rate_result = $rate_stmt->get_result();
-                    if (MealsDB_DB::is_mysqli_result($rate_result)) {
-                        $rate_row = $rate_result->fetch_assoc();
-                        if ($rate_row) {
-                            $rate_id       = (int) $rate_row['rate_id'];
-                            $updates[]     = 'default_rate_id = ?';
-                            $bind_types   .= 'i';
-                            $bind_values[] = $rate_id;
-                            $changes[]     = "default_rate_id={$rate_id}";
-                        }
-                    }
-                    $rate_stmt->close();
+                $rate_row = $wpdb->get_row($wpdb->prepare(
+                    "SELECT rate_id FROM `{$rates_table}` WHERE client_id = %d AND is_default = 1 LIMIT 1",
+                    $client_id
+                ), ARRAY_A);
+
+                if (is_array($rate_row) && isset($rate_row['rate_id'])) {
+                    $rate_id       = (int) $rate_row['rate_id'];
+                    $set_clauses[] = 'default_rate_id = %d';
+                    $bind_values[] = $rate_id;
+                    $changes[]     = "default_rate_id={$rate_id}";
                 }
             }
 
             // Skip if nothing to update.
-            if (empty($updates)) {
+            if (empty($set_clauses)) {
                 $stats['skipped']++;
                 continue;
             }
@@ -200,27 +174,15 @@ class MealsDB_Backfill_Addresses {
             }
 
             // Build and execute the UPDATE.
-            $update_sql = sprintf(
-                "UPDATE `%s` SET %s WHERE client_id = ?",
-                $clients_table,
-                implode(', ', $updates)
-            );
-            $bind_types  .= 'i';
+            $set_sql = implode(', ', $set_clauses);
             $bind_values[] = $client_id;
 
-            $stmt = $conn->prepare($update_sql);
-            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-                $stats['errors']++;
-                error_log(sprintf(
-                    '[MealsDB Backfill] ERROR preparing update for client_id=%d: %s',
-                    $client_id, $conn->error ?? 'unknown'
-                ));
-                continue;
-            }
+            $update_sql = $wpdb->prepare(
+                "UPDATE `{$clients_table}` SET {$set_sql} WHERE client_id = %d",
+                ...$bind_values
+            );
 
-            $stmt->bind_param($bind_types, ...$bind_values);
-
-            if ($stmt->execute()) {
+            if ($wpdb->query($update_sql) !== false) {
                 error_log(sprintf(
                     '[MealsDB Backfill] Updated client_id=%d: %s',
                     $client_id, implode(', ', $changes)
@@ -229,10 +191,9 @@ class MealsDB_Backfill_Addresses {
                 $stats['errors']++;
                 error_log(sprintf(
                     '[MealsDB Backfill] ERROR updating client_id=%d: %s',
-                    $client_id, $stmt->error ?? 'unknown'
+                    $client_id, $wpdb->last_error ?: 'unknown'
                 ));
             }
-            $stmt->close();
         }
 
         return $stats;

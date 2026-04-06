@@ -3,66 +3,26 @@ MealsDB_Permissions::enforce();
 
 global $wpdb;
 
-$conn = MealsDB_DB::get_connection();
 $ignored = [];
 $ignored_error = null;
 
-if (MealsDB_DB::is_mysqli($conn)) {
-    $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS));
-    $sql = sprintf(
-        'SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at FROM `%s` ORDER BY created_at DESC',
-        $table
+$table = MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS);
+$sql = "SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at FROM `{$table}` ORDER BY created_at DESC";
+
+$results = $wpdb->get_results($sql, ARRAY_A);
+
+if ($results === null && $wpdb->last_error) {
+    error_log('[MealsDB] Failed to load ignored conflicts: ' . $wpdb->last_error);
+    $ignored_error = sprintf(
+        /* translators: %s: database error message */
+        __('Unable to load ignored mismatches: %s', 'meals-db'),
+        $wpdb->last_error
     );
-
-    if ($stmt = $conn->prepare($sql)) {
-        if ($stmt->execute()) {
-            if (method_exists($stmt, 'get_result')) {
-                $res = $stmt->get_result();
-
-                if (MealsDB_DB::is_mysqli_result($res)) {
-                    while ($row = $res->fetch_assoc()) {
-                        $ignored[] = $row;
-                    }
-
-                    $res->free();
-                }
-            } elseif ($stmt->bind_result($id, $field, $source, $target, $ignored_by, $ignored_at)) {
-                while ($stmt->fetch()) {
-                    $ignored[] = [
-                        'id' => $id,
-                        'field_name' => $field,
-                        'source_value' => $source,
-                        'target_value' => $target,
-                        'ignored_by' => $ignored_by,
-                        'ignored_at' => $ignored_at,
-                    ];
-                }
-            }
-        } else {
-            $message = $stmt->error ?? __('unknown error', 'meals-db');
-            error_log('[MealsDB] Failed to execute ignored conflicts query: ' . $message);
-            $ignored_error = sprintf(
-                /* translators: %s: database error message */
-                __('Unable to load ignored mismatches: %s', 'meals-db'),
-                $message
-            );
-        }
-
-        $stmt->close();
-    } else {
-        $message = $conn->error ?? __('unknown error', 'meals-db');
-        error_log('[MealsDB] Failed to prepare ignored conflicts query: ' . $message);
-        $ignored_error = sprintf(
-            /* translators: %s: database error message */
-            __('Unable to prepare ignored mismatches query: %s', 'meals-db'),
-            $message
-        );
-    }
-} else {
-    $ignored_error = __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db');
+} elseif (is_array($results)) {
+    $ignored = $results;
 }
 
-if (!empty($ignored) && isset($wpdb) && $wpdb instanceof wpdb) {
+if (!empty($ignored)) {
     $user_ids = array_unique(array_filter(array_map('intval', wp_list_pluck($ignored, 'ignored_by'))));
 
     if (!empty($user_ids)) {

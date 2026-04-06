@@ -239,16 +239,9 @@ class MealsDB_Staff {
             exit;
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            MealsDB_Logger::error('Unable to obtain mysqli connection when saving staff record.');
-            self::set_old_input($form_data + ['staff_id' => $staff_id]);
-            self::add_notice('error', __('Unable to connect to the Meals DB database.', 'meals-db'));
-            wp_safe_redirect(self::get_form_redirect_url($mode, $staff_id));
-            exit;
-        }
+        global $wpdb;
 
-        $table = self::get_staff_table_name($conn);
+        $table = self::get_staff_table_name();
 
         if ($mode === 'edit') {
             if ($staff_id <= 0) {
@@ -258,45 +251,34 @@ class MealsDB_Staff {
                 exit;
             }
 
-            $sql = "UPDATE {$table} SET first_name = ?, last_name = ?, email = ?, phone = NULLIF(?, ''), wordpress_user_id = NULLIF(?, 0) WHERE id = ?";
-            $stmt = $conn->prepare($sql);
-            if (!$stmt) {
-                MealsDB_Logger::error('[MealsDB Staff] Failed to prepare staff update query: ' . ($conn->error ?? 'unknown error'));
-                self::set_old_input($form_data + ['staff_id' => $staff_id]);
-                self::add_notice('error', __('Failed to prepare staff update query.', 'meals-db'));
-                wp_safe_redirect(self::get_form_redirect_url('edit', $staff_id));
-                exit;
-            }
-
-            $phone_param = $phone;
-            $user_param = $wordpress_user_id;
-            $stmt->bind_param('ssssii', $first_name, $last_name, $email, $phone_param, $user_param, $staff_id);
+            $sql = $wpdb->prepare(
+                "UPDATE {$table} SET first_name = %s, last_name = %s, email = %s, phone = NULLIF(%s, ''), wordpress_user_id = NULLIF(%d, 0) WHERE id = %d",
+                $first_name,
+                $last_name,
+                $email,
+                $phone,
+                $wordpress_user_id,
+                $staff_id
+            );
         } else {
-            $sql = "INSERT INTO {$table} (first_name, last_name, email, phone, wordpress_user_id) VALUES (?, ?, ?, NULLIF(?, ''), NULLIF(?, 0))";
-            $stmt = $conn->prepare($sql);
-            if (!$stmt) {
-                MealsDB_Logger::error('[MealsDB Staff] Failed to prepare staff insert query: ' . ($conn->error ?? 'unknown error'));
-                self::set_old_input($form_data + ['staff_id' => $staff_id]);
-                self::add_notice('error', __('Failed to prepare staff insert query.', 'meals-db'));
-                wp_safe_redirect(self::get_form_redirect_url('add', $staff_id));
-                exit;
-            }
-
-            $phone_param = $phone;
-            $user_param = $wordpress_user_id;
-            $stmt->bind_param('ssssi', $first_name, $last_name, $email, $phone_param, $user_param);
+            $sql = $wpdb->prepare(
+                "INSERT INTO {$table} (first_name, last_name, email, phone, wordpress_user_id) VALUES (%s, %s, %s, NULLIF(%s, ''), NULLIF(%d, 0))",
+                $first_name,
+                $last_name,
+                $email,
+                $phone,
+                $wordpress_user_id
+            );
         }
 
-        if (!$stmt->execute()) {
-            MealsDB_Logger::error('[MealsDB Staff] Failed to execute staff save query: ' . ($stmt->error ?? 'unknown error'));
+        $result = $wpdb->query($sql);
+        if ($result === false) {
+            MealsDB_Logger::error('[MealsDB Staff] Failed to execute staff save query: ' . ($wpdb->last_error ?: 'unknown error'));
             self::set_old_input($form_data + ['staff_id' => $staff_id]);
             self::add_notice('error', __('Failed to save the staff member. Please try again.', 'meals-db'));
-            $stmt->close();
             wp_safe_redirect(self::get_form_redirect_url($mode, $staff_id));
             exit;
         }
-
-        $stmt->close();
 
         self::add_notice('success', $mode === 'edit' ? __('Staff member updated successfully.', 'meals-db') : __('Staff member added successfully.', 'meals-db'));
         wp_safe_redirect(self::get_list_url());
@@ -309,63 +291,40 @@ class MealsDB_Staff {
      * @return array<int, array<string, mixed>>
      */
     private static function get_all_staff(): array {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            MealsDB_Logger::error('Unable to obtain mysqli connection when loading staff records.');
-            self::add_notice('error', __('Unable to connect to the Meals DB database.', 'meals-db'));
-            return [];
-        }
+        global $wpdb;
 
-        $table = self::get_staff_table_name($conn);
+        $table = self::get_staff_table_name();
         $sql   = "SELECT id, first_name, last_name, email, phone, wordpress_user_id FROM {$table} ORDER BY last_name ASC, first_name ASC";
-        $result = $conn->query($sql);
-        if (!MealsDB_DB::is_mysqli_result($result)) {
-            MealsDB_Logger::error('[MealsDB Staff] Failed to load staff records: ' . ($conn->error ?? 'unknown error'));
+        $results = $wpdb->get_results($sql, ARRAY_A);
+        if (!is_array($results)) {
+            MealsDB_Logger::error('[MealsDB Staff] Failed to load staff records: ' . ($wpdb->last_error ?: 'unknown error'));
             self::add_notice('error', __('Failed to load staff records.', 'meals-db'));
             return [];
         }
 
-        $staff = [];
-        while ($row = $result->fetch_assoc()) {
-            $staff[] = $row;
-        }
-        $result->free();
-
-        return $staff;
+        return $results;
     }
 
     /**
      * Fetch a single staff member by ID.
      */
     private static function get_staff_member(int $staff_id): ?array {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            MealsDB_Logger::error('[MealsDB Staff] Unable to obtain mysqli connection when fetching a staff member.');
+        global $wpdb;
+
+        $table = self::get_staff_table_name();
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT id, first_name, last_name, email, phone, wordpress_user_id FROM {$table} WHERE id = %d LIMIT 1",
+                $staff_id
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($row)) {
             return null;
         }
 
-        $table = self::get_staff_table_name($conn);
-        $stmt  = $conn->prepare("SELECT id, first_name, last_name, email, phone, wordpress_user_id FROM {$table} WHERE id = ? LIMIT 1");
-        if (!$stmt) {
-            MealsDB_Logger::error('[MealsDB Staff] Failed to prepare staff lookup query: ' . ($conn->error ?? 'unknown error'));
-            return null;
-        }
-
-        $stmt->bind_param('i', $staff_id);
-        if (!$stmt->execute()) {
-            MealsDB_Logger::error('[MealsDB Staff] Failed to execute staff lookup query: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return null;
-        }
-
-        $result = $stmt->get_result();
-        $record = MealsDB_DB::is_mysqli_result($result) ? $result->fetch_assoc() : null;
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            $result->free();
-        }
-        $stmt->close();
-
-        return $record ?: null;
+        return $row;
     }
 
     /**
@@ -464,13 +423,8 @@ class MealsDB_Staff {
     /**
      * Resolve and escape the staff table name for use in SQL identifiers.
      */
-    private static function get_staff_table_name(mysqli $conn): string {
+    private static function get_staff_table_name(): string {
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::STAFF);
-
-        if (method_exists($conn, 'real_escape_string')) {
-            $table_name = $conn->real_escape_string($table_name);
-        }
-
         $escaped_table = str_replace('`', '``', $table_name);
 
         return '`' . $escaped_table . '`';

@@ -27,8 +27,7 @@ class MealsDB_Ajax_Staff {
      * @return void
      */
     public static function add_staff(): void {
-        $conn  = self::get_connection();
-        $table = self::get_staff_table_name($conn);
+        $table = self::get_staff_table_name();
 
         self::send_error(
             __('Adding staff via AJAX is not available at this time.', 'meals-db'),
@@ -42,8 +41,7 @@ class MealsDB_Ajax_Staff {
      * @return void
      */
     public static function update_staff(): void {
-        $conn  = self::get_connection();
-        $table = self::get_staff_table_name($conn);
+        $table = self::get_staff_table_name();
 
         self::send_error(
             __('Updating staff via AJAX is not available at this time.', 'meals-db'),
@@ -57,8 +55,7 @@ class MealsDB_Ajax_Staff {
      * @return void
      */
     public static function deactivate_staff(): void {
-        $conn  = self::get_connection();
-        $table = self::get_staff_table_name($conn);
+        $table = self::get_staff_table_name();
 
         self::send_error(
             __('Deactivating staff via AJAX is not available at this time.', 'meals-db'),
@@ -67,30 +64,10 @@ class MealsDB_Ajax_Staff {
     }
 
     /**
-     * Retrieve a mysqli connection for AJAX handlers or respond with an error.
-     */
-    private static function get_connection(): mysqli {
-        $conn = MealsDB_DB::get_connection();
-
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            self::send_error(
-                __('Unable to connect to the Meals DB database. Please try again later.', 'meals-db'),
-                '[MealsDB AJAX Staff] Failed to obtain mysqli connection.'
-            );
-        }
-
-        return $conn;
-    }
-
-    /**
      * Resolve and escape the staff table name for safe use in SQL identifiers.
      */
-    private static function get_staff_table_name(mysqli $conn): string {
+    private static function get_staff_table_name(): string {
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::STAFF);
-
-        if (method_exists($conn, 'real_escape_string')) {
-            $table_name = $conn->real_escape_string($table_name);
-        }
 
         $escaped_table = str_replace('`', '``', $table_name);
 

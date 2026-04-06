@@ -205,32 +205,24 @@ class MealsDB_Updates {
             );
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return new WP_Error(
-                'mealsdb_db_connection_failed',
-                __('Unable to connect to the Meals DB database.', 'meals-db')
-            );
-        }
+        global $wpdb;
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
-        $table = str_replace('`', '``', $table);
 
-        $existing_ids = [];
-        $existing_result = $conn->query("SELECT wc_product_id FROM `{$table}`");
+        $existing_rows = $wpdb->get_results("SELECT wc_product_id FROM `{$table}`", ARRAY_A);
 
-        if (MealsDB_DB::is_mysqli_result($existing_result)) {
-            while ($row = $existing_result->fetch_assoc()) {
-                if (isset($row['wc_product_id'])) {
-                    $existing_ids[] = (int) $row['wc_product_id'];
-                }
-            }
-            $existing_result->free();
-        } else {
+        if (!is_array($existing_rows)) {
             return new WP_Error(
                 'mealsdb_products_query_failed',
                 __('Unable to read existing products from the plugin table.', 'meals-db')
             );
+        }
+
+        $existing_ids = [];
+        foreach ($existing_rows as $row) {
+            if (isset($row['wc_product_id'])) {
+                $existing_ids[] = (int) $row['wc_product_id'];
+            }
         }
 
         $product_args = [
@@ -259,32 +251,20 @@ class MealsDB_Updates {
         $created = 0;
 
         if (!empty($missing_ids)) {
-            $sql = "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
-                    VALUES (?, 'meal', 0, '', NULL, NULL, 1, 0.00)
-                    ON DUPLICATE KEY UPDATE wc_product_id = wc_product_id";
-
-            $stmt = $conn->prepare($sql);
-
-            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-                return new WP_Error(
-                    'mealsdb_products_insert_prepare_failed',
-                    __('Failed to prepare insert for missing products.', 'meals-db')
-                );
-            }
-
             foreach ($missing_ids as $product_id) {
                 $product_id = (int) $product_id;
 
-                if (!$stmt->bind_param('i', $product_id)) {
-                    continue;
-                }
+                $sql = $wpdb->prepare(
+                    "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
+                    VALUES (%d, 'meal', 0, '', NULL, NULL, 1, 0.00)
+                    ON DUPLICATE KEY UPDATE wc_product_id = wc_product_id",
+                    $product_id
+                );
 
-                if ($stmt->execute()) {
+                if ($wpdb->query($sql) !== false) {
                     $created++;
                 }
             }
-
-            $stmt->close();
         }
 
         $message = $created > 0

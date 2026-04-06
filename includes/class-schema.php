@@ -285,7 +285,7 @@ class MealsDB_Schema {
      * schema sync additive-only. Pass $include_foreign_keys=true only for routines that
      * explicitly manage constraint creation in a separate, safe pass.
      */
-    public static function generate_create_table_sql(mysqli $conn, array $schema, bool $include_foreign_keys = false): string {
+    public static function generate_create_table_sql($conn, array $schema, bool $include_foreign_keys = false): string {
         $table_name = MealsDB_DB::get_table_name($schema['table']);
         $table_name = str_replace('`', '``', $table_name);
 
@@ -367,23 +367,13 @@ class MealsDB_Schema {
     /**
      * Build consistent charset/collation SQL using the active connection.
      */
-    public static function build_charset_collation_sql(mysqli $conn): string {
-        $charset_sql = 'DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+    public static function build_charset_collation_sql($conn = null): string {
+        global $wpdb;
 
-        $charset   = $conn->character_set_name();
-        $collation = method_exists($conn, 'get_charset') ? $conn->get_charset() : null;
+        $charset = $wpdb->charset ?: 'utf8mb4';
+        $collate = $wpdb->collate ?: 'utf8mb4_unicode_ci';
 
-        if (!empty($charset)) {
-            $collation_name = 'utf8mb4_unicode_ci';
-
-            if (is_object($collation) && property_exists($collation, 'collation') && !empty($collation->collation)) {
-                $collation_name = $collation->collation;
-            }
-
-            $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
-        }
-
-        return $charset_sql;
+        return sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collate);
     }
 
     /**
@@ -404,7 +394,9 @@ class MealsDB_Schema {
     /**
      * Build a foreign key definition for CREATE TABLE statements.
      */
-    private static function build_foreign_key_definition(mysqli $conn, array $foreign_key): string {
+    private static function build_foreign_key_definition($conn, array $foreign_key): string {
+        global $wpdb;
+
         $name       = $foreign_key['name'] ?? '';
         $columns    = array_map(static function ($column) {
             return sprintf('`%s`', $column);
@@ -418,7 +410,7 @@ class MealsDB_Schema {
 
         return sprintf(
             'CONSTRAINT `%s` FOREIGN KEY (%s) REFERENCES `%s`(%s)%s',
-            $conn->real_escape_string($name),
+            $wpdb->_real_escape($name),
             implode(',', $columns),
             $ref_table,
             implode(',', $ref_cols),

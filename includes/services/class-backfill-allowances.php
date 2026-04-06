@@ -23,50 +23,22 @@ class MealsDB_Backfill_Allowances {
     public static function run(bool $dry_run = true): array {
         global $wpdb;
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return ['error' => 'Cannot connect to external Meals DB.'];
-        }
-
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
         // Get all meals_clients rows that have a wp_user_id.
-        $sql = sprintf(
+        $clients = $wpdb->get_results(
             "SELECT client_id, wp_user_id, requisition_period, allowance_mains, allowance_sides
-             FROM `%s`
+             FROM `{$clients_table}`
              WHERE wp_user_id > 0
              ORDER BY client_id ASC",
-            $clients_table
+            ARRAY_A
         );
 
-        $result = $conn->query($sql);
-        if (!MealsDB_DB::is_mysqli_result($result)) {
+        if (!is_array($clients)) {
             return ['error' => 'Failed to query meals_clients.'];
         }
 
-        $clients = [];
-        while ($row = $result->fetch_assoc()) {
-            $clients[] = $row;
-        }
-        $result->free();
-
         $stats = ['updated' => 0, 'skipped' => 0, 'errors' => 0, 'total' => count($clients)];
-
-        // Prepare the UPDATE statement.
-        $update_sql = sprintf(
-            "UPDATE `%s`
-             SET allowance_mains = ?, allowance_sides = ?, requisition_period = ?
-             WHERE client_id = ?",
-            $clients_table
-        );
-
-        $stmt = null;
-        if (!$dry_run) {
-            $stmt = $conn->prepare($update_sql);
-            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-                return ['error' => 'Failed to prepare UPDATE statement: ' . ($conn->error ?? 'unknown')];
-            }
-        }
 
         foreach ($clients as $client) {
             $wp_user_id = (int) $client['wp_user_id'];
@@ -118,26 +90,25 @@ class MealsDB_Backfill_Allowances {
             }
 
             // Write to meals_clients.
-            $bind_mains  = $old_mains;
-            $bind_sides  = $old_sides;
-            $bind_period = $normalized_period;
-            $bind_id     = $client_id;
+            $sql = $wpdb->prepare(
+                "UPDATE `{$clients_table}`
+                 SET allowance_mains = %d, allowance_sides = %d, requisition_period = %s
+                 WHERE client_id = %d",
+                $old_mains,
+                $old_sides,
+                $normalized_period,
+                $client_id
+            );
 
-            $stmt->bind_param('iisi', $bind_mains, $bind_sides, $bind_period, $bind_id);
-
-            if ($stmt->execute()) {
+            if ($wpdb->query($sql) !== false) {
                 $stats['updated']++;
             } else {
                 $stats['errors']++;
                 error_log(sprintf(
                     '[MealsDB Backfill] ERROR updating client_id=%d: %s',
-                    $client_id, $stmt->error ?? 'unknown'
+                    $client_id, $wpdb->last_error ?: 'unknown'
                 ));
             }
-        }
-
-        if ($stmt) {
-            $stmt->close();
         }
 
         return $stats;

@@ -18,8 +18,9 @@ class MealsDB_Schema_Rebuild {
             return new WP_Error('confirmation_required', 'Force rebuild aborted: confirmation text did not match.');
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!$conn instanceof mysqli) {
+        global $wpdb;
+
+        if (!$wpdb) {
             return new WP_Error('db_error', 'Unable to connect to external Meals DB.');
         }
 
@@ -40,13 +41,13 @@ class MealsDB_Schema_Rebuild {
             $sql = sprintf('DROP TABLE IF EXISTS `%s`', $escaped_table);
 
             try {
-                $query_result = $conn->query($sql);
+                $query_result = $wpdb->query($sql);
                 if ($query_result !== false) {
                     $results['dropped'][] = $table_name;
                 } else {
                     $results['drop_errors'][] = [
                         'table' => $table_name,
-                        'error' => $conn->error,
+                        'error' => $wpdb->last_error,
                     ];
                 }
             } catch (Throwable $exception) {
@@ -63,16 +64,16 @@ class MealsDB_Schema_Rebuild {
             }
 
             $table_name  = MealsDB_DB::get_table_name($table_key);
-            $create_sql  = MealsDB_Schema::generate_create_table_sql($conn, $schemas[$table_key], false);
+            $create_sql  = MealsDB_Schema::generate_create_table_sql($wpdb, $schemas[$table_key], false);
 
             try {
-                $query_result = $conn->query($create_sql);
+                $query_result = $wpdb->query($create_sql);
                 if ($query_result !== false) {
                     $results['created'][] = $table_name;
                 } else {
                     $results['create_errors'][] = [
                         'table' => $table_name,
-                        'error' => $conn->error,
+                        'error' => $wpdb->last_error,
                     ];
                 }
             } catch (Throwable $exception) {
@@ -138,4 +139,3 @@ class MealsDB_Schema_Rebuild {
         return $ordered;
     }
 }
-

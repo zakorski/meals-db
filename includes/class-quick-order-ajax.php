@@ -219,53 +219,35 @@ class MealsDB_Quick_Order_Ajax {
             wp_send_json(['success' => true, 'clients' => []]);
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            wp_send_json(['success' => true, 'clients' => []]);
-        }
+        global $wpdb;
 
-        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql   = "
-            SELECT client_id, wp_user_id, first_name, last_name
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $like  = '%' . $wpdb->esc_like($term) . '%';
+        $sql   = $wpdb->prepare(
+            "SELECT client_id, wp_user_id, first_name, last_name
             FROM `{$table}`
             WHERE active = 1
-              AND (first_name LIKE ? OR last_name LIKE ? OR CONCAT(first_name, ' ', last_name) LIKE ?)
+              AND (first_name LIKE %s OR last_name LIKE %s OR CONCAT(first_name, ' ', last_name) LIKE %s)
             ORDER BY last_name ASC, first_name ASC
-            LIMIT 25
-        ";
+            LIMIT 25",
+            $like,
+            $like,
+            $like
+        );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            wp_send_json(['success' => true, 'clients' => []]);
-        }
-
-        $like = '%' . $term . '%';
-        $stmt->bind_param('sss', $like, $like, $like);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (!is_array($rows)) {
             wp_send_json(['success' => true, 'clients' => []]);
         }
 
         $clients = [];
-        if (method_exists($stmt, 'get_result')) {
-            $result = $stmt->get_result();
-            if (MealsDB_DB::is_mysqli_result($result)) {
-                while ($row = $result->fetch_assoc()) {
-                    if (!is_array($row)) {
-                        continue;
-                    }
-
-                    $clients[] = [
-                        'client_id'  => (int) $row['client_id'],
-                        'wp_user_id' => (int) $row['wp_user_id'],
-                        'name'       => $row['first_name'] . ' ' . $row['last_name'],
-                    ];
-                }
-            }
+        foreach ($rows as $row) {
+            $clients[] = [
+                'client_id'  => (int) $row['client_id'],
+                'wp_user_id' => (int) $row['wp_user_id'],
+                'name'       => $row['first_name'] . ' ' . $row['last_name'],
+            ];
         }
-
-        $stmt->close();
 
         wp_send_json(['success' => true, 'clients' => $clients]);
     }
@@ -565,30 +547,19 @@ class MealsDB_Quick_Order_Ajax {
 
             $client_type = '';
             if ($client_db_id > 0) {
-                $conn = MealsDB_DB::get_connection();
-                if (MealsDB_DB::is_mysqli($conn)) {
-                    $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-                    $sql        = sprintf(
-                        'SELECT client_type FROM `%s` WHERE client_id = ? LIMIT 1',
-                        str_replace('`', '``', $table_name)
-                    );
+                global $wpdb;
 
-                    $stmt = $conn->prepare($sql);
-                    if (MealsDB_DB::is_mysqli_stmt($stmt)) {
-                        $stmt->bind_param('i', $client_db_id);
+                $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+                $row = $wpdb->get_row(
+                    $wpdb->prepare(
+                        "SELECT client_type FROM `{$table_name}` WHERE client_id = %d LIMIT 1",
+                        $client_db_id
+                    ),
+                    ARRAY_A
+                );
 
-                        if ($stmt->execute()) {
-                            $result = $stmt->get_result();
-                            if (MealsDB_DB::is_mysqli_result($result)) {
-                                $row = $result->fetch_assoc();
-                                if (isset($row['client_type'])) {
-                                    $client_type = (string) $row['client_type'];
-                                }
-                            }
-                        }
-
-                        $stmt->close();
-                    }
+                if (isset($row['client_type'])) {
+                    $client_type = (string) $row['client_type'];
                 }
             }
 
@@ -679,37 +650,17 @@ class MealsDB_Quick_Order_Ajax {
             return 0;
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return 0;
-        }
+        global $wpdb;
 
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql        = sprintf(
-            'SELECT client_id FROM `%s` WHERE wp_user_id = ? AND active = 1 LIMIT 1',
-            str_replace('`', '``', $table_name)
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT client_id FROM `{$table_name}` WHERE wp_user_id = %d AND active = 1 LIMIT 1",
+                $user_id
+            ),
+            ARRAY_A
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return 0;
-        }
-
-        $stmt->bind_param('i', $user_id);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return 0;
-        }
-
-        $result = $stmt->get_result();
-        $stmt->close();
-
-        if (!MealsDB_DB::is_mysqli_result($result)) {
-            return 0;
-        }
-
-        $row = $result->fetch_assoc();
         if (!is_array($row) || !isset($row['client_id'])) {
             return 0;
         }
@@ -725,37 +676,17 @@ class MealsDB_Quick_Order_Ajax {
             return 0;
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return 0;
-        }
+        global $wpdb;
 
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql        = sprintf(
-            'SELECT wp_user_id FROM `%s` WHERE client_id = ? AND active = 1 LIMIT 1',
-            str_replace('`', '``', $table_name)
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT wp_user_id FROM `{$table_name}` WHERE client_id = %d AND active = 1 LIMIT 1",
+                $client_id
+            ),
+            ARRAY_A
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return 0;
-        }
-
-        $stmt->bind_param('i', $client_id);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return 0;
-        }
-
-        $result = $stmt->get_result();
-        $stmt->close();
-
-        if (!MealsDB_DB::is_mysqli_result($result)) {
-            return 0;
-        }
-
-        $row = $result->fetch_assoc();
         if (!is_array($row) || !isset($row['wp_user_id'])) {
             return 0;
         }
@@ -884,37 +815,18 @@ class MealsDB_Quick_Order_Ajax {
      * Validate that a rate_id belongs to a given client in meals_client_rates.
      */
     private static function validate_rate_for_client(int $rate_id, int $client_id): bool {
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return false;
-        }
+        global $wpdb;
 
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
-        $sql = sprintf(
-            'SELECT rate_id FROM `%s` WHERE rate_id = ? AND client_id = ? LIMIT 1',
-            str_replace('`', '``', $table_name)
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT rate_id FROM `{$table_name}` WHERE rate_id = %d AND client_id = %d LIMIT 1",
+                $rate_id,
+                $client_id
+            ),
+            ARRAY_A
         );
 
-        $stmt = $conn->prepare($sql);
-        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-            return false;
-        }
-
-        $stmt->bind_param('ii', $rate_id, $client_id);
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return false;
-        }
-
-        $result = $stmt->get_result();
-        $found = false;
-
-        if (MealsDB_DB::is_mysqli_result($result)) {
-            $found = $result->fetch_assoc() !== null;
-        }
-
-        $stmt->close();
-
-        return $found;
+        return $row !== null;
     }
 }

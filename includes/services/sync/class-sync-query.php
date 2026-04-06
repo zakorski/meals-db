@@ -5,9 +5,9 @@
 
 class MealsDB_Sync_Query {
     /**
-     * Active mysqli connection, when available.
+     * Active wpdb connection, when available.
      */
-    private ?\mysqli $connection;
+    private ?wpdb $connection;
 
     /**
      * Primary key column name for the Meals DB clients table, when available.
@@ -22,8 +22,8 @@ class MealsDB_Sync_Query {
     private array $column_cache = [];
 
     public function __construct() {
-        $conn = MealsDB_DB::get_connection();
-        $this->connection = $conn instanceof \mysqli ? $conn : null;
+        global $wpdb;
+        $this->connection = $wpdb instanceof wpdb ? $wpdb : null;
         $this->clients_primary_key = MealsDB_Schema::get_primary_key_column(MealsDB_Tables::CLIENTS);
     }
 
@@ -75,7 +75,7 @@ class MealsDB_Sync_Query {
         $clients = $this->batched_query(
             function (int $batch_size, int $page, int $offset) use ($connection, &$query_error): array {
                 $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-                $available_columns = $this->get_table_columns($connection, $clients_table);
+                $available_columns = $this->get_table_columns($clients_table);
                 $column_map = $this->build_client_column_map($available_columns);
 
                 if (empty($column_map)) {
@@ -107,10 +107,10 @@ class MealsDB_Sync_Query {
                     (int) $offset
                 );
 
-                $result = $connection->query($sql);
+                $rows = $connection->get_results($sql, ARRAY_A);
 
-                if (!($result instanceof \mysqli_result)) {
-                    $message = $connection->error ?: __('Unknown database error.', 'meals-db');
+                if (!is_array($rows)) {
+                    $message = $connection->last_error ?: __('Unknown database error.', 'meals-db');
                     error_log('[MealsDB Sync] Failed to fetch Meals DB records: ' . $message);
                     $query_error = new WP_Error(
                         'mealsdb_query_failed',
@@ -123,14 +123,6 @@ class MealsDB_Sync_Query {
 
                     return [];
                 }
-
-                $rows = [];
-
-                while ($row = $result->fetch_assoc()) {
-                    $rows[] = $row;
-                }
-
-                $result->free();
 
                 return $rows;
             }
@@ -175,45 +167,19 @@ class MealsDB_Sync_Query {
 
         $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS));
         $sql   = sprintf('SELECT field_name, source_value, target_value FROM `%s`', $table);
-        $stmt = $connection->prepare($sql);
 
-        if (!$stmt) {
-            error_log('[MealsDB Sync] Failed to prepare ignored conflicts query: ' . ($connection->error ?? 'unknown error'));
-            return $ignored;
-        }
+        $results = $connection->get_results($sql, ARRAY_A);
 
-        if (!$stmt->execute()) {
-            error_log('[MealsDB Sync] Failed to execute ignored conflicts query: ' . ($stmt->error ?? 'unknown error'));
-            $stmt->close();
-            return $ignored;
-        }
-
-        if (method_exists($stmt, 'get_result')) {
-            $result = $stmt->get_result();
-
-            if ($result instanceof \mysqli_result) {
-                while ($row = $result->fetch_assoc()) {
-                    $field  = $this->sanitize_ignore_value($row['field_name'] ?? '');
-                    $source = $this->sanitize_ignore_value($row['source_value'] ?? '');
-                    $target = $this->sanitize_ignore_value($row['target_value'] ?? '');
-                    $ignored[$this->build_ignore_key($field, $source, $target)] = true;
-                }
-
-                $result->free();
+        if (is_array($results)) {
+            foreach ($results as $row) {
+                $field  = $this->sanitize_ignore_value($row['field_name'] ?? '');
+                $source = $this->sanitize_ignore_value($row['source_value'] ?? '');
+                $target = $this->sanitize_ignore_value($row['target_value'] ?? '');
+                $ignored[$this->build_ignore_key($field, $source, $target)] = true;
             }
         } else {
-            if ($stmt->bind_result($field, $source, $target)) {
-                while ($stmt->fetch()) {
-                    $ignored[$this->build_ignore_key(
-                        $this->sanitize_ignore_value($field ?? ''),
-                        $this->sanitize_ignore_value($source ?? ''),
-                        $this->sanitize_ignore_value($target ?? '')
-                    )] = true;
-                }
-            }
+            error_log('[MealsDB Sync] Failed to execute ignored conflicts query: ' . ($connection->last_error ?? 'unknown error'));
         }
-
-        $stmt->close();
 
         return $ignored;
     }
@@ -241,15 +207,11 @@ class MealsDB_Sync_Query {
 
         $staff_ids = [];
         $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::STAFF);
-        $available_columns = $this->get_table_columns($connection, $table_name);
+        $available_columns = $this->get_table_columns($table_name);
         $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
 
         if ($wp_column === null) {
             return $staff_ids;
-        }
-
-        if (method_exists($connection, 'real_escape_string')) {
-            $table_name = $connection->real_escape_string($table_name);
         }
 
         $escaped_table = str_replace('`', '``', $table_name);
@@ -257,10 +219,10 @@ class MealsDB_Sync_Query {
         $table        = '`' . $escaped_table . '`';
 
         $sql = "SELECT `{$escaped_column}` AS wordpress_user_id FROM {$table} WHERE `{$escaped_column}` IS NOT NULL AND `{$escaped_column}` > 0";
-        $result = $connection->query($sql);
+        $results = $connection->get_results($sql, ARRAY_A);
 
-        if ($result instanceof \mysqli_result) {
-            while ($row = $result->fetch_assoc()) {
+        if (is_array($results)) {
+            foreach ($results as $row) {
                 $wp_id_raw = $row['wordpress_user_id'] ?? null;
 
                 if (is_numeric($wp_id_raw)) {
@@ -271,8 +233,6 @@ class MealsDB_Sync_Query {
                     }
                 }
             }
-
-            $result->free();
         }
 
         return $staff_ids;
@@ -424,19 +384,19 @@ class MealsDB_Sync_Query {
     }
 
     /**
-     * Ensure a mysqli connection is available.
+     * Ensure a wpdb connection is available.
      *
-     * @return \mysqli|WP_Error
+     * @return wpdb|WP_Error
      */
     private function require_connection() {
-        if ($this->connection instanceof \mysqli) {
+        if ($this->connection instanceof wpdb) {
             return $this->connection;
         }
 
-        $connection = MealsDB_DB::get_connection();
+        global $wpdb;
 
-        if ($connection instanceof \mysqli) {
-            $this->connection = $connection;
+        if ($wpdb instanceof wpdb) {
+            $this->connection = $wpdb;
             return $this->connection;
         }
 
@@ -556,28 +516,31 @@ class MealsDB_Sync_Query {
     /**
      * Retrieve and cache the available columns for a table.
      *
-     * @param \mysqli $connection
      * @return array<string, bool>
      */
-    private function get_table_columns(\mysqli $connection, string $table): array {
+    private function get_table_columns(string $table): array {
         if (isset($this->column_cache[$table])) {
             return $this->column_cache[$table];
         }
 
-        $escaped_table = str_replace('`', '``', $table);
+        $connection = $this->connection;
         $columns = [];
 
-        $sql = sprintf('SHOW COLUMNS FROM `%s`', $escaped_table);
-        $result = $connection->query($sql);
+        if (!$connection instanceof wpdb) {
+            $this->column_cache[$table] = $columns;
+            return $columns;
+        }
 
-        if ($result instanceof \mysqli_result) {
-            while ($row = $result->fetch_assoc()) {
+        $escaped_table = str_replace('`', '``', $table);
+        $sql = sprintf('SHOW COLUMNS FROM `%s`', $escaped_table);
+        $results = $connection->get_results($sql, ARRAY_A);
+
+        if (is_array($results)) {
+            foreach ($results as $row) {
                 if (!empty($row['Field'])) {
                     $columns[(string) $row['Field']] = true;
                 }
             }
-
-            $result->free();
         }
 
         $this->column_cache[$table] = $columns;

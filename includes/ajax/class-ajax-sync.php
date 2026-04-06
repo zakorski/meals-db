@@ -89,54 +89,26 @@ class MealsDB_Ajax_Sync {
         $set_ignored = filter_var($_POST['ignored'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
         $user_id = get_current_user_id();
-        $conn = MealsDB_DB::get_connection();
+        global $wpdb;
 
-        if (!$conn) {
-            wp_send_json_error(['message' => 'Database connection failed.']);
-        }
-
-        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS));
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS);
 
         if ($set_ignored) {
-            $stmt = $conn->prepare(
-                sprintf(
-                    'INSERT INTO `%s` (field_name, source_value, target_value, ignored_by) VALUES (?, ?, ?, ?)',
-                    $table
-                )
-            );
-            if (!$stmt) {
-                error_log('[MealsDB AJAX] Failed to prepare insert for ignored conflict: ' . ($conn->error ?? 'unknown error'));
-                wp_send_json_error(['message' => 'Failed to update ignore status.']);
-            }
-
-            if (!$stmt->bind_param('sssi', $field_name, $source, $target, $user_id)) {
-                $stmt->close();
-                error_log('[MealsDB AJAX] Failed binding parameters for ignored conflict insert.');
-                wp_send_json_error(['message' => 'Failed to update ignore status.']);
-            }
+            $result = $wpdb->query($wpdb->prepare(
+                "INSERT INTO `{$table}` (field_name, source_value, target_value, ignored_by) VALUES (%s, %s, %s, %d)",
+                $field_name, $source, $target, $user_id
+            ));
         } else {
-            $stmt = $conn->prepare(
-                sprintf('DELETE FROM `%s` WHERE field_name = ? AND source_value = ? AND target_value = ?', $table)
-            );
-            if (!$stmt) {
-                error_log('[MealsDB AJAX] Failed to prepare delete for ignored conflict: ' . ($conn->error ?? 'unknown error'));
-                wp_send_json_error(['message' => 'Failed to update ignore status.']);
-            }
-
-            if (!$stmt->bind_param('sss', $field_name, $source, $target)) {
-                $stmt->close();
-                error_log('[MealsDB AJAX] Failed binding parameters for ignored conflict delete.');
-                wp_send_json_error(['message' => 'Failed to update ignore status.']);
-            }
+            $result = $wpdb->query($wpdb->prepare(
+                "DELETE FROM `{$table}` WHERE field_name = %s AND source_value = %s AND target_value = %s",
+                $field_name, $source, $target
+            ));
         }
 
-        if (!$stmt->execute()) {
-            $stmt->close();
-            error_log('[MealsDB AJAX] Failed executing ignore toggle statement: ' . ($stmt->error ?? 'unknown error'));
+        if ($result === false) {
+            error_log('[MealsDB AJAX] Failed executing ignore toggle: ' . $wpdb->last_error);
             wp_send_json_error(['message' => 'Failed to update ignore status.']);
         }
-
-        $stmt->close();
 
         wp_send_json_success(['message' => $set_ignored ? 'Ignored' : 'Unignored']);
     }

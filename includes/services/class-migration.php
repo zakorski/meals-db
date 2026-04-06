@@ -739,12 +739,7 @@ class MealsDB_Migration {
     public static function create_clients( int $offset = 0, bool $dry_run = false ): array {
         global $wpdb;
 
-        $conn = MealsDB_DB::get_connection();
-        if ( ! MealsDB_DB::is_mysqli( $conn ) ) {
-            return [ 'error' => 'Cannot connect to external Meals DB.' ];
-        }
-
-        $clients_table = str_replace( '`', '``', MealsDB_DB::get_table_name( MealsDB_Tables::CLIENTS ) );
+        $clients_table = MealsDB_DB::get_table_name( MealsDB_Tables::CLIENTS );
 
         // Verify encryption is available before processing clients with sensitive fields.
         if ( ! $dry_run ) {
@@ -797,21 +792,14 @@ class MealsDB_Migration {
                 continue;
             }
 
-            // Check if client already exists in external DB
-            $exists = $conn->prepare( sprintf(
-                'SELECT client_id FROM `%s` WHERE wp_user_id = ? LIMIT 1',
-                $clients_table
+            // Check if client already exists in DB
+            $existing = $wpdb->get_var( $wpdb->prepare(
+                "SELECT client_id FROM `{$clients_table}` WHERE wp_user_id = %d LIMIT 1",
+                $uid
             ) );
-            if ( MealsDB_DB::is_mysqli_stmt( $exists ) ) {
-                $exists->bind_param( 'i', $uid );
-                $exists->execute();
-                $res = $exists->get_result();
-                if ( MealsDB_DB::is_mysqli_result( $res ) && $res->num_rows > 0 ) {
-                    $exists->close();
-                    $stats['skipped']++;
-                    continue;
-                }
-                $exists->close();
+            if ( $existing ) {
+                $stats['skipped']++;
+                continue;
             }
 
             // Normalize client type
@@ -977,95 +965,102 @@ class MealsDB_Migration {
             $ordering_method  = $meta['ordering_contact_method'] ?? null;
             $required_start   = ! empty( $meta['required_start_date'] ) && $meta['required_start_date'] !== '0' ? $meta['required_start_date'] : null;
 
-            // INSERT into external meals_clients
-            $sql = sprintf(
-                "INSERT INTO `%s` (
-                    wp_user_id, client_type, first_name, last_name, client_email, active,
-                    client_phone_1, client_phone_2, payment_method,
-                    open_date, individual_id, individual_id_index,
-                    service_id, requisition_id, requisition_id_index,
-                    requisition_period, units, client_contribution,
-                    allowance_mains, allowance_sides,
-                    vet_health_card, vet_health_card_index,
-                    service_center_charged, delivery_area_zone, delivery_area_name, service_name_zone,
-                    delivery_frequency, ordering_frequency, freezer_capacity,
-                    delivery_fee, diet_concerns, customer_comments,
-                    service_commence_date, expected_termination_date,
-                    notes_to_service_provider,
-                    delivery_initials, delivery_initials_index,
-                    street_name, city, province, postal_code,
-                    delivery_street_name,
-                    delivery_city, delivery_province, delivery_postal_code,
-                    alternate_contact_name, alternate_contact_phone_1,
-                    alternate_contact_phone_2, alternate_contact_email,
-                    gender, birth_date, assigned_worker_name, assigned_worker_email,
-                    vendor_number, meal_type, delivery_day,
-                    do_not_call_client_phone, ordering_contact_method, required_start_date,
-                    use_legacy_billing
-                ) VALUES (
-                    ?, ?, ?, ?, ?, 1,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?,
-                    ?, ?,
-                    ?, ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?,
-                    ?,
-                    ?, ?,
-                    ?, ?, ?, ?,
-                    ?,
-                    ?, ?, ?,
-                    ?, ?,
-                    ?, ?,
-                    ?, ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?,
-                    1
-                )",
-                $clients_table
+            // INSERT into meals_clients
+            $insert_result = $wpdb->insert(
+                $clients_table,
+                [
+                    'wp_user_id'                => $uid,
+                    'client_type'               => $client_type,
+                    'first_name'                => $first,
+                    'last_name'                 => $last,
+                    'client_email'              => $email,
+                    'active'                    => 1,
+                    'client_phone_1'            => $phone1,
+                    'client_phone_2'            => $phone2,
+                    'payment_method'            => $payment,
+                    'open_date'                 => $open_date,
+                    'individual_id'             => $individual_id,
+                    'individual_id_index'       => $individual_id_index,
+                    'service_id'                => $service_id,
+                    'requisition_id'            => $requisition_id,
+                    'requisition_id_index'      => $requisition_id_index,
+                    'requisition_period'        => $req_period,
+                    'units'                     => $units,
+                    'client_contribution'       => $contrib,
+                    'allowance_mains'           => $allowance_mains_val,
+                    'allowance_sides'           => $allowance_sides_val,
+                    'vet_health_card'           => $vet_health_card,
+                    'vet_health_card_index'     => $vet_health_card_index,
+                    'service_center_charged'    => $sc_raw,
+                    'delivery_area_zone'        => $zone,
+                    'delivery_area_name'        => $delivery_area_name,
+                    'service_name_zone'         => $service_name_zone,
+                    'delivery_frequency'        => $del_freq,
+                    'ordering_frequency'        => $ord_freq,
+                    'freezer_capacity'          => $freeze_cap,
+                    'delivery_fee'              => $del_fee,
+                    'diet_concerns'             => $diet,
+                    'customer_comments'         => $comments,
+                    'service_commence_date'     => $commence,
+                    'expected_termination_date' => $term_date,
+                    'notes_to_service_provider' => $notes_final,
+                    'delivery_initials'         => $initials,
+                    'delivery_initials_index'   => $initials_index,
+                    'street_name'               => $street_name,
+                    'city'                      => $city,
+                    'province'                  => $province,
+                    'postal_code'               => $postal_code,
+                    'delivery_street_name'      => $del_street_name,
+                    'delivery_city'             => $del_city,
+                    'delivery_province'         => $del_province,
+                    'delivery_postal_code'      => $del_postal_code,
+                    'alternate_contact_name'    => $alt_name,
+                    'alternate_contact_phone_1' => $alt_phone1,
+                    'alternate_contact_phone_2' => $alt_phone2,
+                    'alternate_contact_email'   => $alt_email,
+                    'gender'                    => $gender,
+                    'birth_date'                => $birth_date,
+                    'assigned_worker_name'      => $worker_name,
+                    'assigned_worker_email'     => $worker_email,
+                    'vendor_number'             => $vendor_number,
+                    'meal_type'                 => $meal_type,
+                    'delivery_day'              => $delivery_day,
+                    'do_not_call_client_phone'  => $do_not_call,
+                    'ordering_contact_method'   => $ordering_method,
+                    'required_start_date'       => $required_start,
+                    'use_legacy_billing'        => 1,
+                ],
+                [
+                    '%d', '%s', '%s', '%s', '%s', '%d',
+                    '%s', '%s', '%s',
+                    '%s', '%s', '%s',
+                    '%s', '%s', '%s',
+                    '%s', '%d', '%f',
+                    '%d', '%d',
+                    '%s', '%s',
+                    '%s', '%s', '%s', '%s',
+                    '%d', '%d', '%s',
+                    '%f', '%s', '%s',
+                    '%s', '%s',
+                    '%s',
+                    '%s', '%s',
+                    '%s', '%s', '%s', '%s',
+                    '%s',
+                    '%s', '%s', '%s',
+                    '%s', '%s',
+                    '%s', '%s',
+                    '%s', '%s', '%s', '%s',
+                    '%s', '%s', '%s',
+                    '%d', '%s', '%s',
+                    '%d',
+                ]
             );
 
-            $stmt = $conn->prepare( $sql );
-            if ( ! MealsDB_DB::is_mysqli_stmt( $stmt ) ) {
-                $stats['errors']++;
-                continue;
-            }
-
-            $stmt->bind_param(
-                'issssssssssssssidiissssssiisdssssssssssssssssssssssssssiss',
-                $uid, $client_type, $first, $last, $email,
-                $phone1, $phone2, $payment,
-                $open_date, $individual_id, $individual_id_index,
-                $service_id, $requisition_id, $requisition_id_index,
-                $req_period, $units, $contrib,
-                $allowance_mains_val, $allowance_sides_val,
-                $vet_health_card, $vet_health_card_index,
-                $sc_raw, $zone, $delivery_area_name, $service_name_zone,
-                $del_freq, $ord_freq, $freeze_cap,
-                $del_fee, $diet, $comments,
-                $commence, $term_date,
-                $notes_final,
-                $initials, $initials_index,
-                $street_name, $city, $province, $postal_code,
-                $del_street_name,
-                $del_city, $del_province, $del_postal_code,
-                $alt_name, $alt_phone1,
-                $alt_phone2, $alt_email,
-                $gender, $birth_date, $worker_name, $worker_email,
-                $vendor_number, $meal_type, $delivery_day,
-                $do_not_call, $ordering_method, $required_start
-            );
-
-            if ( $stmt->execute() ) {
+            if ( $insert_result !== false ) {
                 $stats['created']++;
             } else {
                 $stats['errors']++;
             }
-            $stmt->close();
         }
 
         return [
@@ -1085,52 +1080,33 @@ class MealsDB_Migration {
      * imported basic_cost usermeta value.
      */
     public static function create_rates( int $offset = 0, bool $dry_run = false ): array {
-        $conn = MealsDB_DB::get_connection();
-        if ( ! MealsDB_DB::is_mysqli( $conn ) ) {
-            return [ 'error' => 'Cannot connect to external Meals DB.' ];
-        }
+        global $wpdb;
 
-        $clients_table = str_replace( '`', '``', MealsDB_DB::get_table_name( MealsDB_Tables::CLIENTS ) );
-        $rates_table   = str_replace( '`', '``', MealsDB_DB::get_table_name( MealsDB_Tables::CLIENT_RATES ) );
+        $clients_table = MealsDB_DB::get_table_name( MealsDB_Tables::CLIENTS );
+        $rates_table   = MealsDB_DB::get_table_name( MealsDB_Tables::CLIENT_RATES );
 
         // Get clients that don't have a rate yet
-        $sql = sprintf(
+        $rows = $wpdb->get_results( $wpdb->prepare(
             "SELECT c.client_id, c.wp_user_id
-             FROM `%s` c
-             LEFT JOIN `%s` r ON r.client_id = c.client_id
+             FROM `{$clients_table}` c
+             LEFT JOIN `{$rates_table}` r ON r.client_id = c.client_id
              WHERE r.rate_id IS NULL
              ORDER BY c.client_id ASC
              LIMIT %d OFFSET %d",
-            $clients_table,
-            $rates_table,
             self::BATCH_SIZE,
             $offset
-        );
+        ), ARRAY_A );
 
-        $result = $conn->query( $sql );
-        $rows   = [];
-        if ( MealsDB_DB::is_mysqli_result( $result ) ) {
-            while ( $row = $result->fetch_assoc() ) {
-                $rows[] = $row;
-            }
+        if ( ! is_array( $rows ) ) {
+            $rows = [];
         }
 
         // Count total clients without rates
-        $count_sql = sprintf(
-            "SELECT COUNT(*) AS cnt FROM `%s` c LEFT JOIN `%s` r ON r.client_id = c.client_id WHERE r.rate_id IS NULL",
-            $clients_table,
-            $rates_table
+        $total = (int) $wpdb->get_var(
+            "SELECT COUNT(*) FROM `{$clients_table}` c LEFT JOIN `{$rates_table}` r ON r.client_id = c.client_id WHERE r.rate_id IS NULL"
         );
-        $count_result = $conn->query( $count_sql );
-        $total = 0;
-        if ( MealsDB_DB::is_mysqli_result( $count_result ) ) {
-            $cr    = $count_result->fetch_assoc();
-            $total = (int) ( $cr['cnt'] ?? 0 );
-        }
 
         $stats = [ 'created' => 0, 'skipped' => 0, 'errors' => 0 ];
-
-        global $wpdb;
 
         foreach ( $rows as $row ) {
             $client_id  = (int) $row['client_id'];
@@ -1154,37 +1130,33 @@ class MealsDB_Migration {
                 continue;
             }
 
-            $insert_sql = sprintf(
-                "INSERT INTO `%s` (client_id, label, rate, is_default, effective_date)
-                 VALUES (?, 'Standard', ?, 1, CURDATE())",
-                $rates_table
+            $insert_result = $wpdb->insert(
+                $rates_table,
+                [
+                    'client_id'      => $client_id,
+                    'label'          => 'Standard',
+                    'rate'           => $rate,
+                    'is_default'     => 1,
+                    'effective_date' => current_time( 'Y-m-d' ),
+                ],
+                [ '%d', '%s', '%f', '%d', '%s' ]
             );
 
-            $stmt = $conn->prepare( $insert_sql );
-            if ( ! MealsDB_DB::is_mysqli_stmt( $stmt ) ) {
-                $stats['errors']++;
-                continue;
-            }
-
-            $stmt->bind_param( 'id', $client_id, $rate );
-            if ( $stmt->execute() ) {
+            if ( $insert_result !== false ) {
                 // Update client's default_rate_id
-                $rate_id = (int) $stmt->insert_id;
-                $update  = $conn->prepare( sprintf(
-                    "UPDATE `%s` SET default_rate_id = ? WHERE client_id = ?",
-                    $clients_table
-                ) );
-                if ( MealsDB_DB::is_mysqli_stmt( $update ) ) {
-                    $update->bind_param( 'ii', $rate_id, $client_id );
-                    $update->execute();
-                    $update->close();
-                }
+                $rate_id = (int) $wpdb->insert_id;
+                $wpdb->update(
+                    $clients_table,
+                    [ 'default_rate_id' => $rate_id ],
+                    [ 'client_id' => $client_id ],
+                    [ '%d' ],
+                    [ '%d' ]
+                );
 
                 $stats['created']++;
             } else {
                 $stats['errors']++;
             }
-            $stmt->close();
         }
 
         return [

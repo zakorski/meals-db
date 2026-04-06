@@ -134,49 +134,25 @@ class MealsDB_Initials {
      * It will return true even if the duplicate is at the same address.
      */
     public static function exists_in_db(string $code, ?int $exclude_client_id = null): bool {
-        $connection = MealsDB_DB::get_connection();
+        global $wpdb;
 
-        if (!MealsDB_DB::is_mysqli($connection)) {
-            error_log('[MealsDB] Unable to obtain database connection for initials lookup.');
-            return false;
-        }
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf('SELECT client_id FROM `%s` WHERE delivery_initials = ?', $clients_table);
+        $sql = "SELECT client_id FROM `{$clients_table}` WHERE delivery_initials = %s";
 
         if ($exclude_client_id !== null) {
-            $sql .= ' AND client_id != ?';
+            $sql .= ' AND client_id != %d';
+            $row = $wpdb->get_row($wpdb->prepare($sql, $code, $exclude_client_id), ARRAY_A);
+        } else {
+            $row = $wpdb->get_row($wpdb->prepare($sql, $code), ARRAY_A);
         }
 
-        $statement = $connection->prepare($sql);
-
-        if (!MealsDB_DB::is_mysqli_stmt($statement)) {
-            error_log('[MealsDB] Failed to prepare initials lookup query.');
+        if ($wpdb->last_error) {
+            error_log('[MealsDB] Failed to execute initials lookup query: ' . $wpdb->last_error);
             return false;
         }
 
-        $bind_result = ($exclude_client_id !== null)
-            ? $statement->bind_param('si', $code, $exclude_client_id)
-            : $statement->bind_param('s', $code);
-
-        if (!$bind_result) {
-            error_log('[MealsDB] Failed to bind parameters for initials lookup.');
-            $statement->close();
-            return false;
-        }
-
-        if (!$statement->execute()) {
-            error_log('[MealsDB] Failed to execute initials lookup query: ' . $statement->error);
-            $statement->close();
-            return false;
-        }
-
-        $statement->store_result();
-        $exists = $statement->num_rows > 0;
-        $statement->free_result();
-        $statement->close();
-
-        return $exists;
+        return $row !== null;
     }
 
     /**

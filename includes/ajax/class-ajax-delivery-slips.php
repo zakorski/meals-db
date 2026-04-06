@@ -159,34 +159,25 @@ class MealsDB_Ajax_Delivery_Slips {
             wp_send_json(['success' => false, 'message' => 'No zone delivery schedule configured.']);
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            wp_send_json(['success' => false, 'message' => 'Cannot connect to external database.']);
-        }
+        global $wpdb;
 
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $updated = 0;
 
         foreach ($schedule as $zone_name => $config) {
             $day = strtolower($config['day']);
 
-            $sql = sprintf(
-                "UPDATE `%s`
-                 SET delivery_day = ?
-                 WHERE delivery_area_name = ?
+            $sql = $wpdb->prepare(
+                "UPDATE `{$clients_table}`
+                 SET delivery_day = %s
+                 WHERE delivery_area_name = %s
                    AND (delivery_day IS NULL OR delivery_day = '')
                    AND active = 1",
-                $clients_table
+                $day,
+                $zone_name
             );
-            $stmt = $conn->prepare($sql);
-            if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
-                continue;
-            }
-
-            $stmt->bind_param('ss', $day, $zone_name);
-            $stmt->execute();
-            $updated += $stmt->affected_rows;
-            $stmt->close();
+            $wpdb->query($sql);
+            $updated += $wpdb->rows_affected;
         }
 
         wp_send_json([

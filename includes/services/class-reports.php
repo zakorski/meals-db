@@ -687,29 +687,17 @@ class MealsDB_Reports {
             return ['rows' => [], 'summary' => self::empty_contribution_summary()];
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return ['rows' => [], 'summary' => self::empty_contribution_summary()];
-        }
-
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf(
-            'SELECT client_id, wp_user_id, first_name, last_name, client_contribution, client_type
-             FROM `%s`
-             WHERE client_contribution > 0 AND active = 1 AND wp_user_id > 0',
-            $clients_table
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $clients = $this->wpdb->get_results(
+            "SELECT client_id, wp_user_id, first_name, last_name, client_contribution, client_type
+             FROM `{$clients_table}`
+             WHERE client_contribution > 0 AND active = 1 AND wp_user_id > 0",
+            ARRAY_A
         );
 
-        $result = $conn->query($sql);
-        if (!MealsDB_DB::is_mysqli_result($result)) {
+        if (!is_array($clients) || empty($clients)) {
             return ['rows' => [], 'summary' => self::empty_contribution_summary()];
         }
-
-        $clients = [];
-        while ($row = $result->fetch_assoc()) {
-            $clients[] = $row;
-        }
-        $result->free();
 
         $fee_ids = MealsDB_Invoice_Generator::get_fee_product_ids();
         $contribution_product_id = $fee_ids['client_contribution'];
@@ -764,29 +752,17 @@ class MealsDB_Reports {
             return ['rows' => [], 'summary' => self::empty_delivery_summary()];
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return ['rows' => [], 'summary' => self::empty_delivery_summary()];
-        }
-
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf(
-            'SELECT client_id, wp_user_id, first_name, last_name, delivery_fee, client_type
-             FROM `%s`
-             WHERE delivery_fee > 0 AND active = 1 AND wp_user_id > 0',
-            $clients_table
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $clients = $this->wpdb->get_results(
+            "SELECT client_id, wp_user_id, first_name, last_name, delivery_fee, client_type
+             FROM `{$clients_table}`
+             WHERE delivery_fee > 0 AND active = 1 AND wp_user_id > 0",
+            ARRAY_A
         );
 
-        $result = $conn->query($sql);
-        if (!MealsDB_DB::is_mysqli_result($result)) {
+        if (!is_array($clients) || empty($clients)) {
             return ['rows' => [], 'summary' => self::empty_delivery_summary()];
         }
-
-        $clients = [];
-        while ($row = $result->fetch_assoc()) {
-            $clients[] = $row;
-        }
-        $result->free();
 
         $fee_ids = MealsDB_Invoice_Generator::get_fee_product_ids();
         $delivery_product_id = $fee_ids['delivery_fee'];
@@ -850,50 +826,38 @@ class MealsDB_Reports {
             return $empty;
         }
 
-        $conn = MealsDB_DB::get_connection();
-        if (!MealsDB_DB::is_mysqli($conn)) {
-            return $empty;
-        }
-
         // 1. Get active private clients with WP user IDs.
-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-        $sql = sprintf(
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $client_rows = $this->wpdb->get_results(
             "SELECT client_id, wp_user_id, first_name, last_name
-             FROM `%s`
+             FROM `{$clients_table}`
              WHERE client_type = 'Private' AND active = 1 AND wp_user_id > 0",
-            $clients_table
+            ARRAY_A
         );
 
-        $result = $conn->query($sql);
-        if (!MealsDB_DB::is_mysqli_result($result)) {
+        if (!is_array($client_rows) || empty($client_rows)) {
             return $empty;
         }
 
         $clients = [];
-        while ($row = $result->fetch_assoc()) {
+        foreach ($client_rows as $row) {
             $row['first_name'] = !empty($row['first_name']) ? MealsDB_Encryption::decrypt($row['first_name']) : '';
             $row['last_name']  = !empty($row['last_name']) ? MealsDB_Encryption::decrypt($row['last_name']) : '';
             $clients[] = $row;
-        }
-        $result->free();
-
-        if (empty($clients)) {
-            return $empty;
         }
 
         // 2. Build product type lookup from meals_products, with WC category fallback.
         $product_type_map = [];
         if ($this->order_query instanceof MealsDB_WC_Order_Query) {
-            $products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
-            $prod_result = $conn->query(sprintf(
-                "SELECT wc_product_id, product_type FROM `%s` WHERE product_type IN ('meal', 'side')",
-                $products_table
-            ));
-            if (MealsDB_DB::is_mysqli_result($prod_result)) {
-                while ($prow = $prod_result->fetch_assoc()) {
+            $products_table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+            $prod_rows = $this->wpdb->get_results(
+                "SELECT wc_product_id, product_type FROM `{$products_table}` WHERE product_type IN ('meal', 'side')",
+                ARRAY_A
+            );
+            if (is_array($prod_rows)) {
+                foreach ($prod_rows as $prow) {
                     $product_type_map[(int) $prow['wc_product_id']] = $prow['product_type'];
                 }
-                $prod_result->free();
             }
         }
 
@@ -1106,31 +1070,20 @@ class MealsDB_Reports {
         $clients_map  = [];
 
         if (!empty($customer_ids)) {
-            $conn = MealsDB_DB::get_connection();
-            if (MealsDB_DB::is_mysqli($conn)) {
-                $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-                $placeholders  = implode(',', array_fill(0, count($customer_ids), '?'));
-                $sql = sprintf(
-                    "SELECT wp_user_id, delivery_initials, delivery_area_name,
-                            delivery_area_zone, delivery_street_name
-                     FROM `%s`
-                     WHERE wp_user_id IN (%s)",
-                    $clients_table, $placeholders
-                );
+            $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+            $placeholders  = implode(',', array_fill(0, count($customer_ids), '%d'));
+            $sql = $this->wpdb->prepare(
+                "SELECT wp_user_id, delivery_initials, delivery_area_name,
+                        delivery_area_zone, delivery_street_name
+                 FROM `{$clients_table}`
+                 WHERE wp_user_id IN ({$placeholders})",
+                ...array_values($customer_ids)
+            );
 
-                $stmt = $conn->prepare($sql);
-                if (MealsDB_DB::is_mysqli_stmt($stmt)) {
-                    $types = str_repeat('i', count($customer_ids));
-                    $stmt->bind_param($types, ...array_values($customer_ids));
-                    if ($stmt->execute()) {
-                        $result = $stmt->get_result();
-                        if (MealsDB_DB::is_mysqli_result($result)) {
-                            while ($row = $result->fetch_assoc()) {
-                                $clients_map[(int) $row['wp_user_id']] = $row;
-                            }
-                        }
-                    }
-                    $stmt->close();
+            $client_rows = $this->wpdb->get_results($sql, ARRAY_A);
+            if (is_array($client_rows)) {
+                foreach ($client_rows as $row) {
+                    $clients_map[(int) $row['wp_user_id']] = $row;
                 }
             }
         }

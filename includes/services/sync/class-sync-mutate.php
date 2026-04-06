@@ -5,9 +5,9 @@
 
 class MealsDB_Sync_Mutate {
     /**
-     * Active mysqli connection, when available.
+     * Active wpdb connection, when available.
      */
-    private ?\mysqli $connection;
+    private ?wpdb $connection;
 
     /**
      * Primary key column name for the Meals DB clients table, when available.
@@ -22,8 +22,8 @@ class MealsDB_Sync_Mutate {
     private array $column_cache = [];
 
     public function __construct() {
-        $conn = MealsDB_DB::get_connection();
-        $this->connection = $conn instanceof \mysqli ? $conn : null;
+        global $wpdb;
+        $this->connection = $wpdb instanceof wpdb ? $wpdb : null;
         $this->clients_primary_key = MealsDB_Schema::get_primary_key_column(MealsDB_Tables::CLIENTS);
     }
 
@@ -169,12 +169,15 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        $clients_table = str_replace('`', '``', $clients_table);
-        $select_sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = ? LIMIT 1', str_replace('`', '``', $column), $clients_table, str_replace('`', '``', $primary_key));
-        $stmt = $connection->prepare($select_sql);
+        $escaped_table = str_replace('`', '``', $clients_table);
+        $escaped_column = str_replace('`', '``', $column);
+        $escaped_pk = str_replace('`', '``', $primary_key);
+        $select_sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_column, $escaped_table, $escaped_pk);
 
-        if (!$stmt) {
-            error_log('[MealsDB Sync] Failed to prepare Meals DB client lookup statement: ' . ($connection->error ?? 'unknown error'));
+        $existing_value = $connection->get_var($connection->prepare($select_sql, $client_id));
+
+        if ($existing_value === null && $connection->last_error !== '') {
+            error_log('[MealsDB Sync] Failed to execute Meals DB client lookup: ' . $connection->last_error);
 
             return new WP_Error(
                 'mealsdb_sync_failed',
@@ -182,60 +185,14 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        if (!$stmt->bind_param('i', $client_id)) {
-            $stmt->close();
-            error_log('[MealsDB Sync] Failed binding parameters for Meals DB lookup statement.');
-
-            return new WP_Error(
-                'mealsdb_sync_failed',
-                __('Unable to load the Meals DB client record.', 'meals-db')
-            );
-        }
-
-        $existing_value = null;
-
-        if ($stmt->execute()) {
-            $value_raw = null;
-
-            if (!$stmt->bind_result($value_raw)) {
-                $stmt->close();
-                error_log('[MealsDB Sync] Failed binding result for Meals DB lookup statement.');
-
-                return new WP_Error(
-                    'mealsdb_sync_failed',
-                    __('Unable to read the Meals DB value for this client.', 'meals-db')
-                );
-            }
-
-            if ($stmt->fetch()) {
-                $existing_value = is_scalar($value_raw) ? (string) $value_raw : '';
-            } else {
-                $stmt->close();
-
-                return new WP_Error(
-                    'mealsdb_sync_client_missing',
-                    __('The Meals DB client could not be found.', 'meals-db')
-                );
-            }
-        } else {
-            $message = $stmt->error ?: __('Unknown database error.', 'meals-db');
-            $stmt->close();
-            error_log('[MealsDB Sync] Failed executing Meals DB lookup statement: ' . $message);
-
-            return new WP_Error(
-                'mealsdb_sync_failed',
-                sprintf(__('Unable to load the Meals DB client record: %s', 'meals-db'), $message)
-            );
-        }
-
-        $stmt->close();
-
         if ($existing_value === null) {
             return new WP_Error(
-                'mealsdb_sync_failed',
-                __('Unable to determine the existing Meals DB value for this client.', 'meals-db')
+                'mealsdb_sync_client_missing',
+                __('The Meals DB client could not be found.', 'meals-db')
             );
         }
+
+        $existing_value = is_scalar($existing_value) ? (string) $existing_value : '';
 
         $update_success = $this->update_meals_client($client_id, [
             $column => $new_value,
@@ -290,18 +247,13 @@ class MealsDB_Sync_Mutate {
             return false;
         }
 
-        $columns = [];
-        $types   = '';
-        $values  = [];
+        $set_clauses = [];
+        $values      = [];
 
         foreach ($fields as $column => $value) {
-            $columns[] = sprintf('`%s` = ?', str_replace('`', '``', $column));
-            $types    .= 's';
-            $values[]  = (string) $value;
+            $set_clauses[] = sprintf('`%s` = %%s', str_replace('`', '``', $column));
+            $values[]      = (string) $value;
         }
-
-        $types  .= 'i';
-        $values[] = $client_id;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $available_columns = $this->get_table_columns($connection, $clients_table);
@@ -313,19 +265,18 @@ class MealsDB_Sync_Mutate {
 
         $escaped_table = str_replace('`', '``', $clients_table);
         $escaped_pk    = str_replace('`', '``', $primary_key);
-        $sql = sprintf('UPDATE `%s` SET %s WHERE `%s` = ?', $escaped_table, implode(', ', $columns), $escaped_pk);
-        $stmt = $connection->prepare($sql);
+        $sql = sprintf('UPDATE `%s` SET %s WHERE `%s` = %%d', $escaped_table, implode(', ', $set_clauses), $escaped_pk);
 
-        if (!$stmt) {
-            error_log('[MealsDB Sync] Failed to prepare Meals DB client update statement: ' . ($connection->error ?? 'unknown error'));
+        $values[] = $client_id;
+
+        $result = $connection->query($connection->prepare($sql, ...$values));
+
+        if ($result === false) {
+            error_log('[MealsDB Sync] Failed to execute Meals DB client update: ' . ($connection->last_error ?? 'unknown error'));
             return false;
         }
 
-        $stmt->bind_param($types, ...$values);
-        $success = $stmt->execute();
-        $stmt->close();
-
-        return $success;
+        return true;
     }
 
     /**
@@ -365,15 +316,13 @@ class MealsDB_Sync_Mutate {
             }
 
             $prepared_columns[] = sprintf('`%s`', str_replace('`', '``', $column_map[$field]));
-            $placeholders[] = '?';
+            $placeholders[] = '%s';
             $values[] = (string) $value;
         }
 
         if (empty($prepared_columns)) {
             return false;
         }
-
-        $types = str_repeat('s', count($values));
 
         $escaped_table = str_replace('`', '``', $clients_table);
         $sql = sprintf(
@@ -382,22 +331,15 @@ class MealsDB_Sync_Mutate {
             implode(', ', $prepared_columns),
             implode(', ', $placeholders)
         );
-        $stmt = $connection->prepare($sql);
 
-        if (!$stmt) {
-            error_log('[MealsDB Sync] Failed to prepare Meals DB client insert statement: ' . ($connection->error ?? 'unknown error'));
+        $result = $connection->query($connection->prepare($sql, ...$values));
+
+        if ($result === false) {
+            error_log('[MealsDB Sync] Failed to execute Meals DB client insert: ' . ($connection->last_error ?? 'unknown error'));
             return false;
         }
 
-        $stmt->bind_param($types, ...$values);
-
-        if (!$stmt->execute()) {
-            $stmt->close();
-            return false;
-        }
-
-        $insert_id = $stmt->insert_id;
-        $stmt->close();
+        $insert_id = $connection->insert_id;
 
         return $insert_id > 0 ? $insert_id : false;
     }
@@ -452,10 +394,8 @@ class MealsDB_Sync_Mutate {
         }
 
         $transaction_started = false;
-
-        if (method_exists($connection, 'begin_transaction')) {
-            $transaction_started = $connection->begin_transaction();
-        }
+        $connection->query('START TRANSACTION');
+        $transaction_started = true;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $available_columns = $this->get_table_columns($connection, $clients_table);
@@ -464,7 +404,7 @@ class MealsDB_Sync_Mutate {
 
         if ($primary_key === null || $wp_column === null) {
             if ($transaction_started) {
-                $connection->rollback();
+                $connection->query('ROLLBACK');
             }
 
             return new WP_Error(
@@ -476,27 +416,15 @@ class MealsDB_Sync_Mutate {
         $escaped_table  = str_replace('`', '``', $clients_table);
         $escaped_pk     = str_replace('`', '``', $primary_key);
         $escaped_column = str_replace('`', '``', $wp_column);
-        $update_stmt = $connection->prepare(sprintf('UPDATE `%s` SET `%s` = ? WHERE `%s` = ?', $escaped_table, $escaped_column, $escaped_pk));
+        $update_sql = sprintf('UPDATE `%s` SET `%s` = %%d WHERE `%s` = %%d', $escaped_table, $escaped_column, $escaped_pk);
 
-        if (!$update_stmt) {
-            if ($transaction_started) {
-                $connection->rollback();
-            }
+        $result = $connection->query($connection->prepare($update_sql, $user_id, $client_id));
 
-            error_log('[MealsDB Sync] Failed to prepare client link statement: ' . ($connection->error ?? 'unknown error'));
-
-            return new WP_Error(
-                'mealsdb_link_prepare_failed',
-                __('Failed to prepare the database statement to link the client.', 'meals-db')
-            );
-        }
-
-        if (!$update_stmt->bind_param('ii', $user_id, $client_id) || !$update_stmt->execute()) {
-            $message = $update_stmt->error ?: __('Unknown database error.', 'meals-db');
-            $update_stmt->close();
+        if ($result === false) {
+            $message = $connection->last_error ?: __('Unknown database error.', 'meals-db');
 
             if ($transaction_started) {
-                $connection->rollback();
+                $connection->query('ROLLBACK');
             }
 
             error_log('[MealsDB Sync] Failed executing client link statement: ' . $message);
@@ -507,12 +435,11 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        $affected = $update_stmt->affected_rows;
-        $update_stmt->close();
+        $affected = $connection->rows_affected;
 
         if ($affected === 0) {
             if ($transaction_started) {
-                $connection->rollback();
+                $connection->query('ROLLBACK');
             }
 
             return new WP_Error(
@@ -521,13 +448,16 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        if ($transaction_started && !$connection->commit()) {
-            $connection->rollback();
+        if ($transaction_started) {
+            $commit_result = $connection->query('COMMIT');
+            if ($commit_result === false) {
+                $connection->query('ROLLBACK');
 
-            return new WP_Error(
-                'mealsdb_link_commit_failed',
-                __('Failed to finalize the client link transaction.', 'meals-db')
-            );
+                return new WP_Error(
+                    'mealsdb_link_commit_failed',
+                    __('Failed to finalize the client link transaction.', 'meals-db')
+                );
+            }
         }
 
         return true;
@@ -567,30 +497,11 @@ class MealsDB_Sync_Mutate {
         $escaped_table = str_replace('`', '``', $clients_table);
         $escaped_pk = str_replace('`', '``', $primary_key);
         $escaped_wp_col = str_replace('`', '``', $wp_column);
-        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = ? LIMIT 1', $escaped_pk, $escaped_table, $escaped_wp_col);
-        $stmt = $connection->prepare($sql);
+        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_pk, $escaped_table, $escaped_wp_col);
 
-        if (!$stmt) {
-            return 0;
-        }
+        $client_id = $connection->get_var($connection->prepare($sql, $wp_user_id));
 
-        if (!$stmt->bind_param('i', $wp_user_id)) {
-            $stmt->close();
-            return 0;
-        }
-
-        $client_id = 0;
-
-        if ($stmt->execute()) {
-            $stmt->bind_result($client_id);
-            if (!$stmt->fetch()) {
-                $client_id = 0;
-            }
-        }
-
-        $stmt->close();
-
-        return (int) $client_id;
+        return is_numeric($client_id) ? (int) $client_id : 0;
     }
 
     /**
@@ -618,30 +529,11 @@ class MealsDB_Sync_Mutate {
         $escaped_table = str_replace('`', '``', $clients_table);
         $escaped_pk = str_replace('`', '``', $primary_key);
         $escaped_wp_col = str_replace('`', '``', $wp_column);
-        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = ? LIMIT 1', $escaped_wp_col, $escaped_table, $escaped_pk);
-        $stmt = $connection->prepare($sql);
+        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_wp_col, $escaped_table, $escaped_pk);
 
-        if (!$stmt) {
-            return 0;
-        }
+        $wp_user_id = $connection->get_var($connection->prepare($sql, $client_id));
 
-        if (!$stmt->bind_param('i', $client_id)) {
-            $stmt->close();
-            return 0;
-        }
-
-        $wp_user_id = 0;
-
-        if ($stmt->execute()) {
-            $stmt->bind_result($wp_user_id);
-            if (!$stmt->fetch()) {
-                $wp_user_id = 0;
-            }
-        }
-
-        $stmt->close();
-
-        return (int) $wp_user_id;
+        return is_numeric($wp_user_id) ? (int) $wp_user_id : 0;
     }
 
     /**
@@ -649,7 +541,7 @@ class MealsDB_Sync_Mutate {
      *
      * @return string|null The client_type value, or null if the record cannot be found.
      */
-    private function get_client_type(\mysqli $connection, int $client_id): ?string {
+    private function get_client_type(wpdb $connection, int $client_id): ?string {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $available_columns = $this->get_table_columns($connection, $clients_table);
 
@@ -664,42 +556,27 @@ class MealsDB_Sync_Mutate {
 
         $escaped_table = str_replace('`', '``', $clients_table);
         $escaped_pk    = str_replace('`', '``', $primary_key);
-        $sql  = sprintf('SELECT `client_type` FROM `%s` WHERE `%s` = ? LIMIT 1', $escaped_table, $escaped_pk);
-        $stmt = $connection->prepare($sql);
+        $sql  = sprintf('SELECT `client_type` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_table, $escaped_pk);
 
-        if (!$stmt) {
-            return null;
-        }
-
-        if (!$stmt->bind_param('i', $client_id) || !$stmt->execute()) {
-            $stmt->close();
-            return null;
-        }
-
-        $type = null;
-        $stmt->bind_result($type);
-        if (!$stmt->fetch()) {
-            $type = null;
-        }
-        $stmt->close();
+        $type = $connection->get_var($connection->prepare($sql, $client_id));
 
         return is_string($type) ? $type : null;
     }
 
     /**
-     * Ensure a mysqli connection is available for mutations.
+     * Ensure a wpdb connection is available for mutations.
      *
-     * @return \mysqli|WP_Error
+     * @return wpdb|WP_Error
      */
     private function require_connection() {
-        if ($this->connection instanceof \mysqli) {
+        if ($this->connection instanceof wpdb) {
             return $this->connection;
         }
 
-        $connection = MealsDB_DB::get_connection();
+        global $wpdb;
 
-        if ($connection instanceof \mysqli) {
-            $this->connection = $connection;
+        if ($wpdb instanceof wpdb) {
+            $this->connection = $wpdb;
             return $this->connection;
         }
 
@@ -798,10 +675,10 @@ class MealsDB_Sync_Mutate {
     /**
      * Retrieve and cache the available columns for a table.
      *
-     * @param \mysqli $connection
+     * @param wpdb $connection
      * @return array<string, bool>
      */
-    private function get_table_columns(\mysqli $connection, string $table): array {
+    private function get_table_columns(wpdb $connection, string $table): array {
         if (isset($this->column_cache[$table])) {
             return $this->column_cache[$table];
         }
@@ -810,16 +687,14 @@ class MealsDB_Sync_Mutate {
         $columns = [];
 
         $sql = sprintf('SHOW COLUMNS FROM `%s`', $escaped_table);
-        $result = $connection->query($sql);
+        $results = $connection->get_results($sql, ARRAY_A);
 
-        if ($result instanceof \mysqli_result) {
-            while ($row = $result->fetch_assoc()) {
+        if (is_array($results)) {
+            foreach ($results as $row) {
                 if (!empty($row['Field'])) {
                     $columns[(string) $row['Field']] = true;
                 }
             }
-
-            $result->free();
         }
 
         $this->column_cache[$table] = $columns;
