@@ -154,7 +154,7 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         try {
-            $products = MealsDB_Quick_Order_Products::get_all_products();
+            $products = MealsDB_Quick_Order_Products::get_all_quick_order_products();
             wp_send_json([
                 'success'  => true,
                 'products' => $products,

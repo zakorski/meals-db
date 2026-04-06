@@ -21,9 +21,11 @@ class MealsDB_Quick_Order_UI {
         self::enqueue_scripts();
 
         $clone_order_id = self::get_requested_clone_order_id();
+        $products_array   = [];
         $categories_array = [];
 
         if (class_exists('MealsDB_Quick_Order_Products')) {
+            $products_array   = MealsDB_Quick_Order_Products::get_all_quick_order_products();
             $categories_array = MealsDB_Quick_Order_Products::get_categories();
         }
 
@@ -32,6 +34,7 @@ class MealsDB_Quick_Order_UI {
                 'mealsdb-quick-order',
                 'mealsdb_qo_preload',
                 [
+                    'products'   => is_array($products_array) ? array_values($products_array) : [],
                     'categories' => is_array($categories_array) ? array_values($categories_array) : [],
                 ]
             );

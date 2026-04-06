@@ -4,15 +4,97 @@
  */
 
 class MealsDB_Products_Loader {
-
     /**
-     * @deprecated No longer used. Products are now loaded per-category via
-     *             MealsDB_Quick_Order_Products::get_products_by_category().
+     * Load WooCommerce products with metadata sourced from the Meals DB.
      *
      * @return array<int, array<string, mixed>>
      */
     public static function load_all_products(): array {
-        return [];
+        if (!function_exists('wc_get_products')) {
+            return [];
+        }
+
+        $allowed_slugs = MealsDB_Quick_Order_Products::get_allowed_category_slugs();
+
+        $args = [
+            'status'   => 'publish',
+            'limit'    => -1,
+            'orderby'  => 'title',
+            'order'    => 'ASC',
+            'return'   => 'objects',
+            'category' => $allowed_slugs,
+        ];
+
+        if (function_exists('apply_filters')) {
+            $args = apply_filters('mealsdb_products_loader_args', $args);
+        }
+
+        $products = wc_get_products($args);
+        if (!is_array($products)) {
+            return [];
+        }
+
+        // Collect product IDs for batch metadata fetch.
+        $product_ids = [];
+        foreach ($products as $product) {
+            if ($product instanceof WC_Product) {
+                $product_ids[] = $product->get_id();
+            }
+        }
+
+        $metadata_batch = self::batch_get_product_data($product_ids);
+
+        $loaded = [];
+
+        foreach ($products as $product) {
+            if (!$product instanceof WC_Product) {
+                continue;
+            }
+
+            $product_id = $product->get_id();
+
+            $price = $product->get_price();
+            if ($price === '') {
+                $price_value = 0.0;
+            } else {
+                $price_value = (float) $price;
+            }
+
+            if (function_exists('wc_get_price_to_display')) {
+                $price_value = (float) wc_get_price_to_display($product);
+            }
+
+            $metadata = isset($metadata_batch[$product_id])
+                ? $metadata_batch[$product_id]
+                : MealsDB_Products::get_product_data($product_id);
+            $normalized_metadata = self::normalize_metadata($metadata, $product_id, $product->get_name());
+
+            $image_id  = $product->get_image_id();
+            $image_url = '';
+            if ($image_id) {
+                $image_url = wp_get_attachment_image_url($image_id, 'medium');
+            }
+
+            if (!$image_url) {
+                $image_url = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
+            }
+
+            $categories = self::get_product_categories($product_id);
+
+            $loaded[$product_id] = array_merge(
+                [
+                    'id'         => $product_id,
+                    'name'       => $product->get_name(),
+                    'price'      => $price_value,
+                    'image'      => $image_url,
+                    'sku'        => $product->get_sku(),
+                    'categories' => $categories,
+                ],
+                $normalized_metadata
+            );
+        }
+
+        return $loaded;
     }
 
     /**
@@ -96,6 +178,73 @@ class MealsDB_Products_Loader {
         $stmt->close();
 
         return $rows;
+    }
+
+    /**
+     * Normalise Meals DB metadata for a product.
+     *
+     * @param array<string, mixed> $metadata
+     *
+     * @return array<string, mixed>
+     */
+    private static function normalize_metadata(array $metadata, int $product_id, string $product_name): array {
+        $defaults = [
+            'wc_product_id'   => $product_id,
+            'product_name'    => $product_name,
+            'product_type'    => 'meal',
+            'taxable'         => 0,
+            'main_ingredient' => '',
+            'dietary_tags'    => [],
+            'allergen_flags'  => [],
+            'case_size'       => 1,
+            'unit_cost'       => '0.00',
+        ];
+
+        $merged = array_merge($defaults, $metadata);
+
+        $dietary_tags = is_array($merged['dietary_tags']) ? array_values($merged['dietary_tags']) : [];
+        $allergens    = is_array($merged['allergen_flags']) ? array_values($merged['allergen_flags']) : [];
+
+        return [
+            'wc_product_id'   => (int) $merged['wc_product_id'],
+            'product_name'    => (string) $merged['product_name'],
+            'product_type'    => in_array($merged['product_type'], ['meal', 'side'], true)
+                ? (string) $merged['product_type']
+                : 'meal',
+            'taxable'         => (int) (!empty($merged['taxable'])),
+            'main_ingredient' => isset($merged['main_ingredient']) ? (string) $merged['main_ingredient'] : '',
+            'dietary_tags'    => $dietary_tags,
+            'allergen_flags'  => $allergens,
+            'case_size'       => isset($merged['case_size']) ? (int) $merged['case_size'] : 1,
+            'unit_cost'       => isset($merged['unit_cost']) ? (string) $merged['unit_cost'] : '0.00',
+        ];
+    }
+
+    /**
+     * Retrieve categories for a product.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function get_product_categories(int $product_id): array {
+        $terms = get_the_terms($product_id, 'product_cat');
+        if (!is_array($terms) || empty($terms)) {
+            return [];
+        }
+
+        $categories = [];
+        foreach ($terms as $term) {
+            if (!$term instanceof WP_Term) {
+                continue;
+            }
+
+            $categories[] = [
+                'id'   => (int) $term->term_id,
+                'name' => $term->name,
+                'slug' => $term->slug,
+            ];
+        }
+
+        return $categories;
     }
 
     /**
