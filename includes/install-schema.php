@@ -16,12 +16,12 @@ class MealsDB_Installer {
      * ensuring the shared database connection class is not redeclared.
      */
     public static function install(): void {
-        $conn = MealsDB_DB::get_connection();
-
         if (!MealsDB_Config::is_db_configured()) {
             error_log('[MealsDB Installer] External DB credentials are not configured. Set MEALSDB_* env vars or define the constants before activating the plugin.');
             return;
         }
+
+        $conn = MealsDB_DB::get_connection();
 
         if (!MealsDB_DB::is_mysqli($conn)) {
             error_log('[MealsDB Installer] Unable to establish database connection.');
