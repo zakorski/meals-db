@@ -1023,9 +1023,7 @@
                 if (this.isGovernmentInvoiced()) {
                     formattedPrice = '';
                 } else {
-                    const clientRate = this.getSelectedClientRate();
-                    const displayPrice = clientRate !== null ? clientRate : (product.price || 0);
-                    formattedPrice = this.formatPrice(displayPrice);
+                    formattedPrice = this.formatPrice(product.price || 0);
                 }
                 this.state.renderedProducts[productId] = product;
                 gridHtml += this.buildProductTileHTML(product, productId, quantity, formattedPrice);
@@ -1357,7 +1355,6 @@
             const $list = $('<ul class="mealsdb-quick-order__summary-list" />');
 
             const govInvoiced = this.isGovernmentInvoiced();
-            const clientRate = this.getSelectedClientRate();
 
             items.forEach((entry) => {
                 if (!entry || !entry.product) {
@@ -1365,7 +1362,7 @@
                 }
 
                 const quantity = parseInt(entry.quantity, 10) || 0;
-                const price = govInvoiced ? 0 : (clientRate !== null ? clientRate : parseFloat(entry.product.price || 0));
+                const price = govInvoiced ? 0 : parseFloat(entry.product.price || 0);
                 totalQuantity += quantity;
                 totalPrice += quantity * price;
 
@@ -1818,18 +1815,6 @@
             return ct === 'SDNB' || ct === 'VETERAN';
         },
 
-        getSelectedClientRate() {
-            if (!this.$rateSelect || !this.$rateSelect.length) {
-                return null;
-            }
-            const $selected = this.$rateSelect.find('option:selected');
-            if (!$selected.length) {
-                return null;
-            }
-            const rate = parseFloat($selected.data('rate'));
-            return Number.isFinite(rate) && rate > 0 ? rate : null;
-        },
-
         normaliseClientTypeList(values) {
             if (!Array.isArray(values)) {
                 return ['PRIVATE'];
@@ -1890,7 +1875,6 @@
             let totalItems = 0;
             let subtotal = 0;
             const govInvoiced = this.isGovernmentInvoiced();
-            const clientRate = this.getSelectedClientRate();
 
             items.forEach((entry) => {
                 if (!entry || !entry.product) {
@@ -1898,7 +1882,7 @@
                 }
 
                 const quantity = parseInt(entry.quantity, 10) || 0;
-                const price = govInvoiced ? 0 : (clientRate !== null ? clientRate : parseFloat(entry.product.price || 0));
+                const price = govInvoiced ? 0 : parseFloat(entry.product.price || 0);
 
                 if (quantity <= 0 || !Number.isFinite(price)) {
                     return;
@@ -1940,7 +1924,6 @@
             }
 
             const govInvoiced = this.isGovernmentInvoiced();
-            const clientRate = this.getSelectedClientRate();
             const self = this;
 
             this.$products.find('.mealsdb-quick-order__product-price').each(function () {
@@ -1951,7 +1934,7 @@
                     const $product = $el.closest('.mealsdb-quick-order__product');
                     const productId = parseInt($product.data('productId'), 10);
                     const product = self.state.renderedProducts[productId];
-                    const price = clientRate !== null ? clientRate : (product ? parseFloat(product.price || 0) : 0);
+                    const price = product ? parseFloat(product.price || 0) : 0;
                     $el.text(self.formatPrice(price)).show();
                 }
             });
