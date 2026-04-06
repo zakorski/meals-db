@@ -5,7 +5,6 @@
         typeof window.mealsdb_qo_preload === 'object' && window.mealsdb_qo_preload !== null
             ? window.mealsdb_qo_preload
             : { products: [], categories: [] };
-    const QO_PRODUCTS = Array.isArray(preload.products) ? preload.products : [];
     const QO_CATEGORIES = Array.isArray(preload.categories) ? preload.categories : [];
 
     let lastRequest = null;
@@ -40,12 +39,9 @@
                 return;
             }
 
-            this.state.categoryProducts = { all: QO_PRODUCTS };
-            this.state.activeCategorySlug = 'all';
-
             this.bindEvents();
             this.renderSummary();
-            this.renderProducts(QO_PRODUCTS);
+            this.initialiseCategories();
             this.maybeLoadClonedOrder();
         },
 
@@ -597,8 +593,11 @@
                 return;
             }
 
+            const self = this;
+
             this.$categories.empty();
-            this.$categories.attr('role', 'tablist');
+
+            const $tabsWrap = $('<div>', { class: 'mealsdb-qo-tabs' });
 
             this.state.categories.forEach((category) => {
                 const categoryId = parseInt(category.id, 10);
@@ -610,31 +609,36 @@
 
                 const $button = $('<button>', {
                     type: 'button',
-                    class: 'button button-secondary mealsdb-qo-cat-tab',
+                    class: 'qo-tab',
                     text: category.name || `Category #${categoryId}`,
                 }).attr({
                     'data-cat': categorySlug,
                     'data-cat-id': categoryId,
-                    role: 'tab',
-                    'aria-selected': this.state.activeCategorySlug === categorySlug ? 'true' : 'false',
                 });
 
                 if (this.state.activeCategorySlug === categorySlug) {
-                    $button.addClass('is-active active');
+                    $button.addClass('active');
                 }
 
-                this.$categories.append($button);
+                $tabsWrap.append($button);
             });
 
-            this.$categories.toggleClass('has-categories', true);
+            // Bind tab clicks to load category via AJAX.
+            $tabsWrap.on('click', '.qo-tab', function () {
+                const slug = $(this).data('cat');
+                $tabsWrap.find('.qo-tab').removeClass('active');
+                $(this).addClass('active');
+                self.loadCategory(slug);
+            });
 
-            const $tabs = this.$categories.find('.mealsdb-qo-cat-tab');
-            const $firstTab = $tabs.first();
-            const hasActiveTab = $tabs.filter('.active, .is-active').length > 0;
+            this.$categories.append($tabsWrap);
 
-            if (!hasActiveTab && $firstTab.length) {
-                $firstTab.addClass('active is-active');
-                this.loadCategory($firstTab.data('cat'));
+            // Auto-activate the first tab if none is active.
+            const $tabs = $tabsWrap.find('.qo-tab');
+            const hasActiveTab = $tabs.filter('.active').length > 0;
+            if (!hasActiveTab && $tabs.first().length) {
+                $tabs.first().addClass('active');
+                this.loadCategory($tabs.first().data('cat'));
             }
         },
 
@@ -793,37 +797,8 @@
             return null;
         },
 
-        getPreloadedProductsForCategory(categorySlug, categoryId = null) {
-            const slug = this.normaliseCategorySlug(categorySlug);
-            if (!slug || !Array.isArray(QO_PRODUCTS) || !QO_PRODUCTS.length) {
-                return null;
-            }
-
-            const matches = QO_PRODUCTS.filter((product) => {
-                if (!product || !product.category) {
-                    return false;
-                }
-
-                const productSlug = this.normaliseCategorySlug(product.category.slug || product.category.id);
-                if (productSlug === slug) {
-                    return true;
-                }
-
-                if (Number.isInteger(categoryId)) {
-                    const productCategoryId =
-                        product.category && typeof product.category.id !== 'undefined'
-                            ? parseInt(product.category.id, 10)
-                            : null;
-
-                    if (Number.isInteger(productCategoryId) && productCategoryId === categoryId) {
-                        return true;
-                    }
-                }
-
-                return false;
-            });
-
-            return matches.length ? matches : null;
+        getPreloadedProductsForCategory() {
+            return null;
         },
 
         renderProductsLoading() {
@@ -1761,6 +1736,10 @@
             const globalNonce = window.mealsdb && window.mealsdb.nonce ? window.mealsdb.nonce : '';
             const quickOrderNonces = window.mealsdbQuickOrder && window.mealsdbQuickOrder.nonces ? window.mealsdbQuickOrder.nonces : {};
 
+            if (type === 'createOrder' && quickOrderNonces.createOrder) {
+                return quickOrderNonces.createOrder;
+            }
+
             if (type === 'cloneOrder' && quickOrderNonces.cloneOrder) {
                 return quickOrderNonces.cloneOrder;
             }
@@ -1769,8 +1748,10 @@
                 return globalNonce;
             }
 
-            if (type === 'createOrder' && quickOrderNonces.createOrder) {
-                return quickOrderNonces.createOrder;
+            // On the Quick Order page, mealsdb.nonce is not available.
+            // Fall back to the cloneOrder nonce which uses 'mealsdb_nonce'.
+            if (quickOrderNonces.cloneOrder) {
+                return quickOrderNonces.cloneOrder;
             }
 
             return '';
@@ -2001,44 +1982,11 @@
     });
 
     jQuery(function ($) {
-        $('.mealsdb-qo-tabs').on('click', '.qo-tab', function () {
-            const cat = $(this).data('cat');
-
-            // Highlight the selected tab
-            $('.qo-tab').removeClass('active');
-            $(this).addClass('active');
-
-            // Filter products based on data-cat attribute
-            if (cat === 'all') {
-                $('.qo-product').show();
-            } else {
-                $('.qo-product').hide();
-                $('.qo-product[data-cat~="' + cat + '"]').show();
-            }
-        });
-    });
-
-    jQuery(function ($) {
-        const search = $('#mealsdb_qo_search');
-
-        search.on('keyup', function () {
-            const term = search.val().toLowerCase();
-
-            $('.qo-product').each(function () {
-                const text = $(this).text().toLowerCase();
-                if (text.includes(term)) {
-                    $(this).show();
-                } else {
-                    $(this).hide();
-                }
-            });
-        });
-    });
-
-    jQuery(function ($) {
         const search = $('#mealsdb_qo_client_search');
         const dropdown = $('#mealsdb_qo_client_dropdown');
         const hidden = $('#client_id');
+        let clientSearchTimer = null;
+        let clientSearchXhr = null;
 
         $(document).on('mealsdb_update_summary', function() {
             const clientName = $('#mealsdb_qo_client_search').val();
@@ -2056,11 +2004,6 @@
             }
         });
 
-        // Show dropdown on focus/click
-        search.on('focus click', function() {
-            dropdown.show();
-        });
-
         // Hide dropdown when clicking outside
         $(document).on('click', function(e) {
             if (!$(e.target).closest('.mealsdb-client-combobox').length) {
@@ -2068,20 +2011,73 @@
             }
         });
 
-        // Filter clients as user types
+        // AJAX client search with debounce
         search.on('keyup', function() {
-            const term = search.val().toLowerCase();
+            const term = search.val().trim();
 
-            dropdown.children('.client-option').each(function() {
-                const name = $(this).data('name').toLowerCase();
-                $(this).toggle(name.includes(term));
-            });
+            if (clientSearchTimer) {
+                clearTimeout(clientSearchTimer);
+            }
+
+            if (term.length < 2) {
+                dropdown.empty().hide();
+                return;
+            }
+
+            clientSearchTimer = setTimeout(function() {
+                if (clientSearchXhr) {
+                    clientSearchXhr.abort();
+                }
+
+                clientSearchXhr = $.ajax({
+                    url: (typeof mealsdbQuickOrder !== 'undefined' && mealsdbQuickOrder.ajaxUrl)
+                        ? mealsdbQuickOrder.ajaxUrl
+                        : (typeof ajaxurl !== 'undefined' ? ajaxurl : ''),
+                    method: 'GET',
+                    dataType: 'json',
+                    data: {
+                        action: 'mealsdb_qo_search_clients',
+                        term: term,
+                        nonce: (typeof mealsdbQuickOrder !== 'undefined' && mealsdbQuickOrder.nonces && mealsdbQuickOrder.nonces.cloneOrder)
+                            ? mealsdbQuickOrder.nonces.cloneOrder
+                            : (typeof mealsdb !== 'undefined' ? mealsdb.nonce : ''),
+                    },
+                }).done(function(response) {
+                    dropdown.empty();
+                    const clients = (response && response.clients) ? response.clients : [];
+
+                    if (!clients.length) {
+                        dropdown.append('<div class="client-option--empty" style="padding:6px 10px;color:#888;">No clients found</div>');
+                    } else {
+                        $.each(clients, function(_, client) {
+                            $('<div class="client-option"></div>')
+                                .attr('data-id', client.wp_user_id)
+                                .attr('data-name', client.name)
+                                .text(client.name)
+                                .appendTo(dropdown);
+                        });
+                    }
+
+                    dropdown.show();
+                });
+            }, 300);
+        });
+
+        // Show dropdown on focus if it has results
+        search.on('focus click', function() {
+            if (dropdown.children().length) {
+                dropdown.show();
+            }
         });
 
         // When selecting a client
         dropdown.on('click', '.client-option', function() {
             const id = $(this).data('id');
             const name = $(this).data('name');
+
+            if (!id) {
+                return;
+            }
 
             search.val(name);
             hidden.val(id);

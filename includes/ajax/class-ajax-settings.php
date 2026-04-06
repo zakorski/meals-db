@@ -62,6 +62,24 @@ class MealsDB_Ajax_Settings {
             ], false );
         }
 
+        // Save zone delivery schedule if provided (Phase Q).
+        if ( isset( $_POST['zone_schedule'] ) && is_array( $_POST['zone_schedule'] ) ) {
+            $valid_days = [ 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday' ];
+            $schedule   = [];
+            foreach ( $_POST['zone_schedule'] as $zone_name => $config ) {
+                $zone_name = sanitize_text_field( wp_unslash( $zone_name ) );
+                $day       = sanitize_text_field( wp_unslash( $config['day'] ?? '' ) );
+                $label     = sanitize_text_field( wp_unslash( $config['label'] ?? '' ) );
+
+                if ( $zone_name !== '' && in_array( $day, $valid_days, true ) ) {
+                    $schedule[ $zone_name ] = [ 'day' => $day, 'label' => $label ];
+                }
+            }
+            if ( ! empty( $schedule ) ) {
+                update_option( 'mealsdb_zone_delivery_schedule', $schedule, false );
+            }
+        }
+
         // Force config reload on next request
         MealsDB_Config::reset();
 

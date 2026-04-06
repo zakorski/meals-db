@@ -115,6 +115,7 @@ class MealsDB_Schema {
                     'dietary_tags'   => 'JSON NULL',
                     'allergen_flags' => 'JSON NULL',
                     'case_size'      => 'INT NOT NULL DEFAULT 1',
+                    'buffer'         => 'INT NOT NULL DEFAULT 0',
                     'unit_cost'      => 'DECIMAL(10,2) NOT NULL DEFAULT 0.00',
                     'last_updated'   => 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
                 ],

@@ -26,11 +26,10 @@ class MealsDB_Quick_Order_Products {
         'soup',
         'thickened',
     ];
-    private const PRODUCTS_TRANSIENT_KEY   = 'mealsdb_qo_all_products';
     private const CATEGORIES_TRANSIENT_KEY = 'mealsdb_qo_all_categories';
 
     /**
-     * Duration in seconds for cached product and category data.
+     * Duration in seconds for cached category data.
      */
     private const CACHE_TTL = 30 * MINUTE_IN_SECONDS;
 
@@ -103,7 +102,6 @@ class MealsDB_Quick_Order_Products {
      */
     public static function clear_cache(): void {
         if (function_exists('delete_transient')) {
-            delete_transient(self::PRODUCTS_TRANSIENT_KEY);
             delete_transient(self::CATEGORIES_TRANSIENT_KEY);
         }
     }
@@ -125,6 +123,9 @@ class MealsDB_Quick_Order_Products {
     /**
      * Retrieve product categories that contain published products.
      *
+     * Uses the lightweight WP taxonomy query as the primary path rather
+     * than loading all products just to extract categories.
+     *
      * @return array<int, array<string, mixed>>
      */
     public static function get_categories(): array {
@@ -133,101 +134,113 @@ class MealsDB_Quick_Order_Products {
             return $cached;
         }
 
-        $products = self::get_all_products();
-        if (!empty($products)) {
-            $categories = self::extract_categories_from_products($products);
-            self::set_categories_cache($categories);
-
-            return $categories;
-        }
-
-        if (!function_exists('get_terms') || !taxonomy_exists('product_cat')) {
-            return [];
-        }
-
-        $allowed_slugs = self::get_allowed_category_slugs();
-        $args = [
-            'taxonomy'   => 'product_cat',
-            'hide_empty' => true,
-            'orderby'    => 'name',
-            'order'      => 'ASC',
-            'slug'       => $allowed_slugs,
-        ];
-
-        if (function_exists('apply_filters')) {
-            $args = apply_filters('mealsdb_quick_order_category_args', $args);
-        }
-
-        $terms = get_terms($args);
-        if (!is_array($terms) || is_wp_error($terms)) {
-            return [];
-        }
-
-        $categories = [];
-        foreach ($terms as $term) {
-            if (!$term instanceof WP_Term) {
-                continue;
-            }
-
-            if (!in_array($term->slug, $allowed_slugs, true)) {
-                continue;
-            }
-
-            $categories[] = [
-                'id'   => (int) $term->term_id,
-                'name' => $term->name,
-                'slug' => $term->slug,
+        // Lightweight taxonomy query.
+        if (function_exists('get_terms') && taxonomy_exists('product_cat')) {
+            $allowed_slugs = self::get_allowed_category_slugs();
+            $args = [
+                'taxonomy'   => 'product_cat',
+                'hide_empty' => true,
+                'orderby'    => 'name',
+                'order'      => 'ASC',
+                'slug'       => $allowed_slugs,
             ];
+
+            if (function_exists('apply_filters')) {
+                $args = apply_filters('mealsdb_quick_order_category_args', $args);
+            }
+
+            $terms = get_terms($args);
+            if (is_array($terms) && !is_wp_error($terms)) {
+                $categories = [];
+                foreach ($terms as $term) {
+                    if (!$term instanceof WP_Term) {
+                        continue;
+                    }
+
+                    if (!in_array($term->slug, $allowed_slugs, true)) {
+                        continue;
+                    }
+
+                    $categories[] = [
+                        'id'   => (int) $term->term_id,
+                        'name' => $term->name,
+                        'slug' => $term->slug,
+                    ];
+                }
+
+                if (!empty($categories)) {
+                    self::set_categories_cache($categories);
+
+                    return $categories;
+                }
+            }
         }
 
-        self::set_categories_cache($categories);
-
-        return $categories;
+        return [];
     }
 
     /**
      * Retrieve products that belong to a specific category.
+     *
+     * Queries WooCommerce directly with a bounded limit instead of
+     * loading the entire product catalog into memory.
      *
      * @param int $cat_id Category term ID.
      *
      * @return array<int, array<string, mixed>>
      */
     public static function get_products_by_category(int $cat_id): array {
-        $all_products = self::get_all_products();
-        if (empty($all_products)) {
+        $term = get_term($cat_id, 'product_cat');
+        if (!$term instanceof WP_Term) {
             return [];
         }
 
-        $matches = [];
-        foreach ($all_products as $product) {
-            foreach ($product['categories'] ?? [] as $category) {
-                $category_id = isset($category['id']) ? (int) $category['id'] : 0;
-                if ($category_id === $cat_id) {
-                    $matches[] = $product;
-                    break;
-                }
+        if (!function_exists('wc_get_products')) {
+            return [];
+        }
+
+        $products = wc_get_products([
+            'status'   => 'publish',
+            'limit'    => 200,
+            'orderby'  => 'title',
+            'order'    => 'ASC',
+            'return'   => 'objects',
+            'category' => [$term->slug],
+        ]);
+
+        if (!is_array($products) || empty($products)) {
+            return [];
+        }
+
+        $formatted = [];
+        $product_ids = [];
+        foreach ($products as $product) {
+            if ($product instanceof WC_Product) {
+                $product_ids[] = $product->get_id();
             }
         }
 
-        return array_values(array_filter(array_map([self::class, 'product_cache_entry_to_quick_order'], $matches)));
-    }
+        $metadata_batch = MealsDB_Products_Loader::batch_get_product_data($product_ids);
 
-    /**
-     * Retrieve all products formatted for the Quick Order UI.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public static function get_all_quick_order_products(): array {
-        $products = self::get_all_products();
-        if (empty($products)) {
-            return [];
+        foreach ($products as $product) {
+            if (!$product instanceof WC_Product) {
+                continue;
+            }
+
+            $entry = self::build_product_cache_entry_from_wc_product($product, $metadata_batch);
+            if (!empty($entry)) {
+                $formatted[] = self::product_cache_entry_to_quick_order($entry);
+            }
         }
 
-        return self::format_for_quick_order($products);
+        return array_values(array_filter($formatted));
     }
 
     /**
      * Search published products by keyword.
+     *
+     * Queries WooCommerce directly with a bounded limit instead of
+     * loading the entire product catalog into memory.
      *
      * @param string $keyword Search keyword.
      *
@@ -239,42 +252,48 @@ class MealsDB_Quick_Order_Products {
             return [];
         }
 
-        $all_products = self::get_all_products();
-        if (empty($all_products)) {
+        if (!function_exists('wc_get_products')) {
             return [];
         }
 
-        $keyword_lower = function_exists('mb_strtolower') ? mb_strtolower($keyword) : strtolower($keyword);
+        $allowed_slugs = self::get_allowed_category_slugs();
 
-        $matches = [];
-        foreach ($all_products as $product) {
-            $haystacks = [
-                isset($product['name']) ? (string) $product['name'] : '',
-                isset($product['sku']) ? (string) $product['sku'] : '',
-            ];
+        $products = wc_get_products([
+            'status'   => 'publish',
+            'limit'    => 20,
+            'orderby'  => 'title',
+            'order'    => 'ASC',
+            'return'   => 'objects',
+            'category' => $allowed_slugs,
+            's'        => $keyword,
+        ]);
 
-            foreach ($haystacks as $field) {
-                if ($field === '') {
-                    continue;
-                }
+        if (!is_array($products) || empty($products)) {
+            return [];
+        }
 
-                if (stripos($field, $keyword_lower) !== false) {
-                    $matches[] = $product;
-                    break;
-                }
+        $product_ids = [];
+        foreach ($products as $product) {
+            if ($product instanceof WC_Product) {
+                $product_ids[] = $product->get_id();
             }
         }
 
-        usort($matches, static function ($a, $b) {
-            $name_a = isset($a['name']) ? (string) $a['name'] : '';
-            $name_b = isset($b['name']) ? (string) $b['name'] : '';
+        $metadata_batch = MealsDB_Products_Loader::batch_get_product_data($product_ids);
 
-            return strcasecmp($name_a, $name_b);
-        });
+        $formatted = [];
+        foreach ($products as $product) {
+            if (!$product instanceof WC_Product) {
+                continue;
+            }
 
-        $matches = array_slice($matches, 0, 20);
+            $entry = self::build_product_cache_entry_from_wc_product($product, $metadata_batch);
+            if (!empty($entry)) {
+                $formatted[] = self::product_cache_entry_to_quick_order($entry);
+            }
+        }
 
-        return array_values(array_filter(array_map([self::class, 'product_cache_entry_to_quick_order'], $matches)));
+        return array_values(array_filter($formatted));
     }
 
     /**
@@ -345,44 +364,12 @@ class MealsDB_Quick_Order_Products {
     }
 
     /**
-     * Retrieve all products, using a transient cache when available.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private static function get_all_products(): array {
-        $cached = get_transient(self::PRODUCTS_TRANSIENT_KEY);
-        if (is_array($cached)) {
-            return $cached;
-        }
-
-        $products = MealsDB_Products_Loader::load_all_products();
-        if (!is_array($products)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($products as $product) {
-            if (!self::is_cached_product_entry($product)) {
-                continue;
-            }
-
-            $normalized[$product['id']] = $product;
-        }
-
-        set_transient(self::PRODUCTS_TRANSIENT_KEY, $normalized, self::CACHE_TTL);
-
-        $categories = self::extract_categories_from_products($normalized);
-        if (!empty($categories)) {
-            self::set_categories_cache($categories);
-        }
-
-        return $normalized;
-    }
-
-    /**
      * Build a cache entry for a product.
+     *
+     * @param WC_Product                         $product        Product instance.
+     * @param array<int, array<string, mixed>>   $metadata_batch Optional pre-fetched metadata keyed by product ID.
      */
-    private static function build_product_cache_entry_from_wc_product(WC_Product $product): array {
+    private static function build_product_cache_entry_from_wc_product(WC_Product $product, array $metadata_batch = []): array {
         $product_id = $product->get_id();
 
         $price = $product->get_price();
@@ -407,7 +394,9 @@ class MealsDB_Quick_Order_Products {
         }
 
         $categories = self::get_product_categories($product_id);
-        $metadata   = MealsDB_Products::get_product_data($product_id);
+        $metadata   = isset($metadata_batch[$product_id])
+            ? $metadata_batch[$product_id]
+            : MealsDB_Products::get_product_data($product_id);
 
         return array_merge(
             [
@@ -539,41 +528,6 @@ class MealsDB_Quick_Order_Products {
             'case_size'       => isset($product['case_size']) ? (int) $product['case_size'] : 1,
             'unit_cost'       => isset($product['unit_cost']) ? (string) $product['unit_cost'] : '0.00',
         ];
-    }
-
-    /**
-     * Extract unique categories from cached product data.
-     *
-     * @param array<int, array<string, mixed>> $products Cached product map.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private static function extract_categories_from_products(array $products): array {
-        $categories = [];
-
-        foreach ($products as $product) {
-            $product_categories = self::filter_allowed_categories($product['categories'] ?? []);
-            foreach ($product_categories as $category) {
-                $id = isset($category['id']) ? (int) $category['id'] : 0;
-                if ($id <= 0) {
-                    continue;
-                }
-
-                if (!isset($categories[$id])) {
-                    $categories[$id] = [
-                        'id'   => $id,
-                        'name' => $category['name'] ?? '',
-                        'slug' => $category['slug'] ?? '',
-                    ];
-                }
-            }
-        }
-
-        usort($categories, static function ($a, $b) {
-            return strcasecmp($a['name'] ?? '', $b['name'] ?? '');
-        });
-
-        return array_values($categories);
     }
 
     /**
