@@ -482,6 +482,11 @@ class MealsDB_Migration {
             }
 
             // Copy usermeta (auto-generate umeta_id)
+            // Delete existing meta for this user first to prevent duplicates on re-run.
+            $wpdb->query( $wpdb->prepare(
+                "DELETE FROM `{$dst_meta}` WHERE user_id = %d",
+                $uid
+            ) );
             $meta_count = (int) $wpdb->query( $wpdb->prepare(
                 "INSERT INTO `{$dst_meta}` (user_id, meta_key, meta_value)
                  SELECT user_id, meta_key, meta_value FROM `{$src_meta}` WHERE user_id = %d",
@@ -573,6 +578,10 @@ class MealsDB_Migration {
         ) );
 
         // Postmeta (auto-generate meta_id)
+        // Delete existing meta for this batch first to prevent duplicates on re-run.
+        $wpdb->query(
+            "DELETE FROM `{$dst_meta}` WHERE post_id IN ({$ids_str})"
+        );
         $stats['meta'] = max( 0, (int) $wpdb->query(
             "INSERT INTO `{$dst_meta}` (post_id, meta_key, meta_value)
              SELECT post_id, meta_key, meta_value FROM `{$src_meta}` WHERE post_id IN ({$ids_str})"
