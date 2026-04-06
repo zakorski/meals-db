@@ -10,6 +10,11 @@ class MealsDB_Products_Loader {
     private const BATCH_SIZE = 100;
 
     /**
+     * Maximum number of pages to fetch, capping total products at BATCH_SIZE * MAX_PAGES.
+     */
+    private const MAX_PAGES = 50;
+
+    /**
      * Load WooCommerce products with metadata sourced from the Meals DB.
      *
      * Products are fetched in batches to keep memory usage bounded.
@@ -66,74 +71,83 @@ class MealsDB_Products_Loader {
         $loaded = [];
         $page   = 1;
 
-        do {
-            $args['page'] = $page;
-            $products = wc_get_products($args);
+        // Prevent the WP object cache from growing unbounded while we
+        // iterate through potentially thousands of products.
+        $was_suspended = wp_suspend_cache_addition();
+        wp_suspend_cache_addition(true);
 
-            if (!is_array($products) || empty($products)) {
-                break;
-            }
+        try {
+            do {
+                $args['page'] = $page;
+                $products = wc_get_products($args);
 
-            $product_ids = [];
-            foreach ($products as $product) {
-                if ($product instanceof WC_Product) {
-                    $product_ids[] = $product->get_id();
-                }
-            }
-
-            $metadata_batch = self::batch_get_product_data($product_ids);
-
-            foreach ($products as $product) {
-                if (!$product instanceof WC_Product) {
-                    continue;
+                if (!is_array($products) || empty($products)) {
+                    break;
                 }
 
-                $product_id = $product->get_id();
-
-                $price = $product->get_price();
-                if ($price === '') {
-                    $price_value = 0.0;
-                } else {
-                    $price_value = (float) $price;
+                $product_ids = [];
+                foreach ($products as $product) {
+                    if ($product instanceof WC_Product) {
+                        $product_ids[] = $product->get_id();
+                    }
                 }
 
-                if (function_exists('wc_get_price_to_display')) {
-                    $price_value = (float) wc_get_price_to_display($product);
+                $metadata_batch = self::batch_get_product_data($product_ids);
+
+                foreach ($products as $product) {
+                    if (!$product instanceof WC_Product) {
+                        continue;
+                    }
+
+                    $product_id = $product->get_id();
+
+                    $price = $product->get_price();
+                    if ($price === '') {
+                        $price_value = 0.0;
+                    } else {
+                        $price_value = (float) $price;
+                    }
+
+                    if (function_exists('wc_get_price_to_display')) {
+                        $price_value = (float) wc_get_price_to_display($product);
+                    }
+
+                    $metadata = isset($metadata_batch[$product_id]) ? $metadata_batch[$product_id] : MealsDB_Products::get_product_data($product_id);
+                    $normalized_metadata = self::normalize_metadata($metadata, $product_id, $product->get_name());
+
+                    $image_id  = $product->get_image_id();
+                    $image_url = '';
+                    if ($image_id) {
+                        $image_url = wp_get_attachment_image_url($image_id, 'medium');
+                    }
+
+                    if (!$image_url) {
+                        $image_url = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
+                    }
+
+                    $categories = self::get_product_categories($product_id);
+
+                    $loaded[$product_id] = array_merge(
+                        [
+                            'id'         => $product_id,
+                            'name'       => $product->get_name(),
+                            'price'      => $price_value,
+                            'image'      => $image_url,
+                            'sku'        => $product->get_sku(),
+                            'categories' => $categories,
+                        ],
+                        $normalized_metadata
+                    );
                 }
 
-                $metadata = isset($metadata_batch[$product_id]) ? $metadata_batch[$product_id] : MealsDB_Products::get_product_data($product_id);
-                $normalized_metadata = self::normalize_metadata($metadata, $product_id, $product->get_name());
+                // Free references so WC_Product objects can be garbage-collected.
+                unset($products, $metadata_batch);
 
-                $image_id  = $product->get_image_id();
-                $image_url = '';
-                if ($image_id) {
-                    $image_url = wp_get_attachment_image_url($image_id, 'medium');
-                }
-
-                if (!$image_url) {
-                    $image_url = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
-                }
-
-                $categories = self::get_product_categories($product_id);
-
-                $loaded[$product_id] = array_merge(
-                    [
-                        'id'         => $product_id,
-                        'name'       => $product->get_name(),
-                        'price'      => $price_value,
-                        'image'      => $image_url,
-                        'sku'        => $product->get_sku(),
-                        'categories' => $categories,
-                    ],
-                    $normalized_metadata
-                );
-            }
-
-            // Free references so WC_Product objects can be garbage-collected.
-            unset($products, $metadata_batch);
-
-            $page++;
-        } while (true);
+                $page++;
+            } while ($page <= self::MAX_PAGES);
+        } finally {
+            wp_suspend_cache_addition($was_suspended);
+        }
 
         return $loaded;
     }

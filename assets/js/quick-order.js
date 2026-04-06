@@ -45,7 +45,15 @@
 
             this.bindEvents();
             this.renderSummary();
-            this.renderProducts(QO_PRODUCTS);
+
+            if (QO_PRODUCTS.length) {
+                this.renderProducts(QO_PRODUCTS);
+            } else if (QO_CATEGORIES.length) {
+                this.activateCategory(QO_CATEGORIES[0].slug);
+            } else {
+                this.renderProducts([]);
+            }
+
             this.maybeLoadClonedOrder();
         },
 

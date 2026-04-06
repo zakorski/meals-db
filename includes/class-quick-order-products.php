@@ -35,6 +35,11 @@ class MealsDB_Quick_Order_Products {
     private const CACHE_TTL = 30 * MINUTE_IN_SECONDS;
 
     /**
+     * Maximum number of products to keep in memory / cache.
+     */
+    private const MAX_PRODUCTS = 5000;
+
+    /**
      * Tracks whether hooks have already been registered.
      */
     private static bool $hooks_registered = false;
@@ -367,6 +372,10 @@ class MealsDB_Quick_Order_Products {
             }
 
             $normalized[$product['id']] = $product;
+
+            if (count($normalized) >= self::MAX_PRODUCTS) {
+                break;
+            }
         }
 
         set_transient(self::PRODUCTS_TRANSIENT_KEY, $normalized, self::CACHE_TTL);
