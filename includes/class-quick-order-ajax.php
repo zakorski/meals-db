@@ -307,7 +307,7 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         try {
-            $order = self::create_wc_order($items, $order_date);
+            $order = self::create_wc_order($items, $order_date, $client_id);
             if (is_wp_error($order)) {
                 throw new Exception($order->get_error_message());
             }
@@ -765,10 +765,11 @@ class MealsDB_Quick_Order_Ajax {
      *
      * @param array<int, array<string, int>> $items
      * @param DateTimeImmutable|null         $order_date
+     * @param int                            $client_id WordPress user ID to assign as the order customer.
      *
      * @return WC_Order|WP_Error
      */
-    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date) {
+    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $client_id = 0) {
         if (!function_exists('wc_create_order') || !class_exists('WC_Order')) {
             return new WP_Error('mealsdb_missing_woocommerce', __('WooCommerce is required to create orders.', 'meals-db'));
         }
@@ -776,6 +777,10 @@ class MealsDB_Quick_Order_Ajax {
         $order = wc_create_order();
         if (is_wp_error($order)) {
             return $order;
+        }
+
+        if ($client_id > 0) {
+            $order->set_customer_id($client_id);
         }
 
         foreach ($items as $item) {

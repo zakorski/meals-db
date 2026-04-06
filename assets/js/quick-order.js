@@ -212,6 +212,8 @@
             if (this.$rateSelect && this.$rateSelect.length) {
                 this.$rateSelect.on('change', () => {
                     this.updateSummaryRate();
+                    this.refreshProductPriceDisplay();
+                    this.renderSummary();
                 });
             }
 
@@ -668,6 +670,28 @@
 
             $tabsWrap.append($allButton);
 
+            // Virtual "Sides" tab combining cereal, dessert, soup, muffin, and thickened.
+            const sidesSlugs = ['cereal', 'dessert', 'soup', 'muffin', 'thickened'];
+            const hasSidesCategories = this.state.categories.some(
+                (cat) => sidesSlugs.indexOf(this.normaliseCategorySlug(cat.slug)) !== -1
+            );
+            if (hasSidesCategories) {
+                const $sidesButton = $('<button>', {
+                    type: 'button',
+                    class: 'qo-tab',
+                    text: 'Sides',
+                }).attr({
+                    'data-cat': 'sides',
+                    'data-cat-id': 0,
+                });
+
+                if (this.state.activeCategorySlug === 'sides') {
+                    $sidesButton.addClass('active');
+                }
+
+                $tabsWrap.append($sidesButton);
+            }
+
             this.state.categories.forEach((category) => {
                 const categoryId = parseInt(category.id, 10);
                 if (!Number.isInteger(categoryId) || categoryId <= 0) {
@@ -780,6 +804,15 @@
 
             if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts[slug])) {
                 this.renderProducts(this.state.categoryProducts[slug]);
+                if ($ && $.Deferred) {
+                    return $.Deferred().resolve().promise();
+                }
+                return null;
+            }
+
+            // Virtual categories (e.g. "sides") have no real category ID; show empty state.
+            if (slug === 'sides') {
+                this.renderProducts([]);
                 if ($ && $.Deferred) {
                     return $.Deferred().resolve().promise();
                 }
@@ -909,6 +942,9 @@
                 return QO_PRODUCTS;
             }
 
+            const sidesSlugs = ['cereal', 'dessert', 'soup', 'muffin', 'thickened'];
+            const matchSlugs = slug === 'sides' ? sidesSlugs : [slug];
+
             const matches = QO_PRODUCTS.filter((product) => {
                 if (!product) {
                     return false;
@@ -917,11 +953,11 @@
                 // Check primary category
                 if (product.category) {
                     const productSlug = this.normaliseCategorySlug(product.category.slug || product.category.id);
-                    if (productSlug === slug) {
+                    if (matchSlugs.indexOf(productSlug) !== -1) {
                         return true;
                     }
 
-                    if (Number.isInteger(categoryId)) {
+                    if (slug !== 'sides' && Number.isInteger(categoryId)) {
                         const productCategoryId =
                             typeof product.category.id !== 'undefined'
                                 ? parseInt(product.category.id, 10)
@@ -936,7 +972,7 @@
                 // Check category_slugs array for multi-category products
                 if (Array.isArray(product.category_slugs)) {
                     for (let i = 0; i < product.category_slugs.length; i++) {
-                        if (this.normaliseCategorySlug(product.category_slugs[i]) === slug) {
+                        if (matchSlugs.indexOf(this.normaliseCategorySlug(product.category_slugs[i])) !== -1) {
                             return true;
                         }
                     }
@@ -983,7 +1019,14 @@
                 }
 
                 const quantity = this.state.cart[productId] ? this.state.cart[productId].quantity : 0;
-                const formattedPrice = this.formatPrice(product.price || 0);
+                let formattedPrice;
+                if (this.isGovernmentInvoiced()) {
+                    formattedPrice = '';
+                } else {
+                    const clientRate = this.getSelectedClientRate();
+                    const displayPrice = clientRate !== null ? clientRate : (product.price || 0);
+                    formattedPrice = this.formatPrice(displayPrice);
+                }
                 this.state.renderedProducts[productId] = product;
                 gridHtml += this.buildProductTileHTML(product, productId, quantity, formattedPrice);
             });
@@ -1313,27 +1356,34 @@
 
             const $list = $('<ul class="mealsdb-quick-order__summary-list" />');
 
+            const govInvoiced = this.isGovernmentInvoiced();
+            const clientRate = this.getSelectedClientRate();
+
             items.forEach((entry) => {
                 if (!entry || !entry.product) {
                     return;
                 }
 
                 const quantity = parseInt(entry.quantity, 10) || 0;
-                const price = parseFloat(entry.product.price || 0);
+                const price = govInvoiced ? 0 : (clientRate !== null ? clientRate : parseFloat(entry.product.price || 0));
                 totalQuantity += quantity;
                 totalPrice += quantity * price;
 
-                const lineTotal = this.formatPrice(quantity * price);
                 const $item = $('<li class="mealsdb-quick-order__summary-item" />');
                 $item.append($('<span class="mealsdb-quick-order__summary-item-name" />').text(entry.product.name || 'Product'));
                 $item.append($('<span class="mealsdb-quick-order__summary-item-qty" />').text(`× ${quantity}`));
-                $item.append($('<span class="mealsdb-quick-order__summary-item-total" />').text(lineTotal));
+                if (!govInvoiced) {
+                    const lineTotal = this.formatPrice(quantity * price);
+                    $item.append($('<span class="mealsdb-quick-order__summary-item-total" />').text(lineTotal));
+                }
                 $list.append($item);
             });
 
             const $footer = $('<div class="mealsdb-quick-order__summary-footer" />');
             $footer.append($('<div class="mealsdb-quick-order__summary-total-qty" />').text(`Items: ${totalQuantity}`));
-            $footer.append($('<div class="mealsdb-quick-order__summary-total-price" />').text(`Total: ${this.formatPrice(totalPrice)}`));
+            if (!govInvoiced) {
+                $footer.append($('<div class="mealsdb-quick-order__summary-total-price" />').text(`Total: ${this.formatPrice(totalPrice)}`));
+            }
 
             this.$summaryContent.empty().append($list, $footer);
 
@@ -1643,7 +1693,9 @@
             }
 
             this.updateProductRestrictionStates();
+            this.refreshProductPriceDisplay();
             this.updateSummaryPanel();
+            this.renderSummary();
             this.fetchClientRates(clientId);
 
             $(document).trigger('mealsdb_update_summary');
@@ -1761,6 +1813,23 @@
             return trimmed ? trimmed.toUpperCase() : '';
         },
 
+        isGovernmentInvoiced() {
+            const ct = this.state.currentClientType || '';
+            return ct === 'SDNB' || ct === 'VETERAN';
+        },
+
+        getSelectedClientRate() {
+            if (!this.$rateSelect || !this.$rateSelect.length) {
+                return null;
+            }
+            const $selected = this.$rateSelect.find('option:selected');
+            if (!$selected.length) {
+                return null;
+            }
+            const rate = parseFloat($selected.data('rate'));
+            return Number.isFinite(rate) && rate > 0 ? rate : null;
+        },
+
         normaliseClientTypeList(values) {
             if (!Array.isArray(values)) {
                 return ['PRIVATE'];
@@ -1820,6 +1889,8 @@
             const items = Object.values(this.state.cart || {});
             let totalItems = 0;
             let subtotal = 0;
+            const govInvoiced = this.isGovernmentInvoiced();
+            const clientRate = this.getSelectedClientRate();
 
             items.forEach((entry) => {
                 if (!entry || !entry.product) {
@@ -1827,7 +1898,7 @@
                 }
 
                 const quantity = parseInt(entry.quantity, 10) || 0;
-                const price = parseFloat(entry.product.price || 0);
+                const price = govInvoiced ? 0 : (clientRate !== null ? clientRate : parseFloat(entry.product.price || 0));
 
                 if (quantity <= 0 || !Number.isFinite(price)) {
                     return;
@@ -1837,7 +1908,7 @@
                 subtotal += quantity * price;
             });
 
-            const taxRate = this.getApplicableTaxRate();
+            const taxRate = govInvoiced ? 0 : this.getApplicableTaxRate();
             const precision = this.getCurrencyPrecision();
             const factor = Math.pow(10, precision);
             const taxAmount = Math.round((subtotal * taxRate + Number.EPSILON) * factor) / factor;
@@ -1848,16 +1919,42 @@
             }
 
             if (this.$qoSubtotal && this.$qoSubtotal.length) {
-                this.$qoSubtotal.text(this.formatPrice(subtotal));
+                this.$qoSubtotal.text(govInvoiced ? '' : this.formatPrice(subtotal));
+                this.$qoSubtotal.toggle(!govInvoiced);
             }
 
             if (this.$qoTax && this.$qoTax.length) {
-                this.$qoTax.text(this.formatPrice(taxAmount));
+                this.$qoTax.text(govInvoiced ? '' : this.formatPrice(taxAmount));
+                this.$qoTax.toggle(!govInvoiced);
             }
 
             if (this.$qoTotal && this.$qoTotal.length) {
-                this.$qoTotal.text(this.formatPrice(total));
+                this.$qoTotal.text(govInvoiced ? '' : this.formatPrice(total));
+                this.$qoTotal.toggle(!govInvoiced);
             }
+        },
+
+        refreshProductPriceDisplay() {
+            if (!this.$products || !this.$products.length) {
+                return;
+            }
+
+            const govInvoiced = this.isGovernmentInvoiced();
+            const clientRate = this.getSelectedClientRate();
+            const self = this;
+
+            this.$products.find('.mealsdb-quick-order__product-price').each(function () {
+                const $el = $(this);
+                if (govInvoiced) {
+                    $el.text('').hide();
+                } else {
+                    const $product = $el.closest('.mealsdb-quick-order__product');
+                    const productId = parseInt($product.data('productId'), 10);
+                    const product = self.state.renderedProducts[productId];
+                    const price = clientRate !== null ? clientRate : (product ? parseFloat(product.price || 0) : 0);
+                    $el.text(self.formatPrice(price)).show();
+                }
+            });
         },
 
         getAjaxUrl() {

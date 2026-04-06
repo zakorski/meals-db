@@ -99,6 +99,16 @@ class MealsDB_Product_Display_Sync {
      *
      * @param WC_Product $product WooCommerce product instance.
      */
+    /**
+     * Side category slugs that are considered taxable.
+     */
+    private const TAXABLE_SIDE_SLUGS = ['dessert', 'muffin'];
+
+    /**
+     * All side category slugs.
+     */
+    private const SIDE_CATEGORY_SLUGS = ['cereal', 'dessert', 'soup', 'muffin', 'thickened'];
+
     public static function sync_single_product(WC_Product $product): void {
         $product_id = $product->get_id();
         if ($product_id <= 0) {
@@ -107,6 +117,24 @@ class MealsDB_Product_Display_Sync {
 
         $display = self::extract_display_data($product);
         MealsDB_Products::update_display_fields($product_id, $display);
+
+        // Auto-set product_type and taxable based on WC categories.
+        $terms = get_the_terms($product_id, 'product_cat');
+        if (is_array($terms)) {
+            $slugs = array_map(static function ($t) {
+                return $t instanceof WP_Term ? $t->slug : '';
+            }, $terms);
+
+            $is_side = !empty(array_intersect($slugs, self::SIDE_CATEGORY_SLUGS));
+            if ($is_side) {
+                $taxable = !empty(array_intersect($slugs, self::TAXABLE_SIDE_SLUGS)) ? 1 : 0;
+                $existing = MealsDB_Products::get_product_data($product_id);
+                MealsDB_Products::save_product_data($product_id, array_merge($existing, [
+                    'product_type' => 'side',
+                    'taxable'      => $taxable,
+                ]));
+            }
+        }
     }
 
     /**
