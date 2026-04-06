@@ -22,9 +22,6 @@ class MealsDB_Quick_Order_UI {
 
         $clone_order_id = self::get_requested_clone_order_id();
         $categories_array = [];
-        $allowed_slugs = method_exists('MealsDB_Quick_Order_Products', 'get_allowed_category_slugs')
-            ? MealsDB_Quick_Order_Products::get_allowed_category_slugs()
-            : [];
 
         if (class_exists('MealsDB_Quick_Order_Products')) {
             $categories_array = MealsDB_Quick_Order_Products::get_categories();
@@ -35,7 +32,6 @@ class MealsDB_Quick_Order_UI {
                 'mealsdb-quick-order',
                 'mealsdb_qo_preload',
                 [
-                    'products'   => [],
                     'categories' => is_array($categories_array) ? array_values($categories_array) : [],
                 ]
             );
@@ -114,14 +110,7 @@ class MealsDB_Quick_Order_UI {
             </div>
 
             <div id="mealsdb-qo-categories" class="mealsdb-qo-categories">
-                <div class="mealsdb-qo-tabs">
-                    <button class="qo-tab active" data-cat="all">All</button>
-                    <?php foreach ($allowed_slugs as $slug): ?>
-                        <button class="qo-tab" data-cat="<?php echo esc_attr($slug); ?>">
-                            <?php echo esc_html( ucwords(str_replace('-', ' ', $slug)) ); ?>
-                        </button>
-                    <?php endforeach; ?>
-                </div>
+                <p><?php esc_html_e('Loading categories…', 'meals-db'); ?></p>
             </div>
 
             <div id="mealsdb-qo-search-container" style="margin-bottom: 15px;">
