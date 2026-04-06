@@ -117,7 +117,7 @@ class MealsDB_Schema {
                     'is_published'   => 'TINYINT(1) NOT NULL DEFAULT 1',
                     'product_type'   => "ENUM('meal','side','fee','other') NOT NULL DEFAULT 'meal'",
                     'taxable'        => 'TINYINT(1) NOT NULL DEFAULT 0',
-                    'main_ingredient'=> 'VARCHAR(40) NOT NULL',
+                    'main_ingredient'=> "VARCHAR(40) NOT NULL DEFAULT ''",
                     'dietary_tags'   => 'JSON NULL',
                     'allergen_flags' => 'JSON NULL',
                     'case_size'      => 'INT NOT NULL DEFAULT 1',

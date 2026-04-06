@@ -46,7 +46,7 @@ class MealsDB_Products {
             is_published TINYINT(1) NOT NULL DEFAULT 1,
             product_type ENUM('meal','side') NOT NULL DEFAULT 'meal',
             taxable TINYINT(1) NOT NULL DEFAULT 0,
-            main_ingredient VARCHAR(40) NOT NULL,
+            main_ingredient VARCHAR(40) NOT NULL DEFAULT '',
             dietary_tags JSON NULL,
             allergen_flags JSON NULL,
             case_size INT NOT NULL DEFAULT 1,
@@ -295,8 +295,8 @@ class MealsDB_Products {
             $category_data = json_encode($display['category_data']);
         }
 
-        $sql = "INSERT INTO `{$table}` (wc_product_id, product_name, price, image_url, sku, category_data, is_published)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+        $sql = "INSERT INTO `{$table}` (wc_product_id, product_name, price, image_url, sku, category_data, is_published, product_type, taxable, main_ingredient, case_size, buffer, unit_cost)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'meal', 0, '', 1, 0, 0.00)
                 ON DUPLICATE KEY UPDATE
                     product_name = VALUES(product_name),
                     price = VALUES(price),
