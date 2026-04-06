@@ -267,6 +267,78 @@ class MealsDB_Schema {
                     ],
                 ],
             ],
+            MealsDB_Tables::CLIENT_ALLOCATIONS => [
+                'table'   => MealsDB_Tables::CLIENT_ALLOCATIONS,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'id'                => 'BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'client_id'         => 'BIGINT(20) UNSIGNED NOT NULL',
+                    'billing_month'     => 'CHAR(7) NOT NULL',
+                    'permitted_mains'   => 'INT NOT NULL DEFAULT 0',
+                    'permitted_sides'   => 'INT NOT NULL DEFAULT 0',
+                    'used_mains'        => 'INT NOT NULL DEFAULT 0',
+                    'used_sides'        => 'INT NOT NULL DEFAULT 0',
+                    'used_tax_sides'    => 'INT NOT NULL DEFAULT 0',
+                    'used_nontax_sides' => 'INT NOT NULL DEFAULT 0',
+                    'overage_mains'     => 'INT NOT NULL DEFAULT 0',
+                    'overage_sides'     => 'INT NOT NULL DEFAULT 0',
+                    'is_finalized'      => 'TINYINT(1) NOT NULL DEFAULT 0',
+                    'finalized_at'      => 'DATETIME NULL',
+                    'created_at'        => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
+                    'updated_at'        => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
+                ],
+                'primary_key' => ['id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_client_month',
+                        'type'    => 'UNIQUE',
+                        'columns' => ['client_id', 'billing_month'],
+                    ],
+                    [
+                        'name'    => 'idx_billing_month',
+                        'type'    => 'INDEX',
+                        'columns' => ['billing_month'],
+                    ],
+                ],
+            ],
+            MealsDB_Tables::DELIVERY_ALLOCATIONS => [
+                'table'   => MealsDB_Tables::DELIVERY_ALLOCATIONS,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'id'                => 'BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'client_id'         => 'BIGINT(20) UNSIGNED NOT NULL',
+                    'wc_order_id'       => 'BIGINT(20) UNSIGNED NOT NULL',
+                    'order_date'        => 'DATE NOT NULL',
+                    'delivery_date'     => 'DATE NOT NULL',
+                    'billing_month'     => 'CHAR(7) NOT NULL',
+                    'mains_count'       => 'INT NOT NULL DEFAULT 0',
+                    'sides_count'       => 'INT NOT NULL DEFAULT 0',
+                    'tax_sides_count'   => 'INT NOT NULL DEFAULT 0',
+                    'nontax_sides_count'=> 'INT NOT NULL DEFAULT 0',
+                    'coverage_start'    => 'DATE NOT NULL',
+                    'coverage_end'      => 'DATE NOT NULL',
+                    'created_at'        => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
+                    'updated_at'        => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
+                ],
+                'primary_key' => ['id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_client_billing',
+                        'type'    => 'INDEX',
+                        'columns' => ['client_id', 'billing_month'],
+                    ],
+                    [
+                        'name'    => 'idx_order',
+                        'type'    => 'INDEX',
+                        'columns' => ['wc_order_id'],
+                    ],
+                    [
+                        'name'    => 'idx_delivery_date',
+                        'type'    => 'INDEX',
+                        'columns' => ['delivery_date'],
+                    ],
+                ],
+            ],
         ];
     }
 

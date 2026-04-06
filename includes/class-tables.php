@@ -11,6 +11,8 @@ class MealsDB_Tables
     public const DRAFTS = 'meals_drafts';
     public const AUDIT_LOG = 'meals_audit_log';
     public const IGNORED_CONFLICTS = 'meals_ignored_conflicts';
+    public const CLIENT_ALLOCATIONS = 'meals_client_allocations';
+    public const DELIVERY_ALLOCATIONS = 'meals_delivery_allocations';
 
     /**
      * Retrieve all canonical table names.
@@ -27,6 +29,8 @@ class MealsDB_Tables
             self::DRAFTS,
             self::AUDIT_LOG,
             self::IGNORED_CONFLICTS,
+            self::CLIENT_ALLOCATIONS,
+            self::DELIVERY_ALLOCATIONS,
         ];
     }
 }
