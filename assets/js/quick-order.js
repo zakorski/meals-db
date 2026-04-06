@@ -1736,6 +1736,10 @@
             const globalNonce = window.mealsdb && window.mealsdb.nonce ? window.mealsdb.nonce : '';
             const quickOrderNonces = window.mealsdbQuickOrder && window.mealsdbQuickOrder.nonces ? window.mealsdbQuickOrder.nonces : {};
 
+            if (type === 'createOrder' && quickOrderNonces.createOrder) {
+                return quickOrderNonces.createOrder;
+            }
+
             if (type === 'cloneOrder' && quickOrderNonces.cloneOrder) {
                 return quickOrderNonces.cloneOrder;
             }
@@ -1744,8 +1748,10 @@
                 return globalNonce;
             }
 
-            if (type === 'createOrder' && quickOrderNonces.createOrder) {
-                return quickOrderNonces.createOrder;
+            // On the Quick Order page, mealsdb.nonce is not available.
+            // Fall back to the cloneOrder nonce which uses 'mealsdb_nonce'.
+            if (quickOrderNonces.cloneOrder) {
+                return quickOrderNonces.cloneOrder;
             }
 
             return '';
