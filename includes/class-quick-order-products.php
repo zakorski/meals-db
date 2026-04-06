@@ -123,8 +123,8 @@ class MealsDB_Quick_Order_Products {
     /**
      * Retrieve product categories that contain published products.
      *
-     * Uses the lightweight WP taxonomy query as the primary path rather
-     * than loading all products just to extract categories.
+     * Derives the category list from the cached category_data column in
+     * meals_products rather than querying the WP taxonomy API.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -134,162 +134,189 @@ class MealsDB_Quick_Order_Products {
             return $cached;
         }
 
-        // Lightweight taxonomy query.
-        if (function_exists('get_terms') && taxonomy_exists('product_cat')) {
-            $allowed_slugs = self::get_allowed_category_slugs();
-            $args = [
-                'taxonomy'   => 'product_cat',
-                'hide_empty' => true,
-                'orderby'    => 'name',
-                'order'      => 'ASC',
-                'slug'       => $allowed_slugs,
-            ];
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            return self::get_categories_fallback();
+        }
 
-            if (function_exists('apply_filters')) {
-                $args = apply_filters('mealsdb_quick_order_category_args', $args);
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+        $table = str_replace('`', '``', $table);
+
+        $sql    = "SELECT category_data FROM `{$table}` WHERE is_published = 1 AND category_data IS NOT NULL";
+        $result = $conn->query($sql);
+
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return self::get_categories_fallback();
+        }
+
+        $allowed_slugs = self::get_allowed_category_slugs();
+        $seen          = [];
+
+        while ($row = $result->fetch_assoc()) {
+            if (!is_array($row) || empty($row['category_data'])) {
+                continue;
             }
 
-            $terms = get_terms($args);
-            if (is_array($terms) && !is_wp_error($terms)) {
-                $categories = [];
-                foreach ($terms as $term) {
-                    if (!$term instanceof WP_Term) {
-                        continue;
-                    }
+            $cats = json_decode($row['category_data'], true);
+            if (!is_array($cats)) {
+                continue;
+            }
 
-                    if (!in_array($term->slug, $allowed_slugs, true)) {
-                        continue;
-                    }
-
-                    $categories[] = [
-                        'id'   => (int) $term->term_id,
-                        'name' => $term->name,
-                        'slug' => $term->slug,
-                    ];
+            foreach ($cats as $cat) {
+                if (!is_array($cat) || !isset($cat['slug'])) {
+                    continue;
                 }
 
-                if (!empty($categories)) {
-                    self::set_categories_cache($categories);
-
-                    return $categories;
+                $slug = (string) $cat['slug'];
+                if (!in_array($slug, $allowed_slugs, true) || isset($seen[$slug])) {
+                    continue;
                 }
+
+                $seen[$slug] = [
+                    'id'   => isset($cat['id']) ? (int) $cat['id'] : 0,
+                    'name' => isset($cat['name']) ? (string) $cat['name'] : '',
+                    'slug' => $slug,
+                ];
+            }
+        }
+        $result->free();
+
+        if (empty($seen)) {
+            return self::get_categories_fallback();
+        }
+
+        // Order by the allowed slugs list.
+        $categories = [];
+        foreach ($allowed_slugs as $slug) {
+            if (isset($seen[$slug])) {
+                $categories[] = $seen[$slug];
             }
         }
 
-        return [];
+        if (!empty($categories)) {
+            self::set_categories_cache($categories);
+        }
+
+        return $categories;
+    }
+
+    /**
+     * Fallback to WP taxonomy query if meals_products has no data yet.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function get_categories_fallback(): array {
+        if (!function_exists('get_terms') || !taxonomy_exists('product_cat')) {
+            return [];
+        }
+
+        $allowed_slugs = self::get_allowed_category_slugs();
+        $terms = get_terms([
+            'taxonomy'   => 'product_cat',
+            'hide_empty' => true,
+            'orderby'    => 'name',
+            'order'      => 'ASC',
+            'slug'       => $allowed_slugs,
+        ]);
+
+        if (!is_array($terms) || is_wp_error($terms)) {
+            return [];
+        }
+
+        $categories = [];
+        foreach ($terms as $term) {
+            if (!$term instanceof WP_Term || !in_array($term->slug, $allowed_slugs, true)) {
+                continue;
+            }
+
+            $categories[] = [
+                'id'   => (int) $term->term_id,
+                'name' => $term->name,
+                'slug' => $term->slug,
+            ];
+        }
+
+        if (!empty($categories)) {
+            self::set_categories_cache($categories);
+        }
+
+        return $categories;
     }
 
     /**
      * Retrieve products that belong to a specific category.
      *
-     * Queries WooCommerce directly with a bounded limit instead of
-     * loading the entire product catalog into memory.
+     * Queries the meals_products cache table filtered by category_data JSON.
      *
      * @param int $cat_id Category term ID.
      *
      * @return array<int, array<string, mixed>>
      */
     public static function get_products_by_category(int $cat_id): array {
-        $term = get_term($cat_id, 'product_cat');
-        if (!$term instanceof WP_Term) {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return [];
         }
 
-        if (!function_exists('wc_get_products')) {
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+        $table = str_replace('`', '``', $table);
+
+        // Use JSON_CONTAINS to find rows where category_data contains an object with matching id.
+        $sql = "SELECT * FROM `{$table}` WHERE is_published = 1 AND JSON_CONTAINS(category_data, ?, '$') ORDER BY product_name ASC LIMIT 200";
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
             return [];
         }
 
-        $products = wc_get_products([
-            'status'   => 'publish',
-            'limit'    => 200,
-            'orderby'  => 'title',
-            'order'    => 'ASC',
-            'return'   => 'objects',
-            'category' => [$term->slug],
-        ]);
+        $search_json = json_encode(['id' => $cat_id]);
+        $stmt->bind_param('s', $search_json);
 
-        if (!is_array($products) || empty($products)) {
+        if (!$stmt->execute()) {
+            $stmt->close();
             return [];
         }
 
-        $formatted = [];
-        $product_ids = [];
-        foreach ($products as $product) {
-            if ($product instanceof WC_Product) {
-                $product_ids[] = $product->get_id();
-            }
+        $result = $stmt->get_result();
+        $stmt->close();
+
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return [];
         }
 
-        $metadata_batch = MealsDB_Products_Loader::batch_get_product_data($product_ids);
-
-        foreach ($products as $product) {
-            if (!$product instanceof WC_Product) {
-                continue;
-            }
-
-            $entry = self::build_product_cache_entry_from_wc_product($product, $metadata_batch);
-            if (!empty($entry)) {
-                $formatted[] = self::product_cache_entry_to_quick_order($entry);
-            }
-        }
-
-        return array_values(array_filter($formatted));
+        return self::rows_to_quick_order_payload($result);
     }
 
     /**
      * Retrieve all published products across allowed categories.
      *
+     * Queries the meals_products cache table for all published rows.
+     *
      * @return array<int, array<string, mixed>>
      */
     public static function get_all_products(): array {
-        if (!function_exists('wc_get_products')) {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return [];
         }
 
-        $allowed_slugs = self::get_allowed_category_slugs();
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+        $table = str_replace('`', '``', $table);
 
-        $products = wc_get_products([
-            'status'   => 'publish',
-            'limit'    => 500,
-            'orderby'  => 'title',
-            'order'    => 'ASC',
-            'return'   => 'objects',
-            'category' => $allowed_slugs,
-        ]);
+        $sql    = "SELECT * FROM `{$table}` WHERE is_published = 1 AND category_data IS NOT NULL ORDER BY product_name ASC LIMIT 500";
+        $result = $conn->query($sql);
 
-        if (!is_array($products) || empty($products)) {
+        if (!MealsDB_DB::is_mysqli_result($result)) {
             return [];
         }
 
-        $product_ids = [];
-        foreach ($products as $product) {
-            if ($product instanceof WC_Product) {
-                $product_ids[] = $product->get_id();
-            }
-        }
-
-        $metadata_batch = MealsDB_Products_Loader::batch_get_product_data($product_ids);
-
-        $formatted = [];
-        foreach ($products as $product) {
-            if (!$product instanceof WC_Product) {
-                continue;
-            }
-
-            $entry = self::build_product_cache_entry_from_wc_product($product, $metadata_batch);
-            if (!empty($entry)) {
-                $formatted[] = self::product_cache_entry_to_quick_order($entry);
-            }
-        }
-
-        return array_values(array_filter($formatted));
+        return self::rows_to_quick_order_payload($result);
     }
 
     /**
      * Search published products by keyword.
      *
-     * Queries WooCommerce directly with a bounded limit instead of
-     * loading the entire product catalog into memory.
+     * Queries the meals_products cache table using product_name LIKE.
      *
      * @param string $keyword Search keyword.
      *
@@ -301,48 +328,137 @@ class MealsDB_Quick_Order_Products {
             return [];
         }
 
-        if (!function_exists('wc_get_products')) {
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
             return [];
         }
 
-        $allowed_slugs = self::get_allowed_category_slugs();
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+        $table = str_replace('`', '``', $table);
 
-        $products = wc_get_products([
-            'status'   => 'publish',
-            'limit'    => 20,
-            'orderby'  => 'title',
-            'order'    => 'ASC',
-            'return'   => 'objects',
-            'category' => $allowed_slugs,
-            's'        => $keyword,
-        ]);
-
-        if (!is_array($products) || empty($products)) {
+        $sql  = "SELECT * FROM `{$table}` WHERE is_published = 1 AND category_data IS NOT NULL AND product_name LIKE ? ORDER BY product_name ASC LIMIT 20";
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
             return [];
         }
 
-        $product_ids = [];
-        foreach ($products as $product) {
-            if ($product instanceof WC_Product) {
-                $product_ids[] = $product->get_id();
-            }
+        $like = '%' . $keyword . '%';
+        $stmt->bind_param('s', $like);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return [];
         }
 
-        $metadata_batch = MealsDB_Products_Loader::batch_get_product_data($product_ids);
+        $result = $stmt->get_result();
+        $stmt->close();
 
+        if (!MealsDB_DB::is_mysqli_result($result)) {
+            return [];
+        }
+
+        return self::rows_to_quick_order_payload($result);
+    }
+
+    /**
+     * Convert a mysqli_result set of meals_products rows into the Quick Order payload.
+     *
+     * @param mysqli_result $result Result set from a meals_products query.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function rows_to_quick_order_payload(mysqli_result $result): array {
         $formatted = [];
-        foreach ($products as $product) {
-            if (!$product instanceof WC_Product) {
+
+        while ($row = $result->fetch_assoc()) {
+            if (!is_array($row)) {
                 continue;
             }
 
-            $entry = self::build_product_cache_entry_from_wc_product($product, $metadata_batch);
+            $entry = self::db_row_to_quick_order($row);
             if (!empty($entry)) {
-                $formatted[] = self::product_cache_entry_to_quick_order($entry);
+                $formatted[] = $entry;
             }
         }
 
-        return array_values(array_filter($formatted));
+        $result->free();
+        return $formatted;
+    }
+
+    /**
+     * Convert a single meals_products DB row into the Quick Order UI payload.
+     *
+     * @param array<string, mixed> $row Associative array from meals_products.
+     *
+     * @return array<string, mixed>
+     */
+    private static function db_row_to_quick_order(array $row): array {
+        $product_id = isset($row['wc_product_id']) ? (int) $row['wc_product_id'] : 0;
+        if ($product_id <= 0) {
+            return [];
+        }
+
+        $categories = [];
+        if (!empty($row['category_data'])) {
+            $decoded = is_string($row['category_data']) ? json_decode($row['category_data'], true) : $row['category_data'];
+            if (is_array($decoded)) {
+                $categories = $decoded;
+            }
+        }
+
+        $product_categories = self::filter_allowed_categories($categories);
+        $category_slugs     = [];
+        $primary_category   = null;
+
+        if (!empty($product_categories)) {
+            foreach ($product_categories as $cat) {
+                $slug = isset($cat['slug']) ? (string) $cat['slug'] : '';
+                if ($slug !== '') {
+                    $category_slugs[] = $slug;
+                }
+            }
+
+            $primary = $product_categories[0];
+            $primary_category = [
+                'id'   => isset($primary['id']) ? (int) $primary['id'] : 0,
+                'name' => isset($primary['name']) ? (string) $primary['name'] : '',
+                'slug' => isset($primary['slug']) ? (string) $primary['slug'] : '',
+            ];
+        }
+
+        $dietary_tags  = [];
+        $allergen_flags = [];
+
+        if (!empty($row['dietary_tags'])) {
+            $decoded = is_string($row['dietary_tags']) ? json_decode($row['dietary_tags'], true) : $row['dietary_tags'];
+            if (is_array($decoded)) {
+                $dietary_tags = array_values($decoded);
+            }
+        }
+
+        if (!empty($row['allergen_flags'])) {
+            $decoded = is_string($row['allergen_flags']) ? json_decode($row['allergen_flags'], true) : $row['allergen_flags'];
+            if (is_array($decoded)) {
+                $allergen_flags = array_values($decoded);
+            }
+        }
+
+        return [
+            'product_id'      => $product_id,
+            'name'            => isset($row['product_name']) ? (string) $row['product_name'] : '',
+            'category'        => $primary_category,
+            'category_slugs'  => $category_slugs,
+            'price'           => isset($row['price']) ? (float) $row['price'] : 0.0,
+            'image_url'       => isset($row['image_url']) ? (string) $row['image_url'] : '',
+            'sku'             => isset($row['sku']) ? (string) $row['sku'] : '',
+            'product_type'    => isset($row['product_type']) && in_array($row['product_type'], ['meal', 'side'], true) ? (string) $row['product_type'] : 'meal',
+            'taxable'         => isset($row['taxable']) ? (int) $row['taxable'] : 0,
+            'main_ingredient' => isset($row['main_ingredient']) ? (string) $row['main_ingredient'] : '',
+            'dietary_tags'    => $dietary_tags,
+            'allergen_flags'  => $allergen_flags,
+            'case_size'       => isset($row['case_size']) ? (int) $row['case_size'] : 1,
+            'unit_cost'       => isset($row['unit_cost']) ? (string) $row['unit_cost'] : '0.00',
+        ];
     }
 
     /**
