@@ -10,6 +10,7 @@ class MealsDB_Quick_Order_Ajax {
     public static function init(): void {
         add_action('wp_ajax_mealsdb_qo_get_categories', [self::class, 'get_categories']);
         add_action('wp_ajax_mealsdb_qo_get_products_by_category', [self::class, 'get_products_by_category']);
+        add_action('wp_ajax_mealsdb_qo_search_clients', [self::class, 'search_clients']);
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
         add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
@@ -135,6 +136,75 @@ class MealsDB_Quick_Order_Ajax {
                 'message' => __('An error occurred. Please try again.', 'meals-db'),
             ]);
         }
+    }
+
+    /**
+     * AJAX endpoint to search active clients by name.
+     */
+    public static function search_clients(): void {
+        self::verify_request();
+
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
+        $term = isset($_REQUEST['term']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['term'])) : '';
+        if (strlen($term) < 2) {
+            wp_send_json(['success' => true, 'clients' => []]);
+        }
+
+        $conn = MealsDB_DB::get_connection();
+        if (!MealsDB_DB::is_mysqli($conn)) {
+            wp_send_json(['success' => true, 'clients' => []]);
+        }
+
+        $table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $sql   = "
+            SELECT client_id, wp_user_id, first_name, last_name
+            FROM `{$table}`
+            WHERE active = 1
+              AND (first_name LIKE ? OR last_name LIKE ? OR CONCAT(first_name, ' ', last_name) LIKE ?)
+            ORDER BY last_name ASC, first_name ASC
+            LIMIT 25
+        ";
+
+        $stmt = $conn->prepare($sql);
+        if (!MealsDB_DB::is_mysqli_stmt($stmt)) {
+            wp_send_json(['success' => true, 'clients' => []]);
+        }
+
+        $like = '%' . $term . '%';
+        $stmt->bind_param('sss', $like, $like, $like);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            wp_send_json(['success' => true, 'clients' => []]);
+        }
+
+        $clients = [];
+        if (method_exists($stmt, 'get_result')) {
+            $result = $stmt->get_result();
+            if (MealsDB_DB::is_mysqli_result($result)) {
+                while ($row = $result->fetch_assoc()) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+
+                    $clients[] = [
+                        'client_id'  => (int) $row['client_id'],
+                        'wp_user_id' => (int) $row['wp_user_id'],
+                        'name'       => $row['first_name'] . ' ' . $row['last_name'],
+                    ];
+                }
+            }
+        }
+
+        $stmt->close();
+
+        wp_send_json(['success' => true, 'clients' => $clients]);
     }
 
     /**
