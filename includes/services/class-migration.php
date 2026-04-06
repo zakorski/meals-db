@@ -481,15 +481,19 @@ class MealsDB_Migration {
                 continue;
             }
 
-            // Copy usermeta (auto-generate umeta_id)
-            // Delete existing meta for this user first to prevent duplicates on re-run.
-            $wpdb->query( $wpdb->prepare(
-                "DELETE FROM `{$dst_meta}` WHERE user_id = %d",
-                $uid
-            ) );
+            // Copy usermeta (auto-generate umeta_id).
+            // Use a NOT EXISTS guard so re-runs skip rows that already exist,
+            // without deleting any live WordPress usermeta.
             $meta_count = (int) $wpdb->query( $wpdb->prepare(
                 "INSERT INTO `{$dst_meta}` (user_id, meta_key, meta_value)
-                 SELECT user_id, meta_key, meta_value FROM `{$src_meta}` WHERE user_id = %d",
+                 SELECT s.user_id, s.meta_key, s.meta_value
+                 FROM `{$src_meta}` s
+                 WHERE s.user_id = %d
+                   AND NOT EXISTS (
+                       SELECT 1 FROM `{$dst_meta}` d
+                       WHERE d.user_id = s.user_id
+                         AND d.meta_key = s.meta_key
+                   )",
                 $uid
             ) );
 
@@ -577,14 +581,19 @@ class MealsDB_Migration {
             "INSERT IGNORE INTO `{$dst_posts}` SELECT * FROM `{$src_posts}` WHERE ID IN ({$ids_str})"
         ) );
 
-        // Postmeta (auto-generate meta_id)
-        // Delete existing meta for this batch first to prevent duplicates on re-run.
-        $wpdb->query(
-            "DELETE FROM `{$dst_meta}` WHERE post_id IN ({$ids_str})"
-        );
+        // Postmeta (auto-generate meta_id).
+        // Use a NOT EXISTS guard so re-runs skip rows that already exist,
+        // without deleting any live WordPress postmeta (WC prices, images, etc.).
         $stats['meta'] = max( 0, (int) $wpdb->query(
             "INSERT INTO `{$dst_meta}` (post_id, meta_key, meta_value)
-             SELECT post_id, meta_key, meta_value FROM `{$src_meta}` WHERE post_id IN ({$ids_str})"
+             SELECT s.post_id, s.meta_key, s.meta_value
+             FROM `{$src_meta}` s
+             WHERE s.post_id IN ({$ids_str})
+               AND NOT EXISTS (
+                   SELECT 1 FROM `{$dst_meta}` d
+                   WHERE d.post_id = s.post_id
+                     AND d.meta_key = s.meta_key
+               )"
         ) );
 
         // Term relationships
