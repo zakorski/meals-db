@@ -53,29 +53,6 @@ class MealsDB_Quick_Order_UI {
             $attribute_string .= sprintf(' %s="%s"', esc_attr($name), esc_attr($value));
         }
 
-        $client_options = [];
-        $conn = MealsDB_DB::get_connection();
-        if (MealsDB_DB::is_mysqli($conn)) {
-            $table  = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-            $sql    = "
-                SELECT client_id, wp_user_id, first_name, last_name
-                FROM `$table`
-                WHERE active = 1
-                ORDER BY last_name ASC, first_name ASC
-            ";
-            $result = $conn->query($sql);
-
-            if (MealsDB_DB::is_mysqli_result($result)) {
-                while ($row = $result->fetch_assoc()) {
-                    if (!is_array($row)) {
-                        continue;
-                    }
-
-                    $client_options[] = $row;
-                }
-            }
-        }
-
         ?>
         <div<?php echo $attribute_string; ?>>
             <h1><?php esc_html_e('Quick Order', 'meals-db'); ?></h1>
@@ -113,15 +90,7 @@ class MealsDB_Quick_Order_UI {
                            placeholder="Search clients..."
                            autocomplete="off">
 
-                    <div id="mealsdb_qo_client_dropdown" class="client-dropdown">
-                        <?php foreach ($client_options as $row) : ?>
-                            <div class="client-option"
-                                 data-id="<?php echo esc_attr($row['wp_user_id']); ?>"
-                                 data-name="<?php echo esc_attr($row['first_name'] . ' ' . $row['last_name']); ?>">
-                                <?php echo esc_html($row['first_name'] . ' ' . $row['last_name']); ?>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
+                    <div id="mealsdb_qo_client_dropdown" class="client-dropdown"></div>
 
                     <input type="hidden"
                            id="client_id"

@@ -71,83 +71,90 @@ class MealsDB_Products_Loader {
         $loaded = [];
         $page   = 1;
 
-        // Prevent the WP object cache from growing unbounded while we
-        // iterate through potentially thousands of products.
-        $was_suspended = wp_suspend_cache_addition();
-        wp_suspend_cache_addition(true);
+        /**
+         * Number of batches between WP object-cache flushes.
+         *
+         * Each batch accumulates WP_Term, attachment, and post-meta objects
+         * in the object cache via get_the_terms() / wp_get_attachment_image_url().
+         * Flushing periodically keeps memory bounded without disabling the
+         * cache entirely (which would cause redundant DB queries).
+         */
+        $flush_interval = 5;
 
-        try {
-            do {
-                $args['page'] = $page;
-                $products = wc_get_products($args);
+        do {
+            $args['page'] = $page;
+            $products = wc_get_products($args);
 
-                if (!is_array($products) || empty($products)) {
-                    break;
+            if (!is_array($products) || empty($products)) {
+                break;
+            }
+
+            $product_ids = [];
+            foreach ($products as $product) {
+                if ($product instanceof WC_Product) {
+                    $product_ids[] = $product->get_id();
+                }
+            }
+
+            $metadata_batch = self::batch_get_product_data($product_ids);
+
+            foreach ($products as $product) {
+                if (!$product instanceof WC_Product) {
+                    continue;
                 }
 
-                $product_ids = [];
-                foreach ($products as $product) {
-                    if ($product instanceof WC_Product) {
-                        $product_ids[] = $product->get_id();
-                    }
+                $product_id = $product->get_id();
+
+                $price = $product->get_price();
+                if ($price === '') {
+                    $price_value = 0.0;
+                } else {
+                    $price_value = (float) $price;
                 }
 
-                $metadata_batch = self::batch_get_product_data($product_ids);
-
-                foreach ($products as $product) {
-                    if (!$product instanceof WC_Product) {
-                        continue;
-                    }
-
-                    $product_id = $product->get_id();
-
-                    $price = $product->get_price();
-                    if ($price === '') {
-                        $price_value = 0.0;
-                    } else {
-                        $price_value = (float) $price;
-                    }
-
-                    if (function_exists('wc_get_price_to_display')) {
-                        $price_value = (float) wc_get_price_to_display($product);
-                    }
-
-                    $metadata = isset($metadata_batch[$product_id]) ? $metadata_batch[$product_id] : MealsDB_Products::get_product_data($product_id);
-                    $normalized_metadata = self::normalize_metadata($metadata, $product_id, $product->get_name());
-
-                    $image_id  = $product->get_image_id();
-                    $image_url = '';
-                    if ($image_id) {
-                        $image_url = wp_get_attachment_image_url($image_id, 'medium');
-                    }
-
-                    if (!$image_url) {
-                        $image_url = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
-                    }
-
-                    $categories = self::get_product_categories($product_id);
-
-                    $loaded[$product_id] = array_merge(
-                        [
-                            'id'         => $product_id,
-                            'name'       => $product->get_name(),
-                            'price'      => $price_value,
-                            'image'      => $image_url,
-                            'sku'        => $product->get_sku(),
-                            'categories' => $categories,
-                        ],
-                        $normalized_metadata
-                    );
+                if (function_exists('wc_get_price_to_display')) {
+                    $price_value = (float) wc_get_price_to_display($product);
                 }
 
-                // Free references so WC_Product objects can be garbage-collected.
-                unset($products, $metadata_batch);
+                $metadata = isset($metadata_batch[$product_id]) ? $metadata_batch[$product_id] : MealsDB_Products::get_product_data($product_id);
+                $normalized_metadata = self::normalize_metadata($metadata, $product_id, $product->get_name());
 
-                $page++;
-            } while ($page <= self::MAX_PAGES);
-        } finally {
-            wp_suspend_cache_addition($was_suspended);
-        }
+                $image_id  = $product->get_image_id();
+                $image_url = '';
+                if ($image_id) {
+                    $image_url = wp_get_attachment_image_url($image_id, 'medium');
+                }
+
+                if (!$image_url) {
+                    $image_url = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
+                }
+
+                $categories = self::get_product_categories($product_id);
+
+                $loaded[$product_id] = array_merge(
+                    [
+                        'id'         => $product_id,
+                        'name'       => $product->get_name(),
+                        'price'      => $price_value,
+                        'image'      => $image_url,
+                        'sku'        => $product->get_sku(),
+                        'categories' => $categories,
+                    ],
+                    $normalized_metadata
+                );
+            }
+
+            // Free references so WC_Product objects can be garbage-collected.
+            unset($products, $metadata_batch);
+
+            // Periodically flush the WP object cache to reclaim memory
+            // accumulated by get_the_terms(), image lookups, etc.
+            if ($page % $flush_interval === 0) {
+                wp_cache_flush();
+            }
+
+            $page++;
+        } while ($page <= self::MAX_PAGES);
 
         return $loaded;
     }

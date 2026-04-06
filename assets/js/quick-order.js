@@ -2047,6 +2047,8 @@
         const search = $('#mealsdb_qo_client_search');
         const dropdown = $('#mealsdb_qo_client_dropdown');
         const hidden = $('#client_id');
+        let clientSearchTimer = null;
+        let clientSearchXhr = null;
 
         $(document).on('mealsdb_update_summary', function() {
             const clientName = $('#mealsdb_qo_client_search').val();
@@ -2064,11 +2066,6 @@
             }
         });
 
-        // Show dropdown on focus/click
-        search.on('focus click', function() {
-            dropdown.show();
-        });
-
         // Hide dropdown when clicking outside
         $(document).on('click', function(e) {
             if (!$(e.target).closest('.mealsdb-client-combobox').length) {
@@ -2076,20 +2073,73 @@
             }
         });
 
-        // Filter clients as user types
+        // AJAX client search with debounce
         search.on('keyup', function() {
-            const term = search.val().toLowerCase();
+            const term = search.val().trim();
 
-            dropdown.children('.client-option').each(function() {
-                const name = $(this).data('name').toLowerCase();
-                $(this).toggle(name.includes(term));
-            });
+            if (clientSearchTimer) {
+                clearTimeout(clientSearchTimer);
+            }
+
+            if (term.length < 2) {
+                dropdown.empty().hide();
+                return;
+            }
+
+            clientSearchTimer = setTimeout(function() {
+                if (clientSearchXhr) {
+                    clientSearchXhr.abort();
+                }
+
+                clientSearchXhr = $.ajax({
+                    url: (typeof mealsdbQuickOrder !== 'undefined' && mealsdbQuickOrder.ajaxUrl)
+                        ? mealsdbQuickOrder.ajaxUrl
+                        : (typeof ajaxurl !== 'undefined' ? ajaxurl : ''),
+                    method: 'GET',
+                    dataType: 'json',
+                    data: {
+                        action: 'mealsdb_qo_search_clients',
+                        term: term,
+                        nonce: (typeof mealsdbQuickOrder !== 'undefined' && mealsdbQuickOrder.nonces && mealsdbQuickOrder.nonces.cloneOrder)
+                            ? mealsdbQuickOrder.nonces.cloneOrder
+                            : (typeof mealsdb !== 'undefined' ? mealsdb.nonce : ''),
+                    },
+                }).done(function(response) {
+                    dropdown.empty();
+                    const clients = (response && response.clients) ? response.clients : [];
+
+                    if (!clients.length) {
+                        dropdown.append('<div class="client-option--empty" style="padding:6px 10px;color:#888;">No clients found</div>');
+                    } else {
+                        $.each(clients, function(_, client) {
+                            $('<div class="client-option"></div>')
+                                .attr('data-id', client.wp_user_id)
+                                .attr('data-name', client.name)
+                                .text(client.name)
+                                .appendTo(dropdown);
+                        });
+                    }
+
+                    dropdown.show();
+                });
+            }, 300);
+        });
+
+        // Show dropdown on focus if it has results
+        search.on('focus click', function() {
+            if (dropdown.children().length) {
+                dropdown.show();
+            }
         });
 
         // When selecting a client
         dropdown.on('click', '.client-option', function() {
             const id = $(this).data('id');
             const name = $(this).data('name');
+
+            if (!id) {
+                return;
+            }
 
             search.val(name);
             hidden.val(id);

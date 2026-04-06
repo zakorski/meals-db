@@ -130,6 +130,9 @@ class MealsDB_Quick_Order_Products {
     /**
      * Retrieve product categories that contain published products.
      *
+     * Uses the lightweight WP taxonomy query as the primary path rather
+     * than loading all products just to extract categories.
+     *
      * @return array<int, array<string, mixed>>
      */
     public static function get_categories(): array {
@@ -138,56 +141,59 @@ class MealsDB_Quick_Order_Products {
             return $cached;
         }
 
-        $products = self::get_all_products();
-        if (!empty($products)) {
-            $categories = self::extract_categories_from_products($products);
+        // If a warm products transient exists, extract categories from it
+        // without triggering a full product load.
+        $cached_products = get_transient(self::PRODUCTS_TRANSIENT_KEY);
+        if (is_array($cached_products) && !empty($cached_products)) {
+            $categories = self::extract_categories_from_products($cached_products);
             self::set_categories_cache($categories);
 
             return $categories;
         }
 
-        if (!function_exists('get_terms') || !taxonomy_exists('product_cat')) {
-            return [];
-        }
-
-        $allowed_slugs = self::get_allowed_category_slugs();
-        $args = [
-            'taxonomy'   => 'product_cat',
-            'hide_empty' => true,
-            'orderby'    => 'name',
-            'order'      => 'ASC',
-            'slug'       => $allowed_slugs,
-        ];
-
-        if (function_exists('apply_filters')) {
-            $args = apply_filters('mealsdb_quick_order_category_args', $args);
-        }
-
-        $terms = get_terms($args);
-        if (!is_array($terms) || is_wp_error($terms)) {
-            return [];
-        }
-
-        $categories = [];
-        foreach ($terms as $term) {
-            if (!$term instanceof WP_Term) {
-                continue;
-            }
-
-            if (!in_array($term->slug, $allowed_slugs, true)) {
-                continue;
-            }
-
-            $categories[] = [
-                'id'   => (int) $term->term_id,
-                'name' => $term->name,
-                'slug' => $term->slug,
+        // Primary path: lightweight taxonomy query.
+        if (function_exists('get_terms') && taxonomy_exists('product_cat')) {
+            $allowed_slugs = self::get_allowed_category_slugs();
+            $args = [
+                'taxonomy'   => 'product_cat',
+                'hide_empty' => true,
+                'orderby'    => 'name',
+                'order'      => 'ASC',
+                'slug'       => $allowed_slugs,
             ];
+
+            if (function_exists('apply_filters')) {
+                $args = apply_filters('mealsdb_quick_order_category_args', $args);
+            }
+
+            $terms = get_terms($args);
+            if (is_array($terms) && !is_wp_error($terms)) {
+                $categories = [];
+                foreach ($terms as $term) {
+                    if (!$term instanceof WP_Term) {
+                        continue;
+                    }
+
+                    if (!in_array($term->slug, $allowed_slugs, true)) {
+                        continue;
+                    }
+
+                    $categories[] = [
+                        'id'   => (int) $term->term_id,
+                        'name' => $term->name,
+                        'slug' => $term->slug,
+                    ];
+                }
+
+                if (!empty($categories)) {
+                    self::set_categories_cache($categories);
+
+                    return $categories;
+                }
+            }
         }
 
-        self::set_categories_cache($categories);
-
-        return $categories;
+        return [];
     }
 
     /**
@@ -378,7 +384,17 @@ class MealsDB_Quick_Order_Products {
             }
         }
 
-        set_transient(self::PRODUCTS_TRANSIENT_KEY, $normalized, self::CACHE_TTL);
+        // Use the raw option API so we can disable autoloading. The
+        // serialized product array can be several MB and should not be
+        // loaded into memory on every WordPress admin request.
+        $option_name   = '_transient_' . self::PRODUCTS_TRANSIENT_KEY;
+        $timeout_name  = '_transient_timeout_' . self::PRODUCTS_TRANSIENT_KEY;
+        $expiration    = time() + self::CACHE_TTL;
+
+        delete_option($timeout_name);
+        delete_option($option_name);
+        add_option($timeout_name, $expiration, '', 'no');
+        add_option($option_name, $normalized, '', 'no');
 
         $categories = self::extract_categories_from_products($normalized);
         if (!empty($categories)) {
