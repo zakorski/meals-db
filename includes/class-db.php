@@ -325,6 +325,14 @@ class MealsDB_DB
     }
 
     /**
+     * Check if we are currently inside a plugin activation hook.
+     */
+    private static function is_activating(): bool
+    {
+        return function_exists('wp_installing') && wp_installing();
+    }
+
+    /**
      * Record and surface a fatal connection failure.
      *
      * @return WP_Error
@@ -355,11 +363,11 @@ class MealsDB_DB
             ], 500);
         }
 
-        if (function_exists('wp_die')) {
+        if (function_exists('wp_die') && !self::is_activating()) {
             wp_die($full_message, __('MealsDB Database Error', 'meals-db'));
         }
 
-        if (class_exists('RuntimeException')) {
+        if (class_exists('RuntimeException') && !self::is_activating()) {
             throw new RuntimeException($full_message);
         }
 
