@@ -5,6 +5,7 @@
         typeof window.mealsdb_qo_preload === 'object' && window.mealsdb_qo_preload !== null
             ? window.mealsdb_qo_preload
             : { products: [], categories: [] };
+    const QO_PRODUCTS = Array.isArray(preload.products) ? preload.products : [];
     const QO_CATEGORIES = Array.isArray(preload.categories) ? preload.categories : [];
 
     let lastRequest = null;
@@ -39,9 +40,13 @@
                 return;
             }
 
+            this.state.categoryProducts = { all: QO_PRODUCTS };
+            this.state.activeCategorySlug = 'all';
+
             this.bindEvents();
             this.renderSummary();
             this.initialiseCategories();
+            this.renderProducts(QO_PRODUCTS);
             this.maybeLoadClonedOrder();
         },
 
@@ -781,10 +786,6 @@
                 return null;
             }
 
-            if (slug === 'all') {
-                return this.fetchAllProducts();
-            }
-
             if (Number.isInteger(categoryId) && categoryId > 0) {
                 return this.fetchProductsByCategory(categoryId, slug);
             }
@@ -898,8 +899,53 @@
             return null;
         },
 
-        getPreloadedProductsForCategory() {
-            return null;
+        getPreloadedProductsForCategory(categorySlug, categoryId = null) {
+            const slug = this.normaliseCategorySlug(categorySlug);
+            if (!slug || !Array.isArray(QO_PRODUCTS) || !QO_PRODUCTS.length) {
+                return null;
+            }
+
+            if (slug === 'all') {
+                return QO_PRODUCTS;
+            }
+
+            const matches = QO_PRODUCTS.filter((product) => {
+                if (!product) {
+                    return false;
+                }
+
+                // Check primary category
+                if (product.category) {
+                    const productSlug = this.normaliseCategorySlug(product.category.slug || product.category.id);
+                    if (productSlug === slug) {
+                        return true;
+                    }
+
+                    if (Number.isInteger(categoryId)) {
+                        const productCategoryId =
+                            typeof product.category.id !== 'undefined'
+                                ? parseInt(product.category.id, 10)
+                                : null;
+
+                        if (Number.isInteger(productCategoryId) && productCategoryId === categoryId) {
+                            return true;
+                        }
+                    }
+                }
+
+                // Check category_slugs array for multi-category products
+                if (Array.isArray(product.category_slugs)) {
+                    for (let i = 0; i < product.category_slugs.length; i++) {
+                        if (this.normaliseCategorySlug(product.category_slugs[i]) === slug) {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            });
+
+            return matches.length ? matches : null;
         },
 
         renderProductsLoading() {
