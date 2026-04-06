@@ -26,18 +26,12 @@ class MealsDB_Quick_Order_Products {
         'soup',
         'thickened',
     ];
-    private const PRODUCTS_TRANSIENT_KEY   = 'mealsdb_qo_all_products';
     private const CATEGORIES_TRANSIENT_KEY = 'mealsdb_qo_all_categories';
 
     /**
-     * Duration in seconds for cached product and category data.
+     * Duration in seconds for cached category data.
      */
     private const CACHE_TTL = 30 * MINUTE_IN_SECONDS;
-
-    /**
-     * Maximum number of products to keep in memory / cache.
-     */
-    private const MAX_PRODUCTS = 5000;
 
     /**
      * Tracks whether hooks have already been registered.
@@ -108,7 +102,6 @@ class MealsDB_Quick_Order_Products {
      */
     public static function clear_cache(): void {
         if (function_exists('delete_transient')) {
-            delete_transient(self::PRODUCTS_TRANSIENT_KEY);
             delete_transient(self::CATEGORIES_TRANSIENT_KEY);
         }
     }
@@ -141,17 +134,7 @@ class MealsDB_Quick_Order_Products {
             return $cached;
         }
 
-        // If a warm products transient exists, extract categories from it
-        // without triggering a full product load.
-        $cached_products = get_transient(self::PRODUCTS_TRANSIENT_KEY);
-        if (is_array($cached_products) && !empty($cached_products)) {
-            $categories = self::extract_categories_from_products($cached_products);
-            self::set_categories_cache($categories);
-
-            return $categories;
-        }
-
-        // Primary path: lightweight taxonomy query.
+        // Lightweight taxonomy query.
         if (function_exists('get_terms') && taxonomy_exists('product_cat')) {
             $allowed_slugs = self::get_allowed_category_slugs();
             $args = [
@@ -251,20 +234,6 @@ class MealsDB_Quick_Order_Products {
         }
 
         return array_values(array_filter($formatted));
-    }
-
-    /**
-     * Retrieve all products formatted for the Quick Order UI.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public static function get_all_quick_order_products(): array {
-        $products = self::get_all_products();
-        if (empty($products)) {
-            return [];
-        }
-
-        return self::format_for_quick_order($products);
     }
 
     /**
@@ -392,55 +361,6 @@ class MealsDB_Quick_Order_Products {
         }
 
         return $keyword;
-    }
-
-    /**
-     * Retrieve all products, using a transient cache when available.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private static function get_all_products(): array {
-        $cached = get_transient(self::PRODUCTS_TRANSIENT_KEY);
-        if (is_array($cached)) {
-            return $cached;
-        }
-
-        $products = MealsDB_Products_Loader::load_all_products();
-        if (!is_array($products)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($products as $product) {
-            if (!self::is_cached_product_entry($product)) {
-                continue;
-            }
-
-            $normalized[$product['id']] = $product;
-
-            if (count($normalized) >= self::MAX_PRODUCTS) {
-                break;
-            }
-        }
-
-        // Use the raw option API so we can disable autoloading. The
-        // serialized product array can be several MB and should not be
-        // loaded into memory on every WordPress admin request.
-        $option_name   = '_transient_' . self::PRODUCTS_TRANSIENT_KEY;
-        $timeout_name  = '_transient_timeout_' . self::PRODUCTS_TRANSIENT_KEY;
-        $expiration    = time() + self::CACHE_TTL;
-
-        delete_option($timeout_name);
-        delete_option($option_name);
-        add_option($timeout_name, $expiration, '', 'no');
-        add_option($option_name, $normalized, '', 'no');
-
-        $categories = self::extract_categories_from_products($normalized);
-        if (!empty($categories)) {
-            self::set_categories_cache($categories);
-        }
-
-        return $normalized;
     }
 
     /**
@@ -608,41 +528,6 @@ class MealsDB_Quick_Order_Products {
             'case_size'       => isset($product['case_size']) ? (int) $product['case_size'] : 1,
             'unit_cost'       => isset($product['unit_cost']) ? (string) $product['unit_cost'] : '0.00',
         ];
-    }
-
-    /**
-     * Extract unique categories from cached product data.
-     *
-     * @param array<int, array<string, mixed>> $products Cached product map.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private static function extract_categories_from_products(array $products): array {
-        $categories = [];
-
-        foreach ($products as $product) {
-            $product_categories = self::filter_allowed_categories($product['categories'] ?? []);
-            foreach ($product_categories as $category) {
-                $id = isset($category['id']) ? (int) $category['id'] : 0;
-                if ($id <= 0) {
-                    continue;
-                }
-
-                if (!isset($categories[$id])) {
-                    $categories[$id] = [
-                        'id'   => $id,
-                        'name' => $category['name'] ?? '',
-                        'slug' => $category['slug'] ?? '',
-                    ];
-                }
-            }
-        }
-
-        usort($categories, static function ($a, $b) {
-            return strcasecmp($a['name'] ?? '', $b['name'] ?? '');
-        });
-
-        return array_values($categories);
     }
 
     /**

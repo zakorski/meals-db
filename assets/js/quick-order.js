@@ -5,7 +5,6 @@
         typeof window.mealsdb_qo_preload === 'object' && window.mealsdb_qo_preload !== null
             ? window.mealsdb_qo_preload
             : { products: [], categories: [] };
-    const QO_PRODUCTS = Array.isArray(preload.products) ? preload.products : [];
     const QO_CATEGORIES = Array.isArray(preload.categories) ? preload.categories : [];
 
     let lastRequest = null;
@@ -40,20 +39,9 @@
                 return;
             }
 
-            this.state.categoryProducts = { all: QO_PRODUCTS };
-            this.state.activeCategorySlug = 'all';
-
             this.bindEvents();
             this.renderSummary();
-
-            if (QO_PRODUCTS.length) {
-                this.renderProducts(QO_PRODUCTS);
-            } else if (QO_CATEGORIES.length) {
-                this.activateCategory(QO_CATEGORIES[0].slug);
-            } else {
-                this.renderProducts([]);
-            }
-
+            this.initialiseCategories();
             this.maybeLoadClonedOrder();
         },
 
@@ -605,8 +593,11 @@
                 return;
             }
 
+            const self = this;
+
             this.$categories.empty();
-            this.$categories.attr('role', 'tablist');
+
+            const $tabsWrap = $('<div>', { class: 'mealsdb-qo-tabs' });
 
             this.state.categories.forEach((category) => {
                 const categoryId = parseInt(category.id, 10);
@@ -618,31 +609,36 @@
 
                 const $button = $('<button>', {
                     type: 'button',
-                    class: 'button button-secondary mealsdb-qo-cat-tab',
+                    class: 'qo-tab',
                     text: category.name || `Category #${categoryId}`,
                 }).attr({
                     'data-cat': categorySlug,
                     'data-cat-id': categoryId,
-                    role: 'tab',
-                    'aria-selected': this.state.activeCategorySlug === categorySlug ? 'true' : 'false',
                 });
 
                 if (this.state.activeCategorySlug === categorySlug) {
-                    $button.addClass('is-active active');
+                    $button.addClass('active');
                 }
 
-                this.$categories.append($button);
+                $tabsWrap.append($button);
             });
 
-            this.$categories.toggleClass('has-categories', true);
+            // Bind tab clicks to load category via AJAX.
+            $tabsWrap.on('click', '.qo-tab', function () {
+                const slug = $(this).data('cat');
+                $tabsWrap.find('.qo-tab').removeClass('active');
+                $(this).addClass('active');
+                self.loadCategory(slug);
+            });
 
-            const $tabs = this.$categories.find('.mealsdb-qo-cat-tab');
-            const $firstTab = $tabs.first();
-            const hasActiveTab = $tabs.filter('.active, .is-active').length > 0;
+            this.$categories.append($tabsWrap);
 
-            if (!hasActiveTab && $firstTab.length) {
-                $firstTab.addClass('active is-active');
-                this.loadCategory($firstTab.data('cat'));
+            // Auto-activate the first tab if none is active.
+            const $tabs = $tabsWrap.find('.qo-tab');
+            const hasActiveTab = $tabs.filter('.active').length > 0;
+            if (!hasActiveTab && $tabs.first().length) {
+                $tabs.first().addClass('active');
+                this.loadCategory($tabs.first().data('cat'));
             }
         },
 
@@ -801,37 +797,8 @@
             return null;
         },
 
-        getPreloadedProductsForCategory(categorySlug, categoryId = null) {
-            const slug = this.normaliseCategorySlug(categorySlug);
-            if (!slug || !Array.isArray(QO_PRODUCTS) || !QO_PRODUCTS.length) {
-                return null;
-            }
-
-            const matches = QO_PRODUCTS.filter((product) => {
-                if (!product || !product.category) {
-                    return false;
-                }
-
-                const productSlug = this.normaliseCategorySlug(product.category.slug || product.category.id);
-                if (productSlug === slug) {
-                    return true;
-                }
-
-                if (Number.isInteger(categoryId)) {
-                    const productCategoryId =
-                        product.category && typeof product.category.id !== 'undefined'
-                            ? parseInt(product.category.id, 10)
-                            : null;
-
-                    if (Number.isInteger(productCategoryId) && productCategoryId === categoryId) {
-                        return true;
-                    }
-                }
-
-                return false;
-            });
-
-            return matches.length ? matches : null;
+        getPreloadedProductsForCategory() {
+            return null;
         },
 
         renderProductsLoading() {
@@ -2006,41 +1973,6 @@
             event.preventDefault();
             jQuery(this).find('.mealsdb-qo-btn[data-action="minus"]').click();
         }
-    });
-
-    jQuery(function ($) {
-        $('.mealsdb-qo-tabs').on('click', '.qo-tab', function () {
-            const cat = $(this).data('cat');
-
-            // Highlight the selected tab
-            $('.qo-tab').removeClass('active');
-            $(this).addClass('active');
-
-            // Filter products based on data-cat attribute
-            if (cat === 'all') {
-                $('.qo-product').show();
-            } else {
-                $('.qo-product').hide();
-                $('.qo-product[data-cat~="' + cat + '"]').show();
-            }
-        });
-    });
-
-    jQuery(function ($) {
-        const search = $('#mealsdb_qo_search');
-
-        search.on('keyup', function () {
-            const term = search.val().toLowerCase();
-
-            $('.qo-product').each(function () {
-                const text = $(this).text().toLowerCase();
-                if (text.includes(term)) {
-                    $(this).show();
-                } else {
-                    $(this).hide();
-                }
-            });
-        });
     });
 
     jQuery(function ($) {
