@@ -49,7 +49,7 @@ class MealsDB_Allocation_Engine {
 
         $allowance_mains    = (int) $client['allowance_mains'];
         $allowance_sides    = (int) $client['allowance_sides'];
-        $requisition_period = $client['requisition_period'];
+        $requisition_period = strtolower(trim($client['requisition_period'] ?? ''));
 
         // Parse billing month boundaries.
         $year  = (int) substr($billing_month, 0, 4);
