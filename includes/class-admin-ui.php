@@ -1412,6 +1412,151 @@ class MealsDB_Admin_UI {
                 </div>
             </div>
         </form>
+
+        <?php if ($form_mode === 'edit' && $client_id > 0) : ?>
+            <div id="mealsdb-client-allocation-history" style="margin-top: 20px;">
+                <h3><?php esc_html_e('Allocation History', 'meals-db'); ?></h3>
+                <table class="wp-list-table widefat fixed striped" id="mealsdb-allocation-history-table">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e('Month', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Mains Allowed', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Mains Used', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Mains Overage', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Sides Allowed', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Sides Used', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Sides Overage', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Status', 'meals-db'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td colspan="8"><?php esc_html_e('Loading...', 'meals-db'); ?></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <script>
+            (function($) {
+                $(function() {
+                    var clientId = <?php echo (int) $client_id; ?>;
+                    if (clientId <= 0) return;
+
+                    var nonce = '';
+                    if (typeof window.mealsdb !== 'undefined' && window.mealsdb.nonce) {
+                        nonce = window.mealsdb.nonce;
+                    } else {
+                        var $nonceField = $('#mealsdb_nonce_field');
+                        if ($nonceField.length) {
+                            nonce = $nonceField.val();
+                        }
+                    }
+
+                    $.ajax({
+                        url: typeof window.ajaxurl === 'string' ? window.ajaxurl : '',
+                        method: 'GET',
+                        dataType: 'json',
+                        data: {
+                            action: 'mealsdb_get_client_allocation_history',
+                            nonce: nonce,
+                            client_id: clientId
+                        }
+                    }).done(function(response) {
+                        if (!response || !response.success || !response.history) {
+                            $('#mealsdb-allocation-history-table tbody').html(
+                                '<tr><td colspan="8"><?php echo esc_js(__('No allocation history found.', 'meals-db')); ?></td></tr>'
+                            );
+                            return;
+                        }
+
+                        var rows = '';
+                        $.each(response.history, function(i, row) {
+                            var status = row.is_finalized == 1 ? '<?php echo esc_js(__('Finalized', 'meals-db')); ?>' : '<?php echo esc_js(__('Open', 'meals-db')); ?>';
+                            rows += '<tr class="mealsdb-allocation-history-row" data-month="' + row.billing_month + '" style="cursor: pointer;">' +
+                                '<td>' + row.billing_month + '</td>' +
+                                '<td>' + (row.permitted_mains || 0) + '</td>' +
+                                '<td>' + (row.used_mains || 0) + '</td>' +
+                                '<td>' + (row.overage_mains || 0) + '</td>' +
+                                '<td>' + (row.permitted_sides || 0) + '</td>' +
+                                '<td>' + (row.used_sides || 0) + '</td>' +
+                                '<td>' + (row.overage_sides || 0) + '</td>' +
+                                '<td>' + status + '</td>' +
+                            '</tr>' +
+                            '<tr class="mealsdb-allocation-detail-row" data-month="' + row.billing_month + '" style="display: none;">' +
+                                '<td colspan="8"><em><?php echo esc_js(__('Loading details...', 'meals-db')); ?></em></td>' +
+                            '</tr>';
+                        });
+
+                        if (!rows) {
+                            rows = '<tr><td colspan="8"><?php echo esc_js(__('No allocation history found.', 'meals-db')); ?></td></tr>';
+                        }
+
+                        $('#mealsdb-allocation-history-table tbody').html(rows);
+
+                        if (response.current_month_details && response.current_month_details.length) {
+                            var currentMonth = new Date().toISOString().substring(0, 7);
+                            var $detailRow = $('.mealsdb-allocation-detail-row[data-month="' + currentMonth + '"]');
+                            if ($detailRow.length) {
+                                $detailRow.find('td').html(buildDetailTable(response.current_month_details));
+                                $detailRow.data('loaded', true);
+                            }
+                        }
+                    }).fail(function() {
+                        $('#mealsdb-allocation-history-table tbody').html(
+                            '<tr><td colspan="8"><?php echo esc_js(__('Failed to load allocation history.', 'meals-db')); ?></td></tr>'
+                        );
+                    });
+
+                    $(document).on('click', '.mealsdb-allocation-history-row', function() {
+                        var month = $(this).data('month');
+                        var $detail = $('.mealsdb-allocation-detail-row[data-month="' + month + '"]');
+                        if ($detail.is(':visible')) {
+                            $detail.hide();
+                            return;
+                        }
+                        $detail.show();
+                        if ($detail.data('loaded')) return;
+
+                        $.ajax({
+                            url: typeof window.ajaxurl === 'string' ? window.ajaxurl : '',
+                            method: 'GET',
+                            dataType: 'json',
+                            data: {
+                                action: 'mealsdb_get_client_allocation_history',
+                                nonce: nonce,
+                                client_id: clientId
+                            }
+                        }).done(function(resp) {
+                            if (resp && resp.success && resp.current_month_details) {
+                                $detail.find('td').html(buildDetailTable(resp.current_month_details));
+                            } else {
+                                $detail.find('td').html('<em><?php echo esc_js(__('No delivery details available.', 'meals-db')); ?></em>');
+                            }
+                            $detail.data('loaded', true);
+                        });
+                    });
+
+                    function buildDetailTable(details) {
+                        var html = '<table class="widefat fixed striped" style="margin: 5px 0;">' +
+                            '<thead><tr>' +
+                                '<th><?php echo esc_js(__('Delivery Date', 'meals-db')); ?></th>' +
+                                '<th><?php echo esc_js(__('Order #', 'meals-db')); ?></th>' +
+                                '<th><?php echo esc_js(__('Mains', 'meals-db')); ?></th>' +
+                                '<th><?php echo esc_js(__('Sides', 'meals-db')); ?></th>' +
+                            '</tr></thead><tbody>';
+                        $.each(details, function(i, d) {
+                            html += '<tr>' +
+                                '<td>' + (d.delivery_date || '') + '</td>' +
+                                '<td>' + (d.wc_order_id || '') + '</td>' +
+                                '<td>' + (d.mains_count || 0) + '</td>' +
+                                '<td>' + (d.sides_count || 0) + '</td>' +
+                            '</tr>';
+                        });
+                        html += '</tbody></table>';
+                        return html;
+                    }
+                });
+            })(jQuery);
+            </script>
+        <?php endif; ?>
         <?php
     }
 

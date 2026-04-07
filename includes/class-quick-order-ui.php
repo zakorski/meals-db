@@ -151,6 +151,8 @@ class MealsDB_Quick_Order_UI {
                         </dl>
                     </header>
 
+                    <div id="mealsdb-qo-allocation" class="mealsdb-quick-order__allocation" style="display: none;"></div>
+
                     <div class="mealsdb-quick-order__summary-body">
                         <div class="mealsdb-quick-order__summary-empty" id="mealsdb-quick-order-summary-empty">
                             <p><?php esc_html_e('Summary details will appear here.', 'meals-db'); ?></p>

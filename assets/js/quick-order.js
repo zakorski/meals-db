@@ -1254,6 +1254,7 @@
             }
 
             this.renderSummary();
+            this.updateAllocationWithCart();
         },
 
         applyClonedItems(items) {
@@ -1289,6 +1290,7 @@
 
             this.state.cart = cart;
             this.renderSummary();
+            this.updateAllocationWithCart();
             this.syncCartToVisibleProducts();
         },
 
@@ -1694,6 +1696,7 @@
             this.updateSummaryPanel();
             this.renderSummary();
             this.fetchClientRates(clientId);
+            this.fetchClientAllocation(clientId);
 
             $(document).trigger('mealsdb_update_summary');
         },
@@ -1938,6 +1941,112 @@
                     $el.text(self.formatPrice(price)).show();
                 }
             });
+        },
+
+        fetchClientAllocation(userId) {
+            if (!Number.isInteger(userId) || userId <= 0) {
+                this.clearAllocationDisplay();
+                return;
+            }
+
+            $.ajax({
+                url: this.getAjaxUrl(),
+                method: 'GET',
+                dataType: 'json',
+                data: {
+                    action: 'mealsdb_qo_get_client_allocation',
+                    nonce: this.getSecurityNonce(),
+                    user_id: userId,
+                },
+            }).done((response) => {
+                if (response && response.success) {
+                    this.state.clientType = response.client_type || null;
+                    this.state.allocation = response.allocation || null;
+                    this.state.nextDelivery = response.next_delivery || null;
+                    this.state.straddlesMonth = response.straddles_month || false;
+                    this.renderAllocationPanel();
+
+                    if (['SDNB', 'Veteran'].includes(response.client_type)) {
+                        this.hideProductPrices();
+                    } else {
+                        this.showProductPrices();
+                    }
+                }
+            });
+        },
+
+        renderAllocationPanel() {
+            const $panel = $('#mealsdb-qo-allocation');
+            if (!$panel.length) return;
+
+            const alloc = this.state.allocation;
+            if (!alloc) {
+                $panel.hide();
+                return;
+            }
+
+            $panel.html(
+                '<h3>Monthly Allowance (' + alloc.billing_month + ')</h3>' +
+                '<div class="allocation-row">' +
+                    '<span>Mains:</span>' +
+                    '<span>' + alloc.used_mains + ' / ' + alloc.permitted_mains + ' used</span>' +
+                    '<span>(' + alloc.remaining_mains + ' remaining)</span>' +
+                '</div>' +
+                '<div class="allocation-row">' +
+                    '<span>Sides:</span>' +
+                    '<span>' + alloc.used_sides + ' / ' + alloc.permitted_sides + ' used</span>' +
+                    '<span>(' + alloc.remaining_sides + ' remaining)</span>' +
+                '</div>' +
+                (alloc.overage_mains > 0 ? '<div class="allocation-warning">\u26A0 ' + alloc.overage_mains + ' mains over allowance</div>' : '') +
+                (alloc.overage_sides > 0 ? '<div class="allocation-warning">\u26A0 ' + alloc.overage_sides + ' sides over allowance</div>' : '') +
+                (this.state.nextDelivery ? '<div class="allocation-delivery">Next delivery: ' + this.state.nextDelivery + '</div>' : '') +
+                (this.state.straddlesMonth ? '<div class="allocation-straddle">\u26A0 This delivery straddles the month boundary</div>' : '')
+            ).show();
+        },
+
+        clearAllocationDisplay() {
+            const $panel = $('#mealsdb-qo-allocation');
+            if ($panel.length) {
+                $panel.empty().hide();
+            }
+            this.state.allocation = null;
+            this.state.clientType = null;
+        },
+
+        hideProductPrices() {
+            $('.mealsdb-qo-tile__price, .mealsdb-quick-order__summary-total').hide();
+        },
+
+        showProductPrices() {
+            $('.mealsdb-qo-tile__price, .mealsdb-quick-order__summary-total').show();
+        },
+
+        updateAllocationWithCart() {
+            const alloc = this.state.allocation;
+            if (!alloc) return;
+
+            let cartMains = 0;
+            let cartSides = 0;
+
+            Object.values(this.state.cart || {}).forEach((entry) => {
+                if (!entry || !entry.product || entry.quantity <= 0) return;
+                if (entry.product.product_type === 'meal') {
+                    cartMains += entry.quantity;
+                } else if (entry.product.product_type === 'side') {
+                    cartSides += entry.quantity;
+                }
+            });
+
+            const projectedMains = alloc.used_mains + cartMains;
+            const projectedSides = alloc.used_sides + cartSides;
+
+            const $panel = $('#mealsdb-qo-allocation');
+            if (!$panel.length) return;
+
+            $panel.find('.allocation-row').eq(0).find('span').eq(1)
+                .text(projectedMains + ' / ' + alloc.permitted_mains + ' used (' + cartMains + ' in cart)');
+            $panel.find('.allocation-row').eq(1).find('span').eq(1)
+                .text(projectedSides + ' / ' + alloc.permitted_sides + ' used (' + cartSides + ' in cart)');
         },
 
         getAjaxUrl() {
