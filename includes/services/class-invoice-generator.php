@@ -90,6 +90,9 @@ class MealsDB_Invoice_Generator {
      * Returns one row per order, enriched with client fields, resolved rate,
      * unit totals, basic cost, tax, and total cost.
      *
+     * @deprecated Use get_allocation_based_billing() for allowance-based generators.
+     *             Retained as fallback for historical months before the allocation engine.
+     *
      * @param array  $client_rows Rows from meals_clients (must include client_id, wp_user_id, default_rate_id).
      * @param string $start_date  Y-m-d.
      * @param string $end_date    Y-m-d.
@@ -186,6 +189,10 @@ class MealsDB_Invoice_Generator {
      *
      * Returns one row per client (not per order) with mains/sides broken into
      * billable and overage quantities, with sides further split by taxable status.
+     *
+     * @deprecated Use get_allocation_based_billing() which reads from the
+     *             allocation engine tables instead of recalculating from raw orders.
+     *             Retained as fallback for historical months before the allocation engine.
      *
      * @param array  $client_rows     Rows from meals_clients.
      * @param string $start_date      Y-m-d.
@@ -384,6 +391,112 @@ class MealsDB_Invoice_Generator {
 
                 // Service info
                 'user_service'         => $user_service,
+            ];
+        }
+
+        // Sort by last_name, first_name.
+        usort($results, function ($a, $b) {
+            $cmp = strcmp($a['client']['last_name'] ?? '', $b['client']['last_name'] ?? '');
+            return $cmp !== 0 ? $cmp : strcmp($a['client']['first_name'] ?? '', $b['client']['first_name'] ?? '');
+        });
+
+        return $results;
+    }
+
+    /**
+     * Read allocation-based billing data from the allocation engine tables.
+     *
+     * Replaces get_allowance_data_for_clients() by reading pre-calculated data
+     * from meals_client_allocations instead of recalculating from raw WC orders.
+     *
+     * @param array  $client_rows Rows from meals_clients.
+     * @param string $start_date  Y-m-d.
+     * @param string $end_date    Y-m-d.
+     *
+     * @return array One row per client with allowance calculations, same keys as
+     *               get_allowance_data_for_clients().
+     */
+    private static function get_allocation_based_billing(array $client_rows, string $start_date, string $end_date): array {
+        if (empty($client_rows)) {
+            return [];
+        }
+
+        $engine        = new MealsDB_Allocation_Engine();
+        $order_query   = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
+        $billing_month = substr($start_date, 0, 7); // "YYYY-MM"
+
+        $results = [];
+
+        foreach ($client_rows as $client) {
+            $client_id = (int) $client['client_id'];
+
+            // Get the allocation summary for this month.
+            $alloc = $engine->get_client_month_summary($client_id, $billing_month);
+
+            if (!$alloc) {
+                // No allocation exists — recalculate on-demand.
+                $engine->recalculate_month_totals($client_id, $billing_month);
+                $alloc = $engine->get_client_month_summary($client_id, $billing_month);
+            }
+
+            if (!$alloc) {
+                continue;
+            }
+
+            $permitted_mains = (int) $alloc['permitted_mains'];
+            $permitted_sides = (int) $alloc['permitted_sides'];
+            $total_mains     = (int) $alloc['used_mains'];
+            $total_sides     = (int) $alloc['used_sides'];
+            $tax_sides       = (int) $alloc['used_tax_sides'];
+            $nontax_sides    = (int) $alloc['used_nontax_sides'];
+
+            // Bill vs overage for mains.
+            $bill_mains    = min($total_mains, $permitted_mains);
+            $overage_mains = max($total_mains - $permitted_mains, 0);
+
+            // Sides split: taxable sides get priority against the allowance.
+            // (This matches the existing logic in get_allowance_data_for_clients.)
+            $bill_tax_sides      = min($tax_sides, $permitted_sides);
+            $remaining_allowance = max($permitted_sides - $bill_tax_sides, 0);
+            $bill_nontax_sides   = min($nontax_sides, $remaining_allowance);
+            $bill_sides          = $bill_tax_sides + $bill_nontax_sides;
+
+            $overage_tax_sides    = $tax_sides - $bill_tax_sides;
+            $overage_nontax_sides = $nontax_sides - $bill_nontax_sides;
+
+            // Resolve rate using client's default rate.
+            $resolved_rate = $order_query->resolve_rate_for_order(0, $client_id);
+
+            $results[] = [
+                'client'               => $client,
+                'resolved_rate'        => $resolved_rate,
+                'client_contribution'  => (float) ($client['client_contribution'] ?? 0),
+
+                // Mains
+                'total_mains'          => $total_mains,
+                'mains_allowed'        => $permitted_mains,
+                'bill_mains'           => $bill_mains,
+                'bnm_mains'            => $overage_mains,
+
+                // Sides totals
+                'total_sides'          => $total_sides,
+                'sides_allowed'        => $permitted_sides,
+                'taxable_sides'        => $tax_sides,
+                'non_taxable_sides'    => $nontax_sides,
+
+                // Sides splits
+                'bill_tax_sides'       => $bill_tax_sides,
+                'overage_tax_sides'    => $overage_tax_sides,
+                'remaining_sides'      => $remaining_allowance - $bill_nontax_sides,
+                'bill_nontax_sides'    => $bill_nontax_sides,
+                'overage_nontax_sides' => $overage_nontax_sides,
+                'bill_sides'           => $bill_sides,
+
+                // Tax (not available from allocation tables; zero for SDNB legacy format)
+                'total_tax_amount'     => 0.0,
+
+                // Service info
+                'user_service'         => strtolower(trim($client['requisition_period'] ?? 'week')),
             ];
         }
 
@@ -627,8 +740,8 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Fetch invoice data via allowance engine.
-        $invoice_rows = self::get_allowance_data_for_clients($client_rows, $start_date, $end_date, $weeks_in_month);
+        // Fetch invoice data via allocation engine tables.
+        $invoice_rows = self::get_allocation_based_billing($client_rows, $start_date, $end_date);
 
         // Apply allowance engine + two-line splits to get final invoice lines.
         $all_invoice_lines = [];
@@ -782,6 +895,13 @@ class MealsDB_Invoice_Generator {
             $csv[] = implode(',', $row);
         }
 
+        // Finalize the billing month for all included clients.
+        $billing_month = substr($start_date, 0, 7);
+        $engine = new MealsDB_Allocation_Engine();
+        foreach ($client_rows as $client) {
+            $engine->finalize_month((int) $client['client_id'], $billing_month);
+        }
+
         return implode("\n", $csv);
     }
 
@@ -846,6 +966,13 @@ class MealsDB_Invoice_Generator {
             );
         }
 
+        // Finalize the billing month for all included clients.
+        $billing_month = substr($start_date, 0, 7);
+        $engine = new MealsDB_Allocation_Engine();
+        foreach ($client_rows as $client) {
+            $engine->finalize_month((int) $client['client_id'], $billing_month);
+        }
+
         return implode("\n", $csv);
     }
 
@@ -899,78 +1026,40 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Fetch WC HPOS orders for all veterans.
+        // Fetch allocation data for all veterans from the allocation engine.
+        $engine      = new MealsDB_Allocation_Engine();
         $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
-        $wp_user_ids = [];
-        $clients_by_user = [];
-        foreach ($client_rows as $c) {
-            $uid = (int) $c['wp_user_id'];
-            if ($uid > 0) {
-                $wp_user_ids[]       = $uid;
-                $clients_by_user[$uid] = $c;
-            }
-        }
+        $billing_month = substr($start_date, 0, 7);
 
-        $orders = $order_query->get_orders_with_items_for_users($wp_user_ids, $start_date, $end_date);
-
-        // Collect all product IDs for a single product-type lookup.
-        $all_product_ids = [];
-        foreach ($orders as $order) {
-            foreach ($order['items'] as $item) {
-                $pid = (int) $item['wc_product_id'];
-                if ($pid > 0) {
-                    $all_product_ids[$pid] = $pid;
-                }
-            }
-        }
-        $product_types = $order_query->get_product_types_for_ids(array_values($all_product_ids));
-
-        // Aggregate orders per veteran (client_id).
         $vet_aggregates = [];
-        foreach ($orders as $order) {
-            $uid    = (int) $order['wp_user_id'];
-            $client = isset($clients_by_user[$uid]) ? $clients_by_user[$uid] : null;
-            if (!$client) {
-                continue;
-            }
-
+        foreach ($client_rows as $client) {
             $cid = (int) $client['client_id'];
-            if (!isset($vet_aggregates[$cid])) {
-                // Resolve the rate from the first order for this client.
-                $rate_id       = isset($order['mealsdb_rate_id']) ? (int) $order['mealsdb_rate_id'] : 0;
-                $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid);
 
-                $vet_aggregates[$cid] = [
-                    'client'               => $client,
-                    'resolved_rate'        => $resolved_rate,
-                    'mains_ordered'        => 0,
-                    'sides_ordered_taxable' => 0,
-                    'sides_ordered_nontax' => 0,
-                    'sides_cost'           => 0.0,
-                    'sides_tax'            => 0.0,
-                ];
+            $alloc = $engine->get_client_month_summary($cid, $billing_month);
+
+            if (!$alloc) {
+                // No allocation exists — recalculate on-demand.
+                $engine->recalculate_month_totals($cid, $billing_month);
+                $alloc = $engine->get_client_month_summary($cid, $billing_month);
             }
 
-            foreach ($order['items'] as $item) {
-                $pid  = (int) $item['wc_product_id'];
-                $qty  = (float) $item['quantity'];
-                $prod = isset($product_types[$pid]) ? $product_types[$pid] : null;
+            $total_mains  = $alloc ? (int) $alloc['used_mains'] : 0;
+            $total_sides  = $alloc ? (int) $alloc['used_sides'] : 0;
+            $tax_sides    = $alloc ? (int) $alloc['used_tax_sides'] : 0;
+            $nontax_sides = $alloc ? (int) $alloc['used_nontax_sides'] : 0;
 
-                $ptype  = $prod ? $prod['product_type'] : 'meal';
-                $is_tax = $prod ? !empty($prod['taxable']) : false;
+            // Resolve rate using client's default rate.
+            $resolved_rate = $order_query->resolve_rate_for_order(0, $cid);
 
-                if ($ptype === 'meal') {
-                    $vet_aggregates[$cid]['mains_ordered'] += $qty;
-                } elseif ($ptype === 'side') {
-                    if ($is_tax) {
-                        $vet_aggregates[$cid]['sides_ordered_taxable'] += $qty;
-                        $vet_aggregates[$cid]['sides_cost'] += (float) $item['line_subtotal'];
-                        $vet_aggregates[$cid]['sides_tax']  += (float) $item['line_tax'];
-                    } else {
-                        $vet_aggregates[$cid]['sides_ordered_nontax'] += $qty;
-                    }
-                }
-            }
+            $vet_aggregates[$cid] = [
+                'client'                => $client,
+                'resolved_rate'         => $resolved_rate,
+                'mains_ordered'         => $total_mains,
+                'sides_ordered_taxable' => $tax_sides,
+                'sides_ordered_nontax'  => $nontax_sides,
+                'sides_cost'            => 0.0,
+                'sides_tax'             => 0.0,
+            ];
         }
 
         // Sort by last_name, first_name.
@@ -1125,6 +1214,11 @@ class MealsDB_Invoice_Generator {
                 $errors,
                 self::check_new_user_flag((int) ($vet['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No'
             );
+        }
+
+        // Finalize the billing month for all included clients.
+        foreach ($client_rows as $client) {
+            $engine->finalize_month((int) $client['client_id'], $billing_month);
         }
 
         return implode("\n", $csv);
