@@ -44,7 +44,8 @@ class MealsDB_Allocation_Hooks {
         $client_user_id = (int) $order->get_meta('mealsdb_client_user_id');
         if ($client_user_id <= 0) return;
 
-        MealsDB_Allocation_Engine::allocate_order($order_id);
+        $engine = new MealsDB_Allocation_Engine();
+        $engine->allocate_order($order_id);
     }
 
     /**
@@ -59,21 +60,23 @@ class MealsDB_Allocation_Hooks {
         $cancel_statuses = ['cancelled', 'refunded', 'failed', 'trash'];
         $active_statuses = ['pending', 'processing', 'on-hold', 'completed', 'paid'];
 
+        $engine = new MealsDB_Allocation_Engine();
+
         // Moving TO a cancelled state — deallocate
         if (in_array($to, $cancel_statuses, true) && in_array($from, $active_statuses, true)) {
-            MealsDB_Allocation_Engine::deallocate_order($order_id);
+            $engine->deallocate_order($order_id);
             return;
         }
 
         // Moving FROM a cancelled state back to active — reallocate
         if (in_array($to, $active_statuses, true) && in_array($from, $cancel_statuses, true)) {
-            MealsDB_Allocation_Engine::allocate_order($order_id);
+            $engine->allocate_order($order_id);
             return;
         }
 
         // Any other status change on an active order — re-process in case items changed
         if (in_array($to, $active_statuses, true)) {
-            MealsDB_Allocation_Engine::allocate_order($order_id);
+            $engine->allocate_order($order_id);
         }
     }
 
@@ -83,7 +86,8 @@ class MealsDB_Allocation_Hooks {
      * @param int $order_id
      */
     public static function on_order_cancelled(int $order_id): void {
-        MealsDB_Allocation_Engine::deallocate_order($order_id);
+        $engine = new MealsDB_Allocation_Engine();
+        $engine->deallocate_order($order_id);
     }
 
     /**
@@ -93,7 +97,8 @@ class MealsDB_Allocation_Hooks {
      */
     public static function on_order_trashed(int $post_id): void {
         if (get_post_type($post_id) !== 'shop_order') return;
-        MealsDB_Allocation_Engine::deallocate_order($post_id);
+        $engine = new MealsDB_Allocation_Engine();
+        $engine->deallocate_order($post_id);
     }
 
     /**
@@ -103,7 +108,8 @@ class MealsDB_Allocation_Hooks {
      */
     public static function on_order_deleted(int $post_id): void {
         if (get_post_type($post_id) !== 'shop_order') return;
-        MealsDB_Allocation_Engine::deallocate_order($post_id);
+        $engine = new MealsDB_Allocation_Engine();
+        $engine->deallocate_order($post_id);
     }
 
     /**
@@ -113,8 +119,9 @@ class MealsDB_Allocation_Hooks {
         $current_month = gmdate('Y-m');
         $next_month = gmdate('Y-m', strtotime('first day of next month'));
 
-        MealsDB_Allocation_Engine::bulk_recalculate_month($current_month);
-        MealsDB_Allocation_Engine::bulk_recalculate_month($next_month);
+        $engine = new MealsDB_Allocation_Engine();
+        $engine->bulk_recalculate_month($current_month);
+        $engine->bulk_recalculate_month($next_month);
 
         error_log(sprintf(
             '[MealsDB Allocations] Nightly sync completed for %s and %s',

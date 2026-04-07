@@ -1469,7 +1469,7 @@ class MealsDB_Invoice_Generator {
         $client_type = 'SDNB';
         $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
 
-        $allowance_rows = self::get_allowance_data_for_clients($client_rows, $start_date, $end_date, $weeks_in_month);
+        $allowance_rows = self::get_allocation_based_billing($client_rows, $start_date, $end_date);
 
         // Filter to only clients with overages.
         return array_filter($allowance_rows, function ($row) {
