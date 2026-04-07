@@ -309,7 +309,7 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         try {
-            $order = self::create_wc_order($items, $order_date, $client_id);
+            $order = self::create_wc_order($items, $order_date, $client_id, $client_db_id);
             if (is_wp_error($order)) {
                 throw new Exception($order->get_error_message());
             }
@@ -771,7 +771,7 @@ class MealsDB_Quick_Order_Ajax {
      *
      * @return WC_Order|WP_Error
      */
-    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $client_id = 0) {
+    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $client_id = 0, int $mealsdb_client_id = 0) {
         if (!function_exists('wc_create_order') || !class_exists('WC_Order')) {
             return new WP_Error('mealsdb_missing_woocommerce', __('WooCommerce is required to create orders.', 'meals-db'));
         }
@@ -801,6 +801,62 @@ class MealsDB_Quick_Order_Ajax {
                 ]);
             } else {
                 $order->add_product($product, $quantity);
+            }
+        }
+
+        // Look up client fee data.
+        if ($mealsdb_client_id > 0) {
+            global $wpdb;
+            $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+            $client_data = $wpdb->get_row($wpdb->prepare(
+                "SELECT client_type, delivery_fee, client_contribution FROM {$clients_table} WHERE client_id = %d",
+                $mealsdb_client_id
+            ), ARRAY_A);
+
+            if ($client_data && in_array($client_data['client_type'], ['SDNB', 'Veteran'], true)) {
+                $delivery_fee = (float) ($client_data['delivery_fee'] ?? 0);
+                $client_contribution = (float) ($client_data['client_contribution'] ?? 0);
+
+                // Always add delivery fee if > 0.
+                if ($delivery_fee > 0) {
+                    $fee = new WC_Order_Item_Fee();
+                    $fee->set_name('Delivery Fee');
+                    $fee->set_amount($delivery_fee);
+                    $fee->set_total($delivery_fee);
+                    $fee->set_tax_status('none');
+                    $order->add_item($fee);
+                }
+
+                // Add client contribution only if it hasn't been applied this month yet.
+                if ($client_contribution > 0) {
+                    $billing_month = gmdate('Y-m');
+                    $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+                    $already_applied = (int) $wpdb->get_var($wpdb->prepare(
+                        "SELECT contribution_applied FROM {$alloc_table} WHERE client_id = %d AND billing_month = %s",
+                        $mealsdb_client_id,
+                        $billing_month
+                    ));
+
+                    if (!$already_applied) {
+                        $fee = new WC_Order_Item_Fee();
+                        $fee->set_name('Client Contribution');
+                        $fee->set_amount($client_contribution);
+                        $fee->set_total($client_contribution);
+                        $fee->set_tax_status('none');
+                        $order->add_item($fee);
+
+                        // Mark contribution as applied for this month.
+                        $wpdb->query($wpdb->prepare(
+                            "INSERT INTO {$alloc_table} (client_id, billing_month, contribution_applied, contribution_order_id)
+                             VALUES (%d, %s, 1, %d)
+                             ON DUPLICATE KEY UPDATE contribution_applied = 1, contribution_order_id = %d",
+                            $mealsdb_client_id,
+                            $billing_month,
+                            $order->get_id(),
+                            $order->get_id()
+                        ));
+                    }
+                }
             }
         }
 
@@ -852,7 +908,8 @@ class MealsDB_Quick_Order_Ajax {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $client = $wpdb->get_row($wpdb->prepare(
             "SELECT client_id, client_type, allowance_mains, allowance_sides,
-                    delivery_day, delivery_frequency, requisition_period
+                    delivery_day, delivery_frequency, requisition_period,
+                    delivery_fee, client_contribution
              FROM {$clients_table}
              WHERE wp_user_id = %d AND active = 1
              LIMIT 1",
@@ -904,6 +961,18 @@ class MealsDB_Quick_Order_Ajax {
             }
         }
 
+        // Compute fee preview for government clients.
+        $delivery_fee = (float) ($client['delivery_fee'] ?? 0);
+        $client_contribution = (float) ($client['client_contribution'] ?? 0);
+        $contribution_applied = false;
+
+        if ($summary) {
+            $contribution_applied = (bool) ($summary['contribution_applied'] ?? false);
+        }
+
+        $contribution_due = (!$contribution_applied && $client_contribution > 0);
+        $collect_total = $delivery_fee + ($contribution_due ? $client_contribution : 0);
+
         wp_send_json([
             'success'           => true,
             'client_type'       => $client_type,
@@ -919,6 +988,12 @@ class MealsDB_Quick_Order_Ajax {
                 'overage_sides'   => (int) $summary['overage_sides'],
                 'is_finalized'    => (bool) $summary['is_finalized'],
             ] : null,
+            'fees'              => [
+                'delivery_fee'        => $delivery_fee,
+                'client_contribution' => $client_contribution,
+                'contribution_due'    => $contribution_due,
+                'collect_total'       => $collect_total,
+            ],
             'next_delivery'     => $next_delivery,
             'straddles_month'   => $straddles,
             'next_month_units'  => $next_month_units,

@@ -83,7 +83,7 @@ class MealsDB_Delivery_Slip_Generator {
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
-                    payment_method, client_type
+                    client_contribution, payment_method, client_type
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s",
             $day_lower
@@ -170,7 +170,7 @@ class MealsDB_Delivery_Slip_Generator {
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
-                    payment_method, client_type
+                    client_contribution, payment_method, client_type
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN ({$placeholders})",
             ...$zone_names
@@ -755,15 +755,34 @@ class MealsDB_Delivery_Slip_Generator {
             $total          = (float) $wc_order->get_total();
             $payment_method = $wc_order->get_payment_method();
 
-            // Collection calculation — reproduces old export-orders.php logic exactly.
-            $collect      = null;
-            $client_type  = strtolower($client['client_type'] ?? '');
-            $delivery_fee = (float) ($client['delivery_fee'] ?? 0);
+            // Collection calculation.
+            $delivery_fee        = (float) ($client['delivery_fee'] ?? 0);
+            $client_contribution = (float) ($client['client_contribution'] ?? 0);
+            $collect             = null;
+            $contribution_due    = 0;
+            $client_type         = strtolower($client['client_type'] ?? '');
 
-            if ($payment_method === 'cash' && $client_type === 'private') {
-                $collect = $total + $delivery_fee;
-            } elseif ($payment_method !== 'cash' && $delivery_fee > 0) {
-                $collect = $delivery_fee;
+            if (in_array($client_type, ['sdnb', 'veteran'], true)) {
+                // Build order data with date for first-delivery check.
+                $order_with_date = $order;
+                $order_with_date['order_id'] = $order_id;
+                $wc_date = $wc_order->get_date_created();
+                if ($wc_date) {
+                    $order_with_date['date_created_gmt'] = $wc_date->format('Y-m-d H:i:s');
+                }
+                $is_first_delivery = $this->is_first_delivery_of_month($client, $order_with_date);
+
+                if ($is_first_delivery && $client_contribution > 0) {
+                    $contribution_due = $client_contribution;
+                }
+
+                $collect = $delivery_fee + $contribution_due;
+            } elseif ($client_type === 'private') {
+                if ($payment_method === 'cash') {
+                    $collect = $total + $delivery_fee;
+                } elseif ($delivery_fee > 0) {
+                    $collect = $delivery_fee;
+                }
             }
 
             $zones[$zone_key]['orders'][] = [
@@ -778,6 +797,7 @@ class MealsDB_Delivery_Slip_Generator {
                 'total'          => $total,
                 'collect'        => $collect,
                 'delivery_fee'   => $delivery_fee,
+                'client_contribution' => $contribution_due,
                 'payment_method' => $payment_method,
                 'client_type'    => $client_type,
             ];
@@ -799,6 +819,40 @@ class MealsDB_Delivery_Slip_Generator {
         unset($zone);
 
         return $result;
+    }
+
+    /**
+     * Determine if this order is the first delivery for the client in its billing month.
+     *
+     * @param array $client Client data row.
+     * @param array $order  Order data row (WC order array with date_created_gmt or order_date).
+     * @return bool
+     */
+    private function is_first_delivery_of_month(array $client, array $order): bool {
+        $order_date = $order['date_created_gmt'] ?? $order['order_date'] ?? '';
+        if (empty($order_date)) {
+            return true;
+        }
+
+        $billing_month = substr($order_date, 0, 7);
+        $order_id = (int) ($order['order_id'] ?? 0);
+
+        global $wpdb;
+        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+
+        $contribution_order = $wpdb->get_var($wpdb->prepare(
+            "SELECT contribution_order_id FROM {$alloc_table} WHERE client_id = %d AND billing_month = %s",
+            (int) $client['client_id'],
+            $billing_month
+        ));
+
+        // If no contribution has been applied, this is the first.
+        if (!$contribution_order) {
+            return true;
+        }
+
+        // If this order IS the contribution order, it's the first.
+        return (int) $contribution_order === $order_id;
     }
 
     /**
