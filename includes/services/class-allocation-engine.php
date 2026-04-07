@@ -562,6 +562,25 @@ class MealsDB_Allocation_Engine {
     }
 
     /**
+     * Get allocation history for a client across multiple months.
+     *
+     * @param int $client_id
+     * @param int $months Number of months of history to return (default 12).
+     * @return array Rows from meals_client_allocations ordered by billing_month DESC.
+     */
+    public function get_client_history(int $client_id, int $months = 12): array {
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+
+        $rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT * FROM {$table} WHERE client_id = %d ORDER BY billing_month DESC LIMIT %d",
+            $client_id,
+            $months
+        ), ARRAY_A);
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    /**
      * Lock a month from further changes (called at invoice generation time).
      *
      * @param int    $client_id

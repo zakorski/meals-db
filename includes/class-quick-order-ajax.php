@@ -16,6 +16,8 @@ class MealsDB_Quick_Order_Ajax {
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
         add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
+        add_action('wp_ajax_mealsdb_qo_get_client_allocation', [self::class, 'get_client_allocation']);
+        add_action('wp_ajax_mealsdb_get_client_allocation_history', [self::class, 'get_client_allocation_history']);
         MealsDB_Ajax_Rates::init();
     }
 
@@ -833,5 +835,117 @@ class MealsDB_Quick_Order_Ajax {
         );
 
         return $row !== null;
+    }
+
+    /**
+     * AJAX endpoint to fetch the current month's allocation summary for a client.
+     */
+    public static function get_client_allocation(): void {
+        self::verify_request();
+
+        $wp_user_id = isset($_REQUEST['user_id']) ? intval($_REQUEST['user_id']) : 0;
+        if ($wp_user_id <= 0) {
+            wp_send_json(['success' => true, 'allocation' => null]);
+        }
+
+        global $wpdb;
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $client = $wpdb->get_row($wpdb->prepare(
+            "SELECT client_id, client_type, allowance_mains, allowance_sides,
+                    delivery_day, delivery_frequency, requisition_period
+             FROM {$clients_table}
+             WHERE wp_user_id = %d AND active = 1
+             LIMIT 1",
+            $wp_user_id
+        ), ARRAY_A);
+
+        if (!$client) {
+            wp_send_json(['success' => true, 'allocation' => null]);
+        }
+
+        $client_id   = (int) $client['client_id'];
+        $client_type = $client['client_type'];
+        $billing_month = gmdate('Y-m');
+
+        if (!in_array($client_type, ['SDNB', 'Veteran'], true)) {
+            wp_send_json(['success' => true, 'allocation' => null, 'client_type' => $client_type]);
+        }
+
+        $engine  = new MealsDB_Allocation_Engine();
+        $summary = $engine->get_client_month_summary($client_id, $billing_month);
+
+        if (!$summary) {
+            $engine->recalculate_month_totals($client_id, $billing_month);
+            $summary = $engine->get_client_month_summary($client_id, $billing_month);
+        }
+
+        $schedule = $engine->calculate_delivery_schedule($client_id, $billing_month);
+        $today    = gmdate('Y-m-d');
+        $next_delivery = null;
+        foreach ($schedule as $delivery) {
+            if ($delivery['delivery_date'] >= $today) {
+                $next_delivery = $delivery['delivery_date'];
+                break;
+            }
+        }
+
+        $straddles        = false;
+        $next_month_units = 0;
+        if ($next_delivery) {
+            $delivery_frequency = (int) ($client['delivery_frequency'] ?? 7);
+            $coverage_end_date  = gmdate('Y-m-d', strtotime($next_delivery . ' + ' . ($delivery_frequency - 1) . ' days'));
+            $delivery_month     = substr($next_delivery, 0, 7);
+            $coverage_end_month = substr($coverage_end_date, 0, 7);
+            if ($coverage_end_month !== $delivery_month) {
+                $straddles              = true;
+                $end_of_delivery_month  = gmdate('Y-m-t', strtotime($next_delivery));
+                $days_next_month        = (strtotime($coverage_end_date) - strtotime($end_of_delivery_month)) / 86400;
+                $next_month_units       = $days_next_month;
+            }
+        }
+
+        wp_send_json([
+            'success'           => true,
+            'client_type'       => $client_type,
+            'allocation'        => $summary ? [
+                'billing_month'   => $summary['billing_month'],
+                'permitted_mains' => (int) $summary['permitted_mains'],
+                'permitted_sides' => (int) $summary['permitted_sides'],
+                'used_mains'      => (int) $summary['used_mains'],
+                'used_sides'      => (int) $summary['used_sides'],
+                'remaining_mains' => max((int) $summary['permitted_mains'] - (int) $summary['used_mains'], 0),
+                'remaining_sides' => max((int) $summary['permitted_sides'] - (int) $summary['used_sides'], 0),
+                'overage_mains'   => (int) $summary['overage_mains'],
+                'overage_sides'   => (int) $summary['overage_sides'],
+                'is_finalized'    => (bool) $summary['is_finalized'],
+            ] : null,
+            'next_delivery'     => $next_delivery,
+            'straddles_month'   => $straddles,
+            'next_month_units'  => $next_month_units,
+        ]);
+    }
+
+    /**
+     * AJAX endpoint to fetch allocation history for a client.
+     */
+    public static function get_client_allocation_history(): void {
+        self::verify_request();
+
+        $client_id = isset($_REQUEST['client_id']) ? intval($_REQUEST['client_id']) : 0;
+        if ($client_id <= 0) {
+            wp_send_json(['success' => false, 'message' => 'Invalid client ID.']);
+        }
+
+        $engine  = new MealsDB_Allocation_Engine();
+        $history = $engine->get_client_history($client_id, 12);
+
+        $current_month = gmdate('Y-m');
+        $details = $engine->get_client_month_details($client_id, $current_month);
+
+        wp_send_json([
+            'success'               => true,
+            'history'               => $history,
+            'current_month_details' => $details,
+        ]);
     }
 }
