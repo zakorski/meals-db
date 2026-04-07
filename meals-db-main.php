@@ -72,6 +72,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Settings::init();
     MealsDB_Product_Display_Sync::init();
     MealsDB_Sync::register_hooks();
+    MealsDB_Allocation_Hooks::init();
 });
 
 /**
@@ -133,6 +134,13 @@ function meals_db_check_requirements() {
         ]);
     }
 }
+
+/**
+ * Clean up scheduled events on plugin deactivation.
+ */
+register_deactivation_hook(__FILE__, function () {
+    wp_clear_scheduled_hook('mealsdb_nightly_allocation_sync');
+});
 
 // Register the plugin update checker against the GitHub repository.
 require_once plugin_dir_path(__FILE__) . 'plugin-update-checker/plugin-update-checker.php';
