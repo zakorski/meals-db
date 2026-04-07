@@ -529,6 +529,14 @@ class MealsDB_Allocation_Engine {
         // Delete all rows for this order.
         $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
 
+        // Check if this order carried a client contribution and clear it.
+        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+        $this->wpdb->query($this->wpdb->prepare(
+            "UPDATE {$alloc_table} SET contribution_applied = 0, contribution_order_id = NULL
+             WHERE contribution_order_id = %d",
+            $wc_order_id
+        ));
+
         // Recalculate affected months.
         if (is_array($affected)) {
             foreach ($affected as $row) {

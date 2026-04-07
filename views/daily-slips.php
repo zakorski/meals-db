@@ -238,8 +238,9 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             html += '<th style="text-align:right">Subtotal</th>';
             html += '<th style="text-align:right">Tax</th>';
             html += '<th style="text-align:right">Total</th>';
-            html += '<th style="text-align:right">Collect</th>';
             html += '<th style="text-align:right">Delivery Fee</th>';
+            html += '<th style="text-align:right">Client Contribution</th>';
+            html += '<th style="text-align:right">Collect</th>';
             html += '</tr></thead><tbody>';
 
             $.each(zone.orders, function(j, o) {
@@ -251,8 +252,9 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
                 html += '<td style="text-align:right">$' + fmt(o.subtotal) + '</td>';
                 html += '<td style="text-align:right">$' + fmt(o.tax) + '</td>';
                 html += '<td style="text-align:right">$' + fmt(o.total) + '</td>';
-                html += '<td style="text-align:right">' + (o.collect !== null ? '$' + fmt(o.collect) : '') + '</td>';
                 html += '<td style="text-align:right">' + (o.delivery_fee > 0 ? '$' + fmt(o.delivery_fee) : '') + '</td>';
+                html += '<td style="text-align:right">' + (o.client_contribution > 0 ? '$' + fmt(o.client_contribution) : '') + '</td>';
+                html += '<td style="text-align:right">' + (o.collect !== null && o.collect > 0 ? '$' + fmt(o.collect) : '') + '</td>';
                 html += '</tr>';
             });
 

@@ -283,6 +283,8 @@ class MealsDB_Schema {
                     'overage_mains'     => 'INT NOT NULL DEFAULT 0',
                     'overage_sides'     => 'INT NOT NULL DEFAULT 0',
                     'is_finalized'      => 'TINYINT(1) NOT NULL DEFAULT 0',
+                    'contribution_applied'  => 'TINYINT(1) NOT NULL DEFAULT 0',
+                    'contribution_order_id' => 'BIGINT(20) UNSIGNED NULL',
                     'finalized_at'      => 'DATETIME NULL',
                     'created_at'        => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
                     'updated_at'        => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',

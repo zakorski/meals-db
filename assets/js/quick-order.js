@@ -1962,6 +1962,7 @@
                 if (response && response.success) {
                     this.state.clientType = response.client_type || null;
                     this.state.allocation = response.allocation || null;
+                    this.state.clientFees = response.fees || null;
                     this.state.nextDelivery = response.next_delivery || null;
                     this.state.straddlesMonth = response.straddles_month || false;
                     this.renderAllocationPanel();
@@ -2002,6 +2003,20 @@
                 (this.state.nextDelivery ? '<div class="allocation-delivery">Next delivery: ' + this.state.nextDelivery + '</div>' : '') +
                 (this.state.straddlesMonth ? '<div class="allocation-straddle">\u26A0 This delivery straddles the month boundary</div>' : '')
             ).show();
+
+            if (this.state.clientFees) {
+                var fees = this.state.clientFees;
+                var feesHtml = '<div class="allocation-fees"><h4>Fees for this order</h4>';
+                feesHtml += '<div>Delivery Fee: $' + (fees.delivery_fee || 0).toFixed(2) + '</div>';
+                if (fees.contribution_due) {
+                    feesHtml += '<div>Client Contribution: $' + fees.client_contribution.toFixed(2) + ' (first delivery this month)</div>';
+                } else {
+                    feesHtml += '<div>Client Contribution: already applied this month</div>';
+                }
+                feesHtml += '<div><strong>Collect: $' + fees.collect_total.toFixed(2) + '</strong></div>';
+                feesHtml += '</div>';
+                $panel.append(feesHtml);
+            }
         },
 
         clearAllocationDisplay() {
@@ -2011,6 +2026,7 @@
             }
             this.state.allocation = null;
             this.state.clientType = null;
+            this.state.clientFees = null;
         },
 
         hideProductPrices() {
