@@ -1522,11 +1522,12 @@ class MealsDB_Admin_UI {
                             data: {
                                 action: 'mealsdb_get_client_allocation_history',
                                 nonce: nonce,
-                                client_id: clientId
+                                client_id: clientId,
+                                billing_month: month
                             }
                         }).done(function(resp) {
-                            if (resp && resp.success && resp.current_month_details) {
-                                $detail.find('td').html(buildDetailTable(resp.current_month_details));
+                            if (resp && resp.success && resp.month_details) {
+                                $detail.find('td').html(buildDetailTable(resp.month_details));
                             } else {
                                 $detail.find('td').html('<em><?php echo esc_js(__('No delivery details available.', 'meals-db')); ?></em>');
                             }
