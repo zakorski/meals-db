@@ -246,6 +246,22 @@ class MealsDB_Allocation_Engine {
         }
 
         if (!$client_id) {
+            // Fallback: resolve via WC order's native customer_id field.
+            $customer_id = (int) $this->wpdb->get_var($this->wpdb->prepare(
+                "SELECT customer_id FROM {$orders_table} WHERE id = %d",
+                $wc_order_id
+            ));
+
+            if ($customer_id > 0) {
+                $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+                $client_id = (int) $this->wpdb->get_var($this->wpdb->prepare(
+                    "SELECT client_id FROM {$clients_table} WHERE wp_user_id = %d AND active = 1 LIMIT 1",
+                    $customer_id
+                ));
+            }
+        }
+
+        if (!$client_id) {
             return;
         }
 
