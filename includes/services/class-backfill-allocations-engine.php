@@ -65,12 +65,19 @@ class MealsDB_Backfill_Allocations_Engine {
         // Build the list of months to process (chronological order).
         $months = self::build_month_range( $start_month, $end_month );
 
+        // Pre-fetch all finalized months so we can prevent spillover writes.
+        $finalized_set = self::get_finalized_months( $wpdb, $allocations_table );
+
         $stats = [
             'months_processed'    => 0,
             'clients_processed'   => 0,
             'orders_processed'    => 0,
             'allocations_created' => 0,
         ];
+
+        // Track which orders have already been allocated (across months) to
+        // avoid double-processing when prior-month orders are re-fetched.
+        $allocated_orders = [];
 
         // Begin transaction for dry-run rollback.
         $wpdb->query( 'START TRANSACTION' );
@@ -84,6 +91,12 @@ class MealsDB_Backfill_Allocations_Engine {
                 $month_start = sprintf( '%04d-%02d-01', $year, $month );
                 $month_end   = sprintf( '%04d-%02d-%02d', $year, $month, $days_in_month );
 
+                // Compute the prior month's date range so we capture orders
+                // whose delivery coverage spills into this billing month.
+                $prior_dt        = ( new \DateTime( $month_start ) )->modify( '-1 month' );
+                $prior_month_start = $prior_dt->format( 'Y-m-01' );
+                $prior_month_end   = $prior_dt->format( 'Y-m-t' );
+
                 $clients_in_month = 0;
 
                 foreach ( $clients as $client ) {
@@ -91,24 +104,19 @@ class MealsDB_Backfill_Allocations_Engine {
                     $wp_user_id = (int) $client['wp_user_id'];
 
                     // Skip finalized months.
-                    $is_finalized = (int) $wpdb->get_var( $wpdb->prepare(
-                        "SELECT is_finalized FROM {$allocations_table}
-                         WHERE client_id = %d AND billing_month = %s",
-                        $client_id,
-                        $billing_month
-                    ) );
-
-                    if ( $is_finalized === 1 ) {
+                    $client_month_key = $client_id . ':' . $billing_month;
+                    if ( isset( $finalized_set[ $client_month_key ] ) ) {
                         continue;
                     }
 
                     // a. Set up the permitted summary row.
                     $engine->calculate_permitted_for_month( $client_id, $billing_month );
 
-                    // b. Fetch WC orders for this client in this month.
+                    // b. Fetch WC orders for this client in this month AND the
+                    //    prior month (to capture spillover coverage into this month).
                     $orders = $order_query->get_orders_for_users(
                         [ $wp_user_id ],
-                        $month_start,
+                        $prior_month_start,
                         $month_end
                     );
 
@@ -121,8 +129,27 @@ class MealsDB_Backfill_Allocations_Engine {
 
                     if ( is_array( $orders ) ) {
                         foreach ( $orders as $order ) {
-                            $engine->allocate_order( (int) $order['order_id'] );
+                            $order_id = (int) $order['order_id'];
+
+                            // Skip orders already allocated in a previous iteration.
+                            if ( isset( $allocated_orders[ $order_id ] ) ) {
+                                continue;
+                            }
+
+                            $engine->allocate_order( $order_id );
+                            $allocated_orders[ $order_id ] = true;
                             $stats['orders_processed']++;
+
+                            // P1 fix: remove any delivery allocation rows that
+                            // spilled into a finalized month and were just written.
+                            self::cleanup_finalized_spillover(
+                                $wpdb,
+                                $delivery_alloc_table,
+                                $allocations_table,
+                                $order_id,
+                                $client_id,
+                                $finalized_set
+                            );
                         }
                     }
 
@@ -186,6 +213,84 @@ class MealsDB_Backfill_Allocations_Engine {
      */
     public static function run_single_month( string $billing_month, bool $dry_run = true ): array {
         return self::run( $billing_month, $billing_month, $dry_run );
+    }
+
+    /**
+     * Pre-fetch all finalized client+month pairs as a lookup set.
+     *
+     * @param wpdb   $wpdb
+     * @param string $allocations_table Fully-qualified table name.
+     * @return array<string, true> Keys are "client_id:YYYY-MM".
+     */
+    private static function get_finalized_months( $wpdb, string $allocations_table ): array {
+        $rows = $wpdb->get_results(
+            "SELECT client_id, billing_month FROM {$allocations_table} WHERE is_finalized = 1",
+            ARRAY_A
+        );
+
+        $set = [];
+        if ( is_array( $rows ) ) {
+            foreach ( $rows as $row ) {
+                $set[ $row['client_id'] . ':' . $row['billing_month'] ] = true;
+            }
+        }
+
+        return $set;
+    }
+
+    /**
+     * After allocate_order(), remove any delivery allocation rows that spilled
+     * into a finalized month. This prevents the backfill from writing detail
+     * rows into months whose summary can no longer be recalculated.
+     *
+     * @param wpdb   $wpdb
+     * @param string $delivery_alloc_table
+     * @param string $allocations_table
+     * @param int    $order_id
+     * @param int    $client_id
+     * @param array  $finalized_set
+     */
+    private static function cleanup_finalized_spillover(
+        $wpdb,
+        string $delivery_alloc_table,
+        string $allocations_table,
+        int $order_id,
+        int $client_id,
+        array $finalized_set
+    ): void {
+        // Fetch the billing months this order's delivery allocations touch.
+        $alloc_months = $wpdb->get_col( $wpdb->prepare(
+            "SELECT DISTINCT billing_month FROM {$delivery_alloc_table}
+             WHERE wc_order_id = %d AND client_id = %d",
+            $order_id,
+            $client_id
+        ) );
+
+        if ( ! is_array( $alloc_months ) ) {
+            return;
+        }
+
+        foreach ( $alloc_months as $alloc_month ) {
+            $key = $client_id . ':' . $alloc_month;
+            if ( isset( $finalized_set[ $key ] ) ) {
+                $wpdb->delete(
+                    $delivery_alloc_table,
+                    [
+                        'wc_order_id'   => $order_id,
+                        'client_id'     => $client_id,
+                        'billing_month' => $alloc_month,
+                    ],
+                    [ '%d', '%d', '%s' ]
+                );
+
+                error_log( sprintf(
+                    '[MealsDB Backfill Allocations] Removed spillover rows for order %d into finalized month %s (client %d).',
+                    $order_id,
+                    $alloc_month,
+                    $client_id
+                ) );
+            }
+        }
     }
 
     /**
