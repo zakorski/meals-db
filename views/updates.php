@@ -131,6 +131,33 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         </div>
     </div>
 
+    <div class="mealsdb-backfill-allocations">
+        <h2><?php echo esc_html__( 'Allocation Engine Backfill', 'meals-db' ); ?></h2>
+        <div style="padding: 0 0 12px;">
+            <p class="description">
+                <?php echo esc_html__( 'Populate the allocation tables from historical WooCommerce orders. Run this once after enabling the allocation engine.', 'meals-db' ); ?>
+            </p>
+            <div class="mealsdb-form-row" style="margin-top: 12px;">
+                <label for="mealsdb_backfill_start"><?php echo esc_html__( 'Start Month', 'meals-db' ); ?></label>
+                <input type="month" id="mealsdb_backfill_start" value="<?php echo esc_attr( gmdate( 'Y-m', strtotime( '-6 months' ) ) ); ?>" />
+            </div>
+            <div class="mealsdb-form-row" style="margin-top: 8px;">
+                <label for="mealsdb_backfill_end"><?php echo esc_html__( 'End Month', 'meals-db' ); ?></label>
+                <input type="month" id="mealsdb_backfill_end" value="<?php echo esc_attr( gmdate( 'Y-m' ) ); ?>" />
+            </div>
+            <p style="margin-top: 12px;">
+                <button type="button" class="button" id="mealsdb_backfill_allocations_dry">
+                    <?php echo esc_html__( 'Dry Run', 'meals-db' ); ?>
+                </button>
+                <button type="button" class="button button-primary" id="mealsdb_backfill_allocations_run" disabled>
+                    <?php echo esc_html__( 'Run Backfill', 'meals-db' ); ?>
+                </button>
+                <span id="mealsdb_backfill_allocations_status"></span>
+            </p>
+            <div id="backfill-alloc-result" style="margin-top: 10px;"></div>
+        </div>
+    </div>
+
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
 </div>
@@ -496,6 +523,97 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         }).fail(function() {
             $btn.prop('disabled', false).text('Run Backfill');
             showAddrResult('Request failed.', 'error');
+        });
+    });
+
+})(jQuery);
+</script>
+
+<script>
+(function($) {
+    'use strict';
+
+    var allocNonce = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
+
+    function showAllocResult(msg, type) {
+        var cls = type === 'error' ? 'notice-error' : 'notice-success';
+        $('#backfill-alloc-result').html('<div class="notice ' + cls + ' inline" style="margin:0;"><p>' + msg + '</p></div>');
+    }
+
+    $('#mealsdb_backfill_allocations_dry').on('click', function() {
+        var $btn = $(this);
+        var startMonth = $('#mealsdb_backfill_start').val();
+        var endMonth   = $('#mealsdb_backfill_end').val();
+
+        if (!startMonth || !endMonth) {
+            showAllocResult('Please select both start and end months.', 'error');
+            return;
+        }
+
+        $btn.prop('disabled', true).text('Running...');
+        $('#backfill-alloc-result').empty();
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_backfill_allocation_engine',
+            nonce: allocNonce,
+            start_month: startMonth,
+            end_month: endMonth,
+            dry_run: '1'
+        }, function(resp) {
+            $btn.prop('disabled', false).text('Dry Run');
+            if (resp.success && resp.stats) {
+                var d = resp.stats;
+                showAllocResult(
+                    'Dry run complete. Months: ' + d.months_processed +
+                    ', Clients: ' + d.clients_processed +
+                    ', Orders: ' + d.orders_processed +
+                    ', Allocations: ' + d.allocations_created,
+                    'success'
+                );
+                $('#mealsdb_backfill_allocations_run').prop('disabled', false);
+            } else {
+                showAllocResult(resp.message || 'Dry run failed.', 'error');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false).text('Dry Run');
+            showAllocResult('Request failed.', 'error');
+        });
+    });
+
+    $('#mealsdb_backfill_allocations_run').on('click', function() {
+        if (!confirm('This will populate the allocation tables from historical WooCommerce orders. This cannot be easily undone. Continue?')) {
+            return;
+        }
+
+        var $btn = $(this);
+        var startMonth = $('#mealsdb_backfill_start').val();
+        var endMonth   = $('#mealsdb_backfill_end').val();
+
+        $btn.prop('disabled', true).text('Running...');
+        $('#backfill-alloc-result').empty();
+
+        $.post(ajaxurl, {
+            action: 'mealsdb_backfill_allocation_engine',
+            nonce: allocNonce,
+            start_month: startMonth,
+            end_month: endMonth
+        }, function(resp) {
+            $btn.prop('disabled', false).text('Run Backfill');
+            if (resp.success && resp.stats) {
+                var d = resp.stats;
+                showAllocResult(
+                    'Backfill complete. Months: ' + d.months_processed +
+                    ', Clients: ' + d.clients_processed +
+                    ', Orders: ' + d.orders_processed +
+                    ', Allocations: ' + d.allocations_created,
+                    'success'
+                );
+            } else {
+                showAllocResult(resp.message || 'Backfill failed.', 'error');
+            }
+        }).fail(function() {
+            $btn.prop('disabled', false).text('Run Backfill');
+            showAllocResult('Request failed.', 'error');
         });
     });
 

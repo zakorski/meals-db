@@ -23,6 +23,7 @@ class MealsDB_Ajax_Migration {
         add_action( 'wp_ajax_mealsdb_migration_log',         [ self::class, 'get_log' ] );
         add_action( 'wp_ajax_mealsdb_backfill_allowances',   [ self::class, 'backfill_allowances' ] );
         add_action( 'wp_ajax_mealsdb_backfill_addresses',   [ self::class, 'backfill_addresses' ] );
+        add_action( 'wp_ajax_mealsdb_backfill_allocation_engine', [ self::class, 'backfill_allocation_engine' ] );
     }
 
     /**
@@ -348,6 +349,38 @@ class MealsDB_Ajax_Migration {
         }
 
         wp_send_json_success($result);
+    }
+
+    /**
+     * Backfill allocation tables from historical WooCommerce orders.
+     */
+    public static function backfill_allocation_engine(): void {
+        $nonce = isset( $_REQUEST['nonce'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['nonce'] ) ) : '';
+        if ( $nonce === '' || ! wp_verify_nonce( $nonce, 'mealsdb_nonce' ) ) {
+            wp_send_json( [ 'success' => false, 'message' => 'Invalid request.' ] );
+        }
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json( [ 'success' => false, 'message' => 'Insufficient permissions.' ], 403 );
+        }
+
+        $start_month = isset( $_REQUEST['start_month'] ) ? sanitize_text_field( $_REQUEST['start_month'] ) : '';
+        $end_month   = isset( $_REQUEST['end_month'] ) ? sanitize_text_field( $_REQUEST['end_month'] ) : gmdate( 'Y-m' );
+        $dry_run     = isset( $_REQUEST['dry_run'] ) && $_REQUEST['dry_run'] === '1';
+
+        if ( ! preg_match( '/^\d{4}-\d{2}$/', $start_month ) || ! preg_match( '/^\d{4}-\d{2}$/', $end_month ) ) {
+            wp_send_json( [ 'success' => false, 'message' => 'Invalid month format. Use YYYY-MM.' ] );
+        }
+
+        require_once dirname( dirname( __FILE__ ) ) . '/services/class-backfill-allocations-engine.php';
+
+        $result = MealsDB_Backfill_Allocations_Engine::run( $start_month, $end_month, $dry_run );
+
+        if ( isset( $result['error'] ) ) {
+            wp_send_json( [ 'success' => false, 'message' => $result['error'] ] );
+        }
+
+        wp_send_json( [ 'success' => true, 'stats' => $result ] );
     }
 
     /**
