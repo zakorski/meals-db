@@ -185,11 +185,16 @@ class MealsDB_Delivery_Slip_Generator {
         foreach ($rows as $row) {
             $uid = (int) $row['wp_user_id'];
 
-            if (!empty($row['first_name'])) {
-                $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
-            }
-            if (!empty($row['last_name'])) {
-                $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
+            // Decrypt only fields that are actually encrypted (PII fields).
+            // first_name, last_name, etc. are stored in plaintext.
+            foreach (['individual_id', 'requisition_id', 'vet_health_card', 'delivery_initials'] as $field) {
+                if (!empty($row[$field])) {
+                    try {
+                        $row[$field] = MealsDB_Encryption::decrypt($row[$field]);
+                    } catch (Exception $e) {
+                        // Legacy plaintext data — keep as-is.
+                    }
+                }
             }
 
             $clients[$uid] = $row;

@@ -263,25 +263,6 @@ class MealsDB_Initials_Validator {
 	}
 
 	/**
-	 * Normalize unit/apartment number
-	 *
-	 * Treats empty, null, and "0" as equivalent.
-	 *
-	 * @param mixed $unit Unit/apartment number.
-	 * @return string Normalized unit.
-	 */
-	private static function normalize_unit($unit) {
-		$unit = trim(strtolower((string) $unit));
-
-		// Treat empty, null, and "0" as equivalent
-		if ($unit === '' || $unit === '0' || is_null($unit)) {
-			return '';
-		}
-
-		return $unit;
-	}
-
-	/**
 	 * Normalize postal code
 	 *
 	 * Removes spaces, dashes, and converts to lowercase.
@@ -348,14 +329,10 @@ class MealsDB_Initials_Validator {
 				first_name,
 				last_name,
 				delivery_initials,
-				delivery_street_number,
 				delivery_street_name,
-				delivery_apartment_number,
 				delivery_city,
 				delivery_postal_code,
-				street_number,
 				street_name,
-				apartment_number,
 				city,
 				postal_code
 			FROM `{$clients_table}`
