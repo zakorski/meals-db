@@ -785,6 +785,9 @@ class MealsDB_Quick_Order_Ajax {
             $order->set_customer_id($client_id);
         }
 
+        $added_count   = 0;
+        $dropped_items = [];
+
         foreach ($items as $item) {
             $product_id   = $item['product_id'];
             $variation_id = $item['variation_id'] ?? 0;
@@ -792,6 +795,11 @@ class MealsDB_Quick_Order_Ajax {
 
             $product = $variation_id > 0 ? wc_get_product($variation_id) : wc_get_product($product_id);
             if (!$product instanceof WC_Product) {
+                $dropped_items[] = [
+                    'product_id'   => $product_id,
+                    'variation_id' => $variation_id,
+                    'quantity'     => $quantity,
+                ];
                 continue;
             }
 
@@ -802,6 +810,22 @@ class MealsDB_Quick_Order_Ajax {
             } else {
                 $order->add_product($product, $quantity);
             }
+            $added_count++;
+        }
+
+        if (!empty($dropped_items)) {
+            error_log(sprintf(
+                '[MealsDB QuickOrder] Dropped %d item(s) from order (client_id=%d, mealsdb_client_id=%d) because wc_get_product() returned no product: %s',
+                count($dropped_items),
+                $client_id,
+                $mealsdb_client_id,
+                wp_json_encode($dropped_items)
+            ));
+        }
+
+        if ($added_count === 0) {
+            $order->delete(true);
+            return new WP_Error('mealsdb_no_valid_products', __('No valid products could be added to the order.', 'meals-db'));
         }
 
         // Look up client fee data.
@@ -861,6 +885,20 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         $order->calculate_totals();
+
+        // Sanity check: a negative total indicates fee/contribution misconfiguration
+        // or a hook mutating line prices. Reject rather than persist a bad order.
+        if ((float) $order->get_total() < 0) {
+            error_log(sprintf(
+                '[MealsDB QuickOrder] Refusing to save order %d: computed total is negative (%s) for client_id=%d mealsdb_client_id=%d',
+                $order->get_id(),
+                $order->get_total(),
+                $client_id,
+                $mealsdb_client_id
+            ));
+            $order->delete(true);
+            return new WP_Error('mealsdb_invalid_total', __('Order total calculation failed. Please try again.', 'meals-db'));
+        }
 
         if ($order_date instanceof DateTimeImmutable) {
             try {

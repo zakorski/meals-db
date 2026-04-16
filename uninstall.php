@@ -24,18 +24,32 @@ MealsDB_Autoloader::register($plugin_dir);
 
 global $wpdb;
 
-// Drop plugin-specific tables (order respects FK dependencies: CLIENT_RATES before CLIENTS)
-$tables = [
-    MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES),
-    MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS),
-    MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS),
-    MealsDB_DB::get_table_name(MealsDB_Tables::STAFF),
-    MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS),
-    MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS),
-    MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG),
+// Drop every plugin-specific table. Ordered so child tables drop before
+// parents (CLIENT_RATES, CLIENT_ALLOCATIONS, DELIVERY_ALLOCATIONS reference
+// CLIENTS). Derived from the canonical table list in MealsDB_Tables so this
+// list cannot drift from the schema again.
+$drop_order = [
+    MealsDB_Tables::CLIENT_RATES,
+    MealsDB_Tables::CLIENT_ALLOCATIONS,
+    MealsDB_Tables::DELIVERY_ALLOCATIONS,
+    MealsDB_Tables::DRAFTS,
+    MealsDB_Tables::IGNORED_CONFLICTS,
+    MealsDB_Tables::AUDIT_LOG,
+    MealsDB_Tables::STAFF,
+    MealsDB_Tables::PRODUCTS,
+    MealsDB_Tables::CLIENTS,
 ];
 
-foreach ($tables as $table) {
+// Defensive: include any table declared in MealsDB_Tables::all() but missing
+// from the explicit drop order above.
+foreach (MealsDB_Tables::all() as $base) {
+    if (!in_array($base, $drop_order, true)) {
+        $drop_order[] = $base;
+    }
+}
+
+foreach ($drop_order as $base) {
+    $table   = MealsDB_DB::get_table_name($base);
     $escaped = str_replace('`', '``', $table);
     $sql     = "DROP TABLE IF EXISTS `{$escaped}`";
     $wpdb->query($sql);
@@ -44,9 +58,12 @@ foreach ($tables as $table) {
     }
 }
 
-// Clear scheduled events
-wp_clear_scheduled_hook('mealsdb_nightly_sync');
+// Clear scheduled events. Note: the actual hook name registered by the
+// plugin is mealsdb_nightly_allocation_sync (see meals-db-main.php).
+wp_clear_scheduled_hook('mealsdb_nightly_allocation_sync');
+wp_clear_scheduled_hook('mealsdb_nightly_sync'); // legacy name, for safety
 
-// Optional: remove plugin options or transients
-// delete_option('mealsdb_plugin_version');
-// delete_transient('mealsdb_sync_cache');
+// Remove plugin options so reinstall is a clean slate.
+delete_option('mealsdb_settings');
+delete_option('mealsdb_db_version');
+delete_option('mealsdb_zone_delivery_schedule');

@@ -37,7 +37,7 @@ class MealsDB_Products {
             sku VARCHAR(100) NULL,
             category_data JSON NULL,
             is_published TINYINT(1) NOT NULL DEFAULT 1,
-            product_type ENUM('meal','side') NOT NULL DEFAULT 'meal',
+            product_type ENUM('meal','side','fee','other') NOT NULL DEFAULT 'meal',
             taxable TINYINT(1) NOT NULL DEFAULT 0,
             main_ingredient VARCHAR(40) NOT NULL DEFAULT '',
             dietary_tags JSON NULL,
