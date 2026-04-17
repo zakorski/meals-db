@@ -203,6 +203,24 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 </style>
 
 <script>
+// Shared HTML escape helper used by every IIFE on this page so server
+// JSON values flow through one defensive layer before reaching .html().
+window.MealsDBUpdates = window.MealsDBUpdates || {};
+window.MealsDBUpdates.escHtml = function (value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+};
+window.MealsDBUpdates.intText = function (value) {
+    return String(parseInt(value, 10) || 0);
+};
+</script>
+
+<script>
 (function($) {
     'use strict';
 
@@ -253,7 +271,9 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     function showNotice(msg, type) {
         $('#mealsdb-sync-status').show()
             .removeClass('notice-info notice-success notice-error')
-            .addClass('notice-' + type).html('<p>' + msg + '</p>');
+            .addClass('notice-' + type)
+            .empty()
+            .append($('<p></p>').text(msg));
     }
 
     // Start
@@ -389,7 +409,11 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 
     function showBackfillResult(msg, type) {
         var cls = type === 'error' ? 'notice-error' : 'notice-success';
-        $('#backfill-result').html('<div class="notice ' + cls + ' inline" style="margin:0;"><p>' + msg + '</p></div>');
+        var $wrap = $('<div></div>')
+            .attr('class', 'notice ' + cls + ' inline')
+            .css('margin', 0)
+            .append($('<p></p>').text(msg));
+        $('#backfill-result').empty().append($wrap);
     }
 
     $('#backfill-dry-run').on('click', function() {
@@ -461,7 +485,11 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 
     function showAddrResult(msg, type) {
         var cls = type === 'error' ? 'notice-error' : 'notice-success';
-        $('#backfill-addr-result').html('<div class="notice ' + cls + ' inline" style="margin:0;"><p>' + msg + '</p></div>');
+        var $wrap = $('<div></div>')
+            .attr('class', 'notice ' + cls + ' inline')
+            .css('margin', 0)
+            .append($('<p></p>').text(msg));
+        $('#backfill-addr-result').empty().append($wrap);
     }
 
     $('#backfill-addr-dry-run').on('click', function() {
@@ -541,7 +569,11 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 
     function showAllocResult(msg, type) {
         var cls = type === 'error' ? 'notice-error' : 'notice-success';
-        $('#backfill-alloc-result').html('<div class="notice ' + cls + ' inline" style="margin:0;"><p>' + msg + '</p></div>');
+        var $wrap = $('<div></div>')
+            .attr('class', 'notice ' + cls + ' inline')
+            .css('margin', 0)
+            .append($('<p></p>').text(msg));
+        $('#backfill-alloc-result').empty().append($wrap);
     }
 
     $('#mealsdb_backfill_allocations_dry').on('click', function() {
@@ -576,7 +608,10 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
                 );
                 $('#mealsdb_backfill_allocations_run').prop('disabled', false);
             } else {
-                showAllocResult(resp.message || 'Dry run failed.', 'error');
+                showAllocResult(
+                    (resp.data && resp.data.message) || resp.message || 'Dry run failed.',
+                    'error'
+                );
             }
         }).fail(function() {
             $btn.prop('disabled', false).text('Dry Run');
@@ -613,7 +648,10 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
                     'success'
                 );
             } else {
-                showAllocResult(resp.message || 'Backfill failed.', 'error');
+                showAllocResult(
+                    (resp.data && resp.data.message) || resp.message || 'Backfill failed.',
+                    'error'
+                );
             }
         }).fail(function() {
             $btn.prop('disabled', false).text('Run Backfill');
