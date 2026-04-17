@@ -10,6 +10,25 @@
 class MealsDB_Encryption {
 
     /**
+     * Canonical list of columns in meals_clients that are stored encrypted.
+     *
+     * Derived from the columns the migration (class-migration.php) runs
+     * MealsDB_Encryption::encrypt() against. Used as a single source of truth
+     * so read paths don't drift from writes (a historical source of bugs
+     * where first_name/last_name/delivery_initials were decrypted despite
+     * being stored plaintext).
+     *
+     * Keep in sync with MealsDB_Client_Form::$encrypted_fields.
+     */
+    public const ENCRYPTED_CLIENT_COLUMNS = [
+        'individual_id',
+        'requisition_id',
+        'vet_health_card',
+        'diet_concerns',
+        'client_comments',
+    ];
+
+    /**
      * Get the AES key from environment variable or wp-config.php constants.
      *
      * @return string
@@ -129,6 +148,57 @@ class MealsDB_Encryption {
         }
 
         return $plaintext;
+    }
+
+    /**
+     * Decrypt a value that may be in new, legacy, or plaintext form.
+     *
+     * Returns the original input unchanged when decryption fails (e.g. the
+     * value was never encrypted, or is in a format we no longer support).
+     * This keeps read paths resilient during the legacy-to-new migration
+     * window and across the historical inconsistencies where some columns
+     * were decrypted even though the migration stored them as plaintext.
+     *
+     * Use this on every read path. Only use decrypt() directly when a
+     * decryption failure should be a hard error (e.g. the migrator itself).
+     *
+     * @param string $value
+     * @return string
+     */
+    public static function safe_decrypt(string $value): string {
+        if ($value === '') {
+            return '';
+        }
+        try {
+            return self::decrypt($value);
+        } catch (\Throwable $e) {
+            return $value;
+        }
+    }
+
+    /**
+     * Classify the encrypted payload format of a stored value.
+     *
+     * @param string $value Raw column value.
+     * @return string One of 'empty', 'new' (HMAC+IV+CT), 'legacy' (IV+CT only),
+     *                or 'plaintext' (not a valid encrypted payload).
+     */
+    public static function classify_payload(string $value): string {
+        if ($value === '') {
+            return 'empty';
+        }
+        $raw = base64_decode($value, true);
+        if ($raw === false) {
+            return 'plaintext';
+        }
+        $len = strlen($raw);
+        if ($len >= 49) {
+            return 'new';
+        }
+        if ($len >= 17) {
+            return 'legacy';
+        }
+        return 'plaintext';
     }
 
     /**

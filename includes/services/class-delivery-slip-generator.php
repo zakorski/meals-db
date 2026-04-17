@@ -98,12 +98,17 @@ class MealsDB_Delivery_Slip_Generator {
         foreach ($rows as $row) {
             $uid = (int) $row['wp_user_id'];
 
-            // Decrypt encrypted PII fields.
+            // first_name and last_name are stored plaintext (see migration
+            // writes). Previous versions of this method called decrypt() on
+            // them unconditionally, which would throw in any install that
+            // never had legacy-encrypted name rows. safe_decrypt keeps the
+            // read path tolerant for any historical row that *was* encrypted,
+            // and returns plaintext unchanged otherwise.
             if (!empty($row['first_name'])) {
-                $row['first_name'] = MealsDB_Encryption::decrypt($row['first_name']);
+                $row['first_name'] = MealsDB_Encryption::safe_decrypt($row['first_name']);
             }
             if (!empty($row['last_name'])) {
-                $row['last_name'] = MealsDB_Encryption::decrypt($row['last_name']);
+                $row['last_name'] = MealsDB_Encryption::safe_decrypt($row['last_name']);
             }
 
             $clients[$uid] = $row;
@@ -185,15 +190,12 @@ class MealsDB_Delivery_Slip_Generator {
         foreach ($rows as $row) {
             $uid = (int) $row['wp_user_id'];
 
-            // Decrypt only fields that are actually encrypted (PII fields).
-            // first_name, last_name, etc. are stored in plaintext.
-            foreach (['individual_id', 'requisition_id', 'vet_health_card', 'delivery_initials'] as $field) {
+            // Decrypt encrypted PII fields. delivery_initials is a 3-char
+            // plaintext value (see schema) so it is not included here even
+            // though earlier versions of this loop tried to decrypt it.
+            foreach (['individual_id', 'requisition_id', 'vet_health_card'] as $field) {
                 if (!empty($row[$field])) {
-                    try {
-                        $row[$field] = MealsDB_Encryption::decrypt($row[$field]);
-                    } catch (Exception $e) {
-                        // Legacy plaintext data — keep as-is.
-                    }
+                    $row[$field] = MealsDB_Encryption::safe_decrypt($row[$field]);
                 }
             }
 

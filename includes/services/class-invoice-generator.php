@@ -718,11 +718,7 @@ class MealsDB_Invoice_Generator {
         foreach ($client_rows as &$c) {
             foreach (['requisition_id', 'individual_id'] as $field) {
                 if (!empty($c[$field])) {
-                    try {
-                        $c[$field] = MealsDB_Encryption::decrypt($c[$field]);
-                    } catch (Exception $e) {
-                        // Legacy plaintext data — keep as-is.
-                    }
+                    $c[$field] = MealsDB_Encryption::safe_decrypt($c[$field]);
                 }
             }
         }
@@ -1000,11 +996,7 @@ class MealsDB_Invoice_Generator {
         foreach ($client_rows as &$c) {
             foreach (['requisition_id', 'individual_id'] as $field) {
                 if (!empty($c[$field])) {
-                    try {
-                        $c[$field] = MealsDB_Encryption::decrypt($c[$field]);
-                    } catch (Exception $e) {
-                        // Legacy plaintext data — keep as-is.
-                    }
+                    $c[$field] = MealsDB_Encryption::safe_decrypt($c[$field]);
                 }
             }
         }
@@ -1079,11 +1071,7 @@ class MealsDB_Invoice_Generator {
             // Decrypt vet_health_card (encrypted PII field).
             $health_card = '';
             if (!empty($vet['vet_health_card'])) {
-                try {
-                    $health_card = MealsDB_Encryption::decrypt($vet['vet_health_card']);
-                } catch (Exception $e) {
-                    $health_card = '';
-                }
+                $health_card = MealsDB_Encryption::safe_decrypt($vet['vet_health_card']);
             }
 
             $billing_address = trim($vet['street_name'] ?? '');
