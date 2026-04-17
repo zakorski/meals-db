@@ -438,6 +438,36 @@ class MealsDB_Sync_Mutate {
         $escaped_table  = str_replace('`', '``', $clients_table);
         $escaped_pk     = str_replace('`', '``', $primary_key);
         $escaped_column = str_replace('`', '``', $wp_column);
+
+        // Refuse if this WP user is already linked to a different client.
+        // The schema does not (yet) declare wp_user_id as UNIQUE, so this
+        // is an application-level check; multiple clients sharing a WP
+        // user yields nondeterministic results in find_government_client_
+        // by_wp_user (which uses LIMIT 1) and silently mis-routes orders.
+        $existing_client_sql = sprintf(
+            'SELECT `%s` FROM `%s` WHERE `%s` = %%d AND `%s` <> %%d LIMIT 1',
+            $escaped_pk,
+            $escaped_table,
+            $escaped_column,
+            $escaped_pk
+        );
+        $existing_client = $connection->get_var(
+            $connection->prepare($existing_client_sql, $user_id, $client_id)
+        );
+        if ($existing_client !== null) {
+            if ($transaction_started) {
+                $connection->query('ROLLBACK');
+            }
+            return new WP_Error(
+                'mealsdb_link_user_already_linked',
+                sprintf(
+                    __('WordPress user %1$d is already linked to Meals DB client %2$d. Unlink the existing client first.', 'meals-db'),
+                    $user_id,
+                    (int) $existing_client
+                )
+            );
+        }
+
         $update_sql = sprintf('UPDATE `%s` SET `%s` = %%d WHERE `%s` = %%d', $escaped_table, $escaped_column, $escaped_pk);
 
         $result = $connection->query($connection->prepare($update_sql, $user_id, $client_id));
