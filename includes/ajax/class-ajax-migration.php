@@ -28,6 +28,11 @@ class MealsDB_Ajax_Migration {
 
     /**
      * Test a direct database connection and detect the table prefix.
+     *
+     * On success, the credentials are stashed in a short-lived transient
+     * keyed to the requesting admin and a random token is returned. The
+     * client never has to keep the password in JS memory or re-transmit
+     * it on subsequent AJAX calls — it sends the token instead.
      */
     public static function test_db(): void {
         self::verify();
@@ -47,8 +52,68 @@ class MealsDB_Ajax_Migration {
             wp_send_json_error( [ 'message' => $result['error'] ] );
         }
 
+        $token = self::stash_credentials( [
+            'host' => $host,
+            'name' => $name,
+            'user' => $user,
+            'pass' => $pass,
+        ] );
+
+        if ( $token !== '' ) {
+            $result['creds_token'] = $token;
+        }
+
         wp_send_json_success( $result );
     }
+
+    /**
+     * Store source-DB credentials in a per-user transient for ~1 hour and
+     * return an opaque token the client can use in lieu of resending creds.
+     *
+     * The transient is keyed by user_id + random token, so credentials from
+     * one admin's session can't be reached by another. Returns '' if the
+     * caller is unauthenticated (shouldn't happen — verify() ran already).
+     */
+    private static function stash_credentials( array $creds ): string {
+        $user_id = get_current_user_id();
+        if ( $user_id <= 0 ) {
+            return '';
+        }
+        $token = bin2hex( random_bytes( 16 ) );
+        set_transient(
+            self::credentials_transient_key( $user_id, $token ),
+            $creds,
+            HOUR_IN_SECONDS
+        );
+        return $token;
+    }
+
+    /**
+     * Resolve a previously-stashed credentials token to the original creds.
+     * Returns null if the token is unknown / expired / belongs to a
+     * different user.
+     */
+    private static function resolve_credentials( string $token ): ?array {
+        $token = preg_replace( '/[^a-f0-9]/', '', strtolower( $token ) );
+        if ( $token === '' || strlen( $token ) !== 32 ) {
+            return null;
+        }
+        $user_id = get_current_user_id();
+        if ( $user_id <= 0 ) {
+            return null;
+        }
+        $value = get_transient( self::credentials_transient_key( $user_id, $token ) );
+        return is_array( $value ) ? $value : null;
+    }
+
+    private static function credentials_transient_key( int $user_id, string $token ): string {
+        return 'mealsdb_mig_creds_' . $user_id . '_' . $token;
+    }
+
+    /**
+     * Maximum migration upload size in bytes (2 GB hard cap).
+     */
+    private const MAX_UPLOAD_BYTES = 2147483648;
 
     /**
      * Handle SQL file upload.
@@ -75,10 +140,26 @@ class MealsDB_Ajax_Migration {
             wp_send_json_error( [ 'message' => $msg ] );
         }
 
+        if ( ! is_uploaded_file( $file['tmp_name'] ) ) {
+            wp_send_json_error( [ 'message' => 'Invalid upload.' ] );
+        }
+
+        if ( ! empty( $file['size'] ) && (int) $file['size'] > self::MAX_UPLOAD_BYTES ) {
+            wp_send_json_error( [ 'message' => 'File exceeds the migration upload size limit.' ] );
+        }
+
         // Validate extension
         $ext = strtolower( pathinfo( $file['name'], PATHINFO_EXTENSION ) );
         if ( ! in_array( $ext, [ 'sql', 'gz' ], true ) ) {
             wp_send_json_error( [ 'message' => 'Only .sql and .sql.gz files are allowed.' ] );
+        }
+
+        // Sniff content: SQL dumps start with comment / SQL keyword tokens;
+        // gzip files always start with the magic bytes 1f 8b. This catches
+        // a renamed PHP file before it hits disk in the upload directory.
+        $head = (string) file_get_contents( $file['tmp_name'], false, null, 0, 1024 );
+        if ( ! self::looks_like_sql_or_gzip( $head, $ext ) ) {
+            wp_send_json_error( [ 'message' => 'File contents do not look like a SQL dump or gzip archive.' ] );
         }
 
         // Move to uploads directory
@@ -89,21 +170,28 @@ class MealsDB_Ajax_Migration {
             wp_send_json_error( [ 'message' => 'Cannot create upload directory.' ] );
         }
 
-        // Write an .htaccess to block direct access
-        $htaccess = $dest_dir . '/.htaccess';
-        if ( ! file_exists( $htaccess ) ) {
-            file_put_contents( $htaccess, "Deny from all\n" );
-        }
+        // Defence-in-depth web blockers. .htaccess only helps Apache; nginx
+        // and IIS ignore it entirely, which is why we also drop an
+        // index.php that returns 403 and store with a random filename.
+        self::ensure_web_block_files( $dest_dir );
 
-        $dest_path = $dest_dir . '/migration-source.sql';
+        // Random destination filename. Defeats both the predictable
+        // /uploads/mealsdb-migration/migration-source.sql guess and the
+        // race where two concurrent uploads clobber each other.
+        $token     = bin2hex( random_bytes( 16 ) );
+        $dest_path = $dest_dir . '/migration-' . $token . '.' . ( $ext === 'gz' ? 'sql.gz' : 'sql' );
 
         if ( ! move_uploaded_file( $file['tmp_name'], $dest_path ) ) {
             wp_send_json_error( [ 'message' => 'Failed to move uploaded file.' ] );
         }
 
+        // Restrict permissions where the OS lets us.
+        @chmod( $dest_path, 0600 );
+
         // Detect prefix
         $prefix = MealsDB_Migration::detect_prefix( $dest_path );
         if ( ! $prefix ) {
+            @unlink( $dest_path );
             wp_send_json_error( [ 'message' => 'File uploaded but could not detect a table prefix in the SQL dump.' ] );
         }
 
@@ -115,6 +203,57 @@ class MealsDB_Ajax_Migration {
             'file_size' => $file_size,
             'file_mb'   => round( $file_size / ( 1024 * 1024 ), 1 ),
         ] );
+    }
+
+    /**
+     * Coarse content sniff for SQL dumps (.sql) and gzip archives (.sql.gz).
+     */
+    private static function looks_like_sql_or_gzip( string $head, string $ext ): bool {
+        if ( $head === '' ) {
+            return false;
+        }
+        if ( $ext === 'gz' ) {
+            return strncmp( $head, "\x1f\x8b", 2 ) === 0;
+        }
+        // SQL: tolerate UTF-8 BOM and leading whitespace, then expect a
+        // comment marker or one of the common dump keywords.
+        $trimmed = ltrim( $head, "\xEF\xBB\xBF \t\r\n" );
+        $upper   = strtoupper( substr( $trimmed, 0, 32 ) );
+        $prefixes = [ '--', '#', '/*', 'CREATE ', 'DROP ', 'INSERT ', 'SET ', 'USE ', 'LOCK ', 'UNLOCK ', 'ALTER ', 'START TRANSACTION', 'BEGIN' ];
+        foreach ( $prefixes as $prefix ) {
+            if ( strncmp( $upper, $prefix, strlen( $prefix ) ) === 0 ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Drop web-server blockers in the migration upload dir.
+     *
+     * .htaccess covers Apache; index.php covers nginx/IIS by serving a
+     * 403 if anyone manages to guess a filename inside the directory.
+     */
+    private static function ensure_web_block_files( string $dir ): void {
+        $htaccess = $dir . '/.htaccess';
+        if ( ! file_exists( $htaccess ) ) {
+            file_put_contents( $htaccess, "Order allow,deny\nDeny from all\n" );
+            @chmod( $htaccess, 0600 );
+        }
+
+        $index_php = $dir . '/index.php';
+        if ( ! file_exists( $index_php ) ) {
+            file_put_contents(
+                $index_php,
+                "<?php\nhttp_response_code(403);\nexit;\n"
+            );
+            @chmod( $index_php, 0600 );
+        }
+
+        $index_html = $dir . '/index.html';
+        if ( ! file_exists( $index_html ) ) {
+            file_put_contents( $index_html, '' );
+        }
     }
 
     /**
@@ -180,16 +319,36 @@ class MealsDB_Ajax_Migration {
         self::verify();
         set_time_limit( 300 );
 
-        $host          = sanitize_text_field( wp_unslash( $_POST['db_host'] ?? '' ) );
-        $name          = sanitize_text_field( wp_unslash( $_POST['db_name'] ?? '' ) );
-        $user          = sanitize_text_field( wp_unslash( $_POST['db_user'] ?? '' ) );
-        $pass          = (string) wp_unslash( $_POST['db_pass'] ?? '' );
         $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
         $table_index   = (int) ( $_POST['table_index'] ?? 0 );
-        $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
+        $dry_run       = filter_var(
+            $_POST['dry_run'] ?? true,
+            FILTER_VALIDATE_BOOLEAN,
+            FILTER_NULL_ON_FAILURE
+        );
+        if ( $dry_run === null ) {
+            $dry_run = true;
+        }
+
+        // Prefer the credentials token issued by test_db. The raw fields
+        // remain accepted only as a backwards-compat fallback.
+        $token = sanitize_text_field( wp_unslash( $_POST['creds_token'] ?? '' ) );
+        $creds = $token !== '' ? self::resolve_credentials( $token ) : null;
+
+        if ( $creds !== null ) {
+            $host = $creds['host'] ?? '';
+            $name = $creds['name'] ?? '';
+            $user = $creds['user'] ?? '';
+            $pass = $creds['pass'] ?? '';
+        } else {
+            $host = sanitize_text_field( wp_unslash( $_POST['db_host'] ?? '' ) );
+            $name = sanitize_text_field( wp_unslash( $_POST['db_name'] ?? '' ) );
+            $user = sanitize_text_field( wp_unslash( $_POST['db_user'] ?? '' ) );
+            $pass = (string) wp_unslash( $_POST['db_pass'] ?? '' );
+        }
 
         if ( ! $host || ! $name || ! $user || ! $source_prefix ) {
-            wp_send_json_error( [ 'message' => 'Missing database connection parameters.' ] );
+            wp_send_json_error( [ 'message' => 'Missing database connection parameters. Re-run "Test connection" to refresh credentials.' ] );
         }
 
         $result = MealsDB_Migration::copy_table_from_db( $host, $name, $user, $pass, $source_prefix, $table_index, $dry_run );
