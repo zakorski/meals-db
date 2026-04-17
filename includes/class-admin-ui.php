@@ -1462,6 +1462,22 @@ class MealsDB_Admin_UI {
             </div>
             <script>
             (function($) {
+                // Defense-in-depth HTML escape for any value flowing from the
+                // server JSON response into HTML strings below. Even though
+                // most fields are integers / DB-controlled month strings,
+                // future schema additions could let user-controlled text in.
+                function escHtml(value) {
+                    if (value === null || value === undefined) return '';
+                    return String(value)
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#39;');
+                }
+                function intText(value) {
+                    return String(parseInt(value, 10) || 0);
+                }
                 $(function() {
                     var clientId = <?php echo (int) $client_id; ?>;
                     if (clientId <= 0) return;
@@ -1496,17 +1512,18 @@ class MealsDB_Admin_UI {
                         var rows = '';
                         $.each(response.history, function(i, row) {
                             var status = row.is_finalized == 1 ? '<?php echo esc_js(__('Finalized', 'meals-db')); ?>' : '<?php echo esc_js(__('Open', 'meals-db')); ?>';
-                            rows += '<tr class="mealsdb-allocation-history-row" data-month="' + row.billing_month + '" style="cursor: pointer;">' +
-                                '<td>' + row.billing_month + '</td>' +
-                                '<td>' + (row.permitted_mains || 0) + '</td>' +
-                                '<td>' + (row.used_mains || 0) + '</td>' +
-                                '<td>' + (row.overage_mains || 0) + '</td>' +
-                                '<td>' + (row.permitted_sides || 0) + '</td>' +
-                                '<td>' + (row.used_sides || 0) + '</td>' +
-                                '<td>' + (row.overage_sides || 0) + '</td>' +
-                                '<td>' + status + '</td>' +
+                            var month = escHtml(row.billing_month || '');
+                            rows += '<tr class="mealsdb-allocation-history-row" data-month="' + month + '" style="cursor: pointer;">' +
+                                '<td>' + month + '</td>' +
+                                '<td>' + intText(row.permitted_mains) + '</td>' +
+                                '<td>' + intText(row.used_mains) + '</td>' +
+                                '<td>' + intText(row.overage_mains) + '</td>' +
+                                '<td>' + intText(row.permitted_sides) + '</td>' +
+                                '<td>' + intText(row.used_sides) + '</td>' +
+                                '<td>' + intText(row.overage_sides) + '</td>' +
+                                '<td>' + escHtml(status) + '</td>' +
                             '</tr>' +
-                            '<tr class="mealsdb-allocation-detail-row" data-month="' + row.billing_month + '" style="display: none;">' +
+                            '<tr class="mealsdb-allocation-detail-row" data-month="' + month + '" style="display: none;">' +
                                 '<td colspan="8"><em><?php echo esc_js(__('Loading details...', 'meals-db')); ?></em></td>' +
                             '</tr>';
                         });
@@ -1571,10 +1588,10 @@ class MealsDB_Admin_UI {
                             '</tr></thead><tbody>';
                         $.each(details, function(i, d) {
                             html += '<tr>' +
-                                '<td>' + (d.delivery_date || '') + '</td>' +
-                                '<td>' + (d.wc_order_id || '') + '</td>' +
-                                '<td>' + (d.mains_count || 0) + '</td>' +
-                                '<td>' + (d.sides_count || 0) + '</td>' +
+                                '<td>' + escHtml(d.delivery_date || '') + '</td>' +
+                                '<td>' + intText(d.wc_order_id) + '</td>' +
+                                '<td>' + intText(d.mains_count) + '</td>' +
+                                '<td>' + intText(d.sides_count) + '</td>' +
                             '</tr>';
                         });
                         html += '</tbody></table>';
