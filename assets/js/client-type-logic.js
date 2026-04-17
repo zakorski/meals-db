@@ -39,10 +39,15 @@
                 return $();
             }
 
+            // A section that belongs to multiple client types (e.g.
+            // data-client-type="sdnb,veteran") must still be collected as
+            // belonging to each of those types. The earlier `.every(item ===
+            // normalizedType)` filter excluded shared sections, leaving them
+            // visible across type changes when they shouldn't have been.
             return $form.find('.mealsdb-section[data-client-type]').filter(function () {
                 const $section = $(this);
                 const types = parseClientTypes($section.attr('data-client-type'));
-                return types.length > 0 && types.includes(normalizedType) && types.every((item) => item === normalizedType);
+                return types.length > 0 && types.includes(normalizedType);
             });
         };
 

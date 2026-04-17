@@ -2430,6 +2430,15 @@
                     }
 
                     dropdown.show();
+                }).fail(function(xhr, status) {
+                    // Surface the failure rather than leaving the dropdown
+                    // silently empty on a network error / 5xx.
+                    if (status === 'abort') {
+                        return;
+                    }
+                    dropdown.empty()
+                        .append('<div class="client-option--empty" style="padding:6px 10px;color:#a00;">Search failed. Please try again.</div>')
+                        .show();
                 });
             }, 300);
         });
