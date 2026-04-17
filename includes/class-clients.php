@@ -68,6 +68,19 @@ class MealsDB_Clients {
      * Permanently delete a client and any optionally related rows.
      */
     public static function delete_client(int $client_id): bool {
+        // Defence-in-depth: enforce capability here even if a future caller
+        // skips the AJAX gate. Deletes cascade across drafts, conflicts,
+        // and the client row itself.
+        if (function_exists('current_user_can')
+            && (!is_user_logged_in() || !MealsDB_Permissions::can_access_plugin())) {
+            error_log('[MealsDB] delete_client blocked: insufficient permissions.');
+            return false;
+        }
+
+        if ($client_id <= 0) {
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) {
             return false;
@@ -86,8 +99,11 @@ class MealsDB_Clients {
             ];
         }
 
-        $wpdb->query('START TRANSACTION');
-        $transaction_started = true;
+        // Verify START TRANSACTION actually succeeded before assuming we
+        // have transactional safety; otherwise COMMIT/ROLLBACK below would
+        // be no-ops while the destructive deletes still happen.
+        $started = $wpdb->query('START TRANSACTION');
+        $transaction_started = $started !== false;
 
         $success = true;
 
