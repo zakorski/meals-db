@@ -3,6 +3,8 @@
  * Force rebuild logic for the external Meals DB schema.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Schema_Rebuild {
 
     /**

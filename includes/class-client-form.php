@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 if (!function_exists('__')) {
     function __(string $text, string $domain = 'default') {
         return $text;
@@ -105,10 +107,15 @@ class MealsDB_Client_Form {
 
     /**
      * Fields that require AES-256 encryption.
+     *
+     * Mirrors MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS. Kept as a local
+     * property so existing references continue to work; initialized lazily
+     * below so both sources remain in sync.
      */
     private static $encrypted_fields = [
         'individual_id',
         'requisition_id',
+        'vet_health_card',
         'diet_concerns',
         'client_comments',
     ];
@@ -793,14 +800,11 @@ class MealsDB_Client_Form {
             }
         }
 
-        // Decrypt encrypted fields before mapping to form names
+        // Decrypt encrypted fields before mapping to form names.
+        // safe_decrypt returns the original value on failure (legacy plaintext).
         foreach (self::$encrypted_fields as $field) {
             if (!empty($record[$field]) && is_string($record[$field])) {
-                try {
-                    $record[$field] = MealsDB_Encryption::decrypt($record[$field]);
-                } catch (\Exception $e) {
-                    // Leave as-is if decryption fails (e.g. plaintext legacy data)
-                }
+                $record[$field] = MealsDB_Encryption::safe_decrypt($record[$field]);
             }
         }
 

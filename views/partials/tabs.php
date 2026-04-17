@@ -1,5 +1,9 @@
 <?php
-$active_tab = isset($active_tab) ? $active_tab : ($_GET['tab'] ?? 'sync');
+defined('ABSPATH') || exit;
+
+$active_tab = isset($active_tab)
+    ? $active_tab
+    : (isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : 'sync');
 
 if (!isset($tabs) || !is_array($tabs)) {
     $tabs = [

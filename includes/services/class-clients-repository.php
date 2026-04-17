@@ -3,6 +3,8 @@
  * Repository for interacting with Meals DB client records.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Clients_Repository {
     /**
      * @var string|null
@@ -20,11 +22,18 @@ class MealsDB_Clients_Repository {
     }
 
     /**
-     * Retrieve all clients.
+     * Retrieve clients.
      *
+     * Paginated — callers must specify a page size and (optionally) offset.
+     * The previous signature returned the whole table, which is unsafe on
+     * production sites with thousands of clients.
+     *
+     * @param int $limit  Max rows. Hard-capped at 1000 even if a higher
+     *                    value is requested.
+     * @param int $offset Row offset. Clamped to 0.
      * @return array<int, array<string, mixed>>
      */
-    public function get_all_clients(): array {
+    public function get_all_clients(int $limit = 200, int $offset = 0): array {
         global $wpdb;
 
         if (!$this->ensure_table_name()) {
@@ -32,8 +41,15 @@ class MealsDB_Clients_Repository {
             return [];
         }
 
+        $limit  = max(1, min(1000, $limit));
+        $offset = max(0, $offset);
+
         try {
-            $sql = sprintf('SELECT * FROM `%s`', $this->escape_table_name());
+            $sql = $wpdb->prepare(
+                sprintf('SELECT * FROM `%s` LIMIT %%d OFFSET %%d', $this->escape_table_name()),
+                $limit,
+                $offset
+            );
             $rows = $wpdb->get_results($sql, ARRAY_A);
 
             if ($rows === null) {
@@ -98,7 +114,11 @@ class MealsDB_Clients_Repository {
         // Type gate: Private clients are not stored in the external database
         $client_type = $data['client_type'] ?? '';
         if (is_string($client_type) && $client_type !== '' && !self::is_government_client($client_type)) {
-            error_log(sprintf('[MealsDB Clients Repository] Skipped external DB write for Private client: %s %s', $data['first_name'] ?? '', $data['last_name'] ?? ''));
+            error_log(sprintf(
+                '[MealsDB Clients Repository] Skipped external DB write for Private client (client_id=%s, type=%s).',
+                $data['client_id'] ?? 'new',
+                $client_type
+            ));
             return false;
         }
 

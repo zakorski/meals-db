@@ -5,6 +5,8 @@
  * @package MealsDB
  */
 
+defined('ABSPATH') || exit;
+
 /**
  * Handles AJAX requests for draft management.
  */
@@ -28,7 +30,12 @@ class MealsDB_Ajax_Drafts {
             wp_send_json_error(['message' => 'Unauthorized']);
         }
 
-        $payload = $_POST['form_data'] ?? '';
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+        }
+
+        $payload = isset($_POST['form_data']) ? wp_unslash((string) $_POST['form_data']) : '';
         parse_str($payload, $form);
 
         if (empty($form)) {
@@ -65,6 +72,11 @@ class MealsDB_Ajax_Drafts {
 
         if (!MealsDB_Permissions::can_access_plugin()) {
             wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
         }
 
         $draft_id = intval($_POST['id'] ?? 0);

@@ -39,11 +39,17 @@ class MealsDB_Ajax_Invoice {
             return;
         }
 
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+            return;
+        }
+
         // Get and validate parameters
-        $invoice_type = sanitize_text_field($_POST['invoice_type'] ?? '');
-        $start_date = sanitize_text_field($_POST['start_date'] ?? '');
-        $end_date = sanitize_text_field($_POST['end_date'] ?? '');
-        $zone = sanitize_text_field($_POST['zone'] ?? '');
+        $invoice_type = sanitize_text_field(wp_unslash($_POST['invoice_type'] ?? ''));
+        $start_date = sanitize_text_field(wp_unslash($_POST['start_date'] ?? ''));
+        $end_date = sanitize_text_field(wp_unslash($_POST['end_date'] ?? ''));
+        $zone = sanitize_text_field(wp_unslash($_POST['zone'] ?? ''));
         $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
         if ($weeks_in_month < 1 || $weeks_in_month > 6) {
             $weeks_in_month = 4;
@@ -92,7 +98,8 @@ class MealsDB_Ajax_Invoice {
                     return;
             }
         } catch (Exception $e) {
-            wp_send_json_error(['message' => 'Error generating invoice: ' . $e->getMessage()]);
+            error_log('[MealsDB Invoice] generate_invoice failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to generate invoice. Please contact an administrator.', 'meals-db')]);
         }
     }
 
@@ -241,10 +248,16 @@ class MealsDB_Ajax_Invoice {
             return;
         }
 
-        $client_type    = sanitize_text_field($_POST['client_type'] ?? '');
-        $start_date     = sanitize_text_field($_POST['start_date'] ?? '');
-        $end_date       = sanitize_text_field($_POST['end_date'] ?? '');
-        $zone           = sanitize_text_field($_POST['zone'] ?? '');
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+            return;
+        }
+
+        $client_type    = sanitize_text_field(wp_unslash($_POST['client_type'] ?? ''));
+        $start_date     = sanitize_text_field(wp_unslash($_POST['start_date'] ?? ''));
+        $end_date       = sanitize_text_field(wp_unslash($_POST['end_date'] ?? ''));
+        $zone           = sanitize_text_field(wp_unslash($_POST['zone'] ?? ''));
         $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
 
         if (empty($start_date) || empty($end_date)) {
@@ -255,9 +268,11 @@ class MealsDB_Ajax_Invoice {
         try {
             if ($client_type === 'SDNB') {
                 $overages = MealsDB_Invoice_Generator::get_sdnb_overages($zone, $start_date, $end_date, $weeks_in_month);
+                // Only fields actually consumed by the preview UI + create_overage_orders.
+                // individual_id (encrypted PII) is intentionally not returned here —
+                // the UI keys off wp_user_id and displays last/first name only.
                 $rows = array_map(function ($row) {
                     return [
-                        'individual_id'       => $row['client']['individual_id'] ?? '',
                         'name'                => ($row['client']['last_name'] ?? '') . ', ' . ($row['client']['first_name'] ?? ''),
                         'wp_user_id'          => (int) ($row['client']['wp_user_id'] ?? 0),
                         'bnm_mains'           => $row['bnm_mains'],
@@ -266,7 +281,17 @@ class MealsDB_Ajax_Invoice {
                     ];
                 }, $overages);
             } elseif ($client_type === 'Veteran') {
-                $rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+                $vac_rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+                // Strip encrypted PII (K# / health_card) from the JSON surface.
+                $rows = array_map(function ($row) {
+                    return [
+                        'name'                => (($row['last_name'] ?? '') . ', ' . ($row['first_name'] ?? '')),
+                        'wp_user_id'          => (int) ($row['wp_user_id'] ?? 0),
+                        'bnm_mains'           => (int) ($row['bnm_mains'] ?? 0),
+                        'overage_tax_sides'   => (int) ($row['overage_tax_sides'] ?? 0),
+                        'overage_nontax_sides'=> (int) ($row['overage_nontax_sides'] ?? 0),
+                    ];
+                }, $vac_rows);
             } else {
                 wp_send_json_error(['message' => 'Invalid client type.']);
                 return;
@@ -274,7 +299,8 @@ class MealsDB_Ajax_Invoice {
 
             wp_send_json_success(['overages' => array_values($rows), 'count' => count($rows)]);
         } catch (Exception $e) {
-            wp_send_json_error(['message' => 'Error: ' . $e->getMessage()]);
+            error_log('[MealsDB Invoice] preview_overages failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to preview overages. Please contact an administrator.', 'meals-db')]);
         }
     }
 
@@ -291,8 +317,14 @@ class MealsDB_Ajax_Invoice {
             return;
         }
 
-        $invoice_date  = sanitize_text_field($_POST['invoice_date'] ?? '');
-        $overages_json = stripslashes($_POST['overages'] ?? '[]');
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+            return;
+        }
+
+        $invoice_date  = sanitize_text_field(wp_unslash($_POST['invoice_date'] ?? ''));
+        $overages_json = isset($_POST['overages']) ? wp_unslash((string) $_POST['overages']) : '[]';
         $overages      = json_decode($overages_json, true);
 
         if (!is_array($overages) || empty($overages)) {

@@ -10,6 +10,8 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Initials {
 
     /**

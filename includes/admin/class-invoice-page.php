@@ -53,14 +53,19 @@ class MealsDB_Invoice_Page {
             'mealsdb-invoice-js',
             plugins_url('assets/js/invoice.js', dirname(dirname(__FILE__))),
             ['jquery', 'jquery-ui-datepicker'],
-            '1.0.249',
+            defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false,
             true
         );
 
-        wp_localize_script('mealsdb-invoice-js', 'mealsdbInvoice', [
+        $invoice_data = [
             'ajaxUrl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('mealsdb_invoice_nonce')
-        ]);
+            'nonce'   => wp_create_nonce('mealsdb_invoice_nonce'),
+        ];
+        wp_add_inline_script(
+            'mealsdb-invoice-js',
+            'window.mealsdbInvoice = ' . wp_json_encode($invoice_data) . ';',
+            'before'
+        );
     }
 
     /**

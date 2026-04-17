@@ -30,7 +30,11 @@ if (!defined('MEALS_DB_PLUGIN_URL')) {
 }
 
 if (!defined('MEALS_DB_VERSION')) {
-    define('MEALS_DB_VERSION', '1.0.0');
+    if (!function_exists('get_plugin_data')) {
+        require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    }
+    $mealsdb_plugin_data = get_plugin_data(__FILE__, false, false);
+    define('MEALS_DB_VERSION', $mealsdb_plugin_data['Version'] ?? '0.0.0');
 }
 
 // Old Autoloader - Deprecated.
@@ -73,6 +77,23 @@ add_action('plugins_loaded', function () {
     MealsDB_Product_Display_Sync::init();
     MealsDB_Sync::register_hooks();
     MealsDB_Allocation_Hooks::init();
+});
+
+/**
+ * Run schema install/upgrade when the plugin version advances.
+ *
+ * WordPress only fires register_activation_hook() on explicit activation, so
+ * auto-updates or manual file replacement would otherwise leave the schema
+ * behind. This compares the stored DB version to the current plugin version
+ * on every admin load and runs the idempotent installer when they diverge.
+ */
+add_action('admin_init', function () {
+    $stored = get_option('mealsdb_db_version', '0.0.0');
+    if (version_compare($stored, MEALS_DB_VERSION, '<')) {
+        require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
+        MealsDB_Installer::install();
+        update_option('mealsdb_db_version', MEALS_DB_VERSION, false);
+    }
 });
 
 /**
@@ -121,6 +142,7 @@ function meals_db_check_requirements() {
     // Load DB schema and run installer
     require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
     MealsDB_Installer::install();
+    update_option('mealsdb_db_version', MEALS_DB_VERSION, false);
 
     // Seed the zone delivery schedule option (Phase Q).
     if (false === get_option('mealsdb_zone_delivery_schedule')) {

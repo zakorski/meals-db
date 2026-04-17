@@ -3,6 +3,8 @@
  * Contains write operations used to mutate data during Meals DB synchronization.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Sync_Mutate {
     /**
      * Active wpdb connection, when available.

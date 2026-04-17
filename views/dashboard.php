@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 MealsDB_Permissions::enforce();
 
 $sync_error        = null;

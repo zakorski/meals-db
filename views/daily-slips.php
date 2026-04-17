@@ -2,6 +2,8 @@
 /**
  * Daily Slips admin view — packing, picking, and delivery slips.
  */
+defined('ABSPATH') || exit;
+
 ?>
 <?php
 $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);

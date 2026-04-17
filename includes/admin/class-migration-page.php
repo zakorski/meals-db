@@ -51,14 +51,19 @@ class MealsDB_Migration_Page {
             true
         );
 
-        wp_localize_script( 'mealsdb-migration', 'mealsdbMigration', [
+        $migration_data = [
             'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
             'nonce'        => wp_create_nonce( 'mealsdb_migration_nonce' ),
             'maxUploadMb'  => min(
                 (int) ini_get( 'upload_max_filesize' ),
                 (int) ini_get( 'post_max_size' )
             ),
-        ] );
+        ];
+        wp_add_inline_script(
+            'mealsdb-migration',
+            'window.mealsdbMigration = ' . wp_json_encode( $migration_data ) . ';',
+            'before'
+        );
     }
 
     public static function render(): void {

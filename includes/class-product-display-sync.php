@@ -8,6 +8,8 @@
  * of calling WooCommerce APIs on every page load.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Product_Display_Sync {
 
     /**

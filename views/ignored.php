@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 MealsDB_Permissions::enforce();
 
 global $wpdb;
@@ -6,8 +8,17 @@ global $wpdb;
 $ignored = [];
 $ignored_error = null;
 
+$per_page = 50;
+$paged    = max(1, (int) ($_GET['paged'] ?? 1));
+$offset   = ($paged - 1) * $per_page;
+
 $table = MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS);
-$sql = "SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at FROM `{$table}` ORDER BY created_at DESC";
+$total_ignored = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
+$sql = $wpdb->prepare(
+    "SELECT id, field_name, source_value, target_value, ignored_by, created_at AS ignored_at FROM `{$table}` ORDER BY created_at DESC LIMIT %d OFFSET %d",
+    $per_page,
+    $offset
+);
 
 $results = $wpdb->get_results($sql, ARRAY_A);
 
@@ -96,6 +107,33 @@ unset($item);
                 <?php endforeach; ?>
             </tbody>
         </table>
+
+        <?php
+        $total_pages = (int) ceil($total_ignored / $per_page);
+        if ($total_pages > 1):
+            $base_url = admin_url('admin.php?page=mealsdb&tab=ignored');
+        ?>
+            <div class="tablenav bottom">
+                <div class="tablenav-pages">
+                    <span class="displaying-num">
+                        <?= esc_html(sprintf(
+                            /* translators: %s: total number of ignored mismatches */
+                            _n('%s item', '%s items', $total_ignored, 'meals-db'),
+                            number_format_i18n($total_ignored)
+                        )) ?>
+                    </span>
+                    <span class="pagination-links">
+                        <?php for ($p = 1; $p <= $total_pages; $p++): ?>
+                            <?php if ($p === $paged): ?>
+                                <span class="button button-primary"><?= (int) $p ?></span>
+                            <?php else: ?>
+                                <a class="button" href="<?= esc_url(add_query_arg('paged', $p, $base_url)) ?>"><?= (int) $p ?></a>
+                            <?php endif; ?>
+                        <?php endfor; ?>
+                    </span>
+                </div>
+            </div>
+        <?php endif; ?>
     <?php endif; ?>
 </div>
 

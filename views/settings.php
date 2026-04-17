@@ -3,6 +3,8 @@
  * Plugin settings screen — encryption key and operational settings.
  */
 
+defined('ABSPATH') || exit;
+
 if ( ! current_user_can( 'manage_options' ) ) {
     return;
 }

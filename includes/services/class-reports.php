@@ -3,6 +3,8 @@
  * Reporting service for Meals DB.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Reports {
     /**
      * @var wpdb|null
@@ -542,7 +544,7 @@ class MealsDB_Reports {
             $meta   = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
             $case_size = isset($meta['case_size']) && (int) $meta['case_size'] > 0
                 ? (int) $meta['case_size']
-                : (int) get_post_meta($pid, 'case_size', true) ?: 1;
+                : ((int) get_post_meta($pid, 'case_size', true) ?: 1);
 
             $wc_product    = wc_get_product($pid);
             $sku           = $wc_product ? $wc_product->get_sku() : '';
@@ -841,8 +843,11 @@ class MealsDB_Reports {
 
         $clients = [];
         foreach ($client_rows as $row) {
-            $row['first_name'] = !empty($row['first_name']) ? MealsDB_Encryption::decrypt($row['first_name']) : '';
-            $row['last_name']  = !empty($row['last_name']) ? MealsDB_Encryption::decrypt($row['last_name']) : '';
+            // first_name/last_name are stored plaintext in the current schema
+            // but this report historically called decrypt() directly, which
+            // would throw on any plaintext row. safe_decrypt is tolerant.
+            $row['first_name'] = !empty($row['first_name']) ? MealsDB_Encryption::safe_decrypt($row['first_name']) : '';
+            $row['last_name']  = !empty($row['last_name']) ? MealsDB_Encryption::safe_decrypt($row['last_name']) : '';
             $clients[] = $row;
         }
 

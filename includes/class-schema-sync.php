@@ -3,6 +3,8 @@
  * Synchronize external Meals DB schemas with installer definitions.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Schema_Sync {
 
     /**

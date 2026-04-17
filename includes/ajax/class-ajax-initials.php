@@ -5,6 +5,8 @@
  * @package MealsDB
  */
 
+defined('ABSPATH') || exit;
+
 /**
  * Handles AJAX requests for initials generation and validation.
  */
@@ -30,9 +32,14 @@ class MealsDB_Ajax_Initials {
             wp_send_json(['success' => false, 'message' => 'Unauthorized']);
         }
 
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json(['success' => false, 'message' => __('Rate limit exceeded. Please try again later.', 'meals-db')]);
+        }
+
         // Get optional client data for address-based generation
-        $first_name = sanitize_text_field($_POST['first_name'] ?? '');
-        $last_name = sanitize_text_field($_POST['last_name'] ?? '');
+        $first_name = sanitize_text_field(wp_unslash($_POST['first_name'] ?? ''));
+        $last_name = sanitize_text_field(wp_unslash($_POST['last_name'] ?? ''));
         $client_data = self::get_client_data_from_request();
 
         // Use new validator if we have client data, otherwise fallback to legacy
@@ -64,7 +71,12 @@ class MealsDB_Ajax_Initials {
             wp_send_json(['success' => false, 'message' => 'Unauthorized']);
         }
 
-        $code = sanitize_text_field($_POST['code'] ?? '');
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json(['success' => false, 'message' => __('Rate limit exceeded. Please try again later.', 'meals-db')]);
+        }
+
+        $code = sanitize_text_field(wp_unslash($_POST['code'] ?? ''));
         $client_id_raw = $_POST['client_id'] ?? null;
         $client_id = null;
 
@@ -130,7 +142,7 @@ class MealsDB_Ajax_Initials {
 
         foreach ($address_fields as $field) {
             if (isset($_POST[$field])) {
-                $client_data[$field] = sanitize_text_field($_POST[$field]);
+                $client_data[$field] = sanitize_text_field(wp_unslash($_POST[$field]));
             }
         }
 

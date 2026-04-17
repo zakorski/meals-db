@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 if (!empty($success)) :
     $success_message = is_string($success)
         ? $success

@@ -3,6 +3,8 @@
  * Updates and maintenance screen.
  */
 
+defined('ABSPATH') || exit;
+
 $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 ?>
 <div id="mealsdb-updates" class="mealsdb-updates">
