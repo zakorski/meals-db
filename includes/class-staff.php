@@ -296,7 +296,14 @@ class MealsDB_Staff {
         global $wpdb;
 
         $table = self::get_staff_table_name();
-        $sql   = "SELECT id, first_name, last_name, email, phone, wordpress_user_id FROM {$table} ORDER BY last_name ASC, first_name ASC";
+        // Hard cap so a future staff list of thousands can't load the
+        // entire table into PHP memory in a single render. This is a
+        // staff directory; the cap is high enough to never bite real
+        // installs but low enough to bound the worst case.
+        $sql   = $wpdb->prepare(
+            "SELECT id, first_name, last_name, email, phone, wordpress_user_id FROM {$table} ORDER BY last_name ASC, first_name ASC LIMIT %d",
+            5000
+        );
         $results = $wpdb->get_results($sql, ARRAY_A);
         if (!is_array($results)) {
             MealsDB_Logger::error('[MealsDB Staff] Failed to load staff records: ' . ($wpdb->last_error ?: 'unknown error'));

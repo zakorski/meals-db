@@ -6,6 +6,17 @@
 defined('ABSPATH') || exit;
 
 class MealsDB_Sync_Compare {
+
+    /**
+     * Cached WP user list keyed by spl_object_hash of the query instance.
+     * find_probable_matches_for_client is invoked per mismatch row in the
+     * dashboard render loop; without this cache each invocation re-runs
+     * the (paged) get_wp_users query.
+     *
+     * @var array<string, array<int, WP_User>>
+     */
+    private $wp_users_cache = [];
+
     /**
      * Retrieve and compare Meals DB and WordPress data to identify mismatches.
      *
@@ -323,9 +334,12 @@ class MealsDB_Sync_Compare {
      * @return array<int, array<string, mixed>>
      */
     public function find_probable_matches_for_client(array $client, MealsDB_Sync_Query $query): array {
-        $wp_users = $query->get_wp_users();
+        $key = spl_object_hash($query);
+        if (!isset($this->wp_users_cache[$key])) {
+            $this->wp_users_cache[$key] = $query->get_wp_users();
+        }
 
-        return $this->find_probable_matches($client, $wp_users);
+        return $this->find_probable_matches($client, $this->wp_users_cache[$key]);
     }
 
     /**
