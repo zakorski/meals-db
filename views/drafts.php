@@ -32,7 +32,7 @@ if ($results === null && $wpdb->last_error) {
     );
 } elseif (is_array($results)) {
     foreach ($results as $row) {
-        $decoded = json_decode($row['data'], true);
+        $decoded = MealsDB_Client_Form::decode_draft_payload((string) ($row['data'] ?? ''));
         if (!is_array($decoded)) {
             error_log('[MealsDB] Skipping corrupted draft payload for draft ID ' . ($row['id'] ?? 'unknown') . '.');
             continue;

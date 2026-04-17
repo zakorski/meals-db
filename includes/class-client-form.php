@@ -623,6 +623,20 @@ class MealsDB_Client_Form {
     }
 
     /**
+     * Reduce an arbitrary form payload (e.g. parse_str output) to the
+     * known DB columns + sanitised values, preserving array-typed fields
+     * for round-trip display in resumed drafts.
+     *
+     * Used by the drafts AJAX endpoint to defend against parse_str's
+     * willingness to populate the target with attacker-named keys.
+     */
+    public static function filter_to_known_fields(array $data): array {
+        $unknown_keys = [];
+
+        return self::sanitize_payload($data, $unknown_keys, true);
+    }
+
+    /**
      * Save client data to meals_clients table.
      *
      * @param array $data
@@ -927,7 +941,7 @@ class MealsDB_Client_Form {
 
         unset($data['draft_id'], $data['resume_draft']);
 
-        $json = json_encode($data);
+        $json = self::encode_draft_payload($data);
         if ($json === false) {
             error_log('[MealsDB] Draft save failed: unable to encode payload.');
             return false;
@@ -1035,6 +1049,69 @@ class MealsDB_Client_Form {
         }
 
         return true;
+    }
+
+    /**
+     * Encode a draft payload for storage.
+     *
+     * Drafts contain the same PII columns the live record encrypts, so
+     * encrypt the JSON envelope under the same key. Falls back to plain
+     * JSON when encryption is unavailable (e.g. test fixtures without a
+     * configured key) so saving still works in those environments.
+     *
+     * @return string|false
+     */
+    private static function encode_draft_payload(array $data) {
+        $json = function_exists('wp_json_encode') ? wp_json_encode($data) : json_encode($data);
+        if (!is_string($json)) {
+            return false;
+        }
+        if (!class_exists('MealsDB_Encryption')) {
+            return $json;
+        }
+        try {
+            return MealsDB_Encryption::encrypt($json);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB] Draft encrypt fallback to plaintext: ' . $e->getMessage());
+            return $json;
+        }
+    }
+
+    /**
+     * Decode a stored draft payload, supporting:
+     *   - new format (encrypted base64),
+     *   - legacy plaintext JSON written before encryption was added.
+     *
+     * Returns null if neither path produces a JSON object.
+     */
+    public static function decode_draft_payload(string $stored): ?array {
+        if ($stored === '') {
+            return null;
+        }
+
+        // Cheap shape check: legacy drafts are JSON objects/arrays so the
+        // first non-whitespace character is { or [. Try that path first
+        // to avoid invoking the encryption layer (and its legacy-decrypt
+        // warning) on every read of a plaintext-era draft.
+        $trimmed = ltrim($stored);
+        if ($trimmed !== '' && ($trimmed[0] === '{' || $trimmed[0] === '[')) {
+            $decoded = json_decode($stored, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        if (class_exists('MealsDB_Encryption')) {
+            $decrypted = MealsDB_Encryption::safe_decrypt($stored);
+            if (is_string($decrypted) && $decrypted !== '' && $decrypted !== $stored) {
+                $decoded = json_decode($decrypted, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

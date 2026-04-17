@@ -36,20 +36,31 @@ class MealsDB_Ajax_Drafts {
         }
 
         $payload = isset($_POST['form_data']) ? wp_unslash((string) $_POST['form_data']) : '';
+
+        // Cap input length before parse_str. parse_str on a large/deeply
+        // nested string allocates aggressively; an authorised but
+        // malicious caller could otherwise push the worker into a
+        // long parse / OOM condition.
+        if (strlen($payload) > 65536) {
+            wp_send_json_error(['message' => 'Form payload is too large.']);
+        }
+
         parse_str($payload, $form);
 
-        if (empty($form)) {
+        if (empty($form) || !is_array($form)) {
             wp_send_json_error(['message' => 'Invalid form data.']);
         }
 
         $draft_id = isset($form['draft_id']) ? intval($form['draft_id']) : null;
+        unset($form['draft_id'], $form['resume_draft']);
 
-        if ($draft_id !== null) {
-            unset($form['draft_id']);
-        }
+        // Intersect against the known DB-column allowlist so attacker-
+        // named keys parse_str happily accepts (e.g. nested arrays of
+        // arbitrary depth) cannot make it into the stored draft.
+        $form = MealsDB_Client_Form::filter_to_known_fields($form);
 
-        if (isset($form['resume_draft'])) {
-            unset($form['resume_draft']);
+        if (empty($form)) {
+            wp_send_json_error(['message' => 'No recognised form fields supplied.']);
         }
 
         $saved_id = MealsDB_Client_Form::save_draft($form, $draft_id);
