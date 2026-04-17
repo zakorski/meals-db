@@ -5,6 +5,8 @@
  * Weighted demand with seasonal awareness, inventory subtraction,
  * and category exclusions.
  */
+defined('ABSPATH') || exit;
+
 ?>
 <div id="mealsdb-purchase-order" class="mealsdb-purchase-order">
     <p class="description">

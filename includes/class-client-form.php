@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 if (!function_exists('__')) {
     function __(string $text, string $domain = 'default') {
         return $text;

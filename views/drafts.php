@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 MealsDB_Permissions::enforce();
 
 global $wpdb;
@@ -6,8 +8,20 @@ global $wpdb;
 $drafts = [];
 $draft_error = null;
 
+$per_page = 50;
+$paged    = max(1, (int) ($_GET['paged'] ?? 1));
+$offset   = ($paged - 1) * $per_page;
+
 $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
-$results = $wpdb->get_results("SELECT id, data, created_at FROM `{$drafts_table}` ORDER BY created_at DESC", ARRAY_A);
+$total_drafts = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$drafts_table}`");
+$results = $wpdb->get_results(
+    $wpdb->prepare(
+        "SELECT id, data, created_at FROM `{$drafts_table}` ORDER BY created_at DESC LIMIT %d OFFSET %d",
+        $per_page,
+        $offset
+    ),
+    ARRAY_A
+);
 
 if ($results === null && $wpdb->last_error) {
     error_log('[MealsDB] Failed to load draft list: ' . $wpdb->last_error);
@@ -84,6 +98,33 @@ if ($results === null && $wpdb->last_error) {
                 <?php endforeach; ?>
             </tbody>
         </table>
+
+        <?php
+        $total_pages = (int) ceil($total_drafts / $per_page);
+        if ($total_pages > 1):
+            $base_url = admin_url('admin.php?page=mealsdb&tab=drafts');
+        ?>
+            <div class="tablenav bottom">
+                <div class="tablenav-pages">
+                    <span class="displaying-num">
+                        <?= esc_html(sprintf(
+                            /* translators: %s: total number of drafts */
+                            _n('%s draft', '%s drafts', $total_drafts, 'meals-db'),
+                            number_format_i18n($total_drafts)
+                        )) ?>
+                    </span>
+                    <span class="pagination-links">
+                        <?php for ($p = 1; $p <= $total_pages; $p++): ?>
+                            <?php if ($p === $paged): ?>
+                                <span class="button button-primary"><?= (int) $p ?></span>
+                            <?php else: ?>
+                                <a class="button" href="<?= esc_url(add_query_arg('paged', $p, $base_url)) ?>"><?= (int) $p ?></a>
+                            <?php endif; ?>
+                        <?php endfor; ?>
+                    </span>
+                </div>
+            </div>
+        <?php endif; ?>
     <?php endif; ?>
 </div>
 

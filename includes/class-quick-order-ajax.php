@@ -3,6 +3,8 @@
  * AJAX handlers for Meals DB Quick Order feature.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Quick_Order_Ajax {
     /**
      * Register AJAX actions related to the Quick Order UI.

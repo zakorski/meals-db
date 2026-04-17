@@ -10,6 +10,8 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_DB
 {
     /**
@@ -116,17 +118,31 @@ class MealsDB_DB
     }
 
     /**
-     * Retrieve all clients ordered alphabetically by last name.
+     * Retrieve clients ordered alphabetically by last name.
      *
+     * Paginated to avoid loading the whole table into memory on production
+     * sites; pass a larger $limit explicitly if you need more than the default
+     * page and know the dataset is still small.
+     *
+     * @param int $limit  Max rows. Hard-capped at 1000 even if a higher value
+     *                    is requested.
+     * @param int $offset Row offset. Clamped to 0.
      * @return array<int, array<string, mixed>>
      */
-    public static function get_all_clients()
+    public static function get_all_clients(int $limit = 200, int $offset = 0)
     {
         global $wpdb;
 
+        $limit  = max(1, min(1000, $limit));
+        $offset = max(0, $offset);
+
         $clients_table = self::get_table_name(MealsDB_Tables::CLIENTS);
 
-        $sql = "SELECT client_id, first_name, last_name, client_type FROM `{$clients_table}` ORDER BY last_name ASC";
+        $sql = $wpdb->prepare(
+            "SELECT client_id, first_name, last_name, client_type FROM `{$clients_table}` ORDER BY last_name ASC LIMIT %d OFFSET %d",
+            $limit,
+            $offset
+        );
 
         return $wpdb->get_results($sql, ARRAY_A);
     }

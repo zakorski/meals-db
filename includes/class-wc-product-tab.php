@@ -3,6 +3,8 @@
  * WooCommerce product data tab integration for Meals DB metadata.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_WC_Product_Tab {
     private const TAB_ID = 'mealsdb_product_data';
 

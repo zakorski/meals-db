@@ -5,6 +5,8 @@
  * @package MealsDB
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Ajax_Reports {
 
     /**

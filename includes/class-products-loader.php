@@ -3,6 +3,8 @@
  * Helper for loading product metadata from the external Meals DB.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Products_Loader {
     /**
      * Load WooCommerce products with metadata sourced from the Meals DB.

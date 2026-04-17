@@ -2,6 +2,8 @@
 /**
  * Canonical Meals DB schema definitions and helpers.
  */
+defined('ABSPATH') || exit;
+
 class MealsDB_Schema {
     /**
      * Return canonical schema definitions keyed by base table name.

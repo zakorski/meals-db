@@ -2,6 +2,8 @@
 /**
  * Canonical table definitions for the external Meals DB.
  */
+defined('ABSPATH') || exit;
+
 class MealsDB_Tables
 {
     public const CLIENTS = 'meals_clients';

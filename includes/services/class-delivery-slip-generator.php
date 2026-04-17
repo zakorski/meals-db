@@ -9,6 +9,8 @@
  * @package MealsDB
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Delivery_Slip_Generator {
 
     /**

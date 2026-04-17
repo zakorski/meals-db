@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 $active_tab = isset($active_tab) ? $active_tab : ($_GET['tab'] ?? 'sync');
 
 if (!isset($tabs) || !is_array($tabs)) {

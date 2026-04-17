@@ -3,6 +3,8 @@
  * Reporting service for Meals DB.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Reports {
     /**
      * @var wpdb|null

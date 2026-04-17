@@ -6,6 +6,8 @@
  *
  * @package MealsDB
  */
+defined('ABSPATH') || exit;
+
 ?>
 <div id="mealsdb-private-sales">
 

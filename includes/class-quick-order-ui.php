@@ -3,6 +3,8 @@
  * Quick Order admin page renderer.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Quick_Order_UI {
     /**
      * Enqueue Quick Order scripts and styles.
@@ -29,14 +31,15 @@ class MealsDB_Quick_Order_UI {
             $categories_array = MealsDB_Quick_Order_Products::get_categories();
         }
 
-        if (function_exists('wp_localize_script')) {
-            wp_localize_script(
+        if (function_exists('wp_add_inline_script')) {
+            $preload = [
+                'products'   => is_array($products_array) ? array_values($products_array) : [],
+                'categories' => is_array($categories_array) ? array_values($categories_array) : [],
+            ];
+            wp_add_inline_script(
                 'mealsdb-quick-order',
-                'mealsdb_qo_preload',
-                [
-                    'products'   => is_array($products_array) ? array_values($products_array) : [],
-                    'categories' => is_array($categories_array) ? array_values($categories_array) : [],
-                ]
+                'window.mealsdb_qo_preload = ' . wp_json_encode($preload) . ';',
+                'before'
             );
         }
         $attributes = [

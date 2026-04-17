@@ -5,6 +5,8 @@
  * @package MealsDB
  */
 
+defined('ABSPATH') || exit;
+
 /**
  * Handles AJAX requests related to synchronization operations.
  */

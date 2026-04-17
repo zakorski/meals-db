@@ -1,3 +1,4 @@
+<?php defined('ABSPATH') || exit; ?>
 <tr>
     <th><label for="first_name">First Name *</label></th>
     <td><input type="text" name="first_name" required class="regular-text" value="<?= esc_attr($_POST['first_name'] ?? '') ?>" /></td>

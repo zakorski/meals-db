@@ -3,6 +3,8 @@
  * Lightweight autoloader for Meals DB classes.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Autoloader {
     /**
      * Singleton instance retained to keep the autoloader registered.

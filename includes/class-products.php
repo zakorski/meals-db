@@ -3,6 +3,8 @@
  * Manage Meals DB product metadata stored in the external database.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Products {
     private const TABLE = MealsDB_Tables::PRODUCTS;
 

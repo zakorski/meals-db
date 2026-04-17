@@ -6,6 +6,8 @@
  * This class now only manages the encryption key and other plugin settings.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Config
 {
     /** @var self|null */

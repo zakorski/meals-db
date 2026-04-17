@@ -1,5 +1,7 @@
 <?php
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Plugin {
 
     private static $instance = null;

@@ -3,6 +3,8 @@
  * Provides data retrieval methods used during Meals DB synchronization workflows.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Sync_Query {
     /**
      * Active wpdb connection, when available.

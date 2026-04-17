@@ -3,6 +3,8 @@
  * Quick Order product data helpers.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Quick_Order_Products {
     private const ALLOWED_CATEGORY_SLUGS = [
         'main',

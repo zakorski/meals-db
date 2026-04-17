@@ -7,6 +7,8 @@
  * Licensed under the GNU General Public License v3.0 or later.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Admin_UI {
 
     /**
@@ -284,7 +286,13 @@ class MealsDB_Admin_UI {
             $tax_settings   = $this->get_quick_order_tax_settings();
             $client_type    = $this->get_quick_order_client_type();
 
-            wp_localize_script('mealsdb-quick-order', 'mealsdbQuickOrder', [
+            // Use wp_add_inline_script + wp_json_encode instead of wp_localize_script:
+            // wp_localize_script coerces booleans, integers, and floats into
+            // strings (a legacy behaviour retained for back-compat). Our tax
+            // rate is a float and taxableTypes is a nested array that the
+            // quick-order JS consumes as structured data, so we need the real
+            // JSON types to travel through untouched.
+            $quick_order_data = [
                 'ajaxUrl'       => admin_url('admin-ajax.php'),
                 'cloneOrderId'  => $clone_order_id,
                 'nonce'         => wp_create_nonce('mealsdb_nonce'),
@@ -303,7 +311,12 @@ class MealsDB_Admin_UI {
                     'taxableTypes'  => $tax_settings['taxable_types'],
                 ],
                 'clientType'   => $client_type,
-            ]);
+            ];
+            wp_add_inline_script(
+                'mealsdb-quick-order',
+                'window.mealsdbQuickOrder = ' . wp_json_encode($quick_order_data) . ';',
+                'before'
+            );
 
             return;
         }
@@ -379,12 +392,17 @@ class MealsDB_Admin_UI {
             true
         );
 
-        wp_localize_script('mealsdb-admin', 'mealsdb', [
+        $mealsdb_data = [
             'nonce'   => wp_create_nonce('mealsdb_nonce'),
             'ajaxUrl' => admin_url('admin-ajax.php'),
-        ]);
+        ];
+        wp_add_inline_script(
+            'mealsdb-admin',
+            'window.mealsdb = ' . wp_json_encode($mealsdb_data) . ';',
+            'before'
+        );
 
-        wp_localize_script('mealsdb-admin', 'mealsdbClientActions', [
+        $client_actions_data = [
             'activateLabel'      => __('Activate', 'meals-db'),
             'deactivateLabel'    => __('Deactivate', 'meals-db'),
             'genericError'       => __('An unexpected error occurred. Please try again.', 'meals-db'),
@@ -392,9 +410,14 @@ class MealsDB_Admin_UI {
             'deleteError'        => __('Unable to delete the client.', 'meals-db'),
             'deleteSuccess'      => __('Client deleted successfully.', 'meals-db'),
             'emptyState'         => __('No clients found for the selected criteria.', 'meals-db'),
-        ]);
+        ];
+        wp_add_inline_script(
+            'mealsdb-admin',
+            'window.mealsdbClientActions = ' . wp_json_encode($client_actions_data) . ';',
+            'before'
+        );
 
-        wp_localize_script('mealsdb-client-initials', 'mealsdbInitials', [
+        $initials_data = [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonces'  => [
                 'generate' => wp_create_nonce('mealsdb_generate_initials'),
@@ -409,7 +432,12 @@ class MealsDB_Admin_UI {
                 'generateError' => __('Unable to generate initials. Please try again.', 'meals-db'),
                 'validating'    => __('Validating initials…', 'meals-db'),
             ],
-        ]);
+        ];
+        wp_add_inline_script(
+            'mealsdb-client-initials',
+            'window.mealsdbInitials = ' . wp_json_encode($initials_data) . ';',
+            'before'
+        );
     }
 
     /**

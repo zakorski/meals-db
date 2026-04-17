@@ -3,6 +3,8 @@
  * Contains comparison helpers for Meals DB synchronization routines.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Sync_Compare {
     /**
      * Retrieve and compare Meals DB and WordPress data to identify mismatches.

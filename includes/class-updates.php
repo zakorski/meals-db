@@ -7,6 +7,8 @@
  * required by the plugin.
  */
 
+defined('ABSPATH') || exit;
+
 class MealsDB_Updates {
 
     private const REPOSITORY_OWNER = 'zakorski';

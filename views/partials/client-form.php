@@ -1,4 +1,6 @@
 <?php
+defined('ABSPATH') || exit;
+
 $form_mode = isset($form_mode) ? $form_mode : 'add';
 $form_heading = $form_mode === 'edit' ? __('Edit Client', 'meals-db') : __('Add New Client', 'meals-db');
 $submit_label = $form_mode === 'edit' ? __('Update Client', 'meals-db') : __('Submit', 'meals-db');
