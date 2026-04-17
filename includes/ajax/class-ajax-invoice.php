@@ -255,9 +255,11 @@ class MealsDB_Ajax_Invoice {
         try {
             if ($client_type === 'SDNB') {
                 $overages = MealsDB_Invoice_Generator::get_sdnb_overages($zone, $start_date, $end_date, $weeks_in_month);
+                // Only fields actually consumed by the preview UI + create_overage_orders.
+                // individual_id (encrypted PII) is intentionally not returned here —
+                // the UI keys off wp_user_id and displays last/first name only.
                 $rows = array_map(function ($row) {
                     return [
-                        'individual_id'       => $row['client']['individual_id'] ?? '',
                         'name'                => ($row['client']['last_name'] ?? '') . ', ' . ($row['client']['first_name'] ?? ''),
                         'wp_user_id'          => (int) ($row['client']['wp_user_id'] ?? 0),
                         'bnm_mains'           => $row['bnm_mains'],
@@ -266,7 +268,17 @@ class MealsDB_Ajax_Invoice {
                     ];
                 }, $overages);
             } elseif ($client_type === 'Veteran') {
-                $rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+                $vac_rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+                // Strip encrypted PII (K# / health_card) from the JSON surface.
+                $rows = array_map(function ($row) {
+                    return [
+                        'name'                => (($row['last_name'] ?? '') . ', ' . ($row['first_name'] ?? '')),
+                        'wp_user_id'          => (int) ($row['wp_user_id'] ?? 0),
+                        'bnm_mains'           => (int) ($row['bnm_mains'] ?? 0),
+                        'overage_tax_sides'   => (int) ($row['overage_tax_sides'] ?? 0),
+                        'overage_nontax_sides'=> (int) ($row['overage_nontax_sides'] ?? 0),
+                    ];
+                }, $vac_rows);
             } else {
                 wp_send_json_error(['message' => 'Invalid client type.']);
                 return;

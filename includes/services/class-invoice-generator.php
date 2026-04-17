@@ -524,7 +524,7 @@ class MealsDB_Invoice_Generator {
         $bill_sides        = (int) $row['bill_sides'];
         $bill_tax_sides    = (int) $row['bill_tax_sides'];
         $bill_nontax_sides = (int) $row['bill_nontax_sides'];
-        $client_contribution = (float) $row['client_contribution'];
+        $client_contribution_cents = MealsDB_Money::to_cents($row['client_contribution'] ?? 0);
 
         $hst_mult_l1 = $tier ? $tier['hst_multiplier_line1'] : 0;
         $hst_mult_l2 = $tier ? $tier['hst_multiplier_line2'] : 0;
@@ -535,15 +535,20 @@ class MealsDB_Invoice_Generator {
             ? 0 : min($mains_on_line_1, $bill_tax_sides);
         $nontax_sides_on_line_1 = ($bill_sides == 0 || $bill_nontax_sides == 0)
             ? 0 : min($mains_on_line_1 - $tax_sides_on_line_1, $bill_nontax_sides);
-        $hst_line_1 = ($tax_sides_on_line_1 != 0) ? round($tax_sides_on_line_1 * $hst_mult_l1, 2) : 0;
+        // HST multiplier is applied per taxable side: multiplier × count → dollars → cents.
+        $hst_line_1_cents = ($tax_sides_on_line_1 != 0)
+            ? MealsDB_Money::multiply($tax_sides_on_line_1, $hst_mult_l1)
+            : 0;
 
         // Line 2 calculations.
         $mains_on_line_2        = max(0, $bill_mains - $mains_on_line_1);
         $tax_sides_on_line_2    = $bill_tax_sides - $tax_sides_on_line_1;
         $nontax_sides_on_line_2 = $bill_nontax_sides - $nontax_sides_on_line_1;
-        $hst_line_2 = ($tax_sides_on_line_2 != 0) ? round($tax_sides_on_line_2 * $hst_mult_l2, 2) : 0;
+        $hst_line_2_cents = ($tax_sides_on_line_2 != 0)
+            ? MealsDB_Money::multiply($tax_sides_on_line_2, $hst_mult_l2)
+            : 0;
 
-        $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2 + $hst_line_2) > 0;
+        $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2 + $hst_line_2_cents) > 0;
 
         // Determine second line rate.
         $second_line_rate = 0;
@@ -561,34 +566,34 @@ class MealsDB_Invoice_Generator {
         // Line 1.
         $units_l1 = $mains_on_line_1;
         $lines[] = [
-            'service_id'          => $client['service_id'] ?? '',
-            'requisition_id'      => $client['requisition_id'] ?? '',
-            'individual_id'       => $client['individual_id'] ?? '',
-            'last_name'           => $client['last_name'] ?? '',
-            'first_name'          => $client['first_name'] ?? '',
-            'units'               => $units_l1,
-            'unit_type'           => 'Meal',
-            'rate'                => $rate,
-            'basic_cost'          => $units_l1 * $rate,
-            'client_contribution' => $client_contribution,
-            'tax'                 => $hst_line_1,
+            'service_id'                => $client['service_id'] ?? '',
+            'requisition_id'            => $client['requisition_id'] ?? '',
+            'individual_id'             => $client['individual_id'] ?? '',
+            'last_name'                 => $client['last_name'] ?? '',
+            'first_name'                => $client['first_name'] ?? '',
+            'units'                     => $units_l1,
+            'unit_type'                 => 'Meal',
+            'rate'                      => $rate,
+            'basic_cost_cents'          => MealsDB_Money::multiply($units_l1, $rate),
+            'client_contribution_cents' => $client_contribution_cents,
+            'tax_cents'                 => $hst_line_1_cents,
         ];
 
         // Line 2 (if needed).
         if ($has_second_line) {
             $units_l2 = $mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2;
             $lines[] = [
-                'service_id'          => $client['service_id'] ?? '',
-                'requisition_id'      => $client['requisition_id'] ?? '',
-                'individual_id'       => $client['individual_id'] ?? '',
-                'last_name'           => $client['last_name'] ?? '',
-                'first_name'          => $client['first_name'] ?? '',
-                'units'               => $units_l2,
-                'unit_type'           => 'Meal',
-                'rate'                => $second_line_rate,
-                'basic_cost'          => $units_l2 * $second_line_rate,
-                'client_contribution' => 0, // Always 0 on second line
-                'tax'                 => $hst_line_2,
+                'service_id'                => $client['service_id'] ?? '',
+                'requisition_id'            => $client['requisition_id'] ?? '',
+                'individual_id'             => $client['individual_id'] ?? '',
+                'last_name'                 => $client['last_name'] ?? '',
+                'first_name'                => $client['first_name'] ?? '',
+                'units'                     => $units_l2,
+                'unit_type'                 => 'Meal',
+                'rate'                      => $second_line_rate,
+                'basic_cost_cents'          => MealsDB_Money::multiply($units_l2, $second_line_rate),
+                'client_contribution_cents' => 0, // Always 0 on second line
+                'tax_cents'                 => $hst_line_2_cents,
             ];
         }
 
@@ -754,13 +759,15 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Accumulate totals for header.
-        $total_invoice_amount = 0;
-        $total_tax_amount     = 0;
+        // Accumulate totals for header, in integer cents.
+        // Summing many rounded floats drifts; the header total must agree
+        // with the penny-exact sum of every line's (basic + tax − contribution).
+        $total_invoice_amount_cents = 0;
+        $total_tax_amount_cents     = 0;
         foreach ($all_invoice_lines as $line) {
-            $total_cost = $line['basic_cost'] + $line['tax'] - $line['client_contribution'];
-            $total_invoice_amount += $total_cost;
-            $total_tax_amount     += $line['tax'];
+            $line_total_cents = $line['basic_cost_cents'] + $line['tax_cents'] - $line['client_contribution_cents'];
+            $total_invoice_amount_cents += $line_total_cents;
+            $total_tax_amount_cents     += $line['tax_cents'];
         }
 
         // Build CSV content.
@@ -814,8 +821,8 @@ class MealsDB_Invoice_Generator {
         $row5[13] = str_replace('-', '', $end_date);
         $row5[14] = 'Full';
         $row5[15] = self::HST_NUMBER;
-        $row5[16] = number_format($total_tax_amount, 2, '.', '');
-        $row5[17] = number_format($total_invoice_amount, 2, '.', '');
+        $row5[16] = MealsDB_Money::format($total_tax_amount_cents);
+        $row5[17] = MealsDB_Money::format($total_invoice_amount_cents);
         $row5[18] = self::CONTACT_PERSON;
         $row5[20] = self::CONTACT_AREA_CODE;
         $row5[21] = self::CONTACT_PHONE;
@@ -866,8 +873,10 @@ class MealsDB_Invoice_Generator {
 
         // Data rows — one per invoice line.
         foreach ($all_invoice_lines as $line) {
-            $basic_cost = $line['basic_cost'];
-            $total_line_cost = $basic_cost + $line['tax'] - $line['client_contribution'];
+            $basic_cost_cents  = (int) $line['basic_cost_cents'];
+            $tax_cents         = (int) $line['tax_cents'];
+            $contribution_cents = (int) $line['client_contribution_cents'];
+            $total_line_cost_cents = $basic_cost_cents + $tax_cents - $contribution_cents;
 
             $row = array_fill(0, 100, '');
             $row[0]  = '3';
@@ -879,14 +888,14 @@ class MealsDB_Invoice_Generator {
             $row[6]  = number_format($line['units'], 2, '.', '');
             $row[7]  = 'Meal';
             $row[8]  = number_format($line['rate'], 2, '.', '');
-            $row[9]  = number_format($basic_cost, 2, '.', '');
-            $row[23] = number_format($line['client_contribution'], 2, '.', '');
-            $row[24] = number_format($basic_cost, 2, '.', '');
+            $row[9]  = MealsDB_Money::format($basic_cost_cents);
+            $row[23] = MealsDB_Money::format($contribution_cents);
+            $row[24] = MealsDB_Money::format($basic_cost_cents);
             $row[27] = number_format(0, 2, '.', '');
             $row[30] = number_format(0, 2, '.', '');
             $row[33] = number_format(0, 2, '.', '');
-            $row[34] = number_format($line['tax'], 2, '.', '');
-            $row[35] = number_format($total_line_cost, 2, '.', '');
+            $row[34] = MealsDB_Money::format($tax_cents);
+            $row[35] = MealsDB_Money::format($total_line_cost_cents);
             $row[36] = 'I';
             $csv[] = implode(',', $row);
         }
@@ -1132,14 +1141,18 @@ class MealsDB_Invoice_Generator {
             elseif ($sides_allowance_raw == 70) { $sides_allowance_raw = 62; }
 
             // Mains billing.
-            $bill_mains     = min($mains_ordered, $mains_allowance);
-            $bnm_mains      = max(0, $mains_ordered - $mains_allowance);
-            $vet_mains_cost = $bill_mains * $resolved_rate;
+            $bill_mains           = min($mains_ordered, $mains_allowance);
+            $bnm_mains            = max(0, $mains_ordered - $mains_allowance);
+            $vet_mains_cost_cents = MealsDB_Money::multiply($bill_mains, $resolved_rate);
 
-            // Monetary allowance → sides conversion.
-            $monthly_allowance   = $mains_allowance * self::$vac_billing['per_main_allowance'];
-            $allowance_remaining = max(0, $monthly_allowance - $vet_mains_cost);
-            $new_sides           = max(0, (int) floor($allowance_remaining / self::$vac_billing['sides_conversion_rate']));
+            // Monetary allowance → sides conversion, in integer cents.
+            $monthly_allowance_cents   = MealsDB_Money::multiply($mains_allowance, self::$vac_billing['per_main_allowance']);
+            $allowance_remaining_cents = max(0, $monthly_allowance_cents - $vet_mains_cost_cents);
+            // Sides conversion is "dollars per side" — compute in cents, then divide out.
+            $conversion_cents = MealsDB_Money::to_cents(self::$vac_billing['sides_conversion_rate']);
+            $new_sides        = $conversion_cents > 0
+                ? (int) floor($allowance_remaining_cents / $conversion_cents)
+                : 0;
 
             // Use the derived sides count as the actual sides allowance.
             $sides_allowance = $new_sides;
@@ -1155,10 +1168,11 @@ class MealsDB_Invoice_Generator {
 
             $bill_sides = $bill_tax_sides + $bill_nontax_sides;
 
-            // Cost calculations.
-            $sides_cost = ($bill_tax_sides + $bill_nontax_sides) * self::$vac_billing['sides_cost_rate'];
-            $sides_tax  = round(($bill_tax_sides * self::$vac_billing['sides_cost_rate']) * self::$vac_billing['sides_hst_rate'], 2);
-            $new_total  = $vet_mains_cost + $sides_cost + $sides_tax;
+            // Cost calculations, in integer cents.
+            $sides_cost_cents    = MealsDB_Money::multiply($bill_tax_sides + $bill_nontax_sides, self::$vac_billing['sides_cost_rate']);
+            $tax_sides_base_cents = MealsDB_Money::multiply($bill_tax_sides, self::$vac_billing['sides_cost_rate']);
+            $sides_tax_cents     = MealsDB_Money::percent_of($tax_sides_base_cents, self::$vac_billing['sides_hst_rate']);
+            $new_total_cents     = $vet_mains_cost_cents + $sides_cost_cents + $sides_tax_cents;
 
             // Check for errors/warnings
             $errors = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
@@ -1193,12 +1207,12 @@ class MealsDB_Invoice_Generator {
                 $overage_nontax_sides,
                 $bill_sides,
                 $service,
-                number_format($monthly_allowance, 2, '.', ''),
-                number_format($vet_mains_cost, 2, '.', ''),
-                number_format($allowance_remaining, 2, '.', ''),
-                number_format($sides_cost, 2, '.', ''),
-                number_format($sides_tax, 2, '.', ''),
-                number_format($new_total, 2, '.', ''),
+                MealsDB_Money::format($monthly_allowance_cents),
+                MealsDB_Money::format($vet_mains_cost_cents),
+                MealsDB_Money::format($allowance_remaining_cents),
+                MealsDB_Money::format($sides_cost_cents),
+                MealsDB_Money::format($sides_tax_cents),
+                MealsDB_Money::format($new_total_cents),
                 $errors,
                 self::check_new_user_flag((int) ($vet['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No'
             );

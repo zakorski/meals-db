@@ -98,7 +98,11 @@ class MealsDB_Clients_Repository {
         // Type gate: Private clients are not stored in the external database
         $client_type = $data['client_type'] ?? '';
         if (is_string($client_type) && $client_type !== '' && !self::is_government_client($client_type)) {
-            error_log(sprintf('[MealsDB Clients Repository] Skipped external DB write for Private client: %s %s', $data['first_name'] ?? '', $data['last_name'] ?? ''));
+            error_log(sprintf(
+                '[MealsDB Clients Repository] Skipped external DB write for Private client (client_id=%s, type=%s).',
+                $data['client_id'] ?? 'new',
+                $client_type
+            ));
             return false;
         }
 
