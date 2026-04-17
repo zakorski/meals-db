@@ -83,6 +83,26 @@ defined('ABSPATH') || exit;
         return parseFloat(val).toFixed(2);
     }
 
+    // Neutralise CSV-injection (leading =, +, -, @, tab, CR) and quote
+    // any cell that contains commas, double-quotes, or newlines.
+    function csvCell(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        var str = String(value);
+        if (str.length && '=+-@\t\r'.indexOf(str.charAt(0)) !== -1) {
+            str = "'" + str;
+        }
+        if (/[",\r\n]/.test(str)) {
+            str = '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+    }
+
+    function csvRow(cells) {
+        return cells.map(csvCell).join(',') + '\n';
+    }
+
     function exportCsv(csvString, filename) {
         var blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
         var url = URL.createObjectURL(blob);
@@ -105,20 +125,19 @@ defined('ABSPATH') || exit;
             '<th style="text-align:right;">Expected</th><th style="text-align:right;">Actual Paid</th>' +
             '<th style="text-align:right;">Difference</th></tr></thead><tbody>';
 
-        var csv = 'First Name,Last Name,Client Type,Expected,Actual Paid,Difference\n';
+        var csv = csvRow(['First Name', 'Last Name', 'Client Type', 'Expected', 'Actual Paid', 'Difference']);
 
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
             var diff = parseFloat(r.difference);
-            var style = diff !== 0 ? ' style="background:#fff3cd;"' : '';
-            var link = '<a href="' + editUrl + r.client_id + '">' + esc(r.first_name) + '</a>';
+            var style = Math.abs(diff) > 0.005 ? ' style="background:#fff3cd;"' : '';
+            var link = '<a href="' + editUrl + parseInt(r.client_id, 10) + '">' + esc(r.first_name) + '</a>';
             html += '<tr' + style + '><td>' + link + '</td><td>' + esc(r.last_name) + '</td>' +
                 '<td>' + esc(r.client_type) + '</td>' +
                 '<td style="text-align:right;">$' + fmt(r.expected) + '</td>' +
                 '<td style="text-align:right;">$' + fmt(r.actual_paid) + '</td>' +
                 '<td style="text-align:right;">$' + fmt(r.difference) + '</td></tr>';
-            csv += '"' + r.first_name + '","' + r.last_name + '","' + r.client_type + '",' +
-                fmt(r.expected) + ',' + fmt(r.actual_paid) + ',' + fmt(r.difference) + '\n';
+            csv += csvRow([r.first_name, r.last_name, r.client_type, fmt(r.expected), fmt(r.actual_paid), fmt(r.difference)]);
         }
 
         html += '</tbody><tfoot><tr><th colspan="3"><strong>TOTAL</strong></th>' +
@@ -127,7 +146,7 @@ defined('ABSPATH') || exit;
             '<th style="text-align:right;"><strong>$' + fmt(summary.total_difference) + '</strong></th>' +
             '</tr></tfoot></table>';
 
-        csv += '"TOTAL","","","' + fmt(summary.total_expected) + '","' + fmt(summary.total_paid) + '","' + fmt(summary.total_difference) + '"\n';
+        csv += csvRow(['TOTAL', '', '', fmt(summary.total_expected), fmt(summary.total_paid), fmt(summary.total_difference)]);
 
         contribCsvData = csv;
         return html;
@@ -180,23 +199,21 @@ defined('ABSPATH') || exit;
             '<th style="text-align:right;">Total Owed</th><th style="text-align:right;">Actual Paid</th>' +
             '<th style="text-align:right;">Difference</th></tr></thead><tbody>';
 
-        var csv = 'First Name,Last Name,Client Type,Fee Rate,# Orders,Total Owed,Actual Paid,Difference\n';
+        var csv = csvRow(['First Name', 'Last Name', 'Client Type', 'Fee Rate', '# Orders', 'Total Owed', 'Actual Paid', 'Difference']);
 
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
             var diff = parseFloat(r.difference);
-            var style = diff !== 0 ? ' style="background:#fff3cd;"' : '';
-            var link = '<a href="' + editUrl + r.client_id + '">' + esc(r.first_name) + '</a>';
+            var style = Math.abs(diff) > 0.005 ? ' style="background:#fff3cd;"' : '';
+            var link = '<a href="' + editUrl + parseInt(r.client_id, 10) + '">' + esc(r.first_name) + '</a>';
             html += '<tr' + style + '><td>' + link + '</td><td>' + esc(r.last_name) + '</td>' +
                 '<td>' + esc(r.client_type) + '</td>' +
                 '<td style="text-align:right;">$' + fmt(r.delivery_fee) + '</td>' +
-                '<td style="text-align:right;">' + r.num_orders + '</td>' +
+                '<td style="text-align:right;">' + parseInt(r.num_orders, 10) + '</td>' +
                 '<td style="text-align:right;">$' + fmt(r.total_owed) + '</td>' +
                 '<td style="text-align:right;">$' + fmt(r.actual_paid) + '</td>' +
                 '<td style="text-align:right;">$' + fmt(r.difference) + '</td></tr>';
-            csv += '"' + r.first_name + '","' + r.last_name + '","' + r.client_type + '",' +
-                fmt(r.delivery_fee) + ',' + r.num_orders + ',' + fmt(r.total_owed) + ',' +
-                fmt(r.actual_paid) + ',' + fmt(r.difference) + '\n';
+            csv += csvRow([r.first_name, r.last_name, r.client_type, fmt(r.delivery_fee), r.num_orders, fmt(r.total_owed), fmt(r.actual_paid), fmt(r.difference)]);
         }
 
         html += '</tbody><tfoot><tr><th colspan="5"><strong>TOTAL</strong></th>' +
@@ -205,7 +222,7 @@ defined('ABSPATH') || exit;
             '<th style="text-align:right;"><strong>$' + fmt(summary.total_difference) + '</strong></th>' +
             '</tr></tfoot></table>';
 
-        csv += '"TOTAL","","","","","' + fmt(summary.total_owed) + '","' + fmt(summary.total_paid) + '","' + fmt(summary.total_difference) + '"\n';
+        csv += csvRow(['TOTAL', '', '', '', '', fmt(summary.total_owed), fmt(summary.total_paid), fmt(summary.total_difference)]);
 
         delfeeCsvData = csv;
         return html;
