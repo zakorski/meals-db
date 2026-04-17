@@ -11,7 +11,18 @@ if ( ! current_user_can( 'manage_options' ) ) {
 
 $opts = get_option( 'mealsdb_settings', [] );
 
-$enc_key = $opts['encryption_key'] ?? '';
+$enc_key       = isset( $opts['encryption_key'] ) ? (string) $opts['encryption_key'] : '';
+$has_enc_key   = $enc_key !== '';
+
+// Compute a short non-reversible fingerprint so an admin can confirm at a
+// glance which key is configured without exposing the key itself.
+$enc_key_fingerprint = '';
+if ( $has_enc_key ) {
+    $raw = strpos( $enc_key, 'base64:' ) === 0 ? base64_decode( substr( $enc_key, 7 ), true ) : false;
+    if ( is_string( $raw ) && $raw !== '' ) {
+        $enc_key_fingerprint = strtoupper( substr( hash( 'sha256', $raw ), 0, 12 ) );
+    }
+}
 ?>
 <div id="mealsdb-settings" class="mealsdb-settings">
     <p class="description">
@@ -30,9 +41,31 @@ $enc_key = $opts['encryption_key'] ?? '';
                         <label for="mealsdb-enc-key"><?php echo esc_html__( 'AES-256 Key', 'meals-db' ); ?></label>
                     </th>
                     <td>
-                        <input type="text" id="mealsdb-enc-key" name="encryption_key" value="<?php echo esc_attr( $enc_key ); ?>" class="large-text code" autocomplete="off" placeholder="base64:..." />
+                        <?php if ( $has_enc_key ) : ?>
+                            <p>
+                                <strong><?php echo esc_html__( 'Status:', 'meals-db' ); ?></strong>
+                                <span style="color:#46b450;">&#9679; <?php echo esc_html__( 'Configured', 'meals-db' ); ?></span>
+                                <?php if ( $enc_key_fingerprint !== '' ) : ?>
+                                    <code style="margin-left:8px;"><?php echo esc_html( $enc_key_fingerprint ); ?></code>
+                                <?php endif; ?>
+                            </p>
+                        <?php else : ?>
+                            <p>
+                                <strong><?php echo esc_html__( 'Status:', 'meals-db' ); ?></strong>
+                                <span style="color:#dc3232;">&#9679; <?php echo esc_html__( 'Not configured', 'meals-db' ); ?></span>
+                            </p>
+                        <?php endif; ?>
+                        <input type="password"
+                               id="mealsdb-enc-key"
+                               name="encryption_key"
+                               value=""
+                               class="large-text code"
+                               autocomplete="new-password"
+                               spellcheck="false"
+                               data-1p-ignore="true"
+                               placeholder="<?php echo $has_enc_key ? esc_attr__( 'Leave blank to keep current key, or paste a new base64: key to rotate.', 'meals-db' ) : esc_attr__( 'base64:...', 'meals-db' ); ?>" />
                         <p class="description">
-                            <?php echo esc_html__( 'Must be a base64-encoded 256-bit key prefixed with "base64:".', 'meals-db' ); ?>
+                            <?php echo esc_html__( 'Must be a base64-encoded 256-bit key prefixed with "base64:". The current key is never displayed; submit a new one to rotate.', 'meals-db' ); ?>
                         </p>
                         <p style="margin-top:8px;">
                             <button type="button" class="button" id="mealsdb-generate-key">
