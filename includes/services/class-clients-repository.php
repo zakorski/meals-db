@@ -45,8 +45,14 @@ class MealsDB_Clients_Repository {
         $offset = max(0, $offset);
 
         try {
+            // Explicit SELECT list — never SELECT *. The previous wildcard
+            // returned encrypted PII columns and deterministic-hash sidecar
+            // columns to every caller, none of which are needed by current
+            // listing surfaces and which expand the blast radius of any
+            // accidental data echo to the response.
+            $columns = self::default_select_columns();
             $sql = $wpdb->prepare(
-                sprintf('SELECT * FROM `%s` LIMIT %%d OFFSET %%d', $this->escape_table_name()),
+                sprintf('SELECT %s FROM `%s` ORDER BY client_id ASC LIMIT %%d OFFSET %%d', $columns, $this->escape_table_name()),
                 $limit,
                 $offset
             );
@@ -62,6 +68,17 @@ class MealsDB_Clients_Repository {
             error_log('[MealsDB Clients Repository] Exception while fetching clients: ' . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Non-PII columns safe to surface in list views. Keep narrow — encrypted
+     * blobs and *_index hashes are intentionally absent.
+     */
+    private static function default_select_columns(): string {
+        return 'client_id, first_name, last_name, client_type, active, '
+             . 'wp_user_id, client_email, client_phone_1 AS phone_primary, '
+             . 'street_name, city, province, postal_code, '
+             . 'delivery_area_zone, delivery_area_name';
     }
 
     /**
@@ -169,6 +186,16 @@ class MealsDB_Clients_Repository {
                 error_log(sprintf('[MealsDB Clients Repository] Skipped external DB update for Private client ID %d', $client_id));
                 return false;
             }
+        }
+
+        // Whitelist incoming keys against the canonical schema. Caller
+        // pre-filters today, but keep defence-in-depth so a future caller
+        // that hands us an unfiltered payload can't sneak unrelated
+        // columns (e.g. client_type, wp_user_id) into an UPDATE.
+        $data = self::filter_to_known_columns($data);
+        if (empty($data)) {
+            error_log('[MealsDB Clients Repository] Update aborted: no recognised columns supplied.');
+            return false;
         }
 
         try {
@@ -370,6 +397,36 @@ class MealsDB_Clients_Repository {
      */
     private static function is_government_client(string $client_type): bool {
         return $client_type === 'SDNB' || $client_type === 'Veteran';
+    }
+
+    /**
+     * Drop any keys from $data that are not declared in the canonical
+     * meals_clients schema (or in the small set of related sidecar
+     * columns the form pipeline emits, e.g. *_index hashes).
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private static function filter_to_known_columns(array $data): array {
+        static $allowed = null;
+        if ($allowed === null) {
+            $allowed = [];
+            if (class_exists('MealsDB_Schema')) {
+                $schema = MealsDB_Schema::get_table_schema(MealsDB_Tables::CLIENTS);
+                if (is_array($schema) && isset($schema['columns']) && is_array($schema['columns'])) {
+                    $allowed = array_fill_keys(array_keys($schema['columns']), true);
+                }
+            }
+        }
+
+        if (empty($allowed)) {
+            // Schema lookup failed — return as-is rather than silently
+            // dropping every column. The wpdb->update call still goes
+            // through wpdb's own escaping.
+            return $data;
+        }
+
+        return array_intersect_key($data, $allowed);
     }
 
     /**
