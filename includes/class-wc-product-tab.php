@@ -176,6 +176,14 @@ class MealsDB_WC_Product_Tab {
             return;
         }
 
+        // Defence-in-depth: this hook is normally fired after WooCommerce
+        // has run its own nonce + capability check, but a custom plugin /
+        // REST endpoint that constructs a WC_Product and triggers the hook
+        // outside admin would otherwise reach this writer with no auth.
+        if (!current_user_can('edit_product', $product->get_id())) {
+            return;
+        }
+
         $product_id   = $product->get_id();
         $product_type = isset($_POST['_mealsdb_product_type'])
             ? sanitize_text_field(wp_unslash($_POST['_mealsdb_product_type']))
@@ -205,9 +213,19 @@ class MealsDB_WC_Product_Tab {
             ? absint($_POST['_mealsdb_case_size'])
             : 1;
 
-        $unit_cost = isset($_POST['_mealsdb_unit_cost'])
-            ? wc_format_decimal(wp_unslash($_POST['_mealsdb_unit_cost']))
+        $unit_cost_raw = isset($_POST['_mealsdb_unit_cost'])
+            ? (string) wc_format_decimal(wp_unslash($_POST['_mealsdb_unit_cost']))
             : '0.00';
+        // Bound to a sane interval. Negative or astronomical unit costs
+        // (the field accepts arbitrary admin input) propagate into invoice
+        // and reorder calculations and corrupt them silently.
+        $unit_cost_float = (float) $unit_cost_raw;
+        if ($unit_cost_float < 0) {
+            $unit_cost_float = 0.0;
+        } elseif ($unit_cost_float > 10000) {
+            $unit_cost_float = 10000.0;
+        }
+        $unit_cost = number_format($unit_cost_float, 2, '.', '');
 
         if ($product_type === 'meal') {
             $product->set_tax_status('none');
