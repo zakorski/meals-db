@@ -76,7 +76,7 @@ if ($results === null && $wpdb->last_error) {
                         <td><?= esc_html(($data['first_name'] ?? '') . ' ' . ($data['last_name'] ?? '')) ?></td>
                         <td><?= esc_html($data['client_email'] ?? '') ?></td>
                         <td><?= esc_html($data['phone_primary'] ?? '') ?></td>
-                        <td><?= esc_html(date('Y-m-d H:i', strtotime($draft['created_at']))) ?></td>
+                        <td><?= esc_html(mysql2date('Y-m-d H:i', $draft['created_at'])) ?></td>
                         <td>
                             <form method="post" action="<?php echo admin_url('admin.php?page=mealsdb&tab=add'); ?>">
                                 <?php foreach ($data as $key => $value): ?>
