@@ -300,8 +300,17 @@ class MealsDB_Quick_Order_Ajax {
         // Meals DB client_id from the external meals_clients table for this WordPress user.
         $client_db_id = self::get_active_client_id_for_user($client_id);
 
-        // Validate that the selected rate belongs to this client.
-        if ($rate_id > 0 && $client_db_id > 0) {
+        // A rate_id is meaningless without an active Meals DB client to
+        // bind it to. Refuse rather than silently storing an unvalidated
+        // rate as order meta — the previous behaviour let any caller stash
+        // an arbitrary rate_id against any WP user.
+        if ($rate_id > 0) {
+            if ($client_db_id <= 0) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => __('A rate can only be applied to an active Meals DB client.', 'meals-db'),
+                ]);
+            }
             if (!self::validate_rate_for_client($rate_id, $client_db_id)) {
                 wp_send_json([
                     'success' => false,
@@ -330,8 +339,11 @@ class MealsDB_Quick_Order_Ajax {
 
             // Update operational wp_usermeta fields (matches old admin-pos-order behavior).
             // These are read by the call-log-manager to schedule follow-up calls.
-            update_user_meta($client_id, 'last_order_date', current_time('mysql'));
-            update_user_meta($client_id, 'last_call_date', current_time('mysql'));
+            // Use the actual order timestamp so back-dated orders don't
+            // overwrite real "last order" tracking with `now`.
+            $order_timestamp = $order_date->format('Y-m-d H:i:s');
+            update_user_meta($client_id, 'last_order_date', $order_timestamp);
+            update_user_meta($client_id, 'last_call_date', $order_timestamp);
 
             $order_id = $order->get_id();
             wp_send_json([
@@ -700,30 +712,26 @@ class MealsDB_Quick_Order_Ajax {
 
     /**
      * Parse the incoming order date into a DateTimeImmutable instance.
+     *
+     * Strict YYYY-MM-DD only. The previous fallback to
+     *   new DateTimeImmutable($date, $tz)
+     * accepted loose forms like "tomorrow", "+3 days", or "1990-01-01",
+     * letting a caller backdate orders to arbitrary historical timestamps.
      */
     private static function parse_order_date(string $date): ?DateTimeImmutable {
         $date = trim($date);
-        if ($date === '') {
+        if ($date === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
             return null;
         }
 
         $timezone = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone('UTC');
+        $parsed   = DateTimeImmutable::createFromFormat('!Y-m-d', $date, $timezone);
 
-        $parsed = DateTimeImmutable::createFromFormat('Y-m-d', $date, $timezone);
-        if ($parsed instanceof DateTimeImmutable) {
+        if ($parsed instanceof DateTimeImmutable && $parsed->format('Y-m-d') === $date) {
             return $parsed;
         }
 
-        try {
-            return new DateTimeImmutable($date, $timezone);
-        } catch (Exception $e) {
-            error_log(sprintf(
-                '[MealsDB Quick Order] Unparseable order date "%s": %s',
-                $date,
-                $e->getMessage()
-            ));
-            return null;
-        }
+        return null;
     }
 
     /**
