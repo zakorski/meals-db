@@ -40,6 +40,24 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
+     * Whether a wp_usermeta key is allowed to be written from a sync
+     * override. Derived from the canonical field-to-meta map at request
+     * time; cached per-process.
+     */
+    private static function is_allowed_user_meta_key(string $meta_key): bool {
+        static $allowed = null;
+        if ($allowed === null) {
+            $allowed = [];
+            foreach (MealsDB_Sync::get_field_to_wp_meta_map() as $entry) {
+                if (is_array($entry) && ($entry['type'] ?? '') === 'meta' && !empty($entry['key'])) {
+                    $allowed[(string) $entry['key']] = true;
+                }
+            }
+        }
+        return isset($allowed[$meta_key]);
+    }
+
+    /**
      * Update a WordPress user with the provided field values.
      *
      * @param int                  $user_id Identifier of the WordPress user to update.
@@ -816,6 +834,18 @@ class MealsDB_Sync_Mutate {
                 // Handle any WP-authoritative field that maps to user meta.
                 if ($descriptor !== null && $descriptor['type'] === 'meta') {
                     $meta_key = $descriptor['key'];
+
+                    // Defence-in-depth meta_key allowlist. Today the
+                    // descriptor map is hardcoded, but a future expansion
+                    // that drew from filterable input would let a caller
+                    // rewrite arbitrary user meta. Restrict to the keys
+                    // referenced by the canonical WP-side map.
+                    if (!self::is_allowed_user_meta_key($meta_key)) {
+                        $error_code    = 'mealsdb_sync_unsupported_field';
+                        $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
+                        break;
+                    }
+
                     $old_value = get_user_meta($woo_user_id, $meta_key, true);
                     $update_success = update_user_meta($woo_user_id, $meta_key, $new_value) !== false;
                     if (!$update_success) {

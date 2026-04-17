@@ -13,9 +13,49 @@ class MealsDB_Logger {
 
     /**
      * Log an error message to the error log with a Meals DB prefix.
+     *
+     * Replaces long base64-looking blobs and obvious PII fragments
+     * (emails, phone numbers, encrypted-payload-shaped strings) with
+     * fingerprints so server error logs (often world-readable on shared
+     * hosts) don't leak ciphertext, names, or contact details when
+     * callers helpfully pass through $wpdb->last_error or exception
+     * messages that include the offending row's content.
      */
     public static function error(string $message): void {
-        error_log('[MealsDB] ' . $message);
+        error_log('[MealsDB] ' . self::sanitize_for_log($message));
+    }
+
+    /**
+     * Best-effort scrub of a free-text log message. Capped at 2 KB.
+     */
+    public static function sanitize_for_log(string $message): string {
+        if ($message === '') {
+            return '';
+        }
+
+        // Replace email-looking substrings with a fingerprint.
+        $message = preg_replace_callback(
+            '/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i',
+            static function ($m) {
+                return '[email:' . substr(hash('sha256', strtolower($m[0])), 0, 8) . ']';
+            },
+            $message
+        ) ?? $message;
+
+        // Replace base64-looking blobs >= 32 chars with a length-tagged stub.
+        $message = preg_replace_callback(
+            '#[A-Za-z0-9+/]{32,}={0,2}#',
+            static function ($m) {
+                return '[blob:' . strlen($m[0]) . 'B]';
+            },
+            $message
+        ) ?? $message;
+
+        if (strlen($message) > 2048) {
+            $message = substr($message, 0, 2045) . '...';
+        }
+
+        return $message;
     }
 
     /**

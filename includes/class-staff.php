@@ -393,9 +393,19 @@ class MealsDB_Staff {
 
     /**
      * Remember old form input between redirects.
+     *
+     * Stored in the object cache when one is available so PII from the
+     * staff form (names, phone, email) doesn't land in the wp_options
+     * table on sites that fall back to DB-backed transients. The TTL is
+     * already short (30s); this just prevents the data from briefly
+     * existing on disk.
      */
     private static function set_old_input(array $data): void {
         $key = self::get_old_input_key();
+        if (function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache()) {
+            wp_cache_set($key, $data, 'mealsdb_staff_old_input', 30);
+            return;
+        }
         set_transient($key, $data, 30);
     }
 
@@ -406,6 +416,14 @@ class MealsDB_Staff {
      */
     private static function pull_old_input(): array {
         $key = self::get_old_input_key();
+        if (function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache()) {
+            $data = wp_cache_get($key, 'mealsdb_staff_old_input');
+            if (is_array($data)) {
+                wp_cache_delete($key, 'mealsdb_staff_old_input');
+                return $data;
+            }
+            return [];
+        }
         $data = get_transient($key);
         if (!is_array($data)) {
             return [];
