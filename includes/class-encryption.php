@@ -125,8 +125,16 @@ class MealsDB_Encryption {
                 throw new Exception('Data integrity check failed.');
             }
         } elseif (strlen($data) >= 17) {
-            // Legacy format without HMAC (backward compatibility)
-            // TODO: Remove this after migrating all encrypted data
+            // Legacy format without HMAC. Decryption proceeds without
+            // integrity verification, which is the classic Vaudenay
+            // padding-oracle setup against AES-CBC. Refuse this branch
+            // entirely once the operator has confirmed via the encryption
+            // migrator that no legacy payloads remain in the database.
+            if (self::legacy_decrypt_disabled()) {
+                throw new Exception('Legacy encrypted payload rejected: legacy decryption is disabled.');
+            }
+
+            self::log_legacy_decrypt_use();
             $iv = substr($data, 0, 16);
             $ciphertext = substr($data, 16);
         } else {
@@ -197,6 +205,36 @@ class MealsDB_Encryption {
             return 'legacy';
         }
         return 'plaintext';
+    }
+
+    /**
+     * Whether the legacy (pre-HMAC) decrypt branch is administratively
+     * disabled. Set MEALSDB_DISABLE_LEGACY_DECRYPT in wp-config.php or
+     * the mealsdb_legacy_decrypt_disabled option to refuse legacy
+     * payloads — do this once the migrator's inventory() reports zero
+     * legacy rows in every column.
+     */
+    public static function legacy_decrypt_disabled(): bool {
+        if (defined('MEALSDB_DISABLE_LEGACY_DECRYPT') && MEALSDB_DISABLE_LEGACY_DECRYPT) {
+            return true;
+        }
+        if (function_exists('get_option')) {
+            return (bool) get_option('mealsdb_legacy_decrypt_disabled', false);
+        }
+        return false;
+    }
+
+    /**
+     * Log (once per request) that a legacy payload was decrypted, so the
+     * operator can monitor when the inventory really is clean.
+     */
+    private static function log_legacy_decrypt_use(): void {
+        static $logged = false;
+        if ($logged) {
+            return;
+        }
+        $logged = true;
+        error_log('[MealsDB Encryption] WARNING: legacy CBC payload decrypted without HMAC. Run the encryption migrator and set MEALSDB_DISABLE_LEGACY_DECRYPT.');
     }
 
     /**
