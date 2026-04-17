@@ -46,6 +46,27 @@ class MealsDB_Products_Loader {
 
         $metadata_batch = self::batch_get_product_data($product_ids);
 
+        // Prime WP caches in bulk before the per-product loop. Without
+        // this each iteration runs a separate query for thumbnail meta
+        // and another set for product term assignments — N+1 across
+        // potentially hundreds of products.
+        if (!empty($product_ids)) {
+            if (function_exists('update_post_thumbnail_cache')) {
+                $thumb_query = new WP_Query([
+                    'post_type'      => 'product',
+                    'post__in'       => $product_ids,
+                    'posts_per_page' => count($product_ids),
+                    'no_found_rows'  => true,
+                    'fields'         => 'ids',
+                ]);
+                update_post_thumbnail_cache($thumb_query);
+                wp_reset_postdata();
+            }
+            if (function_exists('update_object_term_cache')) {
+                update_object_term_cache($product_ids, 'product');
+            }
+        }
+
         $loaded = [];
 
         foreach ($products as $product) {

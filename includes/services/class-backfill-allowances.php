@@ -40,23 +40,36 @@ class MealsDB_Backfill_Allowances {
 
         $stats = ['updated' => 0, 'skipped' => 0, 'errors' => 0, 'total' => count($clients)];
 
+        // Bulk-fetch the wp_usermeta values for every wp_user_id up front so
+        // the per-client loop doesn't issue one SELECT per client (which is
+        // slow and noisy at thousands of rows).
+        $meta_by_user = [];
+        $user_ids = array_filter(array_map(static function ($c) { return (int) ($c['wp_user_id'] ?? 0); }, $clients));
+        if (!empty($user_ids)) {
+            $user_ids = array_values(array_unique($user_ids));
+            $placeholders = implode(',', array_fill(0, count($user_ids), '%d'));
+            $args = array_merge($user_ids, ['mains', 'sides', 'service']);
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT user_id, meta_key, meta_value FROM {$wpdb->usermeta}
+                     WHERE user_id IN ({$placeholders}) AND meta_key IN (%s, %s, %s)",
+                    $args
+                ),
+                ARRAY_A
+            );
+            if (is_array($rows)) {
+                foreach ($rows as $r) {
+                    $uid = (int) $r['user_id'];
+                    $meta_by_user[$uid][$r['meta_key']] = $r['meta_value'];
+                }
+            }
+        }
+
         foreach ($clients as $client) {
             $wp_user_id = (int) $client['wp_user_id'];
             $client_id  = (int) $client['client_id'];
 
-            // Read the three legacy user meta values from wp_usermeta.
-            $meta_rows = $wpdb->get_results($wpdb->prepare(
-                "SELECT meta_key, meta_value FROM {$wpdb->usermeta}
-                 WHERE user_id = %d AND meta_key IN ('mains', 'sides', 'service')",
-                $wp_user_id
-            ), ARRAY_A);
-
-            $meta = [];
-            if (is_array($meta_rows)) {
-                foreach ($meta_rows as $mr) {
-                    $meta[$mr['meta_key']] = $mr['meta_value'];
-                }
-            }
+            $meta = $meta_by_user[$wp_user_id] ?? [];
 
             $old_mains   = isset($meta['mains']) && $meta['mains'] !== '' ? (int) $meta['mains'] : null;
             $old_sides   = isset($meta['sides']) && $meta['sides'] !== '' ? (int) $meta['sides'] : null;
