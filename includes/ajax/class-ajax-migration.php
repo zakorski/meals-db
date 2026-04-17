@@ -310,16 +310,51 @@ class MealsDB_Ajax_Migration {
 
     /**
      * Sanitize and validate a file-system path.
+     *
+     * Returns '' unless the resolved path lives under the plugin's migration
+     * upload directory. The previous '..'-substring check let absolute paths
+     * such as /etc/passwd or wp-config.php through; downstream readers would
+     * then disclose file size or contents back to the admin.
      */
     private static function sanitize_path( string $raw ): string {
         $path = wp_normalize_path( trim( $raw ) );
 
-        // Block directory traversal
-        if ( strpos( $path, '..' ) !== false ) {
+        if ( $path === '' ) {
             return '';
         }
 
-        return $path;
+        $base = self::migration_dir_realpath();
+        if ( $base === '' ) {
+            return '';
+        }
+
+        $resolved = realpath( $path );
+        if ( $resolved === false ) {
+            return '';
+        }
+        $resolved = wp_normalize_path( $resolved );
+
+        // strict prefix match — the trailing slash prevents
+        // /uploads/mealsdb-migration-other/ from satisfying a base of
+        // /uploads/mealsdb-migration.
+        if ( strpos( $resolved . '/', $base . '/' ) !== 0 ) {
+            return '';
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * Resolve the on-disk migration upload directory (canonical path).
+     */
+    private static function migration_dir_realpath(): string {
+        $uploads = wp_upload_dir();
+        if ( empty( $uploads['basedir'] ) ) {
+            return '';
+        }
+        $dir = trailingslashit( $uploads['basedir'] ) . 'mealsdb-migration';
+        $resolved = realpath( $dir );
+        return $resolved === false ? '' : wp_normalize_path( $resolved );
     }
 
     /**

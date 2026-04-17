@@ -115,6 +115,18 @@ class MealsDB_Ajax_Invoice {
     }
 
     /**
+     * Strip everything except [A-Za-z0-9_-] from a value before using it as a
+     * Content-Disposition filename token. sanitize_text_field() preserves
+     * quotes, which would otherwise let a value like  evil"; filename="x
+     * inject a second filename parameter into the response header.
+     */
+    private static function safe_filename_token(string $value): string {
+        $clean = preg_replace('/[^A-Za-z0-9_-]+/', '_', $value) ?? '';
+        $clean = trim($clean, '_-');
+        return $clean === '' ? 'data' : $clean;
+    }
+
+    /**
      * Generate and download SDNB legacy invoice
      */
     private static function download_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month = 4) {
@@ -128,7 +140,7 @@ class MealsDB_Ajax_Invoice {
         // Generate filename
         $filename = sprintf(
             'SDNB_Legacy_%s_%s_to_%s.csv',
-            $zone,
+            self::safe_filename_token($zone),
             str_replace('-', '', $start_date),
             str_replace('-', '', $end_date)
         );
@@ -208,7 +220,14 @@ class MealsDB_Ajax_Invoice {
     private static function download_vac_pdf($start_date, $end_date) {
         $pdf_path = MealsDB_Invoice_Generator::generate_vac_pdf($start_date, $end_date);
 
-        if (!file_exists($pdf_path)) {
+        // Confine the served path to the WP uploads dir. Defends against the
+        // generator ever being misconfigured to return an attacker-influenced
+        // path (e.g. wp-config.php) — readfile would happily oblige.
+        $resolved = is_string($pdf_path) ? realpath($pdf_path) : false;
+        $uploads  = wp_upload_dir();
+        $base     = isset($uploads['basedir']) ? realpath($uploads['basedir']) : false;
+
+        if (!$resolved || !$base || strpos($resolved, $base . DIRECTORY_SEPARATOR) !== 0 || !is_file($resolved)) {
             wp_send_json_error(['message' => 'Error generating PDF file.']);
             return;
         }
@@ -223,14 +242,14 @@ class MealsDB_Ajax_Invoice {
         // Set headers and output
         header('Content-Type: application/pdf');
         header('Content-Disposition: attachment; filename="' . $filename . '"');
-        header('Content-Length: ' . filesize($pdf_path));
+        header('Content-Length: ' . filesize($resolved));
         header('Cache-Control: no-cache, must-revalidate');
         header('Pragma: no-cache');
 
-        readfile($pdf_path);
+        readfile($resolved);
 
         // Clean up temp file
-        unlink($pdf_path);
+        @unlink($resolved);
 
         exit;
     }
@@ -306,6 +325,11 @@ class MealsDB_Ajax_Invoice {
 
     /**
      * Create WooCommerce orders for overages.
+     *
+     * Quantities are recomputed server-side from the same period/zone the
+     * preview was built from — never trust the round-tripped JSON. Clients
+     * may pass `wp_user_ids` to limit the run to a subset of the previewed
+     * rows (e.g. when the operator unchecks a row in the UI).
      */
     public static function create_overage_orders() {
         if (!check_ajax_referer('mealsdb_invoice_nonce', 'nonce', false)) {
@@ -323,31 +347,97 @@ class MealsDB_Ajax_Invoice {
             return;
         }
 
-        $invoice_date  = sanitize_text_field(wp_unslash($_POST['invoice_date'] ?? ''));
-        $overages_json = isset($_POST['overages']) ? wp_unslash((string) $_POST['overages']) : '[]';
-        $overages      = json_decode($overages_json, true);
+        $client_type    = sanitize_text_field(wp_unslash($_POST['client_type'] ?? ''));
+        $start_date     = sanitize_text_field(wp_unslash($_POST['start_date'] ?? ''));
+        $end_date       = sanitize_text_field(wp_unslash($_POST['end_date'] ?? ''));
+        $zone           = sanitize_text_field(wp_unslash($_POST['zone'] ?? ''));
+        $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
+        $invoice_date   = sanitize_text_field(wp_unslash($_POST['invoice_date'] ?? ''));
 
-        if (!is_array($overages) || empty($overages)) {
-            wp_send_json_error(['message' => 'No overage data provided.']);
+        if (!in_array($client_type, ['SDNB', 'Veteran'], true)) {
+            wp_send_json_error(['message' => 'Invalid client type.']);
             return;
         }
 
-        if (empty($invoice_date)) {
-            $invoice_date = date('Y-m-d');
+        if (!self::validate_date($start_date) || !self::validate_date($end_date)) {
+            wp_send_json_error(['message' => 'Start and end dates must be in YYYY-MM-DD format.']);
+            return;
+        }
+
+        if ($weeks_in_month < 1 || $weeks_in_month > 6) {
+            $weeks_in_month = 4;
+        }
+
+        if (!self::validate_date($invoice_date)) {
+            $invoice_date = current_time('Y-m-d');
+        }
+
+        // Optional subset filter: a client may submit a list of wp_user_ids
+        // to restrict the run, but the per-user quantities are still
+        // recomputed from the server-side overage report.
+        $allowed_user_ids = null;
+        if (isset($_POST['wp_user_ids'])) {
+            $raw_ids = (array) wp_unslash($_POST['wp_user_ids']);
+            $allowed_user_ids = [];
+            foreach ($raw_ids as $raw_id) {
+                $id = (int) $raw_id;
+                if ($id > 0) {
+                    $allowed_user_ids[$id] = true;
+                }
+            }
+        }
+
+        try {
+            if ($client_type === 'SDNB') {
+                $rows = MealsDB_Invoice_Generator::get_sdnb_overages($zone, $start_date, $end_date, $weeks_in_month);
+                $rows = array_map(function ($row) {
+                    return [
+                        'wp_user_id'           => (int) ($row['client']['wp_user_id'] ?? 0),
+                        'name'                 => ($row['client']['last_name'] ?? '') . ', ' . ($row['client']['first_name'] ?? ''),
+                        'bnm_mains'            => (int) ($row['bnm_mains'] ?? 0),
+                        'overage_tax_sides'    => (int) ($row['overage_tax_sides'] ?? 0),
+                        'overage_nontax_sides' => (int) ($row['overage_nontax_sides'] ?? 0),
+                    ];
+                }, $rows);
+            } else {
+                $rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+                $rows = array_map(function ($row) {
+                    return [
+                        'wp_user_id'           => (int) ($row['wp_user_id'] ?? 0),
+                        'name'                 => (($row['last_name'] ?? '') . ', ' . ($row['first_name'] ?? '')),
+                        'bnm_mains'            => (int) ($row['bnm_mains'] ?? 0),
+                        'overage_tax_sides'    => (int) ($row['overage_tax_sides'] ?? 0),
+                        'overage_nontax_sides' => (int) ($row['overage_nontax_sides'] ?? 0),
+                    ];
+                }, $rows);
+            }
+        } catch (Exception $e) {
+            error_log('[MealsDB Invoice] create_overage_orders: failed to recompute overages: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to compute overages. Please contact an administrator.', 'meals-db')]);
+            return;
+        }
+
+        if (empty($rows)) {
+            wp_send_json_error(['message' => 'No overages found for the selected period.']);
+            return;
         }
 
         $product_ids = MealsDB_Invoice_Generator::get_overage_product_ids();
         $order_count = 0;
         $skipped     = [];
 
-        foreach ($overages as $item) {
-            $wp_user_id  = (int) ($item['wp_user_id'] ?? 0);
-            $bnm_mains   = (int) ($item['bnm_mains'] ?? 0);
-            $overage_tax = (int) ($item['overage_tax_sides'] ?? 0);
-            $overage_nt  = (int) ($item['overage_nontax_sides'] ?? 0);
+        foreach ($rows as $item) {
+            $wp_user_id  = (int) $item['wp_user_id'];
+            $bnm_mains   = (int) $item['bnm_mains'];
+            $overage_tax = (int) $item['overage_tax_sides'];
+            $overage_nt  = (int) $item['overage_nontax_sides'];
 
-            if ($wp_user_id <= 0) {
-                $skipped[] = $item['name'] ?? 'Unknown';
+            if ($wp_user_id <= 0 || !get_userdata($wp_user_id)) {
+                $skipped[] = $item['name'] ?: 'Unknown';
+                continue;
+            }
+
+            if ($allowed_user_ids !== null && !isset($allowed_user_ids[$wp_user_id])) {
                 continue;
             }
 
@@ -357,11 +447,13 @@ class MealsDB_Ajax_Invoice {
 
             $order = wc_create_order(['customer_id' => $wp_user_id]);
             if (is_wp_error($order)) {
-                $skipped[] = $item['name'] ?? 'Unknown';
+                $skipped[] = $item['name'] ?: 'Unknown';
                 continue;
             }
 
-            $order->update_status('completed');
+            // Configure the order BEFORE updating status so date_created
+            // and items are persisted in a single save and the status
+            // transition fires with a complete order.
             $order->set_date_created($invoice_date . ' 00:00:00');
             $order->set_date_paid($invoice_date . ' 00:00:00');
 
@@ -385,6 +477,7 @@ class MealsDB_Ajax_Invoice {
             }
 
             $order->calculate_totals();
+            $order->update_status('completed');
             $order->save();
             $order_count++;
         }
