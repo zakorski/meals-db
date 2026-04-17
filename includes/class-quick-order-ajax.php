@@ -717,6 +717,11 @@ class MealsDB_Quick_Order_Ajax {
         try {
             return new DateTimeImmutable($date, $timezone);
         } catch (Exception $e) {
+            error_log(sprintf(
+                '[MealsDB Quick Order] Unparseable order date "%s": %s',
+                $date,
+                $e->getMessage()
+            ));
             return null;
         }
     }
@@ -1054,7 +1059,7 @@ class MealsDB_Quick_Order_Ajax {
         $engine  = new MealsDB_Allocation_Engine();
         $history = $engine->get_client_history($client_id, 12);
 
-        $billing_month = isset($_REQUEST['billing_month']) ? sanitize_text_field($_REQUEST['billing_month']) : gmdate('Y-m');
+        $billing_month = isset($_REQUEST['billing_month']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['billing_month'])) : gmdate('Y-m');
         $details = $engine->get_client_month_details($client_id, $billing_month);
 
         wp_send_json([

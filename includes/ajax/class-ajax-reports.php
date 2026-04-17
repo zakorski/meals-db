@@ -21,6 +21,19 @@ class MealsDB_Ajax_Reports {
     }
 
     /**
+     * Enforce per-user rate limit for expensive report generation.
+     */
+    private static function enforce_rate_limit(): void {
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+    }
+
+    /**
      * Generate a seasonally-adjusted purchase order projection.
      */
     public static function generate_purchase_order(): void {
@@ -36,6 +49,8 @@ class MealsDB_Ajax_Reports {
                 'message' => __('You are not allowed to perform this action.', 'meals-db'),
             ], 403);
         }
+
+        self::enforce_rate_limit();
 
         $trailing_weeks      = isset($_REQUEST['trailing_weeks']) ? intval($_REQUEST['trailing_weeks']) : 12;
         $order_horizon_weeks = isset($_REQUEST['order_horizon_weeks']) ? intval($_REQUEST['order_horizon_weeks']) : 6;
@@ -68,8 +83,10 @@ class MealsDB_Ajax_Reports {
             return;
         }
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : '';
+        self::enforce_rate_limit();
+
+        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
+        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
 
         if (!$start_date || !$end_date) {
             wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
@@ -93,8 +110,10 @@ class MealsDB_Ajax_Reports {
             return;
         }
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : '';
+        self::enforce_rate_limit();
+
+        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
+        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
 
         if (!$start_date || !$end_date) {
             wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
@@ -118,8 +137,10 @@ class MealsDB_Ajax_Reports {
             return;
         }
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : '';
+        self::enforce_rate_limit();
+
+        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
+        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
 
         if (!$start_date || !$end_date) {
             wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
@@ -148,8 +169,10 @@ class MealsDB_Ajax_Reports {
             return;
         }
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : '';
+        self::enforce_rate_limit();
+
+        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
+        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
 
         if (!$start_date || !$end_date) {
             wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);

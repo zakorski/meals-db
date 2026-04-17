@@ -34,11 +34,16 @@ class MealsDB_Ajax_Sync {
             wp_send_json_error(['message' => 'Unauthorized']);
         }
 
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('sync_operations')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+        }
+
         $woo_user_id = intval($_POST['woo_user_id'] ?? 0);
         $client_id = intval($_POST['client_id'] ?? 0);
-        $field = sanitize_text_field($_POST['field'] ?? '');
-        $value = sanitize_text_field($_POST['value'] ?? '');
-        $direction = sanitize_key($_POST['direction'] ?? 'meals_db');
+        $field = sanitize_text_field(wp_unslash($_POST['field'] ?? ''));
+        $value = sanitize_text_field(wp_unslash($_POST['value'] ?? ''));
+        $direction = sanitize_key(wp_unslash($_POST['direction'] ?? 'meals_db'));
 
         if (!$field) {
             wp_send_json_error(['message' => 'Missing data.']);
@@ -85,9 +90,14 @@ class MealsDB_Ajax_Sync {
             wp_send_json_error(['message' => 'Unauthorized']);
         }
 
-        $field_name = sanitize_text_field($_POST['field'] ?? '');
-        $source = sanitize_text_field($_POST['source'] ?? '');
-        $target = sanitize_text_field($_POST['target'] ?? '');
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('sync_operations')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+        }
+
+        $field_name = sanitize_text_field(wp_unslash($_POST['field'] ?? ''));
+        $source = sanitize_text_field(wp_unslash($_POST['source'] ?? ''));
+        $target = sanitize_text_field(wp_unslash($_POST['target'] ?? ''));
         $set_ignored = filter_var($_POST['ignored'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
         $user_id = get_current_user_id();
@@ -184,6 +194,11 @@ class MealsDB_Ajax_Sync {
 
         if (!MealsDB_Permissions::can_access_plugin()) {
             wp_send_json_error(['message' => 'Unauthorized']);
+        }
+
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('sync_operations')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
         }
 
         $result = MealsDB_Updates::fetch_products_from_woocommerce();

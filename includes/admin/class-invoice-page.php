@@ -53,7 +53,7 @@ class MealsDB_Invoice_Page {
             'mealsdb-invoice-js',
             plugins_url('assets/js/invoice.js', dirname(dirname(__FILE__))),
             ['jquery', 'jquery-ui-datepicker'],
-            '1.0.249',
+            defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false,
             true
         );
 

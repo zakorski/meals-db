@@ -469,10 +469,9 @@ class MealsDB_Admin_UI {
 
             require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-rebuild.php';
 
-            $confirmation = $_POST['mealsdb_rebuild_confirm'] ?? '';
-            if (function_exists('sanitize_text_field')) {
-                $confirmation = sanitize_text_field($confirmation);
-            }
+            $confirmation = isset($_POST['mealsdb_rebuild_confirm'])
+                ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_rebuild_confirm']))
+                : '';
 
             $result = MealsDB_Schema_Rebuild::run($confirmation);
 
@@ -492,10 +491,9 @@ class MealsDB_Admin_UI {
 
             require_once MEALS_DB_PLUGIN_DIR . 'includes/class-user-delete.php';
 
-            $confirmation = $_POST['mealsdb_delete_confirm'] ?? '';
-            if (function_exists('sanitize_text_field')) {
-                $confirmation = sanitize_text_field($confirmation);
-            }
+            $confirmation = isset($_POST['mealsdb_delete_confirm'])
+                ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_delete_confirm']))
+                : '';
 
             $result = MealsDB_User_Delete::run($confirmation);
 
@@ -510,7 +508,7 @@ class MealsDB_Admin_UI {
             }
         }
 
-        $tab = $_GET['tab'] ?? 'sync';
+        $tab = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : 'sync';
 
         echo '<div class="wrap">';
         echo '<h1>Meals DB</h1>';
@@ -1755,6 +1753,7 @@ class MealsDB_Admin_UI {
             $rate = (float) $first_rate['rate'];
             return $rate > 0 ? $rate / 100 : 0.0;
         } catch (Throwable $e) {
+            error_log('[MealsDB Admin UI] Failed reading WC tax rate: ' . $e->getMessage());
             return 0.0;
         }
     }
@@ -1767,7 +1766,7 @@ class MealsDB_Admin_UI {
         $client_type = '';
 
         if (isset($_GET['client_type'])) {
-            $client_type = $this->sanitise_client_type_value($_GET['client_type']);
+            $client_type = $this->sanitise_client_type_value(wp_unslash($_GET['client_type']));
         }
 
         $client_id = isset($_GET['client_id']) ? absint($_GET['client_id']) : 0;
@@ -1809,6 +1808,11 @@ class MealsDB_Admin_UI {
             $repository = new MealsDB_Clients_Repository();
             $record      = $repository->get_client_by_id($client_id);
         } catch (Throwable $e) {
+            error_log(sprintf(
+                '[MealsDB Admin UI] fetch_quick_order_client_type(%d) failed: %s',
+                $client_id,
+                $e->getMessage()
+            ));
             return '';
         }
 

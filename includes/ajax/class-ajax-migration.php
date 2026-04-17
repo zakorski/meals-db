@@ -32,10 +32,10 @@ class MealsDB_Ajax_Migration {
     public static function test_db(): void {
         self::verify();
 
-        $host   = sanitize_text_field( $_POST['db_host'] ?? '' );
-        $name   = sanitize_text_field( $_POST['db_name'] ?? '' );
-        $user   = sanitize_text_field( $_POST['db_user'] ?? '' );
-        $pass   = $_POST['db_pass'] ?? '';
+        $host   = sanitize_text_field( wp_unslash( $_POST['db_host'] ?? '' ) );
+        $name   = sanitize_text_field( wp_unslash( $_POST['db_name'] ?? '' ) );
+        $user   = sanitize_text_field( wp_unslash( $_POST['db_user'] ?? '' ) );
+        $pass   = (string) wp_unslash( $_POST['db_pass'] ?? '' );
 
         if ( ! $host || ! $name || ! $user ) {
             wp_send_json_error( [ 'message' => 'Host, database name, and username are required.' ] );
@@ -123,7 +123,7 @@ class MealsDB_Ajax_Migration {
     public static function detect_prefix(): void {
         self::verify();
 
-        $file_path = self::sanitize_path( $_POST['file_path'] ?? '' );
+        $file_path = self::sanitize_path( (string) wp_unslash( $_POST['file_path'] ?? '' ) );
         if ( ! $file_path || ! file_exists( $file_path ) ) {
             wp_send_json_error( [ 'message' => 'File not found: ' . $file_path ] );
         }
@@ -149,8 +149,8 @@ class MealsDB_Ajax_Migration {
         self::verify();
         set_time_limit( 300 );
 
-        $file_path     = self::sanitize_path( $_POST['file_path'] ?? '' );
-        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+        $file_path     = self::sanitize_path( (string) wp_unslash( $_POST['file_path'] ?? '' ) );
+        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
         $byte_offset   = (int) ( $_POST['byte_offset'] ?? 0 );
         $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
 
@@ -180,11 +180,11 @@ class MealsDB_Ajax_Migration {
         self::verify();
         set_time_limit( 300 );
 
-        $host          = sanitize_text_field( $_POST['db_host'] ?? '' );
-        $name          = sanitize_text_field( $_POST['db_name'] ?? '' );
-        $user          = sanitize_text_field( $_POST['db_user'] ?? '' );
-        $pass          = $_POST['db_pass'] ?? '';
-        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+        $host          = sanitize_text_field( wp_unslash( $_POST['db_host'] ?? '' ) );
+        $name          = sanitize_text_field( wp_unslash( $_POST['db_name'] ?? '' ) );
+        $user          = sanitize_text_field( wp_unslash( $_POST['db_user'] ?? '' ) );
+        $pass          = (string) wp_unslash( $_POST['db_pass'] ?? '' );
+        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
         $table_index   = (int) ( $_POST['table_index'] ?? 0 );
         $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
 
@@ -217,7 +217,7 @@ class MealsDB_Ajax_Migration {
         $phase         = (int) ( $_POST['phase'] ?? 0 );
         $offset        = (int) ( $_POST['offset'] ?? 0 );
         $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
-        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
 
         $result = [];
 
@@ -270,7 +270,7 @@ class MealsDB_Ajax_Migration {
     public static function cleanup(): void {
         self::verify();
 
-        $source_prefix = sanitize_text_field( $_POST['source_prefix'] ?? '' );
+        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
         if ( ! $source_prefix ) {
             wp_send_json_error( [ 'message' => 'Missing source_prefix.' ] );
         }
@@ -364,8 +364,8 @@ class MealsDB_Ajax_Migration {
             wp_send_json( [ 'success' => false, 'message' => 'Insufficient permissions.' ], 403 );
         }
 
-        $start_month = isset( $_REQUEST['start_month'] ) ? sanitize_text_field( $_REQUEST['start_month'] ) : '';
-        $end_month   = isset( $_REQUEST['end_month'] ) ? sanitize_text_field( $_REQUEST['end_month'] ) : gmdate( 'Y-m' );
+        $start_month = isset( $_REQUEST['start_month'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['start_month'] ) ) : '';
+        $end_month   = isset( $_REQUEST['end_month'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['end_month'] ) ) : gmdate( 'Y-m' );
         $dry_run     = isset( $_REQUEST['dry_run'] ) && $_REQUEST['dry_run'] === '1';
 
         if ( ! preg_match( '/^\d{4}-\d{2}$/', $start_month ) || ! preg_match( '/^\d{4}-\d{2}$/', $end_month ) ) {

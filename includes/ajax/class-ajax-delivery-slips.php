@@ -220,7 +220,7 @@ class MealsDB_Ajax_Delivery_Slips {
      * @return string Y-m-d
      */
     private static function get_delivery_date(): string {
-        $raw = isset($_REQUEST['delivery_date']) ? sanitize_text_field($_REQUEST['delivery_date']) : '';
+        $raw = isset($_REQUEST['delivery_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['delivery_date'])) : '';
 
         // Validate Y-m-d format.
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
@@ -247,9 +247,9 @@ class MealsDB_Ajax_Delivery_Slips {
      * @return array{zones: string[], start_date: string, end_date: string}
      */
     private static function get_zone_params(): array {
-        $zones = isset($_REQUEST['zones']) ? array_map('sanitize_text_field', (array) $_REQUEST['zones']) : [];
-        $start = isset($_REQUEST['start_date']) ? sanitize_text_field($_REQUEST['start_date']) : '';
-        $end   = isset($_REQUEST['end_date']) ? sanitize_text_field($_REQUEST['end_date']) : '';
+        $zones = isset($_REQUEST['zones']) ? array_map('sanitize_text_field', wp_unslash((array) $_REQUEST['zones'])) : [];
+        $start = isset($_REQUEST['start_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['start_date'])) : '';
+        $end   = isset($_REQUEST['end_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['end_date'])) : '';
 
         if (empty($zones) || empty($start) || empty($end)) {
             wp_send_json([

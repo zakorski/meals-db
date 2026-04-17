@@ -33,6 +33,8 @@ class MealsDB_Ajax_Clients {
             wp_send_json_error(['message' => 'Unauthorized']);
         }
 
+        self::enforce_rate_limit();
+
         $client_id = intval($_POST['client_id'] ?? 0);
         $wp_user_id = intval($_POST['wp_user_id'] ?? 0);
 
@@ -65,6 +67,8 @@ class MealsDB_Ajax_Clients {
         if (!MealsDB_Permissions::can_access_plugin()) {
             wp_send_json_error(['message' => 'Unauthorized']);
         }
+
+        self::enforce_rate_limit();
 
         $client_id = intval($_POST['client_id'] ?? 0);
         $wp_user_id = isset($_POST['wp_user_id']) ? intval($_POST['wp_user_id']) : null;
@@ -113,6 +117,7 @@ class MealsDB_Ajax_Clients {
     public static function activate_client(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
         self::ensure_client_permissions();
+        self::enforce_rate_limit();
 
         $client_id = self::get_requested_client_id();
 
@@ -132,6 +137,7 @@ class MealsDB_Ajax_Clients {
     public static function deactivate_client(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
         self::ensure_client_permissions();
+        self::enforce_rate_limit();
 
         $client_id = self::get_requested_client_id();
 
@@ -151,6 +157,7 @@ class MealsDB_Ajax_Clients {
     public static function delete_client(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
         self::ensure_client_permissions();
+        self::enforce_rate_limit();
 
         $client_id = self::get_requested_client_id();
 
@@ -161,6 +168,19 @@ class MealsDB_Ajax_Clients {
         wp_send_json_success([
             'message' => __('Client deleted successfully.', 'meals-db'),
         ]);
+    }
+
+    /**
+     * Enforce the per-user rate limit for client write operations.
+     */
+    private static function enforce_rate_limit(): void {
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json_error(
+                ['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')],
+                429
+            );
+        }
     }
 
     /**

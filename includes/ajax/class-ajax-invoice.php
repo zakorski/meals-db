@@ -39,11 +39,17 @@ class MealsDB_Ajax_Invoice {
             return;
         }
 
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+            return;
+        }
+
         // Get and validate parameters
-        $invoice_type = sanitize_text_field($_POST['invoice_type'] ?? '');
-        $start_date = sanitize_text_field($_POST['start_date'] ?? '');
-        $end_date = sanitize_text_field($_POST['end_date'] ?? '');
-        $zone = sanitize_text_field($_POST['zone'] ?? '');
+        $invoice_type = sanitize_text_field(wp_unslash($_POST['invoice_type'] ?? ''));
+        $start_date = sanitize_text_field(wp_unslash($_POST['start_date'] ?? ''));
+        $end_date = sanitize_text_field(wp_unslash($_POST['end_date'] ?? ''));
+        $zone = sanitize_text_field(wp_unslash($_POST['zone'] ?? ''));
         $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
         if ($weeks_in_month < 1 || $weeks_in_month > 6) {
             $weeks_in_month = 4;
@@ -92,7 +98,8 @@ class MealsDB_Ajax_Invoice {
                     return;
             }
         } catch (Exception $e) {
-            wp_send_json_error(['message' => 'Error generating invoice: ' . $e->getMessage()]);
+            error_log('[MealsDB Invoice] generate_invoice failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to generate invoice. Please contact an administrator.', 'meals-db')]);
         }
     }
 
@@ -241,10 +248,16 @@ class MealsDB_Ajax_Invoice {
             return;
         }
 
-        $client_type    = sanitize_text_field($_POST['client_type'] ?? '');
-        $start_date     = sanitize_text_field($_POST['start_date'] ?? '');
-        $end_date       = sanitize_text_field($_POST['end_date'] ?? '');
-        $zone           = sanitize_text_field($_POST['zone'] ?? '');
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+            return;
+        }
+
+        $client_type    = sanitize_text_field(wp_unslash($_POST['client_type'] ?? ''));
+        $start_date     = sanitize_text_field(wp_unslash($_POST['start_date'] ?? ''));
+        $end_date       = sanitize_text_field(wp_unslash($_POST['end_date'] ?? ''));
+        $zone           = sanitize_text_field(wp_unslash($_POST['zone'] ?? ''));
         $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
 
         if (empty($start_date) || empty($end_date)) {
@@ -286,7 +299,8 @@ class MealsDB_Ajax_Invoice {
 
             wp_send_json_success(['overages' => array_values($rows), 'count' => count($rows)]);
         } catch (Exception $e) {
-            wp_send_json_error(['message' => 'Error: ' . $e->getMessage()]);
+            error_log('[MealsDB Invoice] preview_overages failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to preview overages. Please contact an administrator.', 'meals-db')]);
         }
     }
 
@@ -303,8 +317,14 @@ class MealsDB_Ajax_Invoice {
             return;
         }
 
-        $invoice_date  = sanitize_text_field($_POST['invoice_date'] ?? '');
-        $overages_json = stripslashes($_POST['overages'] ?? '[]');
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+            return;
+        }
+
+        $invoice_date  = sanitize_text_field(wp_unslash($_POST['invoice_date'] ?? ''));
+        $overages_json = isset($_POST['overages']) ? wp_unslash((string) $_POST['overages']) : '[]';
         $overages      = json_decode($overages_json, true);
 
         if (!is_array($overages) || empty($overages)) {
