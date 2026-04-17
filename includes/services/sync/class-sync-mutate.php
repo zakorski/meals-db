@@ -249,6 +249,13 @@ class MealsDB_Sync_Mutate {
             return false;
         }
 
+        try {
+            $fields = MealsDB_Encryption::encrypt_columns($fields);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB Sync] Update aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
+        }
+
         $set_clauses = [];
         $values      = [];
 
@@ -308,16 +315,29 @@ class MealsDB_Sync_Mutate {
         $available_columns = $this->get_table_columns($connection, $clients_table);
         $column_map = $this->build_identity_column_map($available_columns);
 
-        $prepared_columns = [];
-        $placeholders = [];
-        $values = [];
-
+        // Build the row keyed by DB column name first so we can encrypt
+        // before assembling the prepared statement.
+        $row = [];
         foreach ($fields as $field => $value) {
             if (!isset($column_map[$field])) {
                 continue;
             }
+            $row[$column_map[$field]] = $value;
+        }
 
-            $prepared_columns[] = sprintf('`%s`', str_replace('`', '``', $column_map[$field]));
+        try {
+            $row = MealsDB_Encryption::encrypt_columns($row);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB Sync] Create aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
+        }
+
+        $prepared_columns = [];
+        $placeholders = [];
+        $values = [];
+
+        foreach ($row as $column => $value) {
+            $prepared_columns[] = sprintf('`%s`', str_replace('`', '``', $column));
             $placeholders[] = '%s';
             $values[] = (string) $value;
         }

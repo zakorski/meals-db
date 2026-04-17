@@ -684,6 +684,13 @@ class MealsDB_Client_Form {
             unset($encrypted['units']);
         }
 
+        try {
+            $encrypted = MealsDB_Encryption::encrypt_columns($encrypted);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB] Save aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
+        }
+
         $repository = new MealsDB_Clients_Repository();
 
         return $repository->create_client($encrypted);
@@ -761,6 +768,13 @@ class MealsDB_Client_Form {
             $encrypted['units'] = null;
         }
 
+        try {
+            $encrypted = MealsDB_Encryption::encrypt_columns($encrypted);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB] Update aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
+        }
+
         $columns = array_keys($encrypted);
         if (empty($columns)) {
             return false;
@@ -800,11 +814,13 @@ class MealsDB_Client_Form {
             }
         }
 
-        // Decrypt encrypted fields before mapping to form names.
+        // Decrypt encrypted columns BEFORE mapping DB column names to form
+        // field names. Use the canonical DB-column list (note: form-side
+        // `client_comments` is `customer_comments` in the DB).
         // safe_decrypt returns the original value on failure (legacy plaintext).
-        foreach (self::$encrypted_fields as $field) {
-            if (!empty($record[$field]) && is_string($record[$field])) {
-                $record[$field] = MealsDB_Encryption::safe_decrypt($record[$field]);
+        foreach (MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS as $column) {
+            if (!empty($record[$column]) && is_string($record[$column])) {
+                $record[$column] = MealsDB_Encryption::safe_decrypt($record[$column]);
             }
         }
 

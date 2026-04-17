@@ -12,22 +12,18 @@ defined('ABSPATH') || exit;
 class MealsDB_Encryption {
 
     /**
-     * Canonical list of columns in meals_clients that are stored encrypted.
+     * Canonical list of meals_clients DB columns that are stored encrypted.
      *
-     * Derived from the columns the migration (class-migration.php) runs
-     * MealsDB_Encryption::encrypt() against. Used as a single source of truth
-     * so read paths don't drift from writes (a historical source of bugs
-     * where first_name/last_name/delivery_initials were decrypted despite
-     * being stored plaintext).
-     *
-     * Keep in sync with MealsDB_Client_Form::$encrypted_fields.
+     * These are the actual database column names. The form-side name for
+     * `customer_comments` is `client_comments`; map_form_to_db() rewrites it
+     * before persistence, so encryption operates on the DB-side name here.
      */
     public const ENCRYPTED_CLIENT_COLUMNS = [
         'individual_id',
         'requisition_id',
         'vet_health_card',
         'diet_concerns',
-        'client_comments',
+        'customer_comments',
     ];
 
     /**
@@ -201,6 +197,57 @@ class MealsDB_Encryption {
             return 'legacy';
         }
         return 'plaintext';
+    }
+
+    /**
+     * Encrypt the canonical PII columns in a row keyed by DB column name.
+     *
+     * Idempotent: values that are already in `new` (HMAC) format are left
+     * alone, so this is safe to call on payloads that may have come back
+     * round-trip from another encrypt-aware code path. Empty/null values
+     * are also left alone (NULL is preserved so the column gets cleared).
+     *
+     * @param array<string, mixed> $row    Row keyed by DB column name.
+     * @param string[]|null         $fields Optional override of which columns
+     *                                      to encrypt. Defaults to the canonical
+     *                                      ENCRYPTED_CLIENT_COLUMNS list.
+     *
+     * @return array<string, mixed> Row with the listed columns encrypted.
+     */
+    public static function encrypt_columns(array $row, ?array $fields = null): array {
+        $columns = $fields ?? self::ENCRYPTED_CLIENT_COLUMNS;
+
+        foreach ($columns as $column) {
+            if (!array_key_exists($column, $row)) {
+                continue;
+            }
+
+            $value = $row[$column];
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            if (!is_string($value)) {
+                $value = (string) $value;
+            }
+
+            // Don't double-encrypt rows that already carry an HMAC payload
+            // (e.g. in case a caller hands us a row read straight from the DB).
+            if (self::classify_payload($value) === 'new') {
+                continue;
+            }
+
+            try {
+                $row[$column] = self::encrypt($value);
+            } catch (\Throwable $e) {
+                error_log('[MealsDB Encryption] Failed to encrypt column ' . $column . ': ' . $e->getMessage());
+                // Bail rather than silently storing plaintext.
+                throw $e;
+            }
+        }
+
+        return $row;
     }
 
     /**
