@@ -249,79 +249,104 @@ class MealsDB_Sync {
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $escaped_table = str_replace('`', '``', $clients_table);
 
-        $sql = "SELECT * FROM `{$clients_table}` WHERE client_type IN ('SDNB', 'Veteran') AND wp_user_id > 0";
-
-        // Try the preferred column name first; fall back to the alternate.
-        $wpdb->suppress_errors(true);
-        $clients = $wpdb->get_results($sql, ARRAY_A);
-        $wpdb->suppress_errors(false);
-
-        if (!is_array($clients) || empty($clients)) {
-            $sql = "SELECT * FROM `{$clients_table}` WHERE client_type IN ('SDNB', 'Veteran') AND wordpress_user_id > 0";
-            $clients = $wpdb->get_results($sql, ARRAY_A);
-        }
-
-        if (!is_array($clients) || empty($clients)) {
-            error_log('[MealsDB Sync] Nightly sync aborted: failed to query clients.');
+        // Pick the canonical wp_user column once via INFORMATION_SCHEMA so
+        // we don't trial-and-error two SELECTs (which would also issue a
+        // second large SELECT * pointlessly when the first returned zero
+        // rows because no clients had wp_user_id set yet).
+        $wp_column = self::resolve_wp_user_column($wpdb, $clients_table);
+        if ($wp_column === null) {
+            error_log('[MealsDB Sync] Nightly sync aborted: no wp_user_id column on clients table.');
             return;
         }
 
-        $synced_count   = 0;
-        $skipped_count  = 0;
-        $error_count    = 0;
-        $field_map      = self::get_field_to_wp_meta_map();
-        $wp_fields      = self::get_wp_authoritative_fields();
+        $synced_count  = 0;
+        $skipped_count = 0;
+        $error_count   = 0;
+        $field_map     = self::get_field_to_wp_meta_map();
+        $wp_fields     = self::get_wp_authoritative_fields();
+        $batch_size    = 500;
+        $offset        = 0;
 
-        foreach ($clients as $client) {
-            $wp_user_id = (int) ($client['wp_user_id'] ?? $client['wordpress_user_id'] ?? 0);
-            $client_id  = (int) ($client['client_id'] ?? 0);
+        $escaped_column = str_replace('`', '``', $wp_column);
 
-            if ($wp_user_id <= 0 || $client_id <= 0) {
-                $skipped_count++;
-                continue;
+        while (true) {
+            $batch = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT * FROM `{$escaped_table}` WHERE client_type IN ('SDNB', 'Veteran') AND `{$escaped_column}` > 0 ORDER BY client_id ASC LIMIT %d OFFSET %d",
+                    $batch_size,
+                    $offset
+                ),
+                ARRAY_A
+            );
+
+            if (!is_array($batch) || empty($batch)) {
+                break;
             }
 
-            $user = get_userdata($wp_user_id);
-            if (!$user instanceof WP_User) {
-                MealsDB_Logger::log('sync_nightly_missing_user', $client_id, 'wp_user_id', (string) $wp_user_id, null);
-                $skipped_count++;
-                continue;
-            }
+            foreach ($batch as $client) {
+                $wp_user_id = (int) ($client[$wp_column] ?? 0);
+                $client_id  = (int) ($client['client_id'] ?? 0);
 
-            $pushed = 0;
-            foreach ($wp_fields as $field) {
-                if (!isset($field_map[$field])) {
+                if ($wp_user_id <= 0 || $client_id <= 0) {
+                    $skipped_count++;
                     continue;
                 }
 
-                $wp_value     = self::read_wp_field_value($user, $field_map[$field]);
-                $client_value = isset($client[$field]) ? (string) $client[$field] : '';
-
-                if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
+                $user = get_userdata($wp_user_id);
+                if (!$user instanceof WP_User) {
+                    MealsDB_Logger::log('sync_nightly_missing_user', $client_id, 'wp_user_id', (string) $wp_user_id, null);
+                    $skipped_count++;
                     continue;
                 }
 
-                self::$syncing = true;
-                $push_result = self::push_to_meals_db($client_id, $field, $wp_value);
-                self::$syncing = false;
+                $pushed = 0;
+                foreach ($wp_fields as $field) {
+                    if (!isset($field_map[$field])) {
+                        continue;
+                    }
 
-                if (is_wp_error($push_result)) {
-                    $error_count++;
-                    error_log(sprintf(
-                        '[MealsDB Sync] Nightly sync error for client %d, field %s: %s',
-                        $client_id,
-                        $field,
-                        $push_result->get_error_message()
-                    ));
-                } else {
-                    $pushed++;
+                    $wp_value     = self::read_wp_field_value($user, $field_map[$field]);
+                    $client_value = isset($client[$field]) ? (string) $client[$field] : '';
+
+                    if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
+                        continue;
+                    }
+
+                    // Wrap in try/finally so an exception in push_to_meals_db
+                    // can't leave the global $syncing flag stuck on for the
+                    // rest of the worker (which would suppress every
+                    // subsequent sync hook silently).
+                    self::$syncing = true;
+                    try {
+                        $push_result = self::push_to_meals_db($client_id, $field, $wp_value);
+                    } finally {
+                        self::$syncing = false;
+                    }
+
+                    if (is_wp_error($push_result)) {
+                        $error_count++;
+                        error_log(sprintf(
+                            '[MealsDB Sync] Nightly sync error for client %d, field %s: %s',
+                            $client_id,
+                            $field,
+                            $push_result->get_error_message()
+                        ));
+                    } else {
+                        $pushed++;
+                    }
+                }
+
+                if ($pushed > 0) {
+                    $synced_count++;
                 }
             }
 
-            if ($pushed > 0) {
-                $synced_count++;
+            if (count($batch) < $batch_size) {
+                break;
             }
+            $offset += $batch_size;
         }
 
         $summary = wp_json_encode([
@@ -331,6 +356,33 @@ class MealsDB_Sync {
         ]);
 
         MealsDB_Logger::log('sync_nightly_complete', 0, 'summary', null, $summary !== false ? $summary : null);
+    }
+
+    /**
+     * Pick wp_user_id / wordpress_user_id by inspecting INFORMATION_SCHEMA
+     * once. Cached for the request.
+     */
+    private static function resolve_wp_user_column(wpdb $wpdb, string $clients_table): ?string {
+        static $cache = [];
+        if (array_key_exists($clients_table, $cache)) {
+            return $cache[$clients_table];
+        }
+
+        $columns = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME IN ('wp_user_id', 'wordpress_user_id')",
+                $clients_table
+            )
+        );
+
+        $columns = is_array($columns) ? array_map('strval', $columns) : [];
+        if (in_array('wp_user_id', $columns, true)) {
+            return $cache[$clients_table] = 'wp_user_id';
+        }
+        if (in_array('wordpress_user_id', $columns, true)) {
+            return $cache[$clients_table] = 'wordpress_user_id';
+        }
+        return $cache[$clients_table] = null;
     }
 
     // ------------------------------------------------------------------
@@ -431,26 +483,20 @@ class MealsDB_Sync {
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-
-        // Try the preferred column name first; fall back to the alternate.
-        $wp_columns = ['wp_user_id', 'wordpress_user_id'];
-        foreach ($wp_columns as $wp_col) {
-            $escaped_col = str_replace('`', '``', $wp_col);
-            $sql = $wpdb->prepare(
-                "SELECT * FROM `{$clients_table}` WHERE `{$escaped_col}` = %d AND client_type IN ('SDNB', 'Veteran') LIMIT 1",
-                $wp_user_id
-            );
-
-            $wpdb->suppress_errors(true);
-            $row = $wpdb->get_row($sql, ARRAY_A);
-            $wpdb->suppress_errors(false);
-
-            if (is_array($row)) {
-                return $row;
-            }
+        $wp_column     = self::resolve_wp_user_column($wpdb, $clients_table);
+        if ($wp_column === null) {
+            return null;
         }
 
-        return null;
+        $escaped_table = str_replace('`', '``', $clients_table);
+        $escaped_col   = str_replace('`', '``', $wp_column);
+        $sql = $wpdb->prepare(
+            "SELECT * FROM `{$escaped_table}` WHERE `{$escaped_col}` = %d AND client_type IN ('SDNB', 'Veteran') LIMIT 1",
+            $wp_user_id
+        );
+
+        $row = $wpdb->get_row($sql, ARRAY_A);
+        return is_array($row) ? $row : null;
     }
 
     /**
@@ -465,34 +511,38 @@ class MealsDB_Sync {
         $field_map = self::get_field_to_wp_meta_map();
         $wp_fields = self::get_wp_authoritative_fields();
 
+        // try/finally so an exception or fatal in push_to_meals_db can't
+        // leave the global $syncing flag stuck on for the rest of the
+        // worker (which would silently suppress every subsequent sync hook).
         self::$syncing = true;
+        try {
+            foreach ($wp_fields as $field) {
+                if (!isset($field_map[$field])) {
+                    continue;
+                }
 
-        foreach ($wp_fields as $field) {
-            if (!isset($field_map[$field])) {
-                continue;
+                $wp_value     = self::read_wp_field_value($user, $field_map[$field]);
+                $client_value = isset($client[$field]) ? (string) $client[$field] : '';
+
+                if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
+                    continue;
+                }
+
+                $result = self::push_to_meals_db($client_id, $field, $wp_value);
+
+                if (is_wp_error($result)) {
+                    error_log(sprintf(
+                        '[MealsDB Sync] %s error for client %d, field %s: %s',
+                        $action,
+                        $client_id,
+                        $field,
+                        $result->get_error_message()
+                    ));
+                }
             }
-
-            $wp_value     = self::read_wp_field_value($user, $field_map[$field]);
-            $client_value = isset($client[$field]) ? (string) $client[$field] : '';
-
-            if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
-                continue;
-            }
-
-            $result = self::push_to_meals_db($client_id, $field, $wp_value);
-
-            if (is_wp_error($result)) {
-                error_log(sprintf(
-                    '[MealsDB Sync] %s error for client %d, field %s: %s',
-                    $action,
-                    $client_id,
-                    $field,
-                    $result->get_error_message()
-                ));
-            }
+        } finally {
+            self::$syncing = false;
         }
-
-        self::$syncing = false;
     }
 
     /**
