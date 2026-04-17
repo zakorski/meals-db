@@ -282,10 +282,18 @@ class MealsDB_Schema_Sync {
         $trimmed = trim($definition);
         $lower   = strtolower($trimmed);
 
+        // ENUM('a','b','default','c') would otherwise be cut at the
+        // " default " inside the parens. Substitute the parenthesised
+        // contents with placeholders so the keyword scan can't misfire.
+        $masked = preg_replace_callback('/\(([^)]*)\)/', static function ($m) {
+            return '(' . str_repeat('_', strlen($m[1])) . ')';
+        }, $trimmed) ?? $trimmed;
+        $masked_lower = strtolower($masked);
+
         $keywords     = [' not null', ' null', ' default', ' auto_increment', ' on update', ' unique', ' primary', ' comment'];
         $cut_position = strlen($trimmed);
         foreach ($keywords as $keyword) {
-            $pos = stripos($lower, $keyword);
+            $pos = stripos($masked_lower, $keyword);
             if ($pos !== false && $pos < $cut_position) {
                 $cut_position = $pos;
             }

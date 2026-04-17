@@ -487,7 +487,10 @@ class MealsDB_Schema {
 
         return sprintf(
             'CONSTRAINT `%s` FOREIGN KEY (%s) REFERENCES `%s`(%s)%s',
-            $wpdb->_real_escape($name),
+            // _real_escape() escapes string literals, not identifiers; a
+            // backtick in the constraint name would break the DDL. Escape
+            // backticks the identifier-correct way.
+            str_replace('`', '``', $name),
             implode(',', $columns),
             $ref_table,
             implode(',', $ref_cols),

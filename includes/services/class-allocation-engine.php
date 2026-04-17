@@ -56,7 +56,10 @@ class MealsDB_Allocation_Engine {
         // Parse billing month boundaries.
         $year  = (int) substr($billing_month, 0, 4);
         $month = (int) substr($billing_month, 5, 2);
-        $days_in_month = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+        // Use DateTime->format('t') instead of cal_days_in_month so we
+        // don't depend on the optional php-calendar extension being built
+        // into the runtime.
+        $days_in_month = (int) (new DateTime(sprintf('%04d-%02d-01', $year, $month)))->format('t');
 
         $month_start = sprintf('%04d-%02d-01', $year, $month);
         $month_end   = sprintf('%04d-%02d-%02d', $year, $month, $days_in_month);
@@ -161,7 +164,10 @@ class MealsDB_Allocation_Engine {
         // Parse billing month boundaries.
         $year  = (int) substr($billing_month, 0, 4);
         $month = (int) substr($billing_month, 5, 2);
-        $days_in_month = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+        // Use DateTime->format('t') instead of cal_days_in_month so we
+        // don't depend on the optional php-calendar extension being built
+        // into the runtime.
+        $days_in_month = (int) (new DateTime(sprintf('%04d-%02d-01', $year, $month)))->format('t');
 
         $month_start = new DateTime(sprintf('%04d-%02d-01', $year, $month));
         $month_end   = new DateTime(sprintf('%04d-%02d-%02d', $year, $month, $days_in_month));

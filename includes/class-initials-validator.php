@@ -200,10 +200,11 @@ class MealsDB_Initials_Validator {
 			}
 		}
 
-		// If all patterns failed, generate random initials
+		// If all patterns failed, generate random initials. random_int is
+		// unbiased and CSPRNG-backed; rand() is biased and slow.
 		$max_attempts = 100;
 		for ($i = 0; $i < $max_attempts; $i++) {
-			$random = chr(rand(65, 90)) . chr(rand(65, 90)) . chr(rand(65, 90));
+			$random = chr(random_int(65, 90)) . chr(random_int(65, 90)) . chr(random_int(65, 90));
 
 			$validation = self::validate($random, $client_data, null);
 			if ($validation['valid']) {
@@ -299,8 +300,14 @@ class MealsDB_Initials_Validator {
 	 * @return bool True if address is empty.
 	 */
 	private static function is_address_empty($address) {
-		// Address must have at least street name and city
-		return empty($address['street_name']) || empty($address['city']);
+		// Require street_name + city + postal_code for a "non-empty"
+		// address. Allowing a missing postal would let two unrelated
+		// houses on the same street+city share initials despite having
+		// different postals; treating that as "empty" forces the
+		// uniqueness check to assign independent initials.
+		return empty($address['street_name'])
+			|| empty($address['city'])
+			|| empty($address['postal_code']);
 	}
 
 	/**
