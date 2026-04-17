@@ -4,8 +4,8 @@
  */
 defined('ABSPATH') || exit;
 
-?>
-<?php
+MealsDB_Permissions::enforce();
+
 $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
 ?>
 <div id="mealsdb-daily-slips" class="mealsdb-daily-slips">

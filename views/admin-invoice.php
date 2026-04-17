@@ -9,6 +9,20 @@
 if (!defined('ABSPATH')) {
     exit;
 }
+
+// Defence-in-depth: enforce capability even when the view is included
+// from a path that doesn't gate via render_main_page.
+if (class_exists('MealsDB_Permissions')) {
+    MealsDB_Permissions::enforce();
+} elseif (!current_user_can('manage_woocommerce')) {
+    wp_die(esc_html__('You do not have permission to access this page.', 'meals-db'), 403);
+}
+
+// $zones is supplied by the page renderer (class-invoice-page.php). When a
+// caller forgets to set it the page should render with no options rather
+// than emit "Undefined variable" warnings that leak file paths under
+// display_errors=on.
+$zones = isset($zones) && is_array($zones) ? $zones : [];
 ?>
 
 <div class="wrap">

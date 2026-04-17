@@ -7,6 +7,8 @@
  */
 defined('ABSPATH') || exit;
 
+MealsDB_Permissions::enforce();
+
 ?>
 <div id="mealsdb-purchase-order" class="mealsdb-purchase-order">
     <p class="description">

@@ -51,13 +51,13 @@ class MealsDB_Migration_Page {
             true
         );
 
+        // wp_max_upload_size() correctly parses unit suffixes (10M, 2G);
+        // (int) ini_get(...) silently truncated "100M" to 100 here.
+        $max_bytes      = function_exists( 'wp_max_upload_size' ) ? wp_max_upload_size() : 0;
         $migration_data = [
             'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
             'nonce'        => wp_create_nonce( 'mealsdb_migration_nonce' ),
-            'maxUploadMb'  => min(
-                (int) ini_get( 'upload_max_filesize' ),
-                (int) ini_get( 'post_max_size' )
-            ),
+            'maxUploadMb'  => $max_bytes > 0 ? (int) round( $max_bytes / ( 1024 * 1024 ) ) : 0,
         ];
         wp_add_inline_script(
             'mealsdb-migration',
@@ -69,6 +69,28 @@ class MealsDB_Migration_Page {
     public static function render(): void {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( __( 'Unauthorized', 'meals-db' ) );
+        }
+
+        // Refuse to render the migration UI over plain HTTP. The page
+        // collects source-DB credentials (host/name/user/password) and
+        // submits them via AJAX; on a non-TLS connection those credentials
+        // travel in the clear and end up in the browser history / DOM.
+        // Operators who genuinely need to run this on an HTTP-only host
+        // can opt in via the MEALSDB_MIGRATION_ALLOW_HTTP constant.
+        $allow_http = defined( 'MEALSDB_MIGRATION_ALLOW_HTTP' ) && MEALSDB_MIGRATION_ALLOW_HTTP;
+        if ( ! is_ssl() && ! $allow_http ) {
+            ?>
+            <div class="wrap">
+                <h1><?php esc_html_e( 'Site Migration', 'meals-db' ); ?></h1>
+                <div class="notice notice-error">
+                    <p>
+                        <strong><?php esc_html_e( 'HTTPS required.', 'meals-db' ); ?></strong>
+                        <?php esc_html_e( 'The migration tool collects database credentials and refuses to load over a plain HTTP connection. Re-open this page over HTTPS, or set MEALSDB_MIGRATION_ALLOW_HTTP to true in wp-config.php to override (not recommended).', 'meals-db' ); ?>
+                    </p>
+                </div>
+            </div>
+            <?php
+            return;
         }
 
         ?>

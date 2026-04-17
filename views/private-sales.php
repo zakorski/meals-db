@@ -8,6 +8,8 @@
  */
 defined('ABSPATH') || exit;
 
+MealsDB_Permissions::enforce();
+
 ?>
 <div id="mealsdb-private-sales">
 

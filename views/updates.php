@@ -5,6 +5,8 @@
 
 defined('ABSPATH') || exit;
 
+MealsDB_Permissions::enforce();
+
 $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 ?>
 <div id="mealsdb-updates" class="mealsdb-updates">
