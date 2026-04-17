@@ -358,81 +358,124 @@ class MealsDB_Allocation_Engine {
 
         $delivery_alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
 
-        // Delete existing allocations for this order (for re-processing).
-        $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+        // Wrap the destructive delete + the new insert(s) in a single
+        // transaction so a concurrent deallocate (status-change hook,
+        // cron) can't race between the rows being cleared and the new
+        // rows being written and leave the DB in a half-written state.
+        $started = $this->wpdb->query('START TRANSACTION');
+        $transaction_started = $started !== false;
 
         $affected_months = [];
+        $insert_failed   = false;
 
-        if ($month1 === $month2) {
-            // Single month — insert one row.
-            $this->wpdb->insert($delivery_alloc_table, [
-                'client_id'        => $client_id,
-                'wc_order_id'      => $wc_order_id,
-                'order_date'       => $order_date_str,
-                'delivery_date'    => $delivery_date,
-                'coverage_start'   => $coverage_start,
-                'coverage_end'     => $coverage_end,
-                'billing_month'    => $month1,
-                'mains_count'      => $mains,
-                'sides_count'      => $sides,
-                'tax_sides_count'  => $tax_sides,
-                'nontax_sides_count' => $nontax_sides,
-            ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
+        try {
+            // Delete existing allocations for this order (for re-processing).
+            $deleted = $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+            if ($deleted === false) {
+                $insert_failed = true;
+            }
 
-            $affected_months[] = $month1;
-        } else {
-            // Coverage spans two months — split proportionally.
-            $end_of_month1    = new DateTime($cov_start_dt->format('Y-m-t'));
-            $start_of_month2  = new DateTime($cov_end_dt->format('Y-m-01'));
+            if (!$insert_failed && $month1 === $month2) {
+                // Single month — insert one row.
+                $rows = $this->wpdb->insert($delivery_alloc_table, [
+                    'client_id'        => $client_id,
+                    'wc_order_id'      => $wc_order_id,
+                    'order_date'       => $order_date_str,
+                    'delivery_date'    => $delivery_date,
+                    'coverage_start'   => $coverage_start,
+                    'coverage_end'     => $coverage_end,
+                    'billing_month'    => $month1,
+                    'mains_count'      => $mains,
+                    'sides_count'      => $sides,
+                    'tax_sides_count'  => $tax_sides,
+                    'nontax_sides_count' => $nontax_sides,
+                ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
+                if ($rows === false) {
+                    $insert_failed = true;
+                } else {
+                    $affected_months[] = $month1;
+                }
+            } elseif (!$insert_failed) {
+                // Coverage spans two months — split proportionally.
+                $end_of_month1    = new DateTime($cov_start_dt->format('Y-m-t'));
+                $start_of_month2  = new DateTime($cov_end_dt->format('Y-m-01'));
 
-            $days_in_month_1     = (int) $cov_start_dt->diff($end_of_month1)->days + 1;
-            $days_in_month_2     = (int) $start_of_month2->diff($cov_end_dt)->days + 1;
-            $total_coverage_days = $days_in_month_1 + $days_in_month_2;
+                $days_in_month_1     = (int) $cov_start_dt->diff($end_of_month1)->days + 1;
+                $days_in_month_2     = (int) $start_of_month2->diff($cov_end_dt)->days + 1;
+                $total_coverage_days = $days_in_month_1 + $days_in_month_2;
 
-            $m1_mains        = (int) round($mains * $days_in_month_1 / $total_coverage_days);
-            $m2_mains        = $mains - $m1_mains;
-            $m1_sides        = (int) round($sides * $days_in_month_1 / $total_coverage_days);
-            $m2_sides        = $sides - $m1_sides;
-            $m1_tax_sides    = (int) round($tax_sides * $days_in_month_1 / $total_coverage_days);
-            $m2_tax_sides    = $tax_sides - $m1_tax_sides;
-            $m1_nontax_sides = (int) round($nontax_sides * $days_in_month_1 / $total_coverage_days);
-            $m2_nontax_sides = $nontax_sides - $m1_nontax_sides;
+                $m1_mains        = (int) round($mains * $days_in_month_1 / $total_coverage_days);
+                $m2_mains        = $mains - $m1_mains;
+                $m1_sides        = (int) round($sides * $days_in_month_1 / $total_coverage_days);
+                $m2_sides        = $sides - $m1_sides;
+                $m1_tax_sides    = (int) round($tax_sides * $days_in_month_1 / $total_coverage_days);
+                $m2_tax_sides    = $tax_sides - $m1_tax_sides;
+                $m1_nontax_sides = (int) round($nontax_sides * $days_in_month_1 / $total_coverage_days);
+                $m2_nontax_sides = $nontax_sides - $m1_nontax_sides;
 
-            // Month 1 row.
-            $this->wpdb->insert($delivery_alloc_table, [
-                'client_id'          => $client_id,
-                'wc_order_id'        => $wc_order_id,
-                'order_date'         => $order_date_str,
-                'delivery_date'      => $delivery_date,
-                'coverage_start'     => $coverage_start,
-                'coverage_end'       => $end_of_month1->format('Y-m-d'),
-                'billing_month'      => $month1,
-                'mains_count'        => $m1_mains,
-                'sides_count'        => $m1_sides,
-                'tax_sides_count'    => $m1_tax_sides,
-                'nontax_sides_count' => $m1_nontax_sides,
-            ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
+                // Month 1 row.
+                $rows1 = $this->wpdb->insert($delivery_alloc_table, [
+                    'client_id'          => $client_id,
+                    'wc_order_id'        => $wc_order_id,
+                    'order_date'         => $order_date_str,
+                    'delivery_date'      => $delivery_date,
+                    'coverage_start'     => $coverage_start,
+                    'coverage_end'       => $end_of_month1->format('Y-m-d'),
+                    'billing_month'      => $month1,
+                    'mains_count'        => $m1_mains,
+                    'sides_count'        => $m1_sides,
+                    'tax_sides_count'    => $m1_tax_sides,
+                    'nontax_sides_count' => $m1_nontax_sides,
+                ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
 
-            // Month 2 row.
-            $this->wpdb->insert($delivery_alloc_table, [
-                'client_id'          => $client_id,
-                'wc_order_id'        => $wc_order_id,
-                'order_date'         => $order_date_str,
-                'delivery_date'      => $delivery_date,
-                'coverage_start'     => $start_of_month2->format('Y-m-d'),
-                'coverage_end'       => $coverage_end,
-                'billing_month'      => $month2,
-                'mains_count'        => $m2_mains,
-                'sides_count'        => $m2_sides,
-                'tax_sides_count'    => $m2_tax_sides,
-                'nontax_sides_count' => $m2_nontax_sides,
-            ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
+                // Month 2 row.
+                $rows2 = false;
+                if ($rows1 !== false) {
+                    $rows2 = $this->wpdb->insert($delivery_alloc_table, [
+                        'client_id'          => $client_id,
+                        'wc_order_id'        => $wc_order_id,
+                        'order_date'         => $order_date_str,
+                        'delivery_date'      => $delivery_date,
+                        'coverage_start'     => $start_of_month2->format('Y-m-d'),
+                        'coverage_end'       => $coverage_end,
+                        'billing_month'      => $month2,
+                        'mains_count'        => $m2_mains,
+                        'sides_count'        => $m2_sides,
+                        'tax_sides_count'    => $m2_tax_sides,
+                        'nontax_sides_count' => $m2_nontax_sides,
+                    ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
+                }
 
-            $affected_months[] = $month1;
-            $affected_months[] = $month2;
+                if ($rows1 === false || $rows2 === false) {
+                    $insert_failed = true;
+                } else {
+                    $affected_months[] = $month1;
+                    $affected_months[] = $month2;
+                }
+            }
+
+            if ($transaction_started) {
+                if ($insert_failed) {
+                    $this->wpdb->query('ROLLBACK');
+                } else {
+                    $this->wpdb->query('COMMIT');
+                }
+            }
+        } catch (\Throwable $e) {
+            if ($transaction_started) {
+                $this->wpdb->query('ROLLBACK');
+            }
+            throw $e;
         }
 
-        // Recalculate affected months.
+        if ($insert_failed) {
+            error_log('[MealsDB Allocation Engine] allocate_order rolled back for wc_order_id=' . $wc_order_id . ': ' . $this->wpdb->last_error);
+            return;
+        }
+
+        // Recalculate affected months (outside the transaction so the
+        // recompute reads committed state and doesn't deadlock against
+        // the INSERTs we just did).
         foreach ($affected_months as $bm) {
             $this->recalculate_month_totals($client_id, $bm);
         }
