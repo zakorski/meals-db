@@ -122,6 +122,13 @@ class MealsDB_Client_Form {
 
     /**
      * Deterministic index columns used for uniqueness checks on encrypted data.
+     *
+     * delivery_initials is included for back-compat — the column is
+     * actually a 3-character plaintext VARCHAR (see schema) so every
+     * uniqueness lookup currently queries the plaintext column directly.
+     * The hash column (delivery_initials_index) is populated as a
+     * defensive shadow in case the column is ever moved to encrypted
+     * storage.
      */
     private static $deterministic_index_map = [
         'individual_id'      => 'individual_id_index',
