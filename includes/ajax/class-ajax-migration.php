@@ -291,7 +291,7 @@ class MealsDB_Ajax_Migration {
         $file_path     = self::sanitize_path( (string) wp_unslash( $_POST['file_path'] ?? '' ) );
         $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
         $byte_offset   = (int) ( $_POST['byte_offset'] ?? 0 );
-        $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
+        $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
 
         if ( ! $file_path || ! $source_prefix ) {
             wp_send_json_error( [ 'message' => 'Missing file_path or source_prefix.' ] );
@@ -321,14 +321,7 @@ class MealsDB_Ajax_Migration {
 
         $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
         $table_index   = (int) ( $_POST['table_index'] ?? 0 );
-        $dry_run       = filter_var(
-            $_POST['dry_run'] ?? true,
-            FILTER_VALIDATE_BOOLEAN,
-            FILTER_NULL_ON_FAILURE
-        );
-        if ( $dry_run === null ) {
-            $dry_run = true;
-        }
+        $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
 
         // Prefer the credentials token issued by test_db. The raw fields
         // remain accepted only as a backwards-compat fallback.
@@ -375,7 +368,7 @@ class MealsDB_Ajax_Migration {
 
         $phase         = (int) ( $_POST['phase'] ?? 0 );
         $offset        = (int) ( $_POST['offset'] ?? 0 );
-        $dry_run       = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
+        $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
         $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
 
         $result = [];
@@ -560,9 +553,9 @@ class MealsDB_Ajax_Migration {
 
         $start_month = isset( $_REQUEST['start_month'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['start_month'] ) ) : '';
         $end_month   = isset( $_REQUEST['end_month'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['end_month'] ) ) : gmdate( 'Y-m' );
-        $dry_run     = isset( $_REQUEST['dry_run'] ) && $_REQUEST['dry_run'] === '1';
+        $dry_run     = MealsDB_Helpers::bool_flag( $_REQUEST['dry_run'] ?? null, true );
 
-        if ( ! preg_match( '/^\d{4}-\d{2}$/', $start_month ) || ! preg_match( '/^\d{4}-\d{2}$/', $end_month ) ) {
+        if ( ! MealsDB_Helpers::is_valid_ym( $start_month ) || ! MealsDB_Helpers::is_valid_ym( $end_month ) ) {
             wp_send_json( [ 'success' => false, 'message' => 'Invalid month format. Use YYYY-MM.' ] );
         }
 

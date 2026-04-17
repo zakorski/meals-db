@@ -98,7 +98,7 @@ class MealsDB_Ajax_Sync {
         $field_name = sanitize_text_field(wp_unslash($_POST['field'] ?? ''));
         $source = sanitize_text_field(wp_unslash($_POST['source'] ?? ''));
         $target = sanitize_text_field(wp_unslash($_POST['target'] ?? ''));
-        $set_ignored = filter_var($_POST['ignored'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $set_ignored = MealsDB_Helpers::bool_flag($_POST['ignored'] ?? null, false);
 
         $user_id = get_current_user_id();
         global $wpdb;
