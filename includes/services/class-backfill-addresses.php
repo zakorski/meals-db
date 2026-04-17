@@ -26,10 +26,20 @@ class MealsDB_Backfill_Addresses {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $rates_table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
 
-        // Get all meals_clients rows that have a wp_user_id.
+        // apartment_number / delivery_apartment_number aren't in the
+        // canonical schema. They exist on legacy databases that came
+        // through the migration, but a fresh install won't have them and
+        // a SELECT that names a missing column errors out and aborts the
+        // whole backfill. Probe and select only the columns that exist.
+        $core_columns = ['client_id', 'wp_user_id', 'delivery_area_name', 'street_name', 'delivery_street_name', 'default_rate_id'];
+        $optional_columns = ['apartment_number', 'delivery_apartment_number'];
+        $available_optional = self::filter_existing_columns($wpdb, $clients_table, $optional_columns);
+
+        $select_columns = array_merge($core_columns, $available_optional);
+        $select_sql     = implode(', ', $select_columns);
+
         $clients = $wpdb->get_results(
-            "SELECT client_id, wp_user_id, delivery_area_name, apartment_number, delivery_apartment_number,
-                    street_name, delivery_street_name, default_rate_id
+            "SELECT {$select_sql}
              FROM `{$clients_table}`
              WHERE wp_user_id > 0
              ORDER BY client_id ASC",
@@ -39,6 +49,9 @@ class MealsDB_Backfill_Addresses {
         if (!is_array($clients)) {
             return ['error' => 'Failed to query meals_clients.'];
         }
+
+        $has_apartment_col          = in_array('apartment_number', $available_optional, true);
+        $has_delivery_apartment_col = in_array('delivery_apartment_number', $available_optional, true);
 
         $stats = [
             'total'           => count($clients),
@@ -105,14 +118,14 @@ class MealsDB_Backfill_Addresses {
                 $changes[]     = "delivery_area_name={$billing_address_2}";
             }
 
-            // 2. Clear zone data from apartment_number.
-            if (!empty($client['apartment_number']) && strpos($client['apartment_number'], 'Zone') === 0) {
+            // 2. Clear zone data from apartment_number (legacy schemas only).
+            if ($has_apartment_col && !empty($client['apartment_number']) && strpos($client['apartment_number'], 'Zone') === 0) {
                 $set_clauses[] = 'apartment_number = NULL';
                 $changes[]     = 'apartment_number=NULL';
             }
 
-            // 3. Clear zone data from delivery_apartment_number.
-            if (!empty($client['delivery_apartment_number']) && strpos($client['delivery_apartment_number'], 'Zone') === 0) {
+            // 3. Clear zone data from delivery_apartment_number (legacy schemas only).
+            if ($has_delivery_apartment_col && !empty($client['delivery_apartment_number']) && strpos($client['delivery_apartment_number'], 'Zone') === 0) {
                 $set_clauses[] = 'delivery_apartment_number = NULL';
                 $changes[]     = 'delivery_apartment_number=NULL';
             }
@@ -197,5 +210,31 @@ class MealsDB_Backfill_Addresses {
         }
 
         return $stats;
+    }
+
+    /**
+     * Return the subset of $columns that actually exist on $table.
+     *
+     * Used to keep the backfill compatible with both legacy schemas
+     * (where apartment_number / delivery_apartment_number live) and
+     * fresh installs (where the canonical schema does not declare them).
+     *
+     * @param wpdb     $wpdb
+     * @param string   $table
+     * @param string[] $columns
+     * @return string[]
+     */
+    private static function filter_existing_columns($wpdb, string $table, array $columns): array {
+        if (empty($columns)) {
+            return [];
+        }
+        $placeholders = implode(',', array_fill(0, count($columns), '%s'));
+        $args = array_merge([$table], $columns);
+        $rows = $wpdb->get_col($wpdb->prepare(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME IN ({$placeholders})",
+            $args
+        ));
+        return is_array($rows) ? array_values(array_intersect($columns, array_map('strval', $rows))) : [];
     }
 }
