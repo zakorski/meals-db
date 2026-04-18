@@ -151,8 +151,11 @@ class MealsDB_Invoice_Generator {
             $rate_id       = isset($order['mealsdb_rate_id']) ? (int) $order['mealsdb_rate_id'] : 0;
             $resolved_rate = $order_query->resolve_rate_for_order($rate_id, (int) $client['client_id']);
 
+            // Accumulate in integer cents. Summing float line taxes across
+            // a month of orders drifts pennies on rounding; the header
+            // total must match the sum of every line exactly.
             $total_units = 0;
-            $tax_amount  = 0.0;
+            $tax_cents   = 0;
 
             foreach ($order['items'] as $item) {
                 $qty = (float) $item['quantity'];
@@ -161,22 +164,29 @@ class MealsDB_Invoice_Generator {
                 $pid    = (int) $item['wc_product_id'];
                 $is_tax = isset($product_types[$pid]) && !empty($product_types[$pid]['taxable']);
                 if ($is_tax) {
-                    $tax_amount += (float) $item['line_tax'];
+                    $tax_cents += MealsDB_Money::to_cents($item['line_tax']);
                 }
             }
 
-            $basic_cost          = $total_units * $resolved_rate;
-            $client_contribution = (float) ($client['client_contribution'] ?? 0);
-            $total_cost          = $basic_cost + $tax_amount - $client_contribution;
+            $basic_cents        = MealsDB_Money::multiply($total_units, $resolved_rate);
+            $contribution_cents = MealsDB_Money::to_cents($client['client_contribution'] ?? 0);
+            $total_cents        = $basic_cents + $tax_cents - $contribution_cents;
 
             $rows[] = array_merge($client, [
                 'order_id'        => (int) $order['order_id'],
                 'order_date'      => $order['date_created_gmt'],
                 'resolved_rate'   => $resolved_rate,
                 'total_units'     => $total_units,
-                'basic_cost'      => $basic_cost,
-                'tax_amount'      => $tax_amount,
-                'total_cost'      => $total_cost,
+                // Canonical integer-cents amounts — prefer these for new callers.
+                'basic_cost_cents'          => $basic_cents,
+                'tax_amount_cents'          => $tax_cents,
+                'total_cost_cents'          => $total_cents,
+                'client_contribution_cents' => $contribution_cents,
+                // Back-compat float keys, derived from cents so they round
+                // identically to MealsDB_Money::format() downstream.
+                'basic_cost'      => $basic_cents / 100,
+                'tax_amount'      => $tax_cents / 100,
+                'total_cost'      => $total_cents / 100,
                 'items'           => $order['items'],
             ]);
         }
@@ -658,11 +668,27 @@ class MealsDB_Invoice_Generator {
             return '';
         }
 
-        $registered   = new DateTime($user->user_registered);
-        $period_start = new DateTime($start_date);
-        $period_end   = new DateTime($end_date);
+        // `user_registered` is stored in UTC. The billing period boundaries
+        // are typed by a human in site-local time. Parse each in its own
+        // timezone, then compare — PHP DateTime handles the cross-tz
+        // comparison correctly. Without this, a server set to a non-UTC
+        // default timezone re-interprets `user_registered` as local time
+        // and can drop the registration into the wrong billing month.
+        $site_tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone(date_default_timezone_get());
+        $utc_tz  = new DateTimeZone('UTC');
+
+        try {
+            $registered   = new DateTime($user->user_registered, $utc_tz);
+            $period_start = new DateTime($start_date . ' 00:00:00', $site_tz);
+            $period_end   = new DateTime($end_date . ' 23:59:59', $site_tz);
+        } catch (Exception $e) {
+            return '';
+        }
 
         if ($registered >= $period_start && $registered <= $period_end) {
+            // Render the registration date in the site timezone so the
+            // flag text matches what the user sees in wp-admin.
+            $registered->setTimezone($site_tz);
             return 'New - account - user created on ' . $registered->format('Y-m-d');
         }
 
@@ -703,8 +729,16 @@ class MealsDB_Invoice_Generator {
         // Get service center info
         $service_center = isset(self::$service_centers[$zone]) ? self::$service_centers[$zone] : self::$service_centers['M'];
 
-        // Format invoice number: "2025 Jan 31 M"
-        $end_date_obj = new DateTime($end_date);
+        // Format invoice number: "2025 Jan 31 M". $end_date is a user-typed
+        // Y-m-d string, so parse it in the site timezone rather than the
+        // server default (which on some hosts is UTC and can shift the
+        // label across the midnight boundary).
+        $site_tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone(date_default_timezone_get());
+        try {
+            $end_date_obj = new DateTime($end_date, $site_tz);
+        } catch (Exception $e) {
+            $end_date_obj = new DateTime('now', $site_tz);
+        }
         $invoice_number = $end_date_obj->format('Y M d') . ' ' . $zone;
 
         // Query eligible clients from external DB.
@@ -948,6 +982,14 @@ class MealsDB_Invoice_Generator {
             $sci_id      = 'SCI-' . str_pad($r['order_id'], 8, '0', STR_PAD_LEFT);
             $client_name = strtoupper($r['first_name']) . ' ' . strtoupper($r['last_name']);
 
+            // Money values come straight from the integer-cents totals that
+            // get_invoice_data_for_clients() accumulates, so the CSV total
+            // agrees penny-exactly with the per-line math.
+            $contribution_cents = (int) ($r['client_contribution_cents']
+                ?? MealsDB_Money::to_cents($r['client_contribution'] ?? 0));
+            $tax_cents = (int) ($r['tax_amount_cents']
+                ?? MealsDB_Money::to_cents($r['tax_amount'] ?? 0));
+
             $csv[] = MealsDB_CSV::row([
                 $sci_id,
                 'Meal Services - Services de repas',
@@ -964,9 +1006,9 @@ class MealsDB_Invoice_Generator {
                 '', // Other Cost (admin fees)
                 '', // Other Cost (recreation)
                 '', // Other Cost (parking)
-                number_format((float) ($r['client_contribution'] ?? 0), 2, '.', ''), // Client Contribution
+                MealsDB_Money::format($contribution_cents),
                 '', // Stat Holiday Units
-                number_format($r['tax_amount'], 2, '.', ''),
+                MealsDB_Money::format($tax_cents),
             ]);
         }
 
