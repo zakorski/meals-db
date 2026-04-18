@@ -1499,13 +1499,21 @@ class MealsDB_Client_Form {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
         foreach (self::$deterministic_index_map as $indexColumn) {
-            $escapedColumn = $wpdb->_real_escape($indexColumn);
+            // INFORMATION_SCHEMA with both identifiers bound as %s. The
+            // previous SHOW COLUMNS … LIKE '{$escaped}' path used
+            // _real_escape(), which doesn't neutralise LIKE wildcards,
+            // and interpolated the result into a raw SQL string.
+            $columnExists = (bool) $wpdb->get_var($wpdb->prepare(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = %s
+                   AND COLUMN_NAME = %s
+                 LIMIT 1",
+                $clients_table,
+                $indexColumn
+            ));
 
-            $columnExists = false;
-            $colResult = $wpdb->get_results("SHOW COLUMNS FROM `{$clients_table}` LIKE '{$escapedColumn}'", ARRAY_A);
-            if (is_array($colResult)) {
-                $columnExists = count($colResult) > 0;
-            } else {
+            if (!$columnExists && $wpdb->last_error !== '') {
                 error_log('[MealsDB] Failed to inspect deterministic index column: ' . $wpdb->last_error);
                 $allEnsured = false;
                 continue;

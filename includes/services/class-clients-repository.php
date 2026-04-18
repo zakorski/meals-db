@@ -525,14 +525,28 @@ class MealsDB_Clients_Repository {
             return false;
         }
 
-        $result = $wpdb->get_var(
-            $wpdb->prepare(
-                sprintf("SHOW COLUMNS FROM `%s` LIKE %%s", $this->escape_table_name()),
-                $column
-            )
-        );
+        // INFORMATION_SCHEMA with both identifiers bound as %s. The
+        // previous SHOW COLUMNS … LIKE path let LIKE wildcards in the
+        // column name influence match semantics. Column existence is
+        // stable across a request, so the result is cached per
+        // (table, column).
+        static $cache = [];
+        $key = (string) $this->table_name . "\0" . $column;
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
+        }
 
-        return $result !== null;
+        $found = $wpdb->get_var($wpdb->prepare(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = %s
+               AND COLUMN_NAME = %s
+             LIMIT 1",
+            (string) $this->table_name,
+            $column
+        ));
+
+        return $cache[$key] = ($found !== null);
     }
 
     private function table_exists(string $table_name): bool {

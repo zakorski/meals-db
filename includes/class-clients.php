@@ -207,24 +207,40 @@ class MealsDB_Clients {
 
     /**
      * Check if a table contains a specific column.
+     *
+     * Uses INFORMATION_SCHEMA with both identifiers bound as %s through
+     * $wpdb->prepare. The previous implementation fed the column name
+     * through _real_escape() and into a LIKE clause, which (a) doesn't
+     * neutralise LIKE wildcards — a column literally named `_` would
+     * match every column — and (b) let the caller quietly influence
+     * match semantics. Column-existence is stable within a request, so
+     * the result is cached per (table, column) to keep repeated schema
+     * probes from reissuing the same query.
      */
     private static function table_has_column(string $table_name, string $column): bool {
         if (!self::table_exists($table_name)) {
             return false;
         }
 
-        global $wpdb;
-
-        $escaped_column = $wpdb->_real_escape($column);
-
-        $sql = sprintf("SHOW COLUMNS FROM `%s` LIKE '%s'", $table_name, $escaped_column);
-        $result = $wpdb->get_results($sql, ARRAY_A);
-
-        if (is_array($result)) {
-            return count($result) > 0;
+        static $cache = [];
+        $key = $table_name . "\0" . $column;
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
         }
 
-        return false;
+        global $wpdb;
+
+        $found = $wpdb->get_var($wpdb->prepare(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = %s
+               AND COLUMN_NAME = %s
+             LIMIT 1",
+            $table_name,
+            $column
+        ));
+
+        return $cache[$key] = ($found !== null);
     }
 
     /**
