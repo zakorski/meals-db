@@ -48,7 +48,13 @@ MealsDB_Permissions::enforce();
     function showStatus(msg, type) {
         $('#private-status').show()
             .removeClass('notice-info notice-success notice-error notice-warning')
-            .addClass('notice-' + type).html('<p>' + msg + '</p>');
+            .addClass('notice-' + type)
+            .empty()
+            .append($('<p></p>').text(msg));
+    }
+
+    function intText(v) {
+        return String(parseInt(v, 10) || 0);
     }
 
     function esc(str) {
@@ -92,8 +98,8 @@ MealsDB_Permissions::enforce();
             html += '<tr>';
             html += '<td>' + esc(r.first_name) + '</td>';
             html += '<td>' + esc(r.last_name) + '</td>';
-            html += '<td style="text-align:right">' + r.total_mains + '</td>';
-            html += '<td style="text-align:right">' + r.total_sides + '</td>';
+            html += '<td style="text-align:right">' + intText(r.total_mains) + '</td>';
+            html += '<td style="text-align:right">' + intText(r.total_sides) + '</td>';
             html += '<td style="text-align:right">$' + fmt(r.total_before_tax) + '</td>';
             html += '<td style="text-align:right">$' + fmt(r.total_tax) + '</td>';
             html += '<td style="text-align:right">$' + fmt(r.final_total) + '</td>';
@@ -102,8 +108,8 @@ MealsDB_Permissions::enforce();
 
         html += '</tbody><tfoot><tr>';
         html += '<th colspan="2">Grand Total</th>';
-        html += '<th style="text-align:right">' + (totals.total_mains || 0) + '</th>';
-        html += '<th style="text-align:right">' + (totals.total_sides || 0) + '</th>';
+        html += '<th style="text-align:right">' + intText(totals.total_mains) + '</th>';
+        html += '<th style="text-align:right">' + intText(totals.total_sides) + '</th>';
         html += '<th style="text-align:right">$' + fmt(totals.total_before_tax || 0) + '</th>';
         html += '<th style="text-align:right">$' + fmt(totals.total_tax || 0) + '</th>';
         html += '<th style="text-align:right">$' + fmt(totals.final_total || 0) + '</th>';

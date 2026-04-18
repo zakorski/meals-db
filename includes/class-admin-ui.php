@@ -1889,36 +1889,54 @@ class MealsDB_Admin_UI {
         $attributes = $fields['__attributes'] ?? '';
         unset($fields['__before'], $fields['__after'], $fields['__attributes']);
 
-        $attributes = $attributes !== '' ? ' ' . trim($attributes) : '';
+        // __attributes is today always hardcoded inside this file (e.g.
+        // data-client-type="sdnb"), but run any string through
+        // wp_kses_data + esc_attr-safe filtering to protect future
+        // callers that might feed user-controlled data through. The
+        // typed-array branch is preferred and avoids the free-form
+        // string path entirely.
+        if (is_array($attributes)) {
+            $attributes_html = '';
+            foreach ($attributes as $attr_name => $attr_value) {
+                if (!is_string($attr_name) || $attr_name === '') {
+                    continue;
+                }
+                $attr_name = preg_replace('/[^A-Za-z0-9_:-]/', '', $attr_name);
+                if ($attr_name === '') {
+                    continue;
+                }
+                $attributes_html .= ' ' . $attr_name . '="' . esc_attr((string) $attr_value) . '"';
+            }
+            $attributes = $attributes_html;
+        } elseif (is_string($attributes) && $attributes !== '') {
+            $attributes = ' ' . wp_kses_data(trim($attributes));
+        } else {
+            $attributes = '';
+        }
 
         echo '<div class="mealsdb-section"' . $attributes . '>';
         echo '<h3>' . esc_html($group_name) . '</h3>';
 
-        if ($before !== '') {
-            if (is_callable($before)) {
-                $before($client);
-            } else {
-                echo $before;
-            }
+        // Accept only callables for __before/__after renderers. Strings
+        // are rejected rather than echoed verbatim; rendering hand-built
+        // HTML is the caller's job to do safely.
+        if (is_callable($before)) {
+            $before($client);
         }
 
         echo '<table class="form-table">';
         foreach ($fields as $field_renderer) {
             if (is_callable($field_renderer)) {
                 $field_renderer($client);
-                continue;
             }
-
-            echo $field_renderer;
+            // Non-callable entries are silently skipped: if a caller
+            // wants to inject raw HTML they must wrap it in a closure
+            // so the XSS-safety review happens at the call site.
         }
         echo '</table>';
 
-        if ($after !== '') {
-            if (is_callable($after)) {
-                $after($client);
-            } else {
-                echo $after;
-            }
+        if (is_callable($after)) {
+            $after($client);
         }
 
         echo '</div>';

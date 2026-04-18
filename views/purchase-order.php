@@ -60,6 +60,15 @@ MealsDB_Permissions::enforce();
         return div.innerHTML;
     }
 
+    function intText(v) {
+        return String(parseInt(v, 10) || 0);
+    }
+
+    function fmt(v) {
+        var n = parseFloat(v);
+        return isNaN(n) ? '0.00' : n.toFixed(2);
+    }
+
     function showStatus(msg, type) {
         $('#mealsdb-po-status').show()
             .removeClass('notice-info notice-success notice-error notice-warning')
@@ -97,23 +106,23 @@ MealsDB_Permissions::enforce();
             html += '<tr' + rowStyle(r.seasonal_index) + '>';
             html += '<td>' + esc(r.sku) + '</td>';
             html += '<td>' + esc(r.product_name) + '</td>';
-            html += '<td style="text-align:right">' + r.weighted_avg_weekly + '</td>';
-            html += '<td style="text-align:right">' + r.seasonal_index + '</td>';
-            html += '<td style="text-align:right">' + r.adjusted_weekly + '</td>';
-            html += '<td style="text-align:right">' + r.projected_need + '</td>';
-            html += '<td style="text-align:right">' + r.buffer + '</td>';
-            html += '<td style="text-align:right">' + r.qty_needed + '</td>';
-            html += '<td style="text-align:right">' + r.total_available + '</td>';
-            html += '<td style="text-align:right"><strong>' + r.cases_to_buy + '</strong></td>';
-            html += '<td style="text-align:right">' + r.order_quantity + '</td>';
+            html += '<td style="text-align:right">' + fmt(r.weighted_avg_weekly) + '</td>';
+            html += '<td style="text-align:right">' + fmt(r.seasonal_index) + '</td>';
+            html += '<td style="text-align:right">' + fmt(r.adjusted_weekly) + '</td>';
+            html += '<td style="text-align:right">' + fmt(r.projected_need) + '</td>';
+            html += '<td style="text-align:right">' + intText(r.buffer) + '</td>';
+            html += '<td style="text-align:right">' + fmt(r.qty_needed) + '</td>';
+            html += '<td style="text-align:right">' + intText(r.total_available) + '</td>';
+            html += '<td style="text-align:right"><strong>' + intText(r.cases_to_buy) + '</strong></td>';
+            html += '<td style="text-align:right">' + intText(r.order_quantity) + '</td>';
             html += '<td>' + esc(r.seasonal_note) + '</td>';
             html += '</tr>';
         });
 
         html += '</tbody><tfoot><tr>';
         html += '<th colspan="9">TOTAL</th>';
-        html += '<th style="text-align:right">' + totalCases + '</th>';
-        html += '<th style="text-align:right">' + totalQty + '</th>';
+        html += '<th style="text-align:right">' + intText(totalCases) + '</th>';
+        html += '<th style="text-align:right">' + intText(totalQty) + '</th>';
         html += '<th></th>';
         html += '</tr></tfoot></table>';
 
