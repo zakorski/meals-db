@@ -285,6 +285,26 @@ class MealsDB_Sync {
                 break;
             }
 
+            // Pre-warm the user and user-meta caches for every wp_user_id in
+            // this batch. Without this, each get_userdata() below triggers a
+            // users-table query and the first get_user_meta() per user
+            // triggers a usermeta-table query, giving ~1000 queries on a
+            // 500-client batch. Two priming calls here cut it to 2.
+            $batch_user_ids = [];
+            foreach ($batch as $client) {
+                $uid = (int) ($client[$wp_column] ?? 0);
+                if ($uid > 0) {
+                    $batch_user_ids[$uid] = $uid;
+                }
+            }
+            if (!empty($batch_user_ids)) {
+                $ids = array_values($batch_user_ids);
+                if (function_exists('cache_users')) {
+                    cache_users($ids);
+                }
+                update_meta_cache('user', $ids);
+            }
+
             foreach ($batch as $client) {
                 $wp_user_id = (int) ($client[$wp_column] ?? 0);
                 $client_id  = (int) ($client['client_id'] ?? 0);
