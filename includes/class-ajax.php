@@ -27,11 +27,29 @@ class MealsDB_Ajax {
             _deprecated_function(__METHOD__, '1.0.60', 'MealsDB_Ajax_Sync::init()');
         }
 
-        MealsDB_Ajax_Sync::init();
-        MealsDB_Ajax_Drafts::init();
-        MealsDB_Ajax_Clients::init();
-        MealsDB_Ajax_Staff::init();
-        MealsDB_Ajax_Initials::init();
+        // Init every current domain-specific handler so a caller relying
+        // on the legacy one-shot bootstrap gets the same set of AJAX
+        // endpoints registered as the modern meals-db-main.php path.
+        // Guarded by class_exists so the shim works even if a future
+        // refactor splits a handler away.
+        foreach ([
+            'MealsDB_Ajax_Sync',
+            'MealsDB_Ajax_Drafts',
+            'MealsDB_Ajax_Clients',
+            'MealsDB_Ajax_Staff',
+            'MealsDB_Ajax_Initials',
+            'MealsDB_Ajax_Invoice',
+            'MealsDB_Ajax_Delivery_Slips',
+            'MealsDB_Ajax_Reports',
+            'MealsDB_Ajax_Settings',
+            'MealsDB_Ajax_Migration',
+            'MealsDB_Ajax_DB_Sync',
+            'MealsDB_Quick_Order_Ajax',
+        ] as $handler) {
+            if (class_exists($handler) && method_exists($handler, 'init')) {
+                $handler::init();
+            }
+        }
     }
 
     /**
