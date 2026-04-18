@@ -262,6 +262,18 @@ class MealsDB_Sync_Query {
         $last_name  = isset($meals_client['last_name']) ? (string) $meals_client['last_name'] : '';
         $phone_raw  = isset($meals_client['phone_primary']) ? (string) $meals_client['phone_primary'] : '';
 
+        // Request-scoped memoisation. The dashboard render loop calls
+        // this once per unmatched mismatch, and identical (name, phone)
+        // tuples are common when multiple meals_clients share a
+        // household. The underlying query is  LIKE %needle%  against
+        // wp_usermeta, which cannot use an index — caching is the
+        // highest-leverage improvement without a schema change.
+        static $cache = [];
+        $cache_key = md5($first_name . '|' . $last_name . '|' . $phone_raw);
+        if (array_key_exists($cache_key, $cache)) {
+            return $cache[$cache_key];
+        }
+
         $normalized_phone = preg_replace('/\D+/', '', $phone_raw);
 
         $conditions = [];
@@ -291,6 +303,7 @@ class MealsDB_Sync_Query {
         }
 
         if (empty($conditions)) {
+            $cache[$cache_key] = [];
             return [];
         }
 
@@ -349,6 +362,7 @@ class MealsDB_Sync_Query {
             ];
         }
 
+        $cache[$cache_key] = $candidates;
         return $candidates;
     }
 

@@ -30,6 +30,11 @@ if ( $has_enc_key ) {
     </p>
 
     <form id="mealsdb-settings-form" method="post">
+        <?php
+        // AJAX submits carry their own mealsdb_settings_nonce; this field
+        // is defence-in-depth for the no-JS / submit-on-Enter path.
+        wp_nonce_field( 'mealsdb_settings_nonce', 'mealsdb_settings_nonce_field' );
+        ?>
         <h2><?php echo esc_html__( 'Encryption Key', 'meals-db' ); ?></h2>
         <p class="description">
             <?php echo esc_html__( 'AES-256 key used to encrypt client PII in the database. Once data has been encrypted with a key, changing it will make existing encrypted data unreadable.', 'meals-db' ); ?>
@@ -131,14 +136,22 @@ if ( $has_enc_key ) {
                 <?php
                 $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
                 foreach ( $zone_schedule as $zone_name => $config ) :
-                    $zone_key = sanitize_title( $zone_name );
+                    if ( ! is_array( $config ) ) {
+                        // Defensive against a corrupted option value — skip
+                        // rather than emit an "undefined index" warning
+                        // when we reach $config['day'] below.
+                        continue;
+                    }
+                    $zone_key      = sanitize_title( $zone_name );
+                    $current_day   = isset( $config['day'] ) && in_array( $config['day'], $days, true ) ? $config['day'] : '';
+                    $current_label = isset( $config['label'] ) ? (string) $config['label'] : '';
                 ?>
                 <tr>
                     <td><strong><?php echo esc_html( $zone_name ); ?></strong></td>
                     <td>
                         <select name="zone_schedule[<?php echo esc_attr( $zone_name ); ?>][day]" class="mealsdb-zone-day">
                             <?php foreach ( $days as $d ) : ?>
-                                <option value="<?php echo esc_attr( $d ); ?>" <?php selected( $config['day'], $d ); ?>>
+                                <option value="<?php echo esc_attr( $d ); ?>" <?php selected( $current_day, $d ); ?>>
                                     <?php echo esc_html( $d ); ?>
                                 </option>
                             <?php endforeach; ?>
@@ -146,7 +159,7 @@ if ( $has_enc_key ) {
                     </td>
                     <td>
                         <input type="text" name="zone_schedule[<?php echo esc_attr( $zone_name ); ?>][label]"
-                               value="<?php echo esc_attr( $config['label'] ); ?>" class="regular-text" />
+                               value="<?php echo esc_attr( $current_label ); ?>" class="regular-text" />
                     </td>
                 </tr>
                 <?php endforeach; ?>

@@ -685,22 +685,49 @@ class MealsDB_Allocation_Engine {
     public function bulk_recalculate_month(string $billing_month): int {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
-        $clients = $this->wpdb->get_results($this->wpdb->prepare(
-            "SELECT client_id FROM {$clients_table}
-             WHERE active = 1 AND client_type IN (%s, %s)",
-            'SDNB',
-            'Veteran'
-        ), ARRAY_A);
+        // Walk the client set in bounded batches ordered by client_id so
+        // a cron run with thousands of clients can't OOM the worker by
+        // materialising every ID at once, and a timeout partway through
+        // has a predictable restart point via the log.
+        $batch_size = 500;
+        $last_seen  = 0;
+        $count      = 0;
+        $started_at = microtime(true);
 
-        if (!is_array($clients)) {
-            return 0;
+        while (true) {
+            $clients = $this->wpdb->get_results($this->wpdb->prepare(
+                "SELECT client_id FROM {$clients_table}
+                 WHERE active = 1 AND client_type IN (%s, %s) AND client_id > %d
+                 ORDER BY client_id ASC
+                 LIMIT %d",
+                'SDNB',
+                'Veteran',
+                $last_seen,
+                $batch_size
+            ), ARRAY_A);
+
+            if (!is_array($clients) || empty($clients)) {
+                break;
+            }
+
+            foreach ($clients as $client) {
+                $client_id = (int) $client['client_id'];
+                $this->recalculate_month_totals($client_id, $billing_month);
+                $count++;
+                $last_seen = $client_id;
+            }
+
+            if (count($clients) < $batch_size) {
+                break;
+            }
         }
 
-        $count = 0;
-        foreach ($clients as $client) {
-            $this->recalculate_month_totals((int) $client['client_id'], $billing_month);
-            $count++;
-        }
+        error_log(sprintf(
+            '[MealsDB Allocation Engine] bulk_recalculate_month(%s): %d clients in %.2fs.',
+            $billing_month,
+            $count,
+            microtime(true) - $started_at
+        ));
 
         return $count;
     }
