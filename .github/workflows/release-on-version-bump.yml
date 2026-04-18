@@ -1,7 +1,10 @@
 name: Auto Bump Version, Build Plugin Zip and Release
 
+# Default the workflow to read-only; each job grants itself the exact
+# scopes it needs. Any future job we add inherits no more than
+# contents: read until we opt in explicitly.
 permissions:
-  contents: write
+  contents: read
 
 on:
   push:
@@ -11,9 +14,18 @@ on:
 jobs:
   bump-and-release:
     runs-on: ubuntu-latest
+    # This job pushes a version-bump commit, pushes a tag, and creates a
+    # GitHub Release — all of which require contents: write.
+    permissions:
+      contents: write
     steps:
+      # Third-party actions are pinned to a full commit SHA rather than
+      # a mutable tag. A tag-hijack on either maintainer's repo would
+      # otherwise run attacker-controlled code inside this job with the
+      # scoped GITHUB_TOKEN (contents: write). Dependabot will PR SHA
+      # bumps weekly via .github/dependabot.yml.
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
@@ -93,7 +105,7 @@ jobs:
       # ------------------------------------------------------------------
       - name: Create GitHub Release
         id: release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ env.new_version }}
           name: "Release v${{ env.new_version }}"
