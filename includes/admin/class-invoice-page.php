@@ -46,7 +46,17 @@ class MealsDB_Invoice_Page {
 
         // Enqueue WordPress date picker
         wp_enqueue_script('jquery-ui-datepicker');
-        wp_enqueue_style('jquery-ui-css', 'https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css');
+
+        // Pin jQuery UI base CSS to a known version with SRI so a CDN
+        // compromise (or DNS hijack) can't inject styles that exfiltrate
+        // form values via background-image: url(...) requests.
+        wp_enqueue_style(
+            'jquery-ui-css',
+            'https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css',
+            [],
+            '1.12.1'
+        );
+        add_filter('style_loader_tag', [__CLASS__, 'add_jquery_ui_sri'], 10, 2);
 
         // Custom invoice script
         wp_enqueue_script(
@@ -81,6 +91,26 @@ class MealsDB_Invoice_Page {
 
         // Include the view
         include dirname(dirname(dirname(__FILE__))) . '/views/admin-invoice.php';
+    }
+
+    /**
+     * Inject Subresource Integrity + crossorigin attributes onto the
+     * jquery-ui-css <link> tag enqueued from the public CDN. Hash is the
+     * SHA-384 of jquery-ui v1.12.1 themes/base/jquery-ui.css from
+     * cdnjs.com / sri-hashes.org.
+     */
+    public static function add_jquery_ui_sri($html, $handle) {
+        if ($handle !== 'jquery-ui-css') {
+            return $html;
+        }
+        $integrity = 'sha384-yA0iV8aTatZpoCSFktgo+t+Es/Tcs+VATz5At0pe+M9SuQbpZ9wZerkqQjlfHTdW';
+        // Insert the attributes before the closing `>` of the <link> tag.
+        return preg_replace(
+            '#(<link\b[^>]*\bhref=["\']https://code\.jquery\.com/[^"\']*["\'][^>]*?)\s*/?>#i',
+            '$1 integrity="' . $integrity . '" crossorigin="anonymous" referrerpolicy="no-referrer" />',
+            $html,
+            1
+        );
     }
 
     /**

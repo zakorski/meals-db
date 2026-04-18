@@ -147,13 +147,17 @@
         };
 
         const getAddressData = () => {
+            // The form fields are named address_postal / delivery_address_postal
+            // (see render_client_form). The original *_postal_code names
+            // never matched anything in the DOM, so the postal code never
+            // contributed to the duplicate-detection check.
             const addressFields = [
                 'address_street_name',
                 'address_city',
-                'address_postal_code',
+                'address_postal',
                 'delivery_address_street_name',
                 'delivery_address_city',
-                'delivery_address_postal_code'
+                'delivery_address_postal'
             ];
 
             const data = {};

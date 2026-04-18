@@ -1986,34 +1986,53 @@
                 return;
             }
 
+            // All values flow through escapeHtml() for defense in depth
+            // and toFixed() guards against the server omitting a numeric
+            // field (which would otherwise raise TypeError).
+            const esc = this.escapeHtml.bind(this);
+            const intFmt = (v) => esc(String(parseInt(v, 10) || 0));
+            const billingMonth   = esc(alloc.billing_month || '');
+            const usedMains      = intFmt(alloc.used_mains);
+            const permittedMains = intFmt(alloc.permitted_mains);
+            const remainingMains = intFmt(alloc.remaining_mains);
+            const usedSides      = intFmt(alloc.used_sides);
+            const permittedSides = intFmt(alloc.permitted_sides);
+            const remainingSides = intFmt(alloc.remaining_sides);
+            const overageMains   = parseInt(alloc.overage_mains, 10) || 0;
+            const overageSides   = parseInt(alloc.overage_sides, 10) || 0;
+            const nextDelivery   = this.state.nextDelivery ? esc(String(this.state.nextDelivery)) : '';
+
             $panel.html(
-                '<h3>Monthly Allowance (' + alloc.billing_month + ')</h3>' +
+                '<h3>Monthly Allowance (' + billingMonth + ')</h3>' +
                 '<div class="allocation-row">' +
                     '<span>Mains:</span>' +
-                    '<span>' + alloc.used_mains + ' / ' + alloc.permitted_mains + ' used</span>' +
-                    '<span>(' + alloc.remaining_mains + ' remaining)</span>' +
+                    '<span>' + usedMains + ' / ' + permittedMains + ' used</span>' +
+                    '<span>(' + remainingMains + ' remaining)</span>' +
                 '</div>' +
                 '<div class="allocation-row">' +
                     '<span>Sides:</span>' +
-                    '<span>' + alloc.used_sides + ' / ' + alloc.permitted_sides + ' used</span>' +
-                    '<span>(' + alloc.remaining_sides + ' remaining)</span>' +
+                    '<span>' + usedSides + ' / ' + permittedSides + ' used</span>' +
+                    '<span>(' + remainingSides + ' remaining)</span>' +
                 '</div>' +
-                (alloc.overage_mains > 0 ? '<div class="allocation-warning">\u26A0 ' + alloc.overage_mains + ' mains over allowance</div>' : '') +
-                (alloc.overage_sides > 0 ? '<div class="allocation-warning">\u26A0 ' + alloc.overage_sides + ' sides over allowance</div>' : '') +
-                (this.state.nextDelivery ? '<div class="allocation-delivery">Next delivery: ' + this.state.nextDelivery + '</div>' : '') +
+                (overageMains > 0 ? '<div class="allocation-warning">\u26A0 ' + overageMains + ' mains over allowance</div>' : '') +
+                (overageSides > 0 ? '<div class="allocation-warning">\u26A0 ' + overageSides + ' sides over allowance</div>' : '') +
+                (nextDelivery ? '<div class="allocation-delivery">Next delivery: ' + nextDelivery + '</div>' : '') +
                 (this.state.straddlesMonth ? '<div class="allocation-straddle">\u26A0 This delivery straddles the month boundary</div>' : '')
             ).show();
 
             if (this.state.clientFees) {
                 var fees = this.state.clientFees;
+                var deliveryFee  = (parseFloat(fees.delivery_fee) || 0).toFixed(2);
+                var contribution = (parseFloat(fees.client_contribution) || 0).toFixed(2);
+                var collectTotal = (parseFloat(fees.collect_total) || 0).toFixed(2);
                 var feesHtml = '<div class="allocation-fees"><h4>Fees for this order</h4>';
-                feesHtml += '<div>Delivery Fee: $' + (fees.delivery_fee || 0).toFixed(2) + '</div>';
+                feesHtml += '<div>Delivery Fee: $' + esc(deliveryFee) + '</div>';
                 if (fees.contribution_due) {
-                    feesHtml += '<div>Client Contribution: $' + fees.client_contribution.toFixed(2) + ' (first delivery this month)</div>';
+                    feesHtml += '<div>Client Contribution: $' + esc(contribution) + ' (first delivery this month)</div>';
                 } else {
                     feesHtml += '<div>Client Contribution: already applied this month</div>';
                 }
-                feesHtml += '<div><strong>Collect: $' + fees.collect_total.toFixed(2) + '</strong></div>';
+                feesHtml += '<div><strong>Collect: $' + esc(collectTotal) + '</strong></div>';
                 feesHtml += '</div>';
                 $panel.append(feesHtml);
             }
@@ -2411,6 +2430,15 @@
                     }
 
                     dropdown.show();
+                }).fail(function(xhr, status) {
+                    // Surface the failure rather than leaving the dropdown
+                    // silently empty on a network error / 5xx.
+                    if (status === 'abort') {
+                        return;
+                    }
+                    dropdown.empty()
+                        .append('<div class="client-option--empty" style="padding:6px 10px;color:#a00;">Search failed. Please try again.</div>')
+                        .show();
                 });
             }, 300);
         });

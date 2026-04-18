@@ -12,22 +12,18 @@ defined('ABSPATH') || exit;
 class MealsDB_Encryption {
 
     /**
-     * Canonical list of columns in meals_clients that are stored encrypted.
+     * Canonical list of meals_clients DB columns that are stored encrypted.
      *
-     * Derived from the columns the migration (class-migration.php) runs
-     * MealsDB_Encryption::encrypt() against. Used as a single source of truth
-     * so read paths don't drift from writes (a historical source of bugs
-     * where first_name/last_name/delivery_initials were decrypted despite
-     * being stored plaintext).
-     *
-     * Keep in sync with MealsDB_Client_Form::$encrypted_fields.
+     * These are the actual database column names. The form-side name for
+     * `customer_comments` is `client_comments`; map_form_to_db() rewrites it
+     * before persistence, so encryption operates on the DB-side name here.
      */
     public const ENCRYPTED_CLIENT_COLUMNS = [
         'individual_id',
         'requisition_id',
         'vet_health_card',
         'diet_concerns',
-        'client_comments',
+        'customer_comments',
     ];
 
     /**
@@ -129,8 +125,16 @@ class MealsDB_Encryption {
                 throw new Exception('Data integrity check failed.');
             }
         } elseif (strlen($data) >= 17) {
-            // Legacy format without HMAC (backward compatibility)
-            // TODO: Remove this after migrating all encrypted data
+            // Legacy format without HMAC. Decryption proceeds without
+            // integrity verification, which is the classic Vaudenay
+            // padding-oracle setup against AES-CBC. Refuse this branch
+            // entirely once the operator has confirmed via the encryption
+            // migrator that no legacy payloads remain in the database.
+            if (self::legacy_decrypt_disabled()) {
+                throw new Exception('Legacy encrypted payload rejected: legacy decryption is disabled.');
+            }
+
+            self::log_legacy_decrypt_use();
             $iv = substr($data, 0, 16);
             $ciphertext = substr($data, 16);
         } else {
@@ -201,6 +205,87 @@ class MealsDB_Encryption {
             return 'legacy';
         }
         return 'plaintext';
+    }
+
+    /**
+     * Whether the legacy (pre-HMAC) decrypt branch is administratively
+     * disabled. Set MEALSDB_DISABLE_LEGACY_DECRYPT in wp-config.php or
+     * the mealsdb_legacy_decrypt_disabled option to refuse legacy
+     * payloads — do this once the migrator's inventory() reports zero
+     * legacy rows in every column.
+     */
+    public static function legacy_decrypt_disabled(): bool {
+        if (defined('MEALSDB_DISABLE_LEGACY_DECRYPT') && MEALSDB_DISABLE_LEGACY_DECRYPT) {
+            return true;
+        }
+        if (function_exists('get_option')) {
+            return (bool) get_option('mealsdb_legacy_decrypt_disabled', false);
+        }
+        return false;
+    }
+
+    /**
+     * Log (once per request) that a legacy payload was decrypted, so the
+     * operator can monitor when the inventory really is clean.
+     */
+    private static function log_legacy_decrypt_use(): void {
+        static $logged = false;
+        if ($logged) {
+            return;
+        }
+        $logged = true;
+        error_log('[MealsDB Encryption] WARNING: legacy CBC payload decrypted without HMAC. Run the encryption migrator and set MEALSDB_DISABLE_LEGACY_DECRYPT.');
+    }
+
+    /**
+     * Encrypt the canonical PII columns in a row keyed by DB column name.
+     *
+     * Idempotent: values that are already in `new` (HMAC) format are left
+     * alone, so this is safe to call on payloads that may have come back
+     * round-trip from another encrypt-aware code path. Empty/null values
+     * are also left alone (NULL is preserved so the column gets cleared).
+     *
+     * @param array<string, mixed> $row    Row keyed by DB column name.
+     * @param string[]|null         $fields Optional override of which columns
+     *                                      to encrypt. Defaults to the canonical
+     *                                      ENCRYPTED_CLIENT_COLUMNS list.
+     *
+     * @return array<string, mixed> Row with the listed columns encrypted.
+     */
+    public static function encrypt_columns(array $row, ?array $fields = null): array {
+        $columns = $fields ?? self::ENCRYPTED_CLIENT_COLUMNS;
+
+        foreach ($columns as $column) {
+            if (!array_key_exists($column, $row)) {
+                continue;
+            }
+
+            $value = $row[$column];
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            if (!is_string($value)) {
+                $value = (string) $value;
+            }
+
+            // Don't double-encrypt rows that already carry an HMAC payload
+            // (e.g. in case a caller hands us a row read straight from the DB).
+            if (self::classify_payload($value) === 'new') {
+                continue;
+            }
+
+            try {
+                $row[$column] = self::encrypt($value);
+            } catch (\Throwable $e) {
+                error_log('[MealsDB Encryption] Failed to encrypt column ' . $column . ': ' . $e->getMessage());
+                // Bail rather than silently storing plaintext.
+                throw $e;
+            }
+        }
+
+        return $row;
     }
 
     /**

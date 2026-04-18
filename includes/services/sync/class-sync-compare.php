@@ -6,6 +6,17 @@
 defined('ABSPATH') || exit;
 
 class MealsDB_Sync_Compare {
+
+    /**
+     * Cached WP user list keyed by spl_object_hash of the query instance.
+     * find_probable_matches_for_client is invoked per mismatch row in the
+     * dashboard render loop; without this cache each invocation re-runs
+     * the (paged) get_wp_users query.
+     *
+     * @var array<string, array<int, WP_User>>
+     */
+    private $wp_users_cache = [];
+
     /**
      * Retrieve and compare Meals DB and WordPress data to identify mismatches.
      *
@@ -323,9 +334,12 @@ class MealsDB_Sync_Compare {
      * @return array<int, array<string, mixed>>
      */
     public function find_probable_matches_for_client(array $client, MealsDB_Sync_Query $query): array {
-        $wp_users = $query->get_wp_users();
+        $key = spl_object_hash($query);
+        if (!isset($this->wp_users_cache[$key])) {
+            $this->wp_users_cache[$key] = $query->get_wp_users();
+        }
 
-        return $this->find_probable_matches($client, $wp_users);
+        return $this->find_probable_matches($client, $this->wp_users_cache[$key]);
     }
 
     /**
@@ -347,7 +361,11 @@ class MealsDB_Sync_Compare {
         foreach ($map as $field => $woo_value) {
             $plugin_value = $client[$field] ?? '';
 
-            if (trim(strtolower((string) $plugin_value)) !== trim(strtolower((string) $woo_value))) {
+            // Use mb_strtolower so non-ASCII names (Î, é, etc.) compare
+            // by Unicode case rather than byte-equality.
+            $plugin_norm = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $plugin_value, 'UTF-8') : strtolower((string) $plugin_value));
+            $woo_norm    = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $woo_value, 'UTF-8') : strtolower((string) $woo_value));
+            if ($plugin_norm !== $woo_norm) {
                 $mismatches[$field] = [
                     'meals_db'    => $plugin_value,
                     'woocommerce' => $woo_value,
@@ -464,7 +482,9 @@ class MealsDB_Sync_Compare {
      * Normalize a human-readable name string for comparison purposes.
      */
     private function normalize_name(string $value): string {
-        $normalized = strtolower(trim($value));
+        $normalized = function_exists('mb_strtolower')
+            ? mb_strtolower(trim($value), 'UTF-8')
+            : strtolower(trim($value));
 
         if (function_exists('remove_accents')) {
             $normalized = remove_accents($normalized);

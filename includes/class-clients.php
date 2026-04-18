@@ -35,7 +35,7 @@ class MealsDB_Clients {
      * @param bool        $show_inactive Whether inactive clients should be included in the results.
      * @return array<int, array<string, string|null>>
      */
-    public static function get_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): array {
+    public static function get_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
         global $wpdb;
         if (!$wpdb) {
             return [];
@@ -43,7 +43,19 @@ class MealsDB_Clients {
 
         $repository = new MealsDB_Clients_Repository();
 
-        return $repository->search_clients($client_type, $search, $show_inactive);
+        return $repository->search_clients($client_type, $search, $show_inactive, $limit, $offset);
+    }
+
+    /**
+     * Count clients matching the given filters (for pagination UIs).
+     */
+    public static function count_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): int {
+        global $wpdb;
+        if (!$wpdb) {
+            return 0;
+        }
+        $repository = new MealsDB_Clients_Repository();
+        return $repository->count_clients($client_type, $search, $show_inactive);
     }
 
     /**
@@ -68,6 +80,19 @@ class MealsDB_Clients {
      * Permanently delete a client and any optionally related rows.
      */
     public static function delete_client(int $client_id): bool {
+        // Defence-in-depth: enforce capability here even if a future caller
+        // skips the AJAX gate. Deletes cascade across drafts, conflicts,
+        // and the client row itself.
+        if (function_exists('current_user_can')
+            && (!is_user_logged_in() || !MealsDB_Permissions::can_access_plugin())) {
+            error_log('[MealsDB] delete_client blocked: insufficient permissions.');
+            return false;
+        }
+
+        if ($client_id <= 0) {
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) {
             return false;
@@ -86,8 +111,11 @@ class MealsDB_Clients {
             ];
         }
 
-        $wpdb->query('START TRANSACTION');
-        $transaction_started = true;
+        // Verify START TRANSACTION actually succeeded before assuming we
+        // have transactional safety; otherwise COMMIT/ROLLBACK below would
+        // be no-ops while the destructive deletes still happen.
+        $started = $wpdb->query('START TRANSACTION');
+        $transaction_started = $started !== false;
 
         $success = true;
 

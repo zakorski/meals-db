@@ -16,6 +16,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $is_resume = isset($_POST['resume_draft']) && $_POST['resume_draft'] === '1';
     $resumed_draft_id = isset($_POST['draft_id']) ? intval($_POST['draft_id']) : 0;
 
+    // If the caller claims this is a resume of an existing draft, refuse
+    // it unless the draft actually belongs to them. Otherwise the
+    // resume_draft flag is just a way to re-render the form with
+    // attacker-supplied defaults (still escaped on output, so the risk
+    // is shape-only — but no reason to allow it).
+    if ($is_resume && $resumed_draft_id > 0) {
+        global $wpdb;
+        $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
+        $draft_owner  = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT created_by FROM `{$drafts_table}` WHERE id = %d LIMIT 1",
+            $resumed_draft_id
+        ));
+        if ($draft_owner !== (int) get_current_user_id()) {
+            $is_resume        = false;
+            $resumed_draft_id = 0;
+            $errors[]         = __('That draft does not belong to your account.', 'meals-db');
+        }
+    }
+
     $form_values = MealsDB_Client_Form::prepare_form_defaults($_POST);
 
     if (!$is_resume) {

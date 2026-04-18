@@ -46,6 +46,27 @@ class MealsDB_Products_Loader {
 
         $metadata_batch = self::batch_get_product_data($product_ids);
 
+        // Prime WP caches in bulk before the per-product loop. Without
+        // this each iteration runs a separate query for thumbnail meta
+        // and another set for product term assignments — N+1 across
+        // potentially hundreds of products.
+        if (!empty($product_ids)) {
+            if (function_exists('update_post_thumbnail_cache')) {
+                $thumb_query = new WP_Query([
+                    'post_type'      => 'product',
+                    'post__in'       => $product_ids,
+                    'posts_per_page' => count($product_ids),
+                    'no_found_rows'  => true,
+                    'fields'         => 'ids',
+                ]);
+                update_post_thumbnail_cache($thumb_query);
+                wp_reset_postdata();
+            }
+            if (function_exists('update_object_term_cache')) {
+                update_object_term_cache($product_ids, 'product');
+            }
+        }
+
         $loaded = [];
 
         foreach ($products as $product) {
@@ -103,8 +124,12 @@ class MealsDB_Products_Loader {
      * Determine whether a client can order a product based on allergens.
      */
     public static function client_can_order(array $client_allergens, array $product_allergens): bool {
-        $client = array_filter(array_map('strval', $client_allergens));
-        $product = array_filter(array_map('strval', $product_allergens));
+        // Use an explicit !=='' filter rather than array_filter() with no
+        // callback. The default callback drops empty strings AND '0', so an
+        // allergen literally named "0" would be silently lost.
+        $non_empty = static function ($v) { return $v !== ''; };
+        $client    = array_filter(array_map('strval', $client_allergens), $non_empty);
+        $product   = array_filter(array_map('strval', $product_allergens), $non_empty);
 
         if (empty($client) || empty($product)) {
             return true;

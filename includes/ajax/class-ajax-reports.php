@@ -93,6 +93,11 @@ class MealsDB_Ajax_Reports {
             return;
         }
 
+        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
+            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
+            return;
+        }
+
         $reports = new MealsDB_Reports($GLOBALS['wpdb']);
         $result  = $reports->contribution_reconciliation($start_date, $end_date);
 
@@ -120,6 +125,11 @@ class MealsDB_Ajax_Reports {
             return;
         }
 
+        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
+            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
+            return;
+        }
+
         $reports = new MealsDB_Reports($GLOBALS['wpdb']);
         $result  = $reports->delivery_fee_reconciliation($start_date, $end_date);
 
@@ -144,6 +154,11 @@ class MealsDB_Ajax_Reports {
 
         if (!$start_date || !$end_date) {
             wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+            return;
+        }
+
+        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
+            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
             return;
         }
 
@@ -176,6 +191,11 @@ class MealsDB_Ajax_Reports {
 
         if (!$start_date || !$end_date) {
             wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+            return;
+        }
+
+        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
+            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
             return;
         }
 

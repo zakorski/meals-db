@@ -300,23 +300,33 @@ class MealsDB_Product_Display_Sync {
 
         // Fetch all wc_product_ids that are currently marked published.
         $rows = $wpdb->get_results("SELECT wc_product_id FROM `{$table}` WHERE is_published = 1", ARRAY_A);
-        if (!is_array($rows)) {
+        if (!is_array($rows) || empty($rows)) {
             return;
         }
 
-        $ids_to_unpublish = [];
+        $candidate_ids = [];
         foreach ($rows as $row) {
             $wc_id = (int) $row['wc_product_id'];
-            if ($wc_id <= 0) {
-                continue;
-            }
-
-            $product = function_exists('wc_get_product') ? wc_get_product($wc_id) : null;
-            if (!$product instanceof WC_Product || $product->get_status() !== 'publish') {
-                $ids_to_unpublish[] = $wc_id;
+            if ($wc_id > 0) {
+                $candidate_ids[] = $wc_id;
             }
         }
+        if (empty($candidate_ids)) {
+            return;
+        }
 
+        // Single bulk SELECT against wp_posts to find which candidate IDs
+        // are still published WC products. Previous N+1 wc_get_product()
+        // call per row was unworkable at hundreds of products.
+        $posts_table  = $wpdb->posts;
+        $placeholders = implode(',', array_fill(0, count($candidate_ids), '%d'));
+        $still_published = $wpdb->get_col($wpdb->prepare(
+            "SELECT ID FROM `{$posts_table}` WHERE ID IN ({$placeholders}) AND post_type = 'product' AND post_status = 'publish'",
+            ...$candidate_ids
+        ));
+        $still_published = is_array($still_published) ? array_map('intval', $still_published) : [];
+
+        $ids_to_unpublish = array_values(array_diff($candidate_ids, $still_published));
         if (empty($ids_to_unpublish)) {
             return;
         }

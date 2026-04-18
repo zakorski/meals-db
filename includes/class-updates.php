@@ -341,7 +341,22 @@ class MealsDB_Updates {
      * @return string|WP_Error
      */
     private static function run_git_command(array $arguments) {
-        $gitBinary = apply_filters('mealsdb_git_binary', 'git');
+        $gitBinary = (string) apply_filters('mealsdb_git_binary', 'git');
+
+        // Reject anything other than a bare 'git' or an absolute path that
+        // points at a real executable. escapeshellcmd() does NOT make a
+        // command-name argument-safe; whitespace and shell metacharacters
+        // can still leak through, so a filter that returns
+        // 'git --upload-pack=evil' would otherwise be interpreted as
+        // 'git --upload-pack=evil' (a flag, not a binary).
+        $allowed = $gitBinary === 'git'
+            || (preg_match('#^/[A-Za-z0-9._/-]+$#', $gitBinary) && is_executable($gitBinary));
+        if (!$allowed) {
+            return new WP_Error(
+                'mealsdb_git_binary',
+                __('Refusing to invoke an unrecognised git binary.', 'meals-db')
+            );
+        }
 
         $descriptorSpec = [
             0 => ['pipe', 'r'],
@@ -349,7 +364,7 @@ class MealsDB_Updates {
             2 => ['pipe', 'w'],
         ];
 
-        $command = escapeshellcmd($gitBinary);
+        $command = escapeshellarg($gitBinary);
         foreach ($arguments as $argument) {
             $command .= ' ' . escapeshellarg($argument);
         }
@@ -416,6 +431,47 @@ class MealsDB_Updates {
                 'mealsdb_release_download',
                 __('Unable to download the latest Meals DB release from GitHub.', 'meals-db'),
                 ['error' => $tempFile->get_error_message()]
+            );
+        }
+
+        // Verify archive integrity before unpacking. Without this check, a
+        // network attacker between the WP server and GitHub (or a
+        // compromised release-publishing account) can ship malicious code
+        // that is then copied straight into the live plugin and executed
+        // on the next request. We require either:
+        //   1. an explicit SHA256 from the release notes,
+        //   2. a SHA256 supplied by the mealsdb_release_expected_sha256
+        //      filter (e.g. from a pinned constant), or
+        //   3. an explicit MEALSDB_ALLOW_UNVERIFIED_RELEASE opt-in for
+        //      back-compat with releases that haven't yet started
+        //      publishing checksums.
+        $expectedSha = isset($releaseInfo['sha256']) && is_string($releaseInfo['sha256'])
+            ? strtolower($releaseInfo['sha256'])
+            : '';
+        $expectedSha = (string) apply_filters(
+            'mealsdb_release_expected_sha256',
+            $expectedSha,
+            $releaseInfo
+        );
+
+        if ($expectedSha !== '') {
+            $actualSha = hash_file('sha256', $tempFile);
+            if (!is_string($actualSha) || !hash_equals($expectedSha, strtolower($actualSha))) {
+                self::cleanup_temp_artifacts($tempFile, null);
+                return new WP_Error(
+                    'mealsdb_release_checksum',
+                    __('Downloaded Meals DB archive failed checksum verification. Update aborted.', 'meals-db'),
+                    [
+                        'expected' => $expectedSha,
+                        'actual'   => is_string($actualSha) ? strtolower($actualSha) : '',
+                    ]
+                );
+            }
+        } elseif (!defined('MEALSDB_ALLOW_UNVERIFIED_RELEASE') || !MEALSDB_ALLOW_UNVERIFIED_RELEASE) {
+            self::cleanup_temp_artifacts($tempFile, null);
+            return new WP_Error(
+                'mealsdb_release_unverified',
+                __('Meals DB release is not signed with a SHA-256 checksum. Set MEALSDB_ALLOW_UNVERIFIED_RELEASE to true in wp-config.php to allow unverified updates, or have the publisher add a "SHA256: <hex>" line to the release notes.', 'meals-db')
             );
         }
 
@@ -634,7 +690,28 @@ class MealsDB_Updates {
             'tag'         => $tagName,
             'url'         => !empty($data['html_url']) ? $data['html_url'] : self::get_repository_url(),
             'zipball_url' => self::get_codeload_zip_url($tagName),
+            'sha256'      => self::extract_sha256_from_release_body(
+                isset($data['body']) && is_string($data['body']) ? $data['body'] : ''
+            ),
         ];
+    }
+
+    /**
+     * Pull a "SHA256: <hex>" line out of GitHub release notes, if present.
+     *
+     * Releases that include this line lock the auto-updater to a specific
+     * archive checksum; without it, the updater falls back to a less-safe
+     * "trust HTTPS only" path that requires the explicit
+     * MEALSDB_ALLOW_UNVERIFIED_RELEASE constant to opt in.
+     */
+    private static function extract_sha256_from_release_body(string $body): string {
+        if ($body === '') {
+            return '';
+        }
+        if (!preg_match('/sha-?256[\s:=]+([a-f0-9]{64})/i', $body, $m)) {
+            return '';
+        }
+        return strtolower($m[1]);
     }
 
     /**
@@ -700,6 +777,7 @@ class MealsDB_Updates {
             'tag'         => $tagName,
             'url'         => sprintf('%s/releases/tag/%s', self::get_repository_url(), rawurlencode($tagName)),
             'zipball_url' => self::get_codeload_zip_url($tagName),
+            'sha256'      => '',
         ];
     }
 

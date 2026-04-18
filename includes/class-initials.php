@@ -15,25 +15,23 @@ defined('ABSPATH') || exit;
 class MealsDB_Initials {
 
     /**
-     * Words that should never be used as initials.
+     * Accessor for the banned-initials list. Delegates to the canonical
+     * list on MealsDB_Initials_Validator so the two classes can't drift
+     * apart — the hand-copied $banned_words array here was a known
+     * source of "added to one, forgot the other" bugs.
      *
-     * @deprecated Use MealsDB_Initials_Validator::get_blocked_initials() instead.
-     * @var string[]
+     * @return string[]
      */
-    private static $banned_words = [
-        'ASS',
-        'SEX',
-        'TIT',
-        'CUM',
-        'FAG',
-        'GAY',
-        'GOD',
-        'NIG',
-        'WTF',
-        'XXX',
-        'KKK',
-        'FUK',
-    ];
+    private static function banned_words(): array {
+        if (class_exists('MealsDB_Initials_Validator')
+            && method_exists('MealsDB_Initials_Validator', 'get_blocked_initials')) {
+            $list = MealsDB_Initials_Validator::get_blocked_initials();
+            if (is_array($list)) {
+                return array_values(array_filter(array_map('strtoupper', $list)));
+            }
+        }
+        return [];
+    }
 
     /**
      * Generate a random 3-letter uppercase code.
@@ -161,6 +159,6 @@ class MealsDB_Initials {
      * Check whether a code is in the banned words list.
      */
     private static function is_banned_word(string $code): bool {
-        return in_array($code, self::$banned_words, true);
+        return in_array($code, self::banned_words(), true);
     }
 }

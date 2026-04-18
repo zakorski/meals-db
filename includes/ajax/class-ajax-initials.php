@@ -77,6 +77,12 @@ class MealsDB_Ajax_Initials {
         }
 
         $code = sanitize_text_field(wp_unslash($_POST['code'] ?? ''));
+        // Initials are exactly 3 characters; cap aggressively so a hostile
+        // caller can't push huge strings into LIKE-style downstream
+        // queries or into the validate-by-fragment branch.
+        if (strlen($code) > 8) {
+            $code = substr($code, 0, 8);
+        }
         $client_id_raw = $_POST['client_id'] ?? null;
         $client_id = null;
 

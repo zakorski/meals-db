@@ -95,10 +95,21 @@ class MealsDB_Ajax_Sync {
             wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
         }
 
-        $field_name = sanitize_text_field(wp_unslash($_POST['field'] ?? ''));
-        $source = sanitize_text_field(wp_unslash($_POST['source'] ?? ''));
-        $target = sanitize_text_field(wp_unslash($_POST['target'] ?? ''));
-        $set_ignored = filter_var($_POST['ignored'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $field_name  = sanitize_text_field(wp_unslash($_POST['field'] ?? ''));
+        $source      = sanitize_text_field(wp_unslash($_POST['source'] ?? ''));
+        $target      = sanitize_text_field(wp_unslash($_POST['target'] ?? ''));
+        $set_ignored = MealsDB_Helpers::bool_flag($_POST['ignored'] ?? null, false);
+
+        // Whitelist field_name against the canonical sync field set so the
+        // ignore-conflicts table can't be poisoned with arbitrary
+        // attacker-supplied "fields" via this endpoint.
+        $allowed_fields = array_merge(
+            MealsDB_Sync::get_wp_authoritative_fields(),
+            MealsDB_Sync::get_mealsdb_authoritative_fields()
+        );
+        if ($field_name === '' || !in_array($field_name, $allowed_fields, true)) {
+            wp_send_json_error(['message' => 'Unsupported sync field.']);
+        }
 
         $user_id = get_current_user_id();
         global $wpdb;
@@ -106,8 +117,11 @@ class MealsDB_Ajax_Sync {
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS);
 
         if ($set_ignored) {
+            // Treat duplicate (field, source, target) tuples as a no-op so a
+            // double-click doesn't accumulate identical rows that the
+            // unignore branch would then have to delete in bulk.
             $result = $wpdb->query($wpdb->prepare(
-                "INSERT INTO `{$table}` (field_name, source_value, target_value, ignored_by) VALUES (%s, %s, %s, %d)",
+                "INSERT IGNORE INTO `{$table}` (field_name, source_value, target_value, ignored_by) VALUES (%s, %s, %s, %d)",
                 $field_name, $source, $target, $user_id
             ));
         } else {
@@ -135,14 +149,15 @@ class MealsDB_Ajax_Sync {
             wp_send_json_error(['message' => 'Unauthorized']);
         }
 
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('sync_operations')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+        }
+
         $result = MealsDB_Updates::check_for_updates();
 
         if (is_wp_error($result)) {
-            $data = $result->get_error_data();
-            wp_send_json_error([
-                'message' => $result->get_error_message(),
-                'stderr'  => is_array($data) && isset($data['stderr']) ? $data['stderr'] : '',
-            ]);
+            self::handle_update_failure($result);
         }
 
         wp_send_json_success($result);
@@ -158,17 +173,33 @@ class MealsDB_Ajax_Sync {
             wp_send_json_error(['message' => 'Unauthorized']);
         }
 
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('sync_operations')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+        }
+
         $result = MealsDB_Updates::pull_updates();
 
         if (is_wp_error($result)) {
-            $data = $result->get_error_data();
-            wp_send_json_error([
-                'message' => $result->get_error_message(),
-                'stderr'  => is_array($data) && isset($data['stderr']) ? $data['stderr'] : '',
-            ]);
+            self::handle_update_failure($result);
         }
 
         wp_send_json_success($result);
+    }
+
+    /**
+     * Log shell stderr / process detail server-side and return a
+     * generic error message to the client. Git stderr can include
+     * filesystem paths, remote URLs, and credentials; surfacing it
+     * to the AJAX caller is information disclosure.
+     */
+    private static function handle_update_failure(\WP_Error $result): void {
+        $data   = $result->get_error_data();
+        $stderr = is_array($data) && isset($data['stderr']) ? trim((string) $data['stderr']) : '';
+        if ($stderr !== '') {
+            error_log('[MealsDB Updates] ' . $result->get_error_code() . ': ' . $stderr);
+        }
+        wp_send_json_error(['message' => $result->get_error_message()]);
     }
 
     /**

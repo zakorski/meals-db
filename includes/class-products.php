@@ -9,52 +9,11 @@ class MealsDB_Products {
     private const TABLE = MealsDB_Tables::PRODUCTS;
 
     /**
-     * Create the meals_products table within the external Meals DB.
+     * Allowed values for the product_type ENUM. Kept in sync with the
+     * canonical schema so all four variants round-trip correctly instead
+     * of being silently coerced to 'meal' on save/read.
      */
-    public static function install_table(): void {
-        global $wpdb;
-
-        if (!$wpdb) {
-            error_log('[MealsDB Products] Unable to establish database connection.');
-            return;
-        }
-
-        $table = MealsDB_DB::get_table_name(self::TABLE);
-
-        $charset = $wpdb->charset;
-        $collate = $wpdb->collate;
-
-        $charset_sql = 'DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
-        if (!empty($charset)) {
-            $collation_name = !empty($collate) ? $collate : 'utf8mb4_unicode_ci';
-            $charset_sql = sprintf('DEFAULT CHARSET=%s COLLATE=%s', $charset, $collation_name);
-        }
-
-        $sql = "CREATE TABLE IF NOT EXISTS `{$table}` (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            wc_product_id INT NOT NULL UNIQUE,
-            product_name VARCHAR(200) NOT NULL DEFAULT '',
-            price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-            image_url VARCHAR(500) NULL,
-            sku VARCHAR(100) NULL,
-            category_data JSON NULL,
-            is_published TINYINT(1) NOT NULL DEFAULT 1,
-            product_type ENUM('meal','side','fee','other') NOT NULL DEFAULT 'meal',
-            taxable TINYINT(1) NOT NULL DEFAULT 0,
-            main_ingredient VARCHAR(40) NOT NULL DEFAULT '',
-            dietary_tags JSON NULL,
-            allergen_flags JSON NULL,
-            case_size INT NOT NULL DEFAULT 1,
-            unit_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            KEY idx_is_published (is_published),
-            KEY idx_product_name (product_name)
-        ) ENGINE=InnoDB {$charset_sql};";
-
-        if ($wpdb->query($sql) === false) {
-            error_log('[MealsDB Products] Failed creating ' . MealsDB_Tables::PRODUCTS . ' table: ' . $wpdb->last_error);
-        }
-    }
+    private const PRODUCT_TYPES = ['meal', 'side', 'fee', 'other'];
 
     /**
      * Retrieve product metadata for a WooCommerce product.
@@ -84,7 +43,7 @@ class MealsDB_Products {
 
         return [
             'wc_product_id'   => (int) $row['wc_product_id'],
-            'product_type'    => in_array($row['product_type'], ['meal', 'side'], true) ? (string) $row['product_type'] : 'meal',
+            'product_type'    => in_array($row['product_type'], self::PRODUCT_TYPES, true) ? (string) $row['product_type'] : 'meal',
             'taxable'         => (int) $row['taxable'],
             'main_ingredient' => (string) $row['main_ingredient'],
             'dietary_tags'    => self::decode_json_field($row['dietary_tags']),
@@ -172,7 +131,7 @@ class MealsDB_Products {
         $defaults = self::get_default_row($product_id);
         $merged   = array_merge($defaults, $data);
 
-        $product_type = in_array($merged['product_type'], ['meal', 'side'], true)
+        $product_type = in_array($merged['product_type'], self::PRODUCT_TYPES, true)
             ? (string) $merged['product_type']
             : 'meal';
 

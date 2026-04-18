@@ -897,7 +897,7 @@ class MealsDB_Invoice_Generator {
             $row[34] = MealsDB_Money::format($tax_cents);
             $row[35] = MealsDB_Money::format($total_line_cost_cents);
             $row[36] = 'I';
-            $csv[] = implode(',', $row);
+            $csv[] = MealsDB_CSV::row($row);
         }
 
         // Finalize the billing month for all included clients.
@@ -948,8 +948,7 @@ class MealsDB_Invoice_Generator {
             $sci_id      = 'SCI-' . str_pad($r['order_id'], 8, '0', STR_PAD_LEFT);
             $client_name = strtoupper($r['first_name']) . ' ' . strtoupper($r['last_name']);
 
-            $csv[] = sprintf(
-                '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s',
+            $csv[] = MealsDB_CSV::row([
                 $sci_id,
                 'Meal Services - Services de repas',
                 $r['sdnb_service_request_id'] ?: '',
@@ -967,8 +966,8 @@ class MealsDB_Invoice_Generator {
                 '', // Other Cost (parking)
                 number_format((float) ($r['client_contribution'] ?? 0), 2, '.', ''), // Client Contribution
                 '', // Stat Holiday Units
-                number_format($r['tax_amount'], 2, '.', '')
-            );
+                number_format($r['tax_amount'], 2, '.', ''),
+            ]);
         }
 
         // Finalize the billing month for all included clients.
@@ -1177,12 +1176,11 @@ class MealsDB_Invoice_Generator {
             // Check for errors/warnings
             $errors = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
 
-            $csv[] = sprintf(
-                '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s',
+            $csv[] = MealsDB_CSV::row([
                 $health_card,
                 $vet['last_name'] ?: '',
                 $vet['first_name'] ?: '',
-                str_replace(',', '', $billing_address), // Remove commas from address
+                $billing_address, // MealsDB_CSV::cell() handles embedded commas via quoting.
                 $billing_city ?: '',
                 $billing_postcode ?: '',
                 $billing_phone ?: '',
@@ -1214,8 +1212,8 @@ class MealsDB_Invoice_Generator {
                 MealsDB_Money::format($sides_tax_cents),
                 MealsDB_Money::format($new_total_cents),
                 $errors,
-                self::check_new_user_flag((int) ($vet['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No'
-            );
+                self::check_new_user_flag((int) ($vet['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No',
+            ]);
         }
 
         // Finalize the billing month for all included clients.

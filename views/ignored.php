@@ -23,12 +23,12 @@ $sql = $wpdb->prepare(
 $results = $wpdb->get_results($sql, ARRAY_A);
 
 if ($results === null && $wpdb->last_error) {
+    // Log the full DB error server-side for debugging, but don't echo
+    // it to the admin UI — MySQL errors can include partial SQL and
+    // table/column names that are useful to an attacker. Show a
+    // generic message; admins can find the detail in the log.
     error_log('[MealsDB] Failed to load ignored conflicts: ' . $wpdb->last_error);
-    $ignored_error = sprintf(
-        /* translators: %s: database error message */
-        __('Unable to load ignored mismatches: %s', 'meals-db'),
-        $wpdb->last_error
-    );
+    $ignored_error = __('Unable to load ignored mismatches. Check the server error log for details.', 'meals-db');
 } elseif (is_array($results)) {
     $ignored = $results;
 }
@@ -94,7 +94,7 @@ unset($item);
                         <td><?= esc_html($item['source_value']) ?></td>
                         <td><?= esc_html($item['target_value']) ?></td>
                         <td><?= esc_html($item['ignored_by_user'] ?? 'Unknown') ?></td>
-                        <td><?= esc_html(date('Y-m-d H:i', strtotime($item['ignored_at']))) ?></td>
+                        <td><?= esc_html(mysql2date('Y-m-d H:i', $item['ignored_at'])) ?></td>
                         <td>
                             <button class="button unignore-btn" data-id="<?= esc_attr($item['id']) ?>"
                                     data-field="<?= esc_attr($item['field_name']) ?>"

@@ -88,11 +88,43 @@ add_action('plugins_loaded', function () {
  * on every admin load and runs the idempotent installer when they diverge.
  */
 add_action('admin_init', function () {
+    // Only run the installer for users who could legitimately be
+    // triggering a plugin upgrade. admin_init also fires on
+    // admin-ajax.php and for any logged-in user who happens to hit an
+    // admin-facing URL; there's no reason to run dbDelta on behalf of a
+    // subscriber poking at the UI.
+    if (!current_user_can('activate_plugins') && !current_user_can('manage_options')) {
+        return;
+    }
+
     $stored = get_option('mealsdb_db_version', '0.0.0');
     if (version_compare($stored, MEALS_DB_VERSION, '<')) {
-        require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
-        MealsDB_Installer::install();
-        update_option('mealsdb_db_version', MEALS_DB_VERSION, false);
+        // Belt-and-braces lock so two concurrent admin loads (multi-tab,
+        // parallel AJAX) don't both enter dbDelta at once.
+        if (!get_transient('mealsdb_upgrading')) {
+            set_transient('mealsdb_upgrading', 1, 60);
+            require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
+            try {
+                MealsDB_Installer::install();
+
+                // Seed zone schedule for auto-updated installs that never
+                // fired register_activation_hook.
+                if (false === get_option('mealsdb_zone_delivery_schedule')) {
+                    add_option('mealsdb_zone_delivery_schedule', [
+                        'Zone 1' => ['day' => 'Wednesday', 'label' => 'Wednesday morning - Moncton Downtown'],
+                        'Zone 2' => ['day' => 'Wednesday', 'label' => 'Wednesday afternoon - Sackville / Amherst'],
+                        'Zone 3' => ['day' => 'Thursday',  'label' => 'Thursday morning - Moncton Other / Sussex'],
+                        'Zone 4' => ['day' => 'Thursday',  'label' => 'Thursday afternoon - Shediac'],
+                        'Zone 5' => ['day' => 'Friday',    'label' => 'Friday - Dieppe / Riverview'],
+                        'Zone 6' => ['day' => 'Thursday',  'label' => 'Thursday morning - Sussex (combined with Zone 3)'],
+                    ]);
+                }
+
+                update_option('mealsdb_db_version', MEALS_DB_VERSION, false);
+            } finally {
+                delete_transient('mealsdb_upgrading');
+            }
+        }
     }
 });
 

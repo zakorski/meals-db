@@ -90,7 +90,8 @@ class MealsDB_Schema_Sync {
             }
 
             foreach ($schema['columns'] as $column => $definition) {
-                $clean_definition = self::sanitize_column_definition($definition);
+                $clean_definition  = self::sanitize_column_definition($definition);
+                $needs_unique_index = self::definition_has_unique($definition);
 
                 if (!isset($existing_columns[$column])) {
                     $alter_sql = sprintf('ALTER TABLE `%s` ADD COLUMN `%s` %s', $escaped_table, $column, $clean_definition);
@@ -102,6 +103,21 @@ class MealsDB_Schema_Sync {
                                 'table'  => $table_name,
                                 'column' => $column,
                             ];
+
+                            // sanitize_column_definition() strips inline UNIQUE
+                            // so the ALTER stays column-only. Recreate the
+                            // constraint as a proper index when the canonical
+                            // schema declares it.
+                            if ($needs_unique_index) {
+                                $index_name = sprintf('uniq_%s_%s', preg_replace('/[^a-z0-9_]/i', '_', $table_name), $column);
+                                $index_sql  = sprintf(
+                                    'ALTER TABLE `%s` ADD UNIQUE KEY `%s` (`%s`)',
+                                    $escaped_table,
+                                    str_replace('`', '``', $index_name),
+                                    $column
+                                );
+                                $wpdb->query($index_sql);
+                            }
                         } else {
                             $results['errors'][] = [
                                 'table'  => $table_name,
@@ -229,6 +245,15 @@ class MealsDB_Schema_Sync {
     }
 
     /**
+     * Detect whether a canonical column definition declares an inline
+     * UNIQUE constraint (so a follow-up ADD UNIQUE KEY is needed after
+     * sanitize_column_definition strips the inline directive).
+     */
+    private static function definition_has_unique(string $definition): bool {
+        return (bool) preg_match('/\\bunique(\\s+key)?\\b/i', $definition);
+    }
+
+    /**
      * Strip constraint directives from a column definition so ALTER TABLE statements remain column-only.
      */
     private static function sanitize_column_definition(string $definition): string {
@@ -257,10 +282,18 @@ class MealsDB_Schema_Sync {
         $trimmed = trim($definition);
         $lower   = strtolower($trimmed);
 
+        // ENUM('a','b','default','c') would otherwise be cut at the
+        // " default " inside the parens. Substitute the parenthesised
+        // contents with placeholders so the keyword scan can't misfire.
+        $masked = preg_replace_callback('/\(([^)]*)\)/', static function ($m) {
+            return '(' . str_repeat('_', strlen($m[1])) . ')';
+        }, $trimmed) ?? $trimmed;
+        $masked_lower = strtolower($masked);
+
         $keywords     = [' not null', ' null', ' default', ' auto_increment', ' on update', ' unique', ' primary', ' comment'];
         $cut_position = strlen($trimmed);
         foreach ($keywords as $keyword) {
-            $pos = stripos($lower, $keyword);
+            $pos = stripos($masked_lower, $keyword);
             if ($pos !== false && $pos < $cut_position) {
                 $cut_position = $pos;
             }
@@ -291,12 +324,20 @@ class MealsDB_Schema_Sync {
 
     /**
      * Normalize a column type string for comparison.
+     *
+     * MySQL stores BOOLEAN as tinyint(1); the canonical schema uses the
+     * BOOLEAN spelling. Without this fold the sync forever reports the
+     * boolean columns as mismatches and tries to "fix" them on every run.
      */
     private static function normalize_column_type(string $type): string {
         $normalized = strtolower(trim(preg_replace('/\\s+/', ' ', $type)));
         $normalized = preg_replace('/bigint\\(\\d+\\)/', 'bigint', $normalized);
         $normalized = preg_replace('/int\\(\\d+\\)/', 'int', $normalized);
         $normalized = preg_replace('/tinyint\\(\\d+\\)/', 'tinyint', $normalized);
+
+        if ($normalized === 'boolean' || $normalized === 'bool') {
+            $normalized = 'tinyint';
+        }
 
         return $normalized ?? '';
     }

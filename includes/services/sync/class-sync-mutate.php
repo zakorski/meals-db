@@ -40,6 +40,24 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
+     * Whether a wp_usermeta key is allowed to be written from a sync
+     * override. Derived from the canonical field-to-meta map at request
+     * time; cached per-process.
+     */
+    private static function is_allowed_user_meta_key(string $meta_key): bool {
+        static $allowed = null;
+        if ($allowed === null) {
+            $allowed = [];
+            foreach (MealsDB_Sync::get_field_to_wp_meta_map() as $entry) {
+                if (is_array($entry) && ($entry['type'] ?? '') === 'meta' && !empty($entry['key'])) {
+                    $allowed[(string) $entry['key']] = true;
+                }
+            }
+        }
+        return isset($allowed[$meta_key]);
+    }
+
+    /**
      * Update a WordPress user with the provided field values.
      *
      * @param int                  $user_id Identifier of the WordPress user to update.
@@ -249,6 +267,13 @@ class MealsDB_Sync_Mutate {
             return false;
         }
 
+        try {
+            $fields = MealsDB_Encryption::encrypt_columns($fields);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB Sync] Update aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
+        }
+
         $set_clauses = [];
         $values      = [];
 
@@ -308,16 +333,29 @@ class MealsDB_Sync_Mutate {
         $available_columns = $this->get_table_columns($connection, $clients_table);
         $column_map = $this->build_identity_column_map($available_columns);
 
-        $prepared_columns = [];
-        $placeholders = [];
-        $values = [];
-
+        // Build the row keyed by DB column name first so we can encrypt
+        // before assembling the prepared statement.
+        $row = [];
         foreach ($fields as $field => $value) {
             if (!isset($column_map[$field])) {
                 continue;
             }
+            $row[$column_map[$field]] = $value;
+        }
 
-            $prepared_columns[] = sprintf('`%s`', str_replace('`', '``', $column_map[$field]));
+        try {
+            $row = MealsDB_Encryption::encrypt_columns($row);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB Sync] Create aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
+        }
+
+        $prepared_columns = [];
+        $placeholders = [];
+        $values = [];
+
+        foreach ($row as $column => $value) {
+            $prepared_columns[] = sprintf('`%s`', str_replace('`', '``', $column));
             $placeholders[] = '%s';
             $values[] = (string) $value;
         }
@@ -418,6 +456,36 @@ class MealsDB_Sync_Mutate {
         $escaped_table  = str_replace('`', '``', $clients_table);
         $escaped_pk     = str_replace('`', '``', $primary_key);
         $escaped_column = str_replace('`', '``', $wp_column);
+
+        // Refuse if this WP user is already linked to a different client.
+        // The schema does not (yet) declare wp_user_id as UNIQUE, so this
+        // is an application-level check; multiple clients sharing a WP
+        // user yields nondeterministic results in find_government_client_
+        // by_wp_user (which uses LIMIT 1) and silently mis-routes orders.
+        $existing_client_sql = sprintf(
+            'SELECT `%s` FROM `%s` WHERE `%s` = %%d AND `%s` <> %%d LIMIT 1',
+            $escaped_pk,
+            $escaped_table,
+            $escaped_column,
+            $escaped_pk
+        );
+        $existing_client = $connection->get_var(
+            $connection->prepare($existing_client_sql, $user_id, $client_id)
+        );
+        if ($existing_client !== null) {
+            if ($transaction_started) {
+                $connection->query('ROLLBACK');
+            }
+            return new WP_Error(
+                'mealsdb_link_user_already_linked',
+                sprintf(
+                    __('WordPress user %1$d is already linked to Meals DB client %2$d. Unlink the existing client first.', 'meals-db'),
+                    $user_id,
+                    (int) $existing_client
+                )
+            );
+        }
+
         $update_sql = sprintf('UPDATE `%s` SET `%s` = %%d WHERE `%s` = %%d', $escaped_table, $escaped_column, $escaped_pk);
 
         $result = $connection->query($connection->prepare($update_sql, $user_id, $client_id));
@@ -766,6 +834,18 @@ class MealsDB_Sync_Mutate {
                 // Handle any WP-authoritative field that maps to user meta.
                 if ($descriptor !== null && $descriptor['type'] === 'meta') {
                     $meta_key = $descriptor['key'];
+
+                    // Defence-in-depth meta_key allowlist. Today the
+                    // descriptor map is hardcoded, but a future expansion
+                    // that drew from filterable input would let a caller
+                    // rewrite arbitrary user meta. Restrict to the keys
+                    // referenced by the canonical WP-side map.
+                    if (!self::is_allowed_user_meta_key($meta_key)) {
+                        $error_code    = 'mealsdb_sync_unsupported_field';
+                        $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
+                        break;
+                    }
+
                     $old_value = get_user_meta($woo_user_id, $meta_key, true);
                     $update_success = update_user_meta($woo_user_id, $meta_key, $new_value) !== false;
                     if (!$update_success) {

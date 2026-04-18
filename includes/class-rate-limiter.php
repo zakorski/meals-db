@@ -100,23 +100,20 @@ class MealsDB_Rate_Limiter {
         $now         = time();
         $expiry      = $now + $ttl;
 
-        // If the existing window has already expired, reset both the counter and
-        // the timeout in a single atomic statement. The timeout row drives that
-        // decision; read it first so the decision and the write agree.
-        $existing_timeout = (int) $wpdb->get_var($wpdb->prepare(
+        // Distinguish "row missing" from "row value is 0" — both used to
+        // hit the same branch, leaving stale rows that never re-rotated.
+        $raw_timeout      = $wpdb->get_var($wpdb->prepare(
             "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
             $timeout_key
         ));
+        $existing_timeout = $raw_timeout === null ? null : (int) $raw_timeout;
 
-        if ($existing_timeout > 0 && $existing_timeout < $now) {
-            // Window expired — reset counter and extend the window.
-            $wpdb->query($wpdb->prepare(
-                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload)
-                 VALUES (%s, %s, 'no')
-                 ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)",
-                $option_name,
-                '0'
-            ));
+        if ($existing_timeout !== null && $existing_timeout > 0 && $existing_timeout < $now) {
+            // Window expired — set the new timeout FIRST so a racing reader
+            // never sees a counter without a timeout row, then reset the
+            // counter. The previous order had a window where the counter
+            // could be cleared while the old timeout still pointed at the
+            // past, letting subsequent increments grow unbounded.
             $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$wpdb->options} (option_name, option_value, autoload)
                  VALUES (%s, %s, 'no')
@@ -124,9 +121,17 @@ class MealsDB_Rate_Limiter {
                 $timeout_key,
                 (string) $expiry
             ));
-        } elseif ($existing_timeout === 0) {
-            // No window yet — seed the timeout row. Use INSERT IGNORE-style so
-            // concurrent seeders don't fight.
+            $wpdb->query($wpdb->prepare(
+                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload)
+                 VALUES (%s, %s, 'no')
+                 ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)",
+                $option_name,
+                '0'
+            ));
+        } elseif ($existing_timeout === null) {
+            // No timeout row yet — seed it. INSERT IGNORE pattern via
+            // ON DUPLICATE KEY UPDATE option_value = option_value lets
+            // concurrent seeders coexist without overwriting each other.
             $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$wpdb->options} (option_name, option_value, autoload)
                  VALUES (%s, %s, 'no')
@@ -199,24 +204,73 @@ class MealsDB_Rate_Limiter {
     }
 
     /**
-     * Get the client IP address.
+     * Get the client IP address used as the rate-limit identity for
+     * unauthenticated requests.
      *
-     * @return string The client IP address.
+     * Defaults to REMOTE_ADDR (set by the web server, not spoofable from
+     * the wire). HTTP_X_FORWARDED_FOR / HTTP_CLIENT_IP / HTTP_X_REAL_IP
+     * are honoured ONLY when the immediate peer is in the trusted-proxy
+     * allowlist published via the mealsdb_trusted_proxies filter or the
+     * MEALSDB_TRUSTED_PROXIES constant. The previous unconditional-trust
+     * behaviour let any HTTP client rotate the rate-limit identity at
+     * will and bypass throttling entirely.
      */
     private static function get_client_ip(): string {
-        $ip = '0.0.0.0';
+        $remote = !empty($_SERVER['REMOTE_ADDR'])
+            ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR']))
+            : '';
 
-        if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-            $ip = sanitize_text_field(wp_unslash($_SERVER['HTTP_CLIENT_IP']));
-        } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $ip = sanitize_text_field(wp_unslash($_SERVER['HTTP_X_FORWARDED_FOR']));
-        } elseif (!empty($_SERVER['REMOTE_ADDR'])) {
-            $ip = sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR']));
+        $remote_validated = $remote !== '' ? filter_var($remote, FILTER_VALIDATE_IP) : false;
+        $remote_ip = $remote_validated !== false ? $remote_validated : '0.0.0.0';
+
+        if (!self::is_trusted_proxy($remote_ip)) {
+            return $remote_ip;
         }
 
-        // Validate IP address
-        $validated = filter_var($ip, FILTER_VALIDATE_IP);
-        return $validated !== false ? $validated : '0.0.0.0';
+        // Trusted proxy: take the leftmost validated entry from
+        // X-Forwarded-For (RFC 7239 list of client, proxy1, proxy2),
+        // then fall back to X-Real-IP / Client-IP.
+        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            $list = explode(',', sanitize_text_field(wp_unslash($_SERVER['HTTP_X_FORWARDED_FOR'])));
+            foreach ($list as $candidate) {
+                $candidate = trim($candidate);
+                $valid     = $candidate !== '' ? filter_var($candidate, FILTER_VALIDATE_IP) : false;
+                if ($valid !== false) {
+                    return $valid;
+                }
+            }
+        }
+
+        foreach (['HTTP_X_REAL_IP', 'HTTP_CLIENT_IP'] as $header) {
+            if (!empty($_SERVER[$header])) {
+                $candidate = sanitize_text_field(wp_unslash($_SERVER[$header]));
+                $valid     = filter_var($candidate, FILTER_VALIDATE_IP);
+                if ($valid !== false) {
+                    return $valid;
+                }
+            }
+        }
+
+        return $remote_ip;
+    }
+
+    /**
+     * Whether the given IP is a trusted reverse proxy that may set
+     * forwarded-for headers on our behalf.
+     */
+    private static function is_trusted_proxy(string $ip): bool {
+        $proxies = [];
+        if (defined('MEALSDB_TRUSTED_PROXIES') && is_array(MEALSDB_TRUSTED_PROXIES)) {
+            $proxies = MEALSDB_TRUSTED_PROXIES;
+        }
+        $proxies = (array) apply_filters('mealsdb_trusted_proxies', $proxies);
+        if (empty($proxies)) {
+            return false;
+        }
+        $proxies = array_filter(array_map('strval', $proxies), function ($entry) {
+            return $entry !== '';
+        });
+        return in_array($ip, $proxies, true);
     }
 
     /**
@@ -233,6 +287,19 @@ class MealsDB_Rate_Limiter {
             wp_cache_delete($transient_key, 'mealsdb_rate');
         }
         delete_transient($transient_key);
+
+        // Always purge the DB fallback rows even when the object cache is
+        // in use — earlier writes may have hit the DB path before the
+        // cache flipped on, and stale rows would otherwise keep counting
+        // forever.
+        global $wpdb;
+        if ($wpdb instanceof wpdb) {
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM {$wpdb->options} WHERE option_name IN (%s, %s)",
+                '_transient_' . $transient_key,
+                '_transient_timeout_' . $transient_key
+            ));
+        }
     }
 
     /**

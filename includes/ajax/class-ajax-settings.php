@@ -25,22 +25,31 @@ class MealsDB_Ajax_Settings {
             wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
         }
 
-        $settings = [
-            'encryption_key' => sanitize_text_field( wp_unslash( $_POST['encryption_key'] ?? '' ) ),
-        ];
+        // Merge into existing settings so other keys (and an existing
+        // encryption_key when the user didn't submit a new one) are preserved.
+        $existing = get_option( 'mealsdb_settings', [] );
+        if ( ! is_array( $existing ) ) {
+            $existing = [];
+        }
 
-        // Validate encryption key format if provided
-        $enc_key = $settings['encryption_key'];
-        if ( $enc_key !== '' ) {
-            if ( strpos( $enc_key, 'base64:' ) !== 0 ) {
+        $submitted_key = sanitize_text_field( wp_unslash( $_POST['encryption_key'] ?? '' ) );
+        $settings      = $existing;
+
+        if ( $submitted_key !== '' ) {
+            if ( strpos( $submitted_key, 'base64:' ) !== 0 ) {
                 wp_send_json_error( [ 'message' => 'Encryption key must start with "base64:" prefix.' ] );
             }
 
-            $decoded = base64_decode( substr( $enc_key, 7 ), true );
+            $decoded = base64_decode( substr( $submitted_key, 7 ), true );
             if ( $decoded === false || strlen( $decoded ) !== 32 ) {
                 wp_send_json_error( [ 'message' => 'Encryption key must decode to exactly 32 bytes (256 bits).' ] );
             }
+
+            $settings['encryption_key'] = $submitted_key;
         }
+        // Empty input is treated as "no change" — the previous behaviour
+        // silently cleared the key, which would render every encrypted
+        // PII column unrecoverable on the next read.
 
         update_option( 'mealsdb_settings', $settings, false );
 

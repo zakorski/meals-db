@@ -122,6 +122,13 @@ class MealsDB_Client_Form {
 
     /**
      * Deterministic index columns used for uniqueness checks on encrypted data.
+     *
+     * delivery_initials is included for back-compat — the column is
+     * actually a 3-character plaintext VARCHAR (see schema) so every
+     * uniqueness lookup currently queries the plaintext column directly.
+     * The hash column (delivery_initials_index) is populated as a
+     * defensive shadow in case the column is ever moved to encrypted
+     * storage.
      */
     private static $deterministic_index_map = [
         'individual_id'      => 'individual_id_index',
@@ -623,6 +630,20 @@ class MealsDB_Client_Form {
     }
 
     /**
+     * Reduce an arbitrary form payload (e.g. parse_str output) to the
+     * known DB columns + sanitised values, preserving array-typed fields
+     * for round-trip display in resumed drafts.
+     *
+     * Used by the drafts AJAX endpoint to defend against parse_str's
+     * willingness to populate the target with attacker-named keys.
+     */
+    public static function filter_to_known_fields(array $data): array {
+        $unknown_keys = [];
+
+        return self::sanitize_payload($data, $unknown_keys, true);
+    }
+
+    /**
      * Save client data to meals_clients table.
      *
      * @param array $data
@@ -682,6 +703,13 @@ class MealsDB_Client_Form {
 
         if (isset($encrypted['units']) && $encrypted['units'] === '') {
             unset($encrypted['units']);
+        }
+
+        try {
+            $encrypted = MealsDB_Encryption::encrypt_columns($encrypted);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB] Save aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
         }
 
         $repository = new MealsDB_Clients_Repository();
@@ -761,6 +789,13 @@ class MealsDB_Client_Form {
             $encrypted['units'] = null;
         }
 
+        try {
+            $encrypted = MealsDB_Encryption::encrypt_columns($encrypted);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB] Update aborted: encryption failure (' . $e->getMessage() . ').');
+            return false;
+        }
+
         $columns = array_keys($encrypted);
         if (empty($columns)) {
             return false;
@@ -800,11 +835,13 @@ class MealsDB_Client_Form {
             }
         }
 
-        // Decrypt encrypted fields before mapping to form names.
+        // Decrypt encrypted columns BEFORE mapping DB column names to form
+        // field names. Use the canonical DB-column list (note: form-side
+        // `client_comments` is `customer_comments` in the DB).
         // safe_decrypt returns the original value on failure (legacy plaintext).
-        foreach (self::$encrypted_fields as $field) {
-            if (!empty($record[$field]) && is_string($record[$field])) {
-                $record[$field] = MealsDB_Encryption::safe_decrypt($record[$field]);
+        foreach (MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS as $column) {
+            if (!empty($record[$column]) && is_string($record[$column])) {
+                $record[$column] = MealsDB_Encryption::safe_decrypt($record[$column]);
             }
         }
 
@@ -911,7 +948,7 @@ class MealsDB_Client_Form {
 
         unset($data['draft_id'], $data['resume_draft']);
 
-        $json = json_encode($data);
+        $json = self::encode_draft_payload($data);
         if ($json === false) {
             error_log('[MealsDB] Draft save failed: unable to encode payload.');
             return false;
@@ -1019,6 +1056,69 @@ class MealsDB_Client_Form {
         }
 
         return true;
+    }
+
+    /**
+     * Encode a draft payload for storage.
+     *
+     * Drafts contain the same PII columns the live record encrypts, so
+     * encrypt the JSON envelope under the same key. Falls back to plain
+     * JSON when encryption is unavailable (e.g. test fixtures without a
+     * configured key) so saving still works in those environments.
+     *
+     * @return string|false
+     */
+    private static function encode_draft_payload(array $data) {
+        $json = function_exists('wp_json_encode') ? wp_json_encode($data) : json_encode($data);
+        if (!is_string($json)) {
+            return false;
+        }
+        if (!class_exists('MealsDB_Encryption')) {
+            return $json;
+        }
+        try {
+            return MealsDB_Encryption::encrypt($json);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB] Draft encrypt fallback to plaintext: ' . $e->getMessage());
+            return $json;
+        }
+    }
+
+    /**
+     * Decode a stored draft payload, supporting:
+     *   - new format (encrypted base64),
+     *   - legacy plaintext JSON written before encryption was added.
+     *
+     * Returns null if neither path produces a JSON object.
+     */
+    public static function decode_draft_payload(string $stored): ?array {
+        if ($stored === '') {
+            return null;
+        }
+
+        // Cheap shape check: legacy drafts are JSON objects/arrays so the
+        // first non-whitespace character is { or [. Try that path first
+        // to avoid invoking the encryption layer (and its legacy-decrypt
+        // warning) on every read of a plaintext-era draft.
+        $trimmed = ltrim($stored);
+        if ($trimmed !== '' && ($trimmed[0] === '{' || $trimmed[0] === '[')) {
+            $decoded = json_decode($stored, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        if (class_exists('MealsDB_Encryption')) {
+            $decrypted = MealsDB_Encryption::safe_decrypt($stored);
+            if (is_string($decrypted) && $decrypted !== '' && $decrypted !== $stored) {
+                $decoded = json_decode($decrypted, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

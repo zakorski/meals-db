@@ -15,6 +15,13 @@ class MealsDB_Schema_Rebuild {
      * @return array<string, mixed>|WP_Error Structured result data or WP_Error on precondition failure.
      */
     public static function run(string $confirmation) {
+        // Defence-in-depth: drops every plugin table. Refuse outright if
+        // the caller doesn't have manage_options, regardless of how the
+        // helper was reached.
+        if (!is_user_logged_in() || !current_user_can('manage_options')) {
+            return new WP_Error('forbidden', 'You do not have permission to rebuild the schema.');
+        }
+
         $normalized_confirmation = strtoupper(trim($confirmation));
         if ($normalized_confirmation !== 'REBUILD') {
             return new WP_Error('confirmation_required', 'Force rebuild aborted: confirmation text did not match.');
@@ -24,6 +31,17 @@ class MealsDB_Schema_Rebuild {
 
         if (!$wpdb) {
             return new WP_Error('db_error', 'Unable to connect to external Meals DB.');
+        }
+
+        // Audit-log the destructive op so compromise / mistake is traceable.
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log(
+                'force_rebuild',
+                0,
+                'schema',
+                null,
+                'requested by user_id=' . get_current_user_id()
+            );
         }
 
         $schemas = MealsDB_Schema::get_canonical_schema();
@@ -51,12 +69,17 @@ class MealsDB_Schema_Rebuild {
                         'table' => $table_name,
                         'error' => $wpdb->last_error,
                     ];
+                    // Bail on first drop error rather than continuing into
+                    // a half-broken schema state. DDL is non-transactional
+                    // in MySQL so we can't roll back what already dropped.
+                    break;
                 }
             } catch (Throwable $exception) {
                 $results['drop_errors'][] = [
                     'table' => $table_name,
                     'error' => $exception->getMessage(),
                 ];
+                break;
             }
         }
 

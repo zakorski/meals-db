@@ -45,8 +45,14 @@ class MealsDB_Clients_Repository {
         $offset = max(0, $offset);
 
         try {
+            // Explicit SELECT list — never SELECT *. The previous wildcard
+            // returned encrypted PII columns and deterministic-hash sidecar
+            // columns to every caller, none of which are needed by current
+            // listing surfaces and which expand the blast radius of any
+            // accidental data echo to the response.
+            $columns = self::default_select_columns();
             $sql = $wpdb->prepare(
-                sprintf('SELECT * FROM `%s` LIMIT %%d OFFSET %%d', $this->escape_table_name()),
+                sprintf('SELECT %s FROM `%s` ORDER BY client_id ASC LIMIT %%d OFFSET %%d', $columns, $this->escape_table_name()),
                 $limit,
                 $offset
             );
@@ -62,6 +68,17 @@ class MealsDB_Clients_Repository {
             error_log('[MealsDB Clients Repository] Exception while fetching clients: ' . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Non-PII columns safe to surface in list views. Keep narrow — encrypted
+     * blobs and *_index hashes are intentionally absent.
+     */
+    private static function default_select_columns(): string {
+        return 'client_id, first_name, last_name, client_type, active, '
+             . 'wp_user_id, client_email, client_phone_1 AS phone_primary, '
+             . 'street_name, city, province, postal_code, '
+             . 'delivery_area_zone, delivery_area_name';
     }
 
     /**
@@ -171,6 +188,16 @@ class MealsDB_Clients_Repository {
             }
         }
 
+        // Whitelist incoming keys against the canonical schema. Caller
+        // pre-filters today, but keep defence-in-depth so a future caller
+        // that hands us an unfiltered payload can't sneak unrelated
+        // columns (e.g. client_type, wp_user_id) into an UPDATE.
+        $data = self::filter_to_known_columns($data);
+        if (empty($data)) {
+            error_log('[MealsDB Clients Repository] Update aborted: no recognised columns supplied.');
+            return false;
+        }
+
         try {
             $result = $wpdb->update($this->table_name, $data, ['client_id' => $client_id]);
 
@@ -259,15 +286,20 @@ class MealsDB_Clients_Repository {
      * @param string|null $client_type   Optional client type filter.
      * @param string|null $search        Optional search string that matches first or last name.
      * @param bool        $show_inactive Whether inactive clients should be included in the results.
+     * @param int         $limit         Max rows per page. Hard-capped to 1000.
+     * @param int         $offset        Row offset. Clamped to 0.
      * @return array<int, array<string, string|null>>
      */
-    public function search_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): array {
+    public function search_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
         global $wpdb;
 
         if (!$this->ensure_table_name()) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when searching clients.');
             return [];
         }
+
+        $limit  = max(1, min(1000, $limit));
+        $offset = max(0, $offset);
 
         try {
             $columns = ['client_id', 'client_id AS id', 'first_name', 'last_name', 'client_type', 'assigned_worker_name', 'assigned_worker_email', 'client_phone_1 AS phone_primary', 'client_email'];
@@ -302,11 +334,11 @@ class MealsDB_Clients_Repository {
                 $sql .= ' WHERE ' . implode(' AND ', $conditions);
             }
 
-            $sql .= ' ORDER BY last_name ASC, first_name ASC';
+            $sql .= ' ORDER BY last_name ASC, first_name ASC LIMIT %d OFFSET %d';
+            $prepare_args[] = $limit;
+            $prepare_args[] = $offset;
 
-            if (!empty($prepare_args)) {
-                $sql = $wpdb->prepare($sql, $prepare_args);
-            }
+            $sql = $wpdb->prepare($sql, $prepare_args);
 
             if ($sql === false) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client search query.');
@@ -319,6 +351,53 @@ class MealsDB_Clients_Repository {
         } catch (Throwable $e) {
             error_log('[MealsDB Clients Repository] Exception while searching clients: ' . $e->getMessage());
             return [];
+        }
+    }
+
+    /**
+     * Count clients matching the same filters as search_clients() so the
+     * view can render pagination totals without having to also materialise
+     * every row.
+     */
+    public function count_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): int {
+        global $wpdb;
+
+        if (!$this->ensure_table_name()) {
+            return 0;
+        }
+
+        try {
+            $sql          = sprintf('SELECT COUNT(*) FROM `%s`', $this->escape_table_name());
+            $conditions   = [];
+            $prepare_args = [];
+            $has_active   = $this->table_has_column('active');
+
+            if (!$show_inactive && $has_active) {
+                $conditions[] = 'active = 1';
+            }
+            if ($client_type !== null && $client_type !== '') {
+                $conditions[]   = 'UPPER(client_type) = %s';
+                $prepare_args[] = strtoupper($client_type);
+            }
+            if ($search !== null && $search !== '') {
+                $conditions[] = '(LOWER(first_name) LIKE %s OR LOWER(last_name) LIKE %s OR LOWER(CONCAT(first_name, " ", last_name)) LIKE %s)';
+                $like = '%' . $wpdb->esc_like(strtolower($search)) . '%';
+                $prepare_args[] = $like;
+                $prepare_args[] = $like;
+                $prepare_args[] = $like;
+            }
+            if (!empty($conditions)) {
+                $sql .= ' WHERE ' . implode(' AND ', $conditions);
+            }
+
+            if (!empty($prepare_args)) {
+                $sql = $wpdb->prepare($sql, $prepare_args);
+            }
+
+            return (int) $wpdb->get_var($sql);
+        } catch (Throwable $e) {
+            error_log('[MealsDB Clients Repository] Exception while counting clients: ' . $e->getMessage());
+            return 0;
         }
     }
 
@@ -370,6 +449,36 @@ class MealsDB_Clients_Repository {
      */
     private static function is_government_client(string $client_type): bool {
         return $client_type === 'SDNB' || $client_type === 'Veteran';
+    }
+
+    /**
+     * Drop any keys from $data that are not declared in the canonical
+     * meals_clients schema (or in the small set of related sidecar
+     * columns the form pipeline emits, e.g. *_index hashes).
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private static function filter_to_known_columns(array $data): array {
+        static $allowed = null;
+        if ($allowed === null) {
+            $allowed = [];
+            if (class_exists('MealsDB_Schema')) {
+                $schema = MealsDB_Schema::get_table_schema(MealsDB_Tables::CLIENTS);
+                if (is_array($schema) && isset($schema['columns']) && is_array($schema['columns'])) {
+                    $allowed = array_fill_keys(array_keys($schema['columns']), true);
+                }
+            }
+        }
+
+        if (empty($allowed)) {
+            // Schema lookup failed — return as-is rather than silently
+            // dropping every column. The wpdb->update call still goes
+            // through wpdb's own escaping.
+            return $data;
+        }
+
+        return array_intersect_key($data, $allowed);
     }
 
     /**

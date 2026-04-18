@@ -79,14 +79,26 @@ class MealsDB_Backfill_Allocations_Engine {
         // avoid double-processing when prior-month orders are re-fetched.
         $allocated_orders = [];
 
-        // Begin transaction for dry-run rollback.
-        $wpdb->query( 'START TRANSACTION' );
+        // Dry runs use a single outer transaction so we can rollback the
+        // whole exploration at the end. Live runs commit per month so a
+        // long backfill doesn't hold a single transaction across the
+        // entire run (locks + redo log explode at scale, and a mid-run
+        // failure rolls back work already correctly applied to earlier
+        // months).
+        if ( $dry_run ) {
+            $wpdb->query( 'START TRANSACTION' );
+        }
 
         try {
             foreach ( $months as $billing_month ) {
+                if ( ! $dry_run ) {
+                    $wpdb->query( 'START TRANSACTION' );
+                }
                 $year  = (int) substr( $billing_month, 0, 4 );
                 $month = (int) substr( $billing_month, 5, 2 );
-                $days_in_month = cal_days_in_month( CAL_GREGORIAN, $month, $year );
+                // Use DateTime so we don't depend on the optional
+                // php-calendar extension.
+                $days_in_month = (int) ( new \DateTime( sprintf( '%04d-%02d-01', $year, $month ) ) )->format( 't' );
 
                 $month_start = sprintf( '%04d-%02d-01', $year, $month );
                 $month_end   = sprintf( '%04d-%02d-%02d', $year, $month, $days_in_month );
@@ -170,6 +182,10 @@ class MealsDB_Backfill_Allocations_Engine {
                     $stats['months_processed']++;
                     $stats['clients_processed'] += $clients_in_month;
                 }
+
+                if ( ! $dry_run ) {
+                    $wpdb->query( 'COMMIT' );
+                }
             }
         } catch ( \Exception $e ) {
             $wpdb->query( 'ROLLBACK' );
@@ -188,7 +204,7 @@ class MealsDB_Backfill_Allocations_Engine {
                 $stats['allocations_created']
             ) );
         } else {
-            $wpdb->query( 'COMMIT' );
+            // Per-month COMMITs already happened inside the loop; just log.
             error_log( sprintf(
                 '[MealsDB Backfill Allocations] Live run %s to %s — months: %d, clients: %d, orders: %d, allocations: %d',
                 $start_month,
@@ -258,6 +274,13 @@ class MealsDB_Backfill_Allocations_Engine {
         int $client_id,
         array $finalized_set
     ): void {
+        // Short-circuit: if no months are finalized at all there's
+        // nothing to clean up. The previous code still issued a
+        // SELECT DISTINCT per order even on virgin databases.
+        if ( empty( $finalized_set ) ) {
+            return;
+        }
+
         // Fetch the billing months this order's delivery allocations touch.
         $alloc_months = $wpdb->get_col( $wpdb->prepare(
             "SELECT DISTINCT billing_month FROM {$delivery_alloc_table}

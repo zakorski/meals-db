@@ -29,7 +29,7 @@ class MealsDB_Ajax_DB_Sync {
 
         $phase   = (int) ( $_POST['phase'] ?? 0 );
         $offset  = (int) ( $_POST['offset'] ?? 0 );
-        $dry_run = filter_var( $_POST['dry_run'] ?? true, FILTER_VALIDATE_BOOLEAN );
+        $dry_run = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
 
         $result = [];
 

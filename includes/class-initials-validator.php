@@ -200,11 +200,17 @@ class MealsDB_Initials_Validator {
 			}
 		}
 
-		// If all patterns failed, generate random initials
+		// If all patterns failed, generate random initials. random_int is
+		// unbiased and CSPRNG-backed; rand() is biased and slow. Pre-fetch
+		// the in-use initials set once so the random search skips
+		// already-taken codes without issuing one DB query per attempt.
+		$existing = self::get_all_existing_initials();
 		$max_attempts = 100;
 		for ($i = 0; $i < $max_attempts; $i++) {
-			$random = chr(rand(65, 90)) . chr(rand(65, 90)) . chr(rand(65, 90));
-
+			$random = chr(random_int(65, 90)) . chr(random_int(65, 90)) . chr(random_int(65, 90));
+			if (isset($existing[$random])) {
+				continue;
+			}
 			$validation = self::validate($random, $client_data, null);
 			if ($validation['valid']) {
 				return $random;
@@ -298,9 +304,36 @@ class MealsDB_Initials_Validator {
 	 * @param array $address Normalized address.
 	 * @return bool True if address is empty.
 	 */
+	/**
+	 * Bulk-load all initials currently in use, keyed for O(1) lookup.
+	 *
+	 * @return array<string, true>
+	 */
+	private static function get_all_existing_initials(): array {
+		global $wpdb;
+		if (!$wpdb) {
+			return [];
+		}
+		$clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+		$rows = $wpdb->get_col(sprintf("SELECT delivery_initials FROM `%s` WHERE delivery_initials <> '' AND delivery_initials IS NOT NULL", esc_sql($clients_table)));
+		$set = [];
+		if (is_array($rows)) {
+			foreach ($rows as $r) {
+				$set[strtoupper(trim((string) $r))] = true;
+			}
+		}
+		return $set;
+	}
+
 	private static function is_address_empty($address) {
-		// Address must have at least street name and city
-		return empty($address['street_name']) || empty($address['city']);
+		// Require street_name + city + postal_code for a "non-empty"
+		// address. Allowing a missing postal would let two unrelated
+		// houses on the same street+city share initials despite having
+		// different postals; treating that as "empty" forces the
+		// uniqueness check to assign independent initials.
+		return empty($address['street_name'])
+			|| empty($address['city'])
+			|| empty($address['postal_code']);
 	}
 
 	/**

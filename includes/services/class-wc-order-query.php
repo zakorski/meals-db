@@ -52,6 +52,10 @@ class MealsDB_WC_Order_Query {
         $user_placeholders   = implode(',', array_fill(0, count($wp_user_ids), '%d'));
         $status_placeholders = implode(',', array_fill(0, count($exclude_statuses), '%s'));
 
+        // The LEFT JOIN to wc_orders_meta on a non-unique (order_id,
+        // meta_key) is unsafe — multiple matching rows multiply the
+        // result set and double-count orders. Pull the rate via a
+        // correlated subquery that returns at most one value per order.
         $sql = "
             SELECT
                 o.id              AS order_id,
@@ -60,11 +64,14 @@ class MealsDB_WC_Order_Query {
                 o.date_created_gmt,
                 o.total_amount,
                 o.tax_amount,
-                rate_meta.meta_value AS mealsdb_rate_id
+                (
+                    SELECT m.meta_value
+                    FROM {$meta_table} m
+                    WHERE m.order_id = o.id AND m.meta_key = 'mealsdb_rate_id'
+                    ORDER BY m.id ASC
+                    LIMIT 1
+                ) AS mealsdb_rate_id
             FROM {$orders_table} o
-            LEFT JOIN {$meta_table} rate_meta
-                ON rate_meta.order_id = o.id
-                AND rate_meta.meta_key = 'mealsdb_rate_id'
             WHERE o.customer_id IN ({$user_placeholders})
                 AND o.date_created_gmt >= %s
                 AND o.date_created_gmt < %s
@@ -73,8 +80,10 @@ class MealsDB_WC_Order_Query {
             ORDER BY o.date_created_gmt ASC
         ";
 
-        // End date is inclusive (full day), so advance to the next day for < comparison.
-        $end_date_exclusive = date('Y-m-d', strtotime($end_date . ' +1 day'));
+        // End date is inclusive (full day), so advance to the next day for
+        // < comparison. Use gmdate() so the boundary doesn't drift across
+        // DST transitions in the server-local timezone.
+        $end_date_exclusive = gmdate('Y-m-d', strtotime($end_date . ' +1 day UTC'));
 
         $params = array_merge(
             $wp_user_ids,
@@ -315,8 +324,11 @@ class MealsDB_WC_Order_Query {
                 AND subtotal_meta.meta_key = '_line_subtotal'
             WHERE o.customer_id = %d
                 AND o.type = 'shop_order'
-                AND o.status IN ('wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid',
-                                 'pending', 'processing', 'on-hold', 'completed', 'paid')
+                -- Restrict to actually-paid statuses. Including pending /
+                -- on-hold previously over-counted total-paid, which
+                -- propagated into invoice and reconciliation math.
+                AND o.status IN ('wc-processing', 'wc-completed', 'wc-paid',
+                                 'processing', 'completed', 'paid')
                 AND o.date_created_gmt >= %s
                 AND o.date_created_gmt < %s
                 AND CAST(product_meta.meta_value AS UNSIGNED) = %d
@@ -350,8 +362,10 @@ class MealsDB_WC_Order_Query {
             SELECT COUNT(*) FROM {$orders_table}
             WHERE customer_id = %d
                 AND type = 'shop_order'
-                AND status IN ('wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid',
-                               'pending', 'processing', 'on-hold', 'completed', 'paid')
+                -- Match the paid-status set used elsewhere; pending /
+                -- on-hold are not paid orders for billing purposes.
+                AND status IN ('wc-processing', 'wc-completed', 'wc-paid',
+                               'processing', 'completed', 'paid')
                 AND date_created_gmt >= %s
                 AND date_created_gmt < %s
         ";

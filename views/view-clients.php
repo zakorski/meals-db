@@ -1,6 +1,8 @@
 <?php
 defined('ABSPATH') || exit;
 
+MealsDB_Permissions::enforce();
+
 $selected_type = isset($_GET['client_type']) ? $_GET['client_type'] : '';
 $search_term = isset($_GET['search']) ? $_GET['search'] : '';
 
@@ -18,7 +20,18 @@ if (function_exists('sanitize_text_field')) {
 }
 
 $client_types = MealsDB_Clients::get_client_types();
-$clients = MealsDB_Clients::get_clients($selected_type, $search_term);
+
+$per_page    = 100;
+$paged       = max(1, (int) ($_GET['paged'] ?? 1));
+$offset      = ($paged - 1) * $per_page;
+$total       = MealsDB_Clients::count_clients($selected_type, $search_term);
+$total_pages = $total > 0 ? (int) ceil($total / $per_page) : 1;
+if ($paged > $total_pages) {
+    $paged  = $total_pages;
+    $offset = ($paged - 1) * $per_page;
+}
+
+$clients = MealsDB_Clients::get_clients($selected_type, $search_term, false, $per_page, $offset);
 
 $base_url = admin_url('admin.php?page=mealsdb&tab=clients');
 $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
@@ -136,6 +149,36 @@ $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
             <?php endif; ?>
         </tbody>
     </table>
+
+    <?php if ($total_pages > 1) :
+        $pagination_args = [
+            'page' => 'mealsdb',
+            'tab'  => 'clients',
+        ];
+        if ($selected_type !== '') {
+            $pagination_args['client_type'] = $selected_type;
+        }
+        if ($search_term !== '') {
+            $pagination_args['search'] = $search_term;
+        }
+        $pagination_base = admin_url('admin.php');
+        $paginate_links = paginate_links([
+            'base'      => add_query_arg(array_merge($pagination_args, ['paged' => '%#%']), $pagination_base),
+            'format'    => '',
+            'current'   => $paged,
+            'total'     => $total_pages,
+            'prev_text' => __('&laquo; Prev', 'meals-db'),
+            'next_text' => __('Next &raquo;', 'meals-db'),
+        ]);
+    ?>
+        <div class="tablenav"><div class="tablenav-pages">
+            <span class="displaying-num">
+                <?php echo esc_html(sprintf(_n('%d client', '%d clients', $total, 'meals-db'), number_format_i18n($total))); ?>
+            </span>
+            <?php echo $paginate_links; // paginate_links output is HTML; WP escapes internally. ?>
+        </div></div>
+    <?php endif; ?>
+
     <div id="mealsdb-delete-client-modal" class="mealsdb-modal" role="dialog" aria-modal="true" aria-hidden="true">
         <div class="mealsdb-modal__backdrop" data-close="true"></div>
         <div class="mealsdb-modal__dialog" role="document">

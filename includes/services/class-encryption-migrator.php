@@ -40,16 +40,32 @@ class MealsDB_Encryption_Migrator {
         foreach ($columns as $col) {
             $report[$col] = ['empty' => 0, 'new' => 0, 'legacy' => 0, 'plaintext' => 0];
 
-            // Column names come from a hardcoded constant — safe to interpolate.
-            $sql = sprintf('SELECT `%s` AS v FROM `%s`', $col, $table);
-            $rows = $wpdb->get_col($sql);
-            if (!is_array($rows)) {
-                continue;
-            }
+            // Walk the table in 1000-row windows so a clients table with
+            // tens of thousands of rows doesn't have to be materialised
+            // into PHP memory all at once. Column names come from a
+            // hardcoded constant — safe to interpolate.
+            $batch_size = 1000;
+            $offset     = 0;
+            while (true) {
+                $sql = $wpdb->prepare(
+                    sprintf('SELECT `%s` AS v FROM `%s` ORDER BY client_id ASC LIMIT %%d OFFSET %%d', $col, $table),
+                    $batch_size,
+                    $offset
+                );
+                $rows = $wpdb->get_col($sql);
+                if (!is_array($rows) || empty($rows)) {
+                    break;
+                }
 
-            foreach ($rows as $raw) {
-                $kind = MealsDB_Encryption::classify_payload((string) $raw);
-                $report[$col][$kind]++;
+                foreach ($rows as $raw) {
+                    $kind = MealsDB_Encryption::classify_payload((string) $raw);
+                    $report[$col][$kind]++;
+                }
+
+                if (count($rows) < $batch_size) {
+                    break;
+                }
+                $offset += $batch_size;
             }
         }
 
@@ -82,9 +98,13 @@ class MealsDB_Encryption_Migrator {
         ];
 
         foreach ($columns as $col) {
+            // ORDER BY client_id ASC: without it, repeated calls of
+            // reencrypt_legacy() can return the same rows over and over
+            // until they're all converted, wasting work and obscuring
+            // the "no more legacy" termination condition.
             $sql = $wpdb->prepare(
                 sprintf(
-                    "SELECT client_id, `%s` AS v FROM `%s` WHERE `%s` IS NOT NULL AND `%s` <> '' LIMIT %%d",
+                    "SELECT client_id, `%s` AS v FROM `%s` WHERE `%s` IS NOT NULL AND `%s` <> '' ORDER BY client_id ASC LIMIT %%d",
                     $col,
                     $table,
                     $col,

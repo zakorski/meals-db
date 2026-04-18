@@ -5,10 +5,11 @@
         sourceMode: 'db',  // 'db', 'upload', or 'filepath'
         filePath: '',
         sourcePrefix: '',
-        dbHost: '',
-        dbName: '',
-        dbUser: '',
-        dbPass: '',
+        // Opaque token returned by the server's test_db endpoint. The
+        // actual host/name/user/password are held in a per-user transient
+        // server-side and resolved from this token, so the password never
+        // lives in JS memory or gets re-transmitted over AJAX.
+        credsToken: '',
         dryRun: true,
         phase: -1,
         phaseOffset: 0,
@@ -128,10 +129,12 @@
             db_pass: pass,
         }, function (data) {
             state.sourcePrefix = data.prefix;
-            state.dbHost = host || 'localhost';
-            state.dbName = name;
-            state.dbUser = user;
-            state.dbPass = pass;
+            state.credsToken   = data.creds_token || '';
+
+            // Clear the password field so the value isn't sitting in the
+            // DOM after a successful test. The server already has it.
+            $('#mig-db-pass').val('');
+            pass = '';
 
             $('#mig-prefix-value').text(data.prefix);
             $('#mig-source-info').text('(' + data.tables + ' tables in ' + data.db_name + ')');
@@ -280,11 +283,15 @@
 
     // Phase 0: database mode
     function runLoadFromDb() {
+        if (!state.credsToken) {
+            setPhaseIcon(0, 'error');
+            setPhaseStatus(0, 'Connection token expired. Re-run "Test Connection".');
+            state.running = false;
+            enableSetup();
+            return;
+        }
         ajax('load_from_db', {
-            db_host:       state.dbHost,
-            db_name:       state.dbName,
-            db_user:       state.dbUser,
-            db_pass:       state.dbPass,
+            creds_token:   state.credsToken,
             source_prefix: state.sourcePrefix,
             table_index:   state.tableIndex,
             dry_run:       state.dryRun ? 1 : 0,

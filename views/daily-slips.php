@@ -4,8 +4,8 @@
  */
 defined('ABSPATH') || exit;
 
-?>
-<?php
+MealsDB_Permissions::enforce();
+
 $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
 ?>
 <div id="mealsdb-daily-slips" class="mealsdb-daily-slips">
@@ -134,6 +134,10 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
         return div.innerHTML;
     }
 
+    function intText(v) {
+        return String(parseInt(v, 10) || 0);
+    }
+
     function renderPackingSlip(data) {
         var entries = data.entries || [];
         var noZone  = data.no_zone || [];
@@ -148,7 +152,7 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             html += '<table><thead><tr><th>Zone</th><th>Orders</th><th>Mains</th><th>Sides</th><th>Soup</th><th>Muffins</th><th>Cereal</th><th>Dessert</th></tr></thead><tbody>';
             $.each(zoneSummaries, function(i, z) {
                 var sd = z.side_breakdown || {};
-                html += '<tr><td>' + esc(z.zone) + '</td><td>' + z.total_orders + '</td><td>' + z.total_mains + '</td><td>' + z.total_sides + '</td>';
+                html += '<tr><td>' + esc(z.zone) + '</td><td>' + intText(z.total_orders) + '</td><td>' + intText(z.total_mains) + '</td><td>' + intText(z.total_sides) + '</td>';
                 html += '<td>' + (sd.soup || 0) + '</td><td>' + (sd.muffins || 0) + '</td><td>' + (sd.cereal || 0) + '</td><td>' + (sd.dessert || 0) + '</td></tr>';
             });
             html += '</tbody></table>';
@@ -160,10 +164,10 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
         $.each(entries, function(i, entry) {
             var items = [];
             $.each(entry.items, function(j, item) {
-                items.push(item.quantity + 'x ' + esc(item.name) + ' (' + esc(item.product_type) + ')');
+                items.push(intText(item.quantity) + 'x ' + esc(item.name) + ' (' + esc(item.product_type) + ')');
             });
             html += '<tr><td>' + esc(entry.initials) + '</td><td>' + esc(entry.zone) + '</td><td>' + esc(entry.area_name) + '</td>';
-            html += '<td>' + entry.mains_count + '</td><td>' + entry.sides_count + '</td>';
+            html += '<td>' + intText(entry.mains_count) + '</td><td>' + intText(entry.sides_count) + '</td>';
             html += '<td>' + items.join('<br>') + '</td></tr>';
         });
         html += '</tbody></table>';
@@ -175,9 +179,9 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             $.each(noZone, function(i, entry) {
                 var items = [];
                 $.each(entry.items, function(j, item) {
-                    items.push(item.quantity + 'x ' + esc(item.name));
+                    items.push(intText(item.quantity) + 'x ' + esc(item.name));
                 });
-                html += '<tr><td>' + esc(entry.initials) + '</td><td>' + entry.mains_count + '</td><td>' + entry.sides_count + '</td><td>' + items.join('<br>') + '</td></tr>';
+                html += '<tr><td>' + esc(entry.initials) + '</td><td>' + intText(entry.mains_count) + '</td><td>' + intText(entry.sides_count) + '</td><td>' + items.join('<br>') + '</td></tr>';
             });
             html += '</tbody></table>';
         }
@@ -207,7 +211,7 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             html += '<h3>Delivery Schedule</h3>';
             html += '<table><thead><tr><th>Zone</th><th>Area</th><th>Orders</th><th>Total Items</th></tr></thead><tbody>';
             $.each(cover, function(i, c) {
-                html += '<tr><td>' + esc(c.zone) + '</td><td>' + esc(c.area) + '</td><td>' + c.order_count + '</td><td>' + c.total_items + '</td></tr>';
+                html += '<tr><td>' + esc(c.zone) + '</td><td>' + esc(c.area) + '</td><td>' + intText(c.order_count) + '</td><td>' + intText(c.total_items) + '</td></tr>';
             });
             html += '</tbody></table>';
         }

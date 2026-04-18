@@ -8,6 +8,8 @@
  */
 defined('ABSPATH') || exit;
 
+MealsDB_Permissions::enforce();
+
 ?>
 <div id="mealsdb-order-errors">
 
@@ -78,6 +80,24 @@ defined('ABSPATH') || exit;
         URL.revokeObjectURL(url);
     }
 
+    function csvCell(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        var str = String(value);
+        if (str.length && '=+-@\t\r'.indexOf(str.charAt(0)) !== -1) {
+            str = "'" + str;
+        }
+        if (/[",\r\n]/.test(str)) {
+            str = '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+    }
+
+    function csvRow(cells) {
+        return cells.map(csvCell).join(',') + '\n';
+    }
+
     function buildSummary(summary) {
         var html = '<div style="margin-bottom:16px; padding:12px; background:#f9f9f9; border:1px solid #ddd;">';
         html += '<strong>Orders checked:</strong> ' + summary.total_orders_checked;
@@ -108,7 +128,7 @@ defined('ABSPATH') || exit;
         var html = buildSummary(summary);
 
         // Build CSV.
-        csvData = 'Order ID,Order Date,Customer Name,WP User ID,Error Type,Error Detail\n';
+        csvData = csvRow(['Order ID', 'Order Date', 'Customer Name', 'WP User ID', 'Error Type', 'Error Detail']);
 
         html += '<table class="wp-list-table widefat striped"><thead><tr>';
         html += '<th>Order ID</th><th>Date</th><th>Customer</th><th>Error Type</th><th>Error Detail</th>';
@@ -117,16 +137,16 @@ defined('ABSPATH') || exit;
         $.each(errors, function(i, e) {
             var bg = errorColors[e.error_type] || '';
             var style = bg ? ' style="background:' + bg + ';"' : '';
+            var orderId = parseInt(e.order_id, 10) || 0;
             html += '<tr' + style + '>';
-            html += '<td><a href="' + editUrl + e.order_id + '" target="_blank">#' + e.order_id + '</a></td>';
+            html += '<td><a href="' + editUrl + orderId + '" target="_blank">#' + orderId + '</a></td>';
             html += '<td>' + esc(e.order_date) + '</td>';
             html += '<td>' + esc(e.customer_name) + '</td>';
-            html += '<td>' + esc(e.error_type.replace(/_/g, ' ')) + '</td>';
+            html += '<td>' + esc(String(e.error_type || '').replace(/_/g, ' ')) + '</td>';
             html += '<td>' + esc(e.error_detail) + '</td>';
             html += '</tr>';
 
-            csvData += e.order_id + ',' + e.order_date + ',"' + (e.customer_name || '').replace(/"/g, '""') + '",'
-                     + e.wp_user_id + ',' + e.error_type + ',"' + (e.error_detail || '').replace(/"/g, '""') + '"\n';
+            csvData += csvRow([e.order_id, e.order_date, e.customer_name, e.wp_user_id, e.error_type, e.error_detail]);
         });
 
         html += '</tbody></table>';
