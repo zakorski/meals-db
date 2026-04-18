@@ -286,15 +286,20 @@ class MealsDB_Clients_Repository {
      * @param string|null $client_type   Optional client type filter.
      * @param string|null $search        Optional search string that matches first or last name.
      * @param bool        $show_inactive Whether inactive clients should be included in the results.
+     * @param int         $limit         Max rows per page. Hard-capped to 1000.
+     * @param int         $offset        Row offset. Clamped to 0.
      * @return array<int, array<string, string|null>>
      */
-    public function search_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): array {
+    public function search_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
         global $wpdb;
 
         if (!$this->ensure_table_name()) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when searching clients.');
             return [];
         }
+
+        $limit  = max(1, min(1000, $limit));
+        $offset = max(0, $offset);
 
         try {
             $columns = ['client_id', 'client_id AS id', 'first_name', 'last_name', 'client_type', 'assigned_worker_name', 'assigned_worker_email', 'client_phone_1 AS phone_primary', 'client_email'];
@@ -329,11 +334,11 @@ class MealsDB_Clients_Repository {
                 $sql .= ' WHERE ' . implode(' AND ', $conditions);
             }
 
-            $sql .= ' ORDER BY last_name ASC, first_name ASC';
+            $sql .= ' ORDER BY last_name ASC, first_name ASC LIMIT %d OFFSET %d';
+            $prepare_args[] = $limit;
+            $prepare_args[] = $offset;
 
-            if (!empty($prepare_args)) {
-                $sql = $wpdb->prepare($sql, $prepare_args);
-            }
+            $sql = $wpdb->prepare($sql, $prepare_args);
 
             if ($sql === false) {
                 error_log('[MealsDB Clients Repository] Failed to prepare client search query.');
@@ -346,6 +351,53 @@ class MealsDB_Clients_Repository {
         } catch (Throwable $e) {
             error_log('[MealsDB Clients Repository] Exception while searching clients: ' . $e->getMessage());
             return [];
+        }
+    }
+
+    /**
+     * Count clients matching the same filters as search_clients() so the
+     * view can render pagination totals without having to also materialise
+     * every row.
+     */
+    public function count_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): int {
+        global $wpdb;
+
+        if (!$this->ensure_table_name()) {
+            return 0;
+        }
+
+        try {
+            $sql          = sprintf('SELECT COUNT(*) FROM `%s`', $this->escape_table_name());
+            $conditions   = [];
+            $prepare_args = [];
+            $has_active   = $this->table_has_column('active');
+
+            if (!$show_inactive && $has_active) {
+                $conditions[] = 'active = 1';
+            }
+            if ($client_type !== null && $client_type !== '') {
+                $conditions[]   = 'UPPER(client_type) = %s';
+                $prepare_args[] = strtoupper($client_type);
+            }
+            if ($search !== null && $search !== '') {
+                $conditions[] = '(LOWER(first_name) LIKE %s OR LOWER(last_name) LIKE %s OR LOWER(CONCAT(first_name, " ", last_name)) LIKE %s)';
+                $like = '%' . $wpdb->esc_like(strtolower($search)) . '%';
+                $prepare_args[] = $like;
+                $prepare_args[] = $like;
+                $prepare_args[] = $like;
+            }
+            if (!empty($conditions)) {
+                $sql .= ' WHERE ' . implode(' AND ', $conditions);
+            }
+
+            if (!empty($prepare_args)) {
+                $sql = $wpdb->prepare($sql, $prepare_args);
+            }
+
+            return (int) $wpdb->get_var($sql);
+        } catch (Throwable $e) {
+            error_log('[MealsDB Clients Repository] Exception while counting clients: ' . $e->getMessage());
+            return 0;
         }
     }
 

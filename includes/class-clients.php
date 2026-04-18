@@ -35,7 +35,7 @@ class MealsDB_Clients {
      * @param bool        $show_inactive Whether inactive clients should be included in the results.
      * @return array<int, array<string, string|null>>
      */
-    public static function get_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): array {
+    public static function get_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
         global $wpdb;
         if (!$wpdb) {
             return [];
@@ -43,7 +43,19 @@ class MealsDB_Clients {
 
         $repository = new MealsDB_Clients_Repository();
 
-        return $repository->search_clients($client_type, $search, $show_inactive);
+        return $repository->search_clients($client_type, $search, $show_inactive, $limit, $offset);
+    }
+
+    /**
+     * Count clients matching the given filters (for pagination UIs).
+     */
+    public static function count_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): int {
+        global $wpdb;
+        if (!$wpdb) {
+            return 0;
+        }
+        $repository = new MealsDB_Clients_Repository();
+        return $repository->count_clients($client_type, $search, $show_inactive);
     }
 
     /**
