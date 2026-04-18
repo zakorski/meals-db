@@ -127,6 +127,40 @@ class MealsDB_Ajax_Invoice {
     }
 
     /**
+     * Strip anything that could break an HTTP header or the
+     * Content-Disposition `filename` parameter out of a full filename
+     * (including the extension). Defence-in-depth behind
+     * safe_filename_token(): even if a token ever slips through unsafe
+     * (future refactor, new caller) we still can't emit CR/LF that
+     * would split the response and inject headers, or an embedded
+     * double-quote that would close the filename parameter and let an
+     * attacker tack on a second one.
+     */
+    private static function safe_attachment_filename(string $filename): string {
+        // Drop control chars (inc. \r \n \t and NUL), stray backslashes,
+        // and double-quotes — the three classes that break an
+        // Content-Disposition value.
+        $clean = preg_replace('/[\x00-\x1F\x7F"\\\\]+/', '', $filename) ?? '';
+        $clean = ltrim($clean, '.'); // don't let the filename start with a dot.
+        return $clean === '' ? 'download' : $clean;
+    }
+
+    /**
+     * Emit a complete Content-Disposition: attachment header for the
+     * given filename. Includes both the ASCII `filename=""` for old
+     * clients and an RFC 5987 `filename*=UTF-8''...` so non-ASCII
+     * client names survive browsers that only honour the starred form.
+     */
+    private static function emit_attachment_header(string $filename): void {
+        $safe = self::safe_attachment_filename($filename);
+        header(sprintf(
+            'Content-Disposition: attachment; filename="%s"; filename*=UTF-8\'\'%s',
+            $safe,
+            rawurlencode($safe)
+        ));
+    }
+
+    /**
      * Generate and download SDNB legacy invoice
      */
     private static function download_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month = 4) {
@@ -147,7 +181,7 @@ class MealsDB_Ajax_Invoice {
 
         // Set headers and output
         header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        self::emit_attachment_header($filename);
         header('Content-Length: ' . strlen($csv_content));
         header('Cache-Control: no-cache, must-revalidate');
         header('Pragma: no-cache');
@@ -176,7 +210,7 @@ class MealsDB_Ajax_Invoice {
 
         // Set headers and output
         header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        self::emit_attachment_header($filename);
         header('Content-Length: ' . strlen($csv_content));
         header('Cache-Control: no-cache, must-revalidate');
         header('Pragma: no-cache');
@@ -205,7 +239,7 @@ class MealsDB_Ajax_Invoice {
 
         // Set headers and output
         header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        self::emit_attachment_header($filename);
         header('Content-Length: ' . strlen($csv_content));
         header('Cache-Control: no-cache, must-revalidate');
         header('Pragma: no-cache');
@@ -241,7 +275,7 @@ class MealsDB_Ajax_Invoice {
 
         // Set headers and output
         header('Content-Type: application/pdf');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        self::emit_attachment_header($filename);
         header('Content-Length: ' . filesize($resolved));
         header('Cache-Control: no-cache, must-revalidate');
         header('Pragma: no-cache');

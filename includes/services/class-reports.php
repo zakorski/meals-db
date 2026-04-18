@@ -882,59 +882,136 @@ class MealsDB_Reports {
         $rows = [];
         $grand = self::empty_private_report_totals();
 
+        // Build the set of wp_user_ids in one pass, and look up each client
+        // row by user_id for the aggregation phase.
+        $clients_by_user = [];
+        $wp_user_ids     = [];
         foreach ($clients as $client) {
-            $wp_user_id = (int) $client['wp_user_id'];
+            $uid = (int) $client['wp_user_id'];
+            if ($uid > 0) {
+                $clients_by_user[$uid] = $client;
+                $wp_user_ids[]         = $uid;
+            }
+        }
 
-            // Get orders for this user in the date range.
-            $order_sql = $this->wpdb->prepare(
-                "SELECT id FROM {$orders_table}
-                 WHERE customer_id = %d
-                   AND date_created_gmt >= %s AND date_created_gmt <= %s
-                   AND status IN ('wc-processing', 'wc-completed', 'wc-paid')
-                   AND type = 'shop_order'",
-                $wp_user_id, $start_datetime, $end_datetime
-            );
-            $order_ids = $this->wpdb->get_col($order_sql);
+        if (empty($wp_user_ids)) {
+            return ['rows' => [], 'grand_totals' => $grand];
+        }
 
-            if (empty($order_ids)) {
+        // One query for every qualifying order across every client — the
+        // previous implementation called wc_get_order() once per order
+        // inside a nested loop, which on a month of private-customer
+        // activity meant thousands of HPOS fetches. The batched path issues
+        // three queries regardless of client count.
+        $user_placeholders = implode(',', array_fill(0, count($wp_user_ids), '%d'));
+        $order_sql = $this->wpdb->prepare(
+            "SELECT id, customer_id, tax_amount
+             FROM {$orders_table}
+             WHERE customer_id IN ($user_placeholders)
+               AND date_created_gmt >= %s AND date_created_gmt <= %s
+               AND status IN ('wc-processing', 'wc-completed', 'wc-paid')
+               AND type = 'shop_order'",
+            ...array_merge($wp_user_ids, [$start_datetime, $end_datetime])
+        );
+        $order_rows = $this->wpdb->get_results($order_sql, ARRAY_A);
+
+        if (empty($order_rows)) {
+            return ['rows' => [], 'grand_totals' => $grand];
+        }
+
+        $orders_by_id   = [];
+        $order_ids      = [];
+        $orders_by_user = [];
+        foreach ($order_rows as $or) {
+            $oid = (int) $or['id'];
+            $uid = (int) $or['customer_id'];
+            $orders_by_id[$oid]    = $or;
+            $order_ids[]           = $oid;
+            $orders_by_user[$uid][] = $oid;
+        }
+
+        // One query for every line_item across every order, with the three
+        // meta keys we care about folded in via correlated joins. This
+        // replaces WC_Order::get_items() hydrations (each of which hits
+        // order_items + order_itemmeta separately).
+        $order_placeholders = implode(',', array_fill(0, count($order_ids), '%d'));
+        $items_sql = $this->wpdb->prepare(
+            "SELECT oi.order_id,
+                    pid.meta_value AS product_id,
+                    qty.meta_value AS quantity,
+                    ls.meta_value  AS line_subtotal
+             FROM {$items_table} oi
+             LEFT JOIN {$itemmeta_table} pid ON pid.order_item_id = oi.order_item_id AND pid.meta_key = '_product_id'
+             LEFT JOIN {$itemmeta_table} qty ON qty.order_item_id = oi.order_item_id AND qty.meta_key = '_qty'
+             LEFT JOIN {$itemmeta_table} ls  ON ls.order_item_id  = oi.order_item_id AND ls.meta_key  = '_line_subtotal'
+             WHERE oi.order_id IN ($order_placeholders)
+               AND oi.order_item_type = 'line_item'",
+            ...$order_ids
+        );
+        $item_rows = $this->wpdb->get_results($items_sql, ARRAY_A);
+
+        // Aggregate per-user totals from the two result sets. The original
+        // code summed WC_Order::get_subtotal() (= sum of _line_subtotal
+        // across line_item entries) and WC_Order::get_total_tax() (= the
+        // HPOS tax_amount column). Preserve those exact semantics.
+        $user_totals = [];
+        foreach ($wp_user_ids as $uid) {
+            $user_totals[$uid] = [
+                'mains' => 0, 'sides' => 0,
+                'before_tax' => 0.0, 'tax' => 0.0,
+            ];
+        }
+
+        // Tax: one entry per order, summed per customer.
+        foreach ($order_rows as $or) {
+            $uid = (int) $or['customer_id'];
+            if (isset($user_totals[$uid])) {
+                $user_totals[$uid]['tax'] += (float) $or['tax_amount'];
+            }
+        }
+
+        // Mains/sides + before-tax subtotal from the item rows. Fall back
+        // to product_cat taxonomy when meals_products doesn't know the
+        // product — has_term() is internally cached by WP per term/object
+        // after the first hit.
+        foreach ($item_rows as $ir) {
+            $oid = (int) $ir['order_id'];
+            if (!isset($orders_by_id[$oid])) {
+                continue;
+            }
+            $uid = (int) $orders_by_id[$oid]['customer_id'];
+            if (!isset($user_totals[$uid])) {
                 continue;
             }
 
-            $total_mains      = 0;
-            $total_sides      = 0;
-            $total_before_tax = 0.0;
-            $total_tax        = 0.0;
+            $product_id = (int) $ir['product_id'];
+            $qty        = (int) $ir['quantity'];
+            $user_totals[$uid]['before_tax'] += (float) $ir['line_subtotal'];
 
-            foreach ($order_ids as $order_id) {
-                $wc_order = wc_get_order((int) $order_id);
-                if (!$wc_order) {
-                    continue;
+            if (isset($product_type_map[$product_id])) {
+                if ($product_type_map[$product_id] === 'meal') {
+                    $user_totals[$uid]['mains'] += $qty;
+                } elseif ($product_type_map[$product_id] === 'side') {
+                    $user_totals[$uid]['sides'] += $qty;
                 }
-
-                $total_before_tax += (float) $wc_order->get_subtotal();
-                $total_tax        += (float) $wc_order->get_total_tax();
-
-                foreach ($wc_order->get_items() as $item) {
-                    $product_id = (int) $item->get_product_id();
-                    $qty        = (int) $item->get_quantity();
-
-                    // Determine type: meals_products first, WC category fallback.
-                    if (isset($product_type_map[$product_id])) {
-                        if ($product_type_map[$product_id] === 'meal') {
-                            $total_mains += $qty;
-                        } elseif ($product_type_map[$product_id] === 'side') {
-                            $total_sides += $qty;
-                        }
-                    } else {
-                        // WC category fallback using hardcoded IDs.
-                        if (function_exists('has_term') && has_term($mains_cat_ids, 'product_cat', $product_id)) {
-                            $total_mains += $qty;
-                        } elseif (function_exists('has_term') && has_term($sides_cat_ids, 'product_cat', $product_id)) {
-                            $total_sides += $qty;
-                        }
-                    }
+            } elseif (function_exists('has_term')) {
+                if (has_term($mains_cat_ids, 'product_cat', $product_id)) {
+                    $user_totals[$uid]['mains'] += $qty;
+                } elseif (has_term($sides_cat_ids, 'product_cat', $product_id)) {
+                    $user_totals[$uid]['sides'] += $qty;
                 }
             }
+        }
+
+        foreach ($wp_user_ids as $wp_user_id) {
+            if (empty($orders_by_user[$wp_user_id])) {
+                continue;
+            }
+            $client           = $clients_by_user[$wp_user_id];
+            $total_mains      = $user_totals[$wp_user_id]['mains'];
+            $total_sides      = $user_totals[$wp_user_id]['sides'];
+            $total_before_tax = $user_totals[$wp_user_id]['before_tax'];
+            $total_tax        = $user_totals[$wp_user_id]['tax'];
 
             // Skip clients with zero activity.
             if ($total_mains === 0 && $total_sides === 0 && $total_before_tax == 0) {

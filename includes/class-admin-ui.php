@@ -438,6 +438,113 @@ class MealsDB_Admin_UI {
             'window.mealsdbInitials = ' . wp_json_encode($initials_data) . ';',
             'before'
         );
+
+        // Per-tab report-page scripts. Each was previously an inline
+        // <script> block inside the matching view; extracting to real
+        // files means they can be cached, evaluated under a strict CSP,
+        // and share a single implementation of the CSV-quoting rules
+        // via assets/js/report-utils.js.
+        $this->enqueue_report_scripts($tab);
+    }
+
+    /**
+     * Enqueue the per-tab JS for report / settings pages.
+     *
+     * Keeps the dispatch out of the main enqueue_assets body so each
+     * branch stays a self-contained "register utils, enqueue page JS,
+     * attach config" unit.
+     */
+    private function enqueue_report_scripts(string $tab): void {
+        if (!in_array($tab, ['settings', 'fees', 'errors'], true)) {
+            return;
+        }
+
+        // Shared helpers — register once, enqueue on demand below.
+        $report_utils_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/report-utils.js';
+        $report_utils_version = file_exists($report_utils_path) ? filemtime($report_utils_path) : MEALS_DB_VERSION;
+        wp_register_script(
+            'mealsdb-report-utils',
+            MEALS_DB_PLUGIN_URL . 'assets/js/report-utils.js',
+            ['jquery'],
+            $report_utils_version,
+            true
+        );
+
+        if ($tab === 'settings') {
+            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/settings.js';
+            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
+            wp_enqueue_script(
+                'mealsdb-settings',
+                MEALS_DB_PLUGIN_URL . 'assets/js/settings.js',
+                ['jquery'],
+                $version,
+                true
+            );
+            // Two nonces: one for the settings AJAX surface, one for
+            // the general mealsdb AJAX surface (backfill, product sync).
+            $data = [
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'nonces'  => [
+                    'settings' => wp_create_nonce('mealsdb_settings_nonce'),
+                    'general'  => wp_create_nonce('mealsdb_nonce'),
+                ],
+            ];
+            wp_add_inline_script(
+                'mealsdb-settings',
+                'window.mealsdbSettings = ' . wp_json_encode($data) . ';',
+                'before'
+            );
+            return;
+        }
+
+        if ($tab === 'fees') {
+            wp_enqueue_script('mealsdb-report-utils');
+
+            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/fee-reconciliation.js';
+            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
+            wp_enqueue_script(
+                'mealsdb-fee-reconciliation',
+                MEALS_DB_PLUGIN_URL . 'assets/js/fee-reconciliation.js',
+                ['jquery', 'mealsdb-report-utils'],
+                $version,
+                true
+            );
+            $data = [
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'nonce'   => wp_create_nonce('mealsdb_nonce'),
+                'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&id='),
+            ];
+            wp_add_inline_script(
+                'mealsdb-fee-reconciliation',
+                'window.mealsdbFeeReconciliation = ' . wp_json_encode($data) . ';',
+                'before'
+            );
+            return;
+        }
+
+        if ($tab === 'errors') {
+            wp_enqueue_script('mealsdb-report-utils');
+
+            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/order-errors.js';
+            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
+            wp_enqueue_script(
+                'mealsdb-order-errors',
+                MEALS_DB_PLUGIN_URL . 'assets/js/order-errors.js',
+                ['jquery', 'mealsdb-report-utils'],
+                $version,
+                true
+            );
+            $data = [
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'nonce'   => wp_create_nonce('mealsdb_nonce'),
+                'editUrl' => admin_url('post.php?action=edit&post='),
+            ];
+            wp_add_inline_script(
+                'mealsdb-order-errors',
+                'window.mealsdbOrderErrors = ' . wp_json_encode($data) . ';',
+                'before'
+            );
+        }
     }
 
     /**

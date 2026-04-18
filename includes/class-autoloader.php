@@ -55,7 +55,11 @@ class MealsDB_Autoloader {
      * @param string[] $directories
      */
     private function __construct(string $base_dir, array $directories) {
-        $this->base_dir = rtrim($base_dir, '/\\') . DIRECTORY_SEPARATOR;
+        // Resolve base_dir through realpath() so downstream path-containment
+        // checks compare real inode locations, not a mix of relative
+        // prefixes and resolved candidate paths.
+        $resolved         = realpath($base_dir);
+        $this->base_dir   = rtrim($resolved !== false ? $resolved : $base_dir, '/\\') . DIRECTORY_SEPARATOR;
         $this->directories = array_map([
             $this,
             'normalise_directory',
@@ -68,7 +72,12 @@ class MealsDB_Autoloader {
      * @param string $class_name
      */
     private function autoload(string $class_name): void {
-        if (strpos($class_name, 'MealsDB_') !== 0) {
+        // PHP passes any string given to class_exists() / new into registered
+        // autoloaders, not just syntactically valid class names. Require a
+        // strict identifier shape after the MealsDB_ prefix so a probe like
+        // class_exists('MealsDB_../../etc/passwd') or a null-byte injection
+        // can never reach the filesystem layer below.
+        if (!preg_match('/^MealsDB_[A-Za-z0-9_]+$/', $class_name)) {
             return;
         }
 
@@ -80,12 +89,25 @@ class MealsDB_Autoloader {
         $candidate_files = $this->build_candidate_files($slug);
 
         foreach ($candidate_files as $file) {
-            if (is_readable($file)) {
-                require_once $file;
+            // Defence-in-depth: confirm the candidate resolves to a real
+            // file inside base_dir before require_once. The whitelist above
+            // already blocks path traversal at the slug level; this catches
+            // the case where a registered autoloader directory is itself
+            // configured via a filter (see apply_filters(
+            // 'mealsdb_autoloader_directories', ...)) to point outside the
+            // plugin tree.
+            $resolved = realpath($file);
+            if ($resolved === false || !is_file($resolved)) {
+                continue;
+            }
+            if (strpos($resolved, $this->base_dir) !== 0) {
+                continue;
+            }
 
-                if (class_exists($class_name, false) || interface_exists($class_name, false) || trait_exists($class_name, false)) {
-                    return;
-                }
+            require_once $resolved;
+
+            if (class_exists($class_name, false) || interface_exists($class_name, false) || trait_exists($class_name, false)) {
+                return;
             }
         }
     }
