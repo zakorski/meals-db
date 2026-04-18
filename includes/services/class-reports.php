@@ -39,6 +39,34 @@ class MealsDB_Reports {
     }
 
     /**
+     * Defence-in-depth capability gate for report data access.
+     *
+     * AJAX handlers already run their own capability check before
+     * instantiating this service. This guard ensures that any future
+     * caller (WP-CLI, REST, custom cron) that reaches a report method
+     * without the plugin's required capability receives an empty result
+     * instead of silently exfiltrating aggregate PII.
+     *
+     * Returns true when the plugin's permission layer is not loaded
+     * (e.g. during bootstrap or in test fixtures) so unit tests that
+     * exercise the reporting SQL without a full WP stack still pass.
+     */
+    private static function is_authorized_to_read_reports(): bool {
+        if (!class_exists('MealsDB_Permissions')) {
+            return true;
+        }
+
+        if (MealsDB_Permissions::can_access_plugin()) {
+            return true;
+        }
+
+        $user_id = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+        error_log(sprintf('[MealsDB Reports] Unauthorized report access attempt by user_id=%d', $user_id));
+
+        return false;
+    }
+
+    /**
      * Calculate resupply requirements for order items within the given date range.
      *
      * @param string|int $start_date
@@ -47,6 +75,10 @@ class MealsDB_Reports {
      * @return array<int, array<string, mixed>>
      */
     public function get_resupply_requirements($start_date, $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -105,6 +137,10 @@ class MealsDB_Reports {
      * @return array<int, array<string, mixed>>
      */
     public function get_meal_breakdown($start_date, $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -255,6 +291,10 @@ class MealsDB_Reports {
      * @return array<int, array<string, mixed>> Keyed by wc_product_id.
      */
     public function get_demand_history(int $trailing_weeks = 8): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -346,6 +386,10 @@ class MealsDB_Reports {
         int $order_horizon_weeks = 6,
         float $decay_factor = 0.85
     ): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -685,6 +729,10 @@ class MealsDB_Reports {
      * @return array ['rows' => [...], 'summary' => [...]]
      */
     public function contribution_reconciliation(string $start_date, string $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return ['rows' => [], 'summary' => self::empty_contribution_summary()];
+        }
+
         if (!$this->order_query instanceof MealsDB_WC_Order_Query) {
             return ['rows' => [], 'summary' => self::empty_contribution_summary()];
         }
@@ -750,6 +798,10 @@ class MealsDB_Reports {
      * @return array ['rows' => [...], 'summary' => [...]]
      */
     public function delivery_fee_reconciliation(string $start_date, string $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return ['rows' => [], 'summary' => self::empty_delivery_summary()];
+        }
+
         if (!$this->order_query instanceof MealsDB_WC_Order_Query) {
             return ['rows' => [], 'summary' => self::empty_delivery_summary()];
         }
@@ -823,6 +875,10 @@ class MealsDB_Reports {
      */
     public function private_customer_report(string $start_date, string $end_date): array {
         $empty = ['rows' => [], 'grand_totals' => self::empty_private_report_totals()];
+
+        if (!self::is_authorized_to_read_reports()) {
+            return $empty;
+        }
 
         if (!$this->wpdb instanceof wpdb) {
             return $empty;
@@ -1118,6 +1174,10 @@ class MealsDB_Reports {
             'orders_with_errors'   => 0,
             'error_counts'         => [],
         ];
+
+        if (!self::is_authorized_to_read_reports()) {
+            return ['errors' => [], 'summary' => $empty_summary];
+        }
 
         if (!$this->wpdb instanceof wpdb) {
             return ['errors' => [], 'summary' => $empty_summary];
