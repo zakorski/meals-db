@@ -78,7 +78,12 @@ class MealsDB_Ajax_Invoice {
                         wp_send_json_error(['message' => 'Zone is required for SDNB legacy invoices.']);
                         return;
                     }
-                    self::download_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month);
+                    $zone_canonical = strtoupper(trim($zone));
+                    if (!in_array($zone_canonical, self::allowed_sdnb_zones(), true)) {
+                        wp_send_json_error(['message' => 'Unknown SDNB zone.']);
+                        return;
+                    }
+                    self::download_sdnb_legacy($zone_canonical, $start_date, $end_date, $weeks_in_month);
                     break;
 
                 case 'sdnb_portal':
@@ -112,6 +117,36 @@ class MealsDB_Ajax_Invoice {
     private static function validate_date($date) {
         $d = DateTime::createFromFormat('Y-m-d', $date);
         return $d && $d->format('Y-m-d') === $date;
+    }
+
+    /**
+     * Allowed SDNB service-zone codes.
+     *
+     * Matches MealsDB_Invoice_Generator::$service_centers and the
+     * meals_clients.delivery_area_zone values the generator queries
+     * against. Exposed via a filter so a deployment with additional
+     * service centers can extend the list without patching this
+     * handler. Unknown zones are rejected outright rather than silently
+     * falling back to Moncton ('M').
+     *
+     * @return array<int, string>
+     */
+    private static function allowed_sdnb_zones(): array {
+        $defaults = ['M', 'S'];
+        if (!function_exists('apply_filters')) {
+            return $defaults;
+        }
+        $zones = apply_filters('mealsdb_allowed_sdnb_zones', $defaults);
+        if (!is_array($zones) || empty($zones)) {
+            return $defaults;
+        }
+        $clean = [];
+        foreach ($zones as $z) {
+            if (is_string($z) && $z !== '') {
+                $clean[] = strtoupper(trim($z));
+            }
+        }
+        return !empty($clean) ? array_values(array_unique($clean)) : $defaults;
     }
 
     /**
@@ -391,6 +426,17 @@ class MealsDB_Ajax_Invoice {
         if (!in_array($client_type, ['SDNB', 'Veteran'], true)) {
             wp_send_json_error(['message' => 'Invalid client type.']);
             return;
+        }
+
+        // SDNB overage orders require a service-zone code; VAC does not.
+        // Whitelist against the same set the legacy invoice accepts so
+        // a typo fails fast rather than silently processing zero clients.
+        if ($client_type === 'SDNB') {
+            $zone = strtoupper(trim($zone));
+            if ($zone === '' || !in_array($zone, self::allowed_sdnb_zones(), true)) {
+                wp_send_json_error(['message' => 'Unknown SDNB zone.']);
+                return;
+            }
         }
 
         if (!self::validate_date($start_date) || !self::validate_date($end_date)) {

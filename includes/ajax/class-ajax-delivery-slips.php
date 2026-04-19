@@ -242,14 +242,45 @@ class MealsDB_Ajax_Delivery_Slips {
     }
 
     /**
+     * Upper bound on the number of zone names a single request may
+     * reference. Real deployments ship 6 zones; anything beyond this
+     * is either a misconfiguration or a hostile caller trying to
+     * expand the IN (...) clause downstream.
+     */
+    private const MAX_ZONES_PER_REQUEST = 100;
+
+    /**
      * Extract and validate zone-mode parameters from the request.
      *
      * @return array{zones: string[], start_date: string, end_date: string}
      */
     private static function get_zone_params(): array {
-        $zones = isset($_REQUEST['zones']) ? array_map('sanitize_text_field', wp_unslash((array) $_REQUEST['zones'])) : [];
+        $zones_raw = isset($_REQUEST['zones']) ? wp_unslash((array) $_REQUEST['zones']) : [];
         $start = isset($_REQUEST['start_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['start_date'])) : '';
         $end   = isset($_REQUEST['end_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['end_date'])) : '';
+
+        // Cap the array before sanitisation so an attacker cannot force
+        // per-entry preg_replace / trim work on a million-element array.
+        if (count($zones_raw) > self::MAX_ZONES_PER_REQUEST) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Too many zones specified.', 'meals-db'),
+            ]);
+        }
+
+        $zones = array_map('sanitize_text_field', $zones_raw);
+
+        // Whitelist against the configured zone delivery schedule. Unknown
+        // zones are silently dropped — the downstream generator would
+        // already return an empty slip set for them, but rejecting early
+        // surfaces typos in the UI.
+        $schedule = get_option('mealsdb_zone_delivery_schedule', []);
+        if (is_array($schedule) && !empty($schedule)) {
+            $allowed_zones = array_keys($schedule);
+            $zones = array_values(array_filter($zones, static function ($z) use ($allowed_zones) {
+                return in_array($z, $allowed_zones, true);
+            }));
+        }
 
         if (empty($zones) || empty($start) || empty($end)) {
             wp_send_json([
