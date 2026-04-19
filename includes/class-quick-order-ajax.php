@@ -952,6 +952,13 @@ class MealsDB_Quick_Order_Ajax {
     public static function get_client_allocation(): void {
         self::verify_request();
 
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
         $wp_user_id = isset($_REQUEST['user_id']) ? intval($_REQUEST['user_id']) : 0;
         if ($wp_user_id <= 0) {
             wp_send_json(['success' => true, 'allocation' => null]);
@@ -1059,15 +1066,32 @@ class MealsDB_Quick_Order_Ajax {
     public static function get_client_allocation_history(): void {
         self::verify_request();
 
+        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
         $client_id = isset($_REQUEST['client_id']) ? intval($_REQUEST['client_id']) : 0;
         if ($client_id <= 0) {
             wp_send_json(['success' => false, 'message' => 'Invalid client ID.']);
         }
 
+        // Validate billing_month format (YYYY-MM). The downstream queries
+        // use prepared statements so there is no injection vector, but
+        // rejecting malformed input surfaces typos early rather than
+        // silently returning an empty result set.
+        $billing_month = isset($_REQUEST['billing_month'])
+            ? sanitize_text_field(wp_unslash((string) $_REQUEST['billing_month']))
+            : gmdate('Y-m');
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
+            wp_send_json(['success' => false, 'message' => 'Invalid billing month.']);
+        }
+
         $engine  = new MealsDB_Allocation_Engine();
         $history = $engine->get_client_history($client_id, 12);
 
-        $billing_month = isset($_REQUEST['billing_month']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['billing_month'])) : gmdate('Y-m');
         $details = $engine->get_client_month_details($client_id, $billing_month);
 
         wp_send_json([
