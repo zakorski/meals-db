@@ -296,10 +296,39 @@ class MealsDB_Sync_Mutate {
 
         $values[] = $client_id;
 
-        $result = $connection->query($connection->prepare($sql, ...$values));
+        // Wrap in an explicit transaction for symmetry with
+        // link_meals_client_to_wc_user and so a future caller that adds
+        // an accompanying write (audit log row, related-table update)
+        // gets atomicity for free. InnoDB runs a single UPDATE
+        // atomically even without BEGIN/COMMIT, but the explicit bracket
+        // also makes ROLLBACK available if the encryption or column-map
+        // bookkeeping below ever grows past a single statement.
+        $transaction_started = $connection->query('START TRANSACTION') !== false;
 
-        if ($result === false) {
-            error_log('[MealsDB Sync] Failed to execute Meals DB client update: ' . ($connection->last_error ?? 'unknown error'));
+        try {
+            $result = $connection->query($connection->prepare($sql, ...$values));
+
+            if ($result === false) {
+                if ($transaction_started) {
+                    $connection->query('ROLLBACK');
+                }
+                error_log('[MealsDB Sync] Failed to execute Meals DB client update: ' . ($connection->last_error ?? 'unknown error'));
+                return false;
+            }
+
+            if ($transaction_started) {
+                $commit = $connection->query('COMMIT');
+                if ($commit === false) {
+                    $connection->query('ROLLBACK');
+                    error_log('[MealsDB Sync] Failed to commit Meals DB client update: ' . ($connection->last_error ?? 'unknown error'));
+                    return false;
+                }
+            }
+        } catch (\Throwable $e) {
+            if ($transaction_started) {
+                $connection->query('ROLLBACK');
+            }
+            error_log('[MealsDB Sync] Meals DB client update threw: ' . $e->getMessage());
             return false;
         }
 
@@ -372,16 +401,43 @@ class MealsDB_Sync_Mutate {
             implode(', ', $placeholders)
         );
 
-        $result = $connection->query($connection->prepare($sql, ...$values));
+        // Match update_meals_client: wrap the INSERT in an explicit
+        // transaction so a concurrent failure (disk full, key conflict
+        // from a racing create for the same identity) rolls back
+        // cleanly and so a future caller extending this method with an
+        // audit-log insert gets atomicity for free.
+        $transaction_started = $connection->query('START TRANSACTION') !== false;
 
-        if ($result === false) {
-            error_log('[MealsDB Sync] Failed to execute Meals DB client insert: ' . ($connection->last_error ?? 'unknown error'));
+        try {
+            $result = $connection->query($connection->prepare($sql, ...$values));
+
+            if ($result === false) {
+                if ($transaction_started) {
+                    $connection->query('ROLLBACK');
+                }
+                error_log('[MealsDB Sync] Failed to execute Meals DB client insert: ' . ($connection->last_error ?? 'unknown error'));
+                return false;
+            }
+
+            $insert_id = (int) $connection->insert_id;
+
+            if ($transaction_started) {
+                $commit = $connection->query('COMMIT');
+                if ($commit === false) {
+                    $connection->query('ROLLBACK');
+                    error_log('[MealsDB Sync] Failed to commit Meals DB client insert: ' . ($connection->last_error ?? 'unknown error'));
+                    return false;
+                }
+            }
+
+            return $insert_id > 0 ? $insert_id : false;
+        } catch (\Throwable $e) {
+            if ($transaction_started) {
+                $connection->query('ROLLBACK');
+            }
+            error_log('[MealsDB Sync] Meals DB client insert threw: ' . $e->getMessage());
             return false;
         }
-
-        $insert_id = $connection->insert_id;
-
-        return $insert_id > 0 ? $insert_id : false;
     }
 
     /**
