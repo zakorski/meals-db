@@ -212,18 +212,24 @@ class MealsDB_Reports {
         }
 
         $headers = array_keys(reset($rows));
-        fputcsv($handle, $headers);
+        // Route every row through MealsDB_CSV::row() so cells that start
+        // with =, +, -, @, tab, or CR are prefixed with a single quote
+        // to neutralise formula injection (CWE-1236). fputcsv() handles
+        // RFC-4180 quoting but NOT formula neutralisation, so client
+        // names / product names sourced from user input were previously
+        // executable when the CSV was opened in Excel or Sheets.
+        fwrite($handle, MealsDB_CSV::row($headers) . "\n");
 
         foreach ($rows as $row) {
             $line = [];
             foreach ($headers as $header) {
-                $value = isset($row[$header]) ? $row[$header] : '';
+                $value = $row[$header] ?? '';
                 if (is_array($value)) {
                     $value = json_encode($value);
                 }
                 $line[] = $value;
             }
-            fputcsv($handle, $line);
+            fwrite($handle, MealsDB_CSV::row($line) . "\n");
         }
 
         rewind($handle);
@@ -679,16 +685,20 @@ class MealsDB_Reports {
             return '';
         }
 
-        fputcsv($handle, [
+        // MealsDB_CSV::row() neutralises formula injection in every cell
+        // — matters here because product_name is user-controlled and
+        // seasonal_note is a server-generated string that could be
+        // edited by a future caller.
+        fwrite($handle, MealsDB_CSV::row([
             'SKU', 'Product Name', 'Avg/Week', 'Seasonal Idx', 'Adj/Week',
             'Projected', 'Buffer', 'Qty Needed', 'Stock', 'Future',
             'Available', 'Units Needed', 'Case Size', 'Cases', 'Order Qty', 'Note',
-        ]);
+        ]) . "\n");
 
         $total_cases = 0;
 
         foreach ($po_rows as $row) {
-            fputcsv($handle, [
+            fwrite($handle, MealsDB_CSV::row([
                 $row['sku'],
                 $row['product_name'],
                 $row['weighted_avg_weekly'],
@@ -705,14 +715,15 @@ class MealsDB_Reports {
                 $row['cases_to_buy'],
                 $row['order_quantity'],
                 $row['seasonal_note'],
-            ]);
+            ]) . "\n");
             $total_cases += $row['cases_to_buy'];
         }
 
-        fputcsv($handle, []);
-        fputcsv($handle, [
+        // Blank separator row then grand-total row.
+        fwrite($handle, "\n");
+        fwrite($handle, MealsDB_CSV::row([
             'TOTAL', '', '', '', '', '', '', '', '', '', '', '', '', $total_cases, '', '',
-        ]);
+        ]) . "\n");
 
         rewind($handle);
         $csv = stream_get_contents($handle);
@@ -1122,14 +1133,18 @@ class MealsDB_Reports {
             return '';
         }
 
-        fputcsv($handle, [
+        // first_name / last_name are decrypted user-supplied strings —
+        // route through MealsDB_CSV::row() so a client whose first_name
+        // starts with '=' or '@' can't ship executable formula payloads
+        // in the private customer sales export.
+        fwrite($handle, MealsDB_CSV::row([
             'First Name', 'Last Name', 'Total Mains', 'Total Sides',
             'Total Purchased Before Tax', 'Total Tax Charged', 'Final Total',
-        ]);
+        ]) . "\n");
 
-        $rows = isset($data['rows']) ? $data['rows'] : [];
+        $rows = $data['rows'] ?? [];
         foreach ($rows as $row) {
-            fputcsv($handle, [
+            fwrite($handle, MealsDB_CSV::row([
                 $row['first_name'],
                 $row['last_name'],
                 $row['total_mains'],
@@ -1137,19 +1152,19 @@ class MealsDB_Reports {
                 number_format($row['total_before_tax'], 2, '.', ''),
                 number_format($row['total_tax'], 2, '.', ''),
                 number_format($row['final_total'], 2, '.', ''),
-            ]);
+            ]) . "\n");
         }
 
         // Grand Total row.
-        $grand = isset($data['grand_totals']) ? $data['grand_totals'] : self::empty_private_report_totals();
-        fputcsv($handle, [
+        $grand = $data['grand_totals'] ?? self::empty_private_report_totals();
+        fwrite($handle, MealsDB_CSV::row([
             'Grand Total', '',
             $grand['total_mains'],
             $grand['total_sides'],
             number_format($grand['total_before_tax'], 2, '.', ''),
             number_format($grand['total_tax'], 2, '.', ''),
             number_format($grand['final_total'], 2, '.', ''),
-        ]);
+        ]) . "\n");
 
         rewind($handle);
         $csv = stream_get_contents($handle);
