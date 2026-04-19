@@ -364,10 +364,24 @@ class MealsDB_Allocation_Engine {
 
         $delivery_alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
 
-        // Wrap the destructive delete + the new insert(s) in a single
-        // transaction so a concurrent deallocate (status-change hook,
-        // cron) can't race between the rows being cleared and the new
-        // rows being written and leave the DB in a half-written state.
+        // Lock the summary row(s) before touching delivery_allocations so
+        // concurrent allocate_order / deallocate_order calls for the same
+        // (client_id, billing_month) serialise cleanly. Without this lock
+        // two transactions can both DELETE+INSERT their own delivery rows
+        // and then both attempt a SUM over the table, each wanting shared
+        // locks on the other's uncommitted rows — the classic deadlock
+        // that forced the recalculate step out of the transaction in the
+        // original implementation. With FOR UPDATE on the summary row,
+        // the deadlock is eliminated and the recalculate can run inside
+        // the tx where it belongs.
+        //
+        // Months are locked in sorted order so two transactions spanning
+        // the same pair of months (e.g. order A touches Jan+Feb and
+        // order B touches Feb+Jan) can't acquire locks in reverse order
+        // and deadlock that way either.
+        $months_to_lock = ($month1 === $month2) ? [$month1] : [$month1, $month2];
+        sort($months_to_lock);
+
         $started = $this->wpdb->query('START TRANSACTION');
         $transaction_started = $started !== false;
 
@@ -375,10 +389,19 @@ class MealsDB_Allocation_Engine {
         $insert_failed   = false;
 
         try {
+            foreach ($months_to_lock as $lock_month) {
+                if (!$this->lock_allocation_month($client_id, $lock_month)) {
+                    $insert_failed = true;
+                    break;
+                }
+            }
+
             // Delete existing allocations for this order (for re-processing).
-            $deleted = $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
-            if ($deleted === false) {
-                $insert_failed = true;
+            if (!$insert_failed) {
+                $deleted = $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+                if ($deleted === false) {
+                    $insert_failed = true;
+                }
             }
 
             if (!$insert_failed && $month1 === $month2) {
@@ -460,6 +483,17 @@ class MealsDB_Allocation_Engine {
                 }
             }
 
+            // Recalculate inside the transaction. Safe because the
+            // summary-row lock above serialises us against other
+            // allocate/deallocate runs for the same (client_id, month),
+            // so the SUM can't race against uncommitted INSERT/DELETEs
+            // from a peer transaction.
+            if (!$insert_failed) {
+                foreach ($affected_months as $bm) {
+                    $this->recalculate_month_totals($client_id, $bm);
+                }
+            }
+
             if ($transaction_started) {
                 if ($insert_failed) {
                     $this->wpdb->query('ROLLBACK');
@@ -478,13 +512,57 @@ class MealsDB_Allocation_Engine {
             error_log('[MealsDB Allocation Engine] allocate_order rolled back for wc_order_id=' . $wc_order_id . ': ' . $this->wpdb->last_error);
             return;
         }
+    }
 
-        // Recalculate affected months (outside the transaction so the
-        // recompute reads committed state and doesn't deadlock against
-        // the INSERTs we just did).
-        foreach ($affected_months as $bm) {
-            $this->recalculate_month_totals($client_id, $bm);
+    /**
+     * Acquire an exclusive row lock on the summary row for a
+     * (client_id, billing_month) pair so concurrent allocate/deallocate
+     * calls for the same pair serialise. Creates a zeroed stub row if
+     * one does not already exist — recalculate_month_totals() will
+     * overwrite those zeros with the correct values before the
+     * transaction commits, so peer transactions never see the stub.
+     *
+     * MUST be called inside an open transaction. The returned lock is
+     * released on COMMIT / ROLLBACK.
+     */
+    private function lock_allocation_month(int $client_id, string $billing_month): bool {
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+
+        // INSERT IGNORE creates the lock target when missing and is a
+        // no-op when the unique (client_id, billing_month) index hits.
+        // All other columns in client_allocations have DEFAULT 0 or
+        // nullable, so supplying just the two key columns is sufficient.
+        $insert_result = $this->wpdb->query($this->wpdb->prepare(
+            "INSERT IGNORE INTO {$table} (client_id, billing_month) VALUES (%d, %s)",
+            $client_id,
+            $billing_month
+        ));
+        if ($insert_result === false) {
+            error_log(sprintf(
+                '[MealsDB Allocation Engine] lock_allocation_month failed to ensure row for client %d month %s: %s',
+                $client_id,
+                $billing_month,
+                $this->wpdb->last_error
+            ));
+            return false;
         }
+
+        $locked = $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT id FROM {$table} WHERE client_id = %d AND billing_month = %s FOR UPDATE",
+            $client_id,
+            $billing_month
+        ));
+        if ($locked === null) {
+            error_log(sprintf(
+                '[MealsDB Allocation Engine] lock_allocation_month SELECT FOR UPDATE returned null for client %d month %s: %s',
+                $client_id,
+                $billing_month,
+                $this->wpdb->last_error
+            ));
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -570,30 +648,88 @@ class MealsDB_Allocation_Engine {
      */
     public function deallocate_order(int $wc_order_id): void {
         $delivery_alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+        $alloc_table          = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
 
-        // Fetch affected client + billing_month pairs before deleting.
-        $affected = $this->wpdb->get_results($this->wpdb->prepare(
-            "SELECT DISTINCT client_id, billing_month FROM {$delivery_alloc_table} WHERE wc_order_id = %d",
-            $wc_order_id
-        ), ARRAY_A);
+        // Wrap in a transaction for symmetry with allocate_order. Before
+        // this change, deallocate_order did unprotected DELETE + UPDATE +
+        // recalculate, so a concurrent allocate_order for the same order
+        // could race our read of affected months against its insert of
+        // new delivery rows, or the post-delete recalculate could see
+        // partial state from an in-flight allocate for a different order
+        // in the same (client, month).
+        $started = $this->wpdb->query('START TRANSACTION');
+        $transaction_started = $started !== false;
 
-        // Delete all rows for this order.
-        $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+        $rolled_back = false;
 
-        // Check if this order carried a client contribution and clear it.
-        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-        $this->wpdb->query($this->wpdb->prepare(
-            "UPDATE {$alloc_table} SET contribution_applied = 0, contribution_order_id = NULL
-             WHERE contribution_order_id = %d",
-            $wc_order_id
-        ));
+        try {
+            // Fetch affected client + billing_month pairs before deleting.
+            // These rows are about to be DELETEd by us so no peer
+            // transaction can race us on them.
+            $affected = $this->wpdb->get_results($this->wpdb->prepare(
+                "SELECT DISTINCT client_id, billing_month FROM {$delivery_alloc_table} WHERE wc_order_id = %d",
+                $wc_order_id
+            ), ARRAY_A);
 
-        // Recalculate affected months.
-        if (is_array($affected)) {
-            foreach ($affected as $row) {
-                $this->recalculate_month_totals((int) $row['client_id'], $row['billing_month']);
+            // Lock each (client_id, billing_month) summary row in a
+            // deterministic order to avoid deadlocking with a peer that
+            // happens to touch the same pair in reverse sequence.
+            if (is_array($affected) && !empty($affected)) {
+                $lock_keys = [];
+                foreach ($affected as $row) {
+                    $lock_keys[] = [(int) $row['client_id'], (string) $row['billing_month']];
+                }
+                usort($lock_keys, static function ($a, $b) {
+                    return $a[0] === $b[0]
+                        ? strcmp($a[1], $b[1])
+                        : $a[0] <=> $b[0];
+                });
+
+                foreach ($lock_keys as [$lock_client_id, $lock_month]) {
+                    if (!$this->lock_allocation_month($lock_client_id, $lock_month)) {
+                        throw new RuntimeException(sprintf(
+                            'Failed to lock summary row for client %d month %s',
+                            $lock_client_id,
+                            $lock_month
+                        ));
+                    }
+                }
             }
+
+            // Delete all rows for this order.
+            $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+
+            // Clear any contribution marker this order carried.
+            $this->wpdb->query($this->wpdb->prepare(
+                "UPDATE {$alloc_table} SET contribution_applied = 0, contribution_order_id = NULL
+                 WHERE contribution_order_id = %d",
+                $wc_order_id
+            ));
+
+            // Recalculate affected months inside the tx; safe because the
+            // summary-row locks serialise us against peer writers.
+            if (is_array($affected)) {
+                foreach ($affected as $row) {
+                    $this->recalculate_month_totals((int) $row['client_id'], (string) $row['billing_month']);
+                }
+            }
+
+            if ($transaction_started) {
+                $this->wpdb->query('COMMIT');
+            }
+        } catch (\Throwable $e) {
+            if ($transaction_started) {
+                $this->wpdb->query('ROLLBACK');
+                $rolled_back = true;
+            }
+            error_log('[MealsDB Allocation Engine] deallocate_order rolled back for wc_order_id=' . $wc_order_id . ': ' . $e->getMessage());
         }
+
+        // Suppress the unused-variable notice on environments that
+        // enable E_ALL during tests; $rolled_back exists so future
+        // callers can observe the outcome if deallocate_order is ever
+        // promoted to a non-void return.
+        unset($rolled_back);
     }
 
     /**
