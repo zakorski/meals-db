@@ -30,7 +30,33 @@ class MealsDB_Money {
      * cast before calling.
      */
     public static function to_cents($dollars): int {
-        $value = is_numeric($dollars) ? (float) $dollars : 0.0;
+        if (!is_numeric($dollars)) {
+            // Non-numeric silently converts to 0 — previously this
+            // masked caller bugs where a string like "abc" leaked
+            // through. Log at debug level so developers see the trace
+            // without the production log filling up on typical zero
+            // fields.
+            error_log('[MealsDB Money] to_cents: non-numeric input coerced to 0: ' . var_export($dollars, true));
+            return 0;
+        }
+
+        // Fast-path for amounts that fit in a float without precision
+        // loss. Float can exactly represent integers up to 2^53 ≈
+        // 9e15 cents (~$9e13 dollars) — far above any realistic
+        // invoice. At $999,999.99 / 99_999_999 cents we're nowhere
+        // near the float-precision boundary.
+        $value = (float) $dollars;
+
+        // Extreme amounts: beyond 1e13 dollars the float multiplication
+        // loses precision in the last digit. Nothing in this plugin
+        // realistically reaches that, but if a caller ever does, fall
+        // back to bcmul so the integer conversion stays exact. Guard
+        // on function_exists because bcmath isn't always compiled in.
+        if (abs($value) > 1e13 && function_exists('bcmul')) {
+            $bc = bcmul((string) $dollars, '100', 0);
+            return (int) $bc;
+        }
+
         $cents = $value * 100;
         // round() on positive half values is half-up in PHP by default,
         // but be explicit so behaviour doesn't drift if callers pass
@@ -70,6 +96,24 @@ class MealsDB_Money {
      */
     public static function percent_of(int $cents, $multiplier): int {
         $mult  = is_numeric($multiplier) ? (float) $multiplier : 0.0;
+
+        // Overflow guard: cents * mult can exceed PHP_INT_MAX for
+        // absurd inputs. Realistic invoices never reach this —
+        // $INT_MAX / 100 / typical-mult is still billions of dollars
+        // — but a typo (10.0 instead of 0.10 on a giant amount) would
+        // otherwise produce a silently-wrong wrap-around result.
+        if ($mult !== 0.0 && $cents !== 0) {
+            $abs_mult = abs($mult);
+            if ($abs_mult > 0 && abs($cents) > PHP_INT_MAX / max($abs_mult, 1.0)) {
+                error_log(sprintf(
+                    '[MealsDB Money] percent_of: overflow risk, cents=%d mult=%s. Returning 0 instead of wrapping.',
+                    $cents,
+                    var_export($multiplier, true)
+                ));
+                return 0;
+            }
+        }
+
         $value = $cents * $mult;
         if ($value >= 0) {
             return (int) floor($value + 0.5);

@@ -220,7 +220,7 @@ class MealsDB_Sync_Mutate {
         $existing_value = $connection->get_var($connection->prepare($select_sql, $client_id));
 
         if ($existing_value === null && $connection->last_error !== '') {
-            error_log('[MealsDB Sync] Failed to execute Meals DB client lookup: ' . $connection->last_error);
+            error_log('[MealsDB Sync] Failed to execute Meals DB client lookup: ' . self::redact_sql_error($connection->last_error));
 
             return new WP_Error(
                 'mealsdb_sync_failed',
@@ -300,6 +300,27 @@ class MealsDB_Sync_Mutate {
      * did land, and operators would be tempted to retry — doubling
      * the reconciliation load.
      */
+    /**
+     * Redact row-level values from a MySQL error string before
+     * error_log. MySQL surfaces data values inside single quotes in
+     * classic errors ("Duplicate entry 'x@y.com' for key 'email'",
+     * "Data too long for column 'foo' at row 1"). The error class is
+     * diagnostically useful; the quoted value might be cleartext PII
+     * that shouldn't land in a shared error log. Replace every
+     * single-quoted run with a fixed placeholder.
+     *
+     * Ciphertext values from encrypted columns are safe to log but
+     * they're base64 — noisy and also get scrubbed by this regex.
+     * Net result: logs are cleaner AND never leak cleartext.
+     */
+    private static function redact_sql_error(string $error): string {
+        if ($error === '') {
+            return 'unknown error';
+        }
+        $redacted = preg_replace("/'[^']*'/", "'[redacted]'", $error);
+        return $redacted ?? $error;
+    }
+
     private static function record_partial_sync_failure(
         int $wp_user_id,
         int $client_id,
@@ -395,7 +416,7 @@ class MealsDB_Sync_Mutate {
                 if ($transaction_started) {
                     $connection->query('ROLLBACK');
                 }
-                error_log('[MealsDB Sync] Failed to execute Meals DB client update: ' . ($connection->last_error ?? 'unknown error'));
+                error_log('[MealsDB Sync] Failed to execute Meals DB client update: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
                 return false;
             }
 
@@ -403,7 +424,7 @@ class MealsDB_Sync_Mutate {
                 $commit = $connection->query('COMMIT');
                 if ($commit === false) {
                     $connection->query('ROLLBACK');
-                    error_log('[MealsDB Sync] Failed to commit Meals DB client update: ' . ($connection->last_error ?? 'unknown error'));
+                    error_log('[MealsDB Sync] Failed to commit Meals DB client update: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
                     return false;
                 }
             }
@@ -498,7 +519,7 @@ class MealsDB_Sync_Mutate {
                 if ($transaction_started) {
                     $connection->query('ROLLBACK');
                 }
-                error_log('[MealsDB Sync] Failed to execute Meals DB client insert: ' . ($connection->last_error ?? 'unknown error'));
+                error_log('[MealsDB Sync] Failed to execute Meals DB client insert: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
                 return false;
             }
 
@@ -508,7 +529,7 @@ class MealsDB_Sync_Mutate {
                 $commit = $connection->query('COMMIT');
                 if ($commit === false) {
                     $connection->query('ROLLBACK');
-                    error_log('[MealsDB Sync] Failed to commit Meals DB client insert: ' . ($connection->last_error ?? 'unknown error'));
+                    error_log('[MealsDB Sync] Failed to commit Meals DB client insert: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
                     return false;
                 }
             }

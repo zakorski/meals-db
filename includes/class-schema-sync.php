@@ -94,7 +94,22 @@ class MealsDB_Schema_Sync {
                 $needs_unique_index = self::definition_has_unique($definition);
 
                 if (!isset($existing_columns[$column])) {
-                    $alter_sql = sprintf('ALTER TABLE `%s` ADD COLUMN `%s` %s', $escaped_table, $column, $clean_definition);
+                    // Combine ADD COLUMN and its UNIQUE index (when the
+                    // canonical definition declares one) into a single
+                    // ALTER TABLE. Previously this was two statements,
+                    // which meant two metadata round-trips and two
+                    // separate DDL commits; InnoDB re-copies the table
+                    // for each. One combined ALTER is a single copy.
+                    $alter_parts = [sprintf('ADD COLUMN `%s` %s', $column, $clean_definition)];
+                    if ($needs_unique_index) {
+                        $index_name = sprintf('uniq_%s_%s', preg_replace('/[^a-z0-9_]/i', '_', $table_name), $column);
+                        $alter_parts[] = sprintf(
+                            'ADD UNIQUE KEY `%s` (`%s`)',
+                            str_replace('`', '``', $index_name),
+                            $column
+                        );
+                    }
+                    $alter_sql = sprintf('ALTER TABLE `%s` %s', $escaped_table, implode(', ', $alter_parts));
 
                     try {
                         $query_result = $wpdb->query($alter_sql);
@@ -103,21 +118,6 @@ class MealsDB_Schema_Sync {
                                 'table'  => $table_name,
                                 'column' => $column,
                             ];
-
-                            // sanitize_column_definition() strips inline UNIQUE
-                            // so the ALTER stays column-only. Recreate the
-                            // constraint as a proper index when the canonical
-                            // schema declares it.
-                            if ($needs_unique_index) {
-                                $index_name = sprintf('uniq_%s_%s', preg_replace('/[^a-z0-9_]/i', '_', $table_name), $column);
-                                $index_sql  = sprintf(
-                                    'ALTER TABLE `%s` ADD UNIQUE KEY `%s` (`%s`)',
-                                    $escaped_table,
-                                    str_replace('`', '``', $index_name),
-                                    $column
-                                );
-                                $wpdb->query($index_sql);
-                            }
                         } else {
                             $results['errors'][] = [
                                 'table'  => $table_name,

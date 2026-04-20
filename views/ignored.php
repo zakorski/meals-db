@@ -148,7 +148,7 @@ jQuery(document).ready(function($) {
 
         $.post(ajaxurl, {
             action: 'mealsdb_toggle_ignore',
-            nonce: '<?php echo wp_create_nonce("mealsdb_nonce"); ?>',
+            nonce: '<?php echo esc_js(wp_create_nonce("mealsdb_nonce")); ?>',
             field: field,
             source: source,
             target: target,

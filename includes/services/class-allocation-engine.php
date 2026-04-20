@@ -539,6 +539,18 @@ class MealsDB_Allocation_Engine {
             return [];
         }
 
+        // Proportional split with residual conservation.
+        //
+        // One side gets round(total * days_in_month_1 / total_days);
+        // the other side gets (total - that_rounded), NOT a second
+        // round() call. That guarantees the two month values always
+        // sum back to the original, so a month-straddling order never
+        // inflates or deflates the client's overall consumption by
+        // a rounding penny.
+        //
+        // This is the allocation equivalent of the M1/M2 money-cents
+        // pattern: accumulate in one direction, absorb the residual
+        // at the boundary.
         $m1_mains        = (int) round($mains * $days_in_month_1 / $total_coverage_days);
         $m2_mains        = $mains - $m1_mains;
         $m1_sides        = (int) round($sides * $days_in_month_1 / $total_coverage_days);

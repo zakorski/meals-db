@@ -27,6 +27,19 @@ class MealsDB_Schema_Rebuild {
             return new WP_Error('confirmation_required', 'Force rebuild aborted: confirmation text did not match.');
         }
 
+        // Rate-limit this catastrophically destructive op so a
+        // compromised admin cookie or a mis-scripted "retry" loop
+        // can't execute it repeatedly in quick succession. The
+        // rebuild itself is heavy enough that one-per-30-minutes
+        // imposes no burden on legitimate use.
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('schema_rebuild')) {
+            return new WP_Error(
+                'rate_limited',
+                'Force rebuild rate limit exceeded. Wait before retrying.'
+            );
+        }
+
         global $wpdb;
 
         if (!$wpdb) {

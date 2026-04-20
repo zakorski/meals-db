@@ -30,11 +30,30 @@ if (!defined('MEALS_DB_PLUGIN_URL')) {
 }
 
 if (!defined('MEALS_DB_VERSION')) {
-    if (!function_exists('get_plugin_data')) {
+    // get_plugin_data() lives in wp-admin/includes/plugin.php, which
+    // isn't loaded automatically from every entry point — WP-CLI and
+    // cron contexts hit this file before wp-admin is available. Guard
+    // the require with a defined-ABSPATH check AND fall back cleanly
+    // when the helper still can't be loaded, otherwise activation via
+    // WP-CLI (`wp plugin activate meals-db`) fatals on a missing
+    // function.
+    if (!function_exists('get_plugin_data') && defined('ABSPATH') && is_readable(ABSPATH . 'wp-admin/includes/plugin.php')) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
-    $mealsdb_plugin_data = get_plugin_data(__FILE__, false, false);
-    define('MEALS_DB_VERSION', $mealsdb_plugin_data['Version'] ?? '0.0.0');
+    if (function_exists('get_plugin_data')) {
+        $mealsdb_plugin_data = get_plugin_data(__FILE__, false, false);
+        define('MEALS_DB_VERSION', $mealsdb_plugin_data['Version'] ?? '0.0.0');
+    } else {
+        // Fallback: parse the plugin header ourselves rather than
+        // hard-coding "0.0.0", so downstream version comparisons in
+        // mealsdb_maybe_upgrade_schema still work correctly.
+        $mealsdb_header = @file_get_contents(__FILE__, false, null, 0, 8192);
+        if (is_string($mealsdb_header) && preg_match('/^[\s\*]*Version:\s*(\S+)/mi', $mealsdb_header, $m)) {
+            define('MEALS_DB_VERSION', $m[1]);
+        } else {
+            define('MEALS_DB_VERSION', '0.0.0');
+        }
+    }
 }
 
 // Old Autoloader - Deprecated.
@@ -337,6 +356,51 @@ add_action('admin_notices', function () {
         'Meals DB depends on WooCommerce for orders, products, and capability checks. Reactivate WooCommerce or deactivate Meals DB to restore normal behaviour — several admin pages will fatal on load until one or the other happens.',
         'meals-db'
     );
+    echo '</p></div>';
+});
+
+/**
+ * Previous-uninstall drop-failure notice.
+ *
+ * If uninstall.php couldn't DROP one or more of the plugin tables
+ * (permissions, foreign-key checks, table still in use), it writes
+ * the failed table names into a 30-day site transient. Surface that
+ * as an admin notice on the next activation so the operator knows
+ * orphaned tables are still around and can clean them up manually.
+ * Dismissable via the transient delete button in the notice.
+ */
+add_action('admin_notices', function () {
+    $failed = get_transient('mealsdb_uninstall_drop_failures');
+    if (!is_array($failed) || empty($failed)) {
+        return;
+    }
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    if (isset($_GET['mealsdb_ack_drop_failures']) && check_admin_referer('mealsdb_ack_drop_failures')) {
+        delete_transient('mealsdb_uninstall_drop_failures');
+        return;
+    }
+
+    echo '<div class="notice notice-warning"><p><strong>';
+    echo esc_html__('Meals Database: tables left behind from a previous uninstall.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html(sprintf(
+        _n(
+            'The uninstaller could not drop %d table last time this plugin was removed:',
+            'The uninstaller could not drop %d tables last time this plugin was removed:',
+            count($failed),
+            'meals-db'
+        ),
+        count($failed)
+    ));
+    echo '</p><ul style="list-style:disc;padding-left:24px;"><li>';
+    echo implode('</li><li>', array_map('esc_html', $failed));
+    echo '</li></ul><p>';
+    echo esc_html__('Drop them manually with phpMyAdmin or the mysql CLI once you\'ve confirmed the data is no longer needed.', 'meals-db');
+    $ack_url = wp_nonce_url(add_query_arg('mealsdb_ack_drop_failures', '1'), 'mealsdb_ack_drop_failures');
+    echo ' <a href="' . esc_url($ack_url) . '">' . esc_html__('Dismiss', 'meals-db') . '</a>';
     echo '</p></div>';
 });
 

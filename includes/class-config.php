@@ -52,11 +52,17 @@ class MealsDB_Config
     }
 
     /**
-     * External DB credentials are no longer needed.
-     * The plugin now uses the WordPress database via $wpdb.
+     * Report whether the plugin's data backend is usable.
+     *
+     * The plugin used to connect to a separate database; now it
+     * rides on WordPress's own $wpdb. Returning an unconditional
+     * true lost the last meaningful signal — a caller surveying
+     * "is the plugin healthy?" should at minimum verify $wpdb is
+     * instantiated before trusting subsequent repository calls.
      */
     public static function is_db_configured(): bool
     {
-        return true;
+        global $wpdb;
+        return $wpdb instanceof wpdb;
     }
 }

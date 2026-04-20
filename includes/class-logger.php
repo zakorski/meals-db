@@ -33,23 +33,35 @@ class MealsDB_Logger {
             return '';
         }
 
-        // Replace email-looking substrings with a fingerprint.
-        $message = preg_replace_callback(
+        // Replace email-looking substrings with a fingerprint. If
+        // preg_replace_callback returns null (regex error — shouldn't
+        // happen but the safer fallback is documented explicitly here),
+        // fall through to a conservative "[REDACTED]" rather than
+        // letting the original unscrubbed message reach the log.
+        $step = preg_replace_callback(
             '/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i',
             static function ($m) {
                 return '[email:' . substr(hash('sha256', strtolower($m[0])), 0, 8) . ']';
             },
             $message
-        ) ?? $message;
+        );
+        if ($step === null || preg_last_error() !== PREG_NO_ERROR) {
+            return '[REDACTED — log scrubber regex failed]';
+        }
+        $message = $step;
 
         // Replace base64-looking blobs >= 32 chars with a length-tagged stub.
-        $message = preg_replace_callback(
+        $step = preg_replace_callback(
             '#[A-Za-z0-9+/]{32,}={0,2}#',
             static function ($m) {
                 return '[blob:' . strlen($m[0]) . 'B]';
             },
             $message
-        ) ?? $message;
+        );
+        if ($step === null || preg_last_error() !== PREG_NO_ERROR) {
+            return '[REDACTED — log scrubber regex failed]';
+        }
+        $message = $step;
 
         if (strlen($message) > 2048) {
             $message = substr($message, 0, 2045) . '...';
@@ -168,6 +180,21 @@ class MealsDB_Logger {
      * @return array
      */
     public static function get_recent_logs(int $limit = 50): array {
+        // Audit rows include fingerprints of PII changes. Even with the
+        // redaction in log(), a reader who can correlate many
+        // [redacted:sha256=abcdef] fingerprints against known-value
+        // candidates can still rainbow-match them. Gate the read so
+        // only users who can reach the plugin's admin surface can
+        // retrieve the audit log — a low-privilege caller reaching
+        // this method directly (future REST endpoint, CLI consumer
+        // forgetting to gate) shouldn't trivially enumerate the
+        // whole audit trail.
+        if (function_exists('current_user_can')
+            && class_exists('MealsDB_Permissions')
+            && !MealsDB_Permissions::can_access_plugin()) {
+            return [];
+        }
+
         global $wpdb;
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG);

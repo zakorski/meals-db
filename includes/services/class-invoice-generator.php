@@ -641,10 +641,16 @@ class MealsDB_Invoice_Generator {
             $errors[] = 'Missing individual ID';
         }
 
-        // Duplicate check via deterministic index.
+        // Threshold check via deterministic individual_id hash.
+        // "Duplicate person" was the historical wording but it's
+        // misleading for legitimate multi-person households sharing
+        // an individual_id across more than the threshold — which is
+        // the designed-for behaviour, not an error. Reword so the
+        // admin reading the error list understands what actually
+        // tripped the check.
         $id_index = $client['individual_id_index'] ?? '';
         if ($id_index !== '' && isset($duplicate_counts[$id_index]) && $duplicate_counts[$id_index] > $duplicate_threshold) {
-            $errors[] = 'Duplicate person';
+            $errors[] = 'Shared individual_id exceeds household threshold';
         }
 
         return !empty($errors) ? implode(', ', $errors) : 'No';

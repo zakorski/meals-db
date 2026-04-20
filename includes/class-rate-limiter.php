@@ -21,6 +21,7 @@ class MealsDB_Rate_Limiter {
         'client_modify' => 50,           // Creating/updating clients
         'sync_operations' => 100,        // Sync operations
         'delivery_slips' => 100,         // Delivery slip generation
+        'schema_rebuild' => 2,           // Catastrophic: drops every plugin table
         'default' => 100,                // Default for unlisted actions
     ];
 
@@ -35,6 +36,7 @@ class MealsDB_Rate_Limiter {
         'quick_order_create' => true,
         'client_modify'      => true,
         'sync_operations'    => true,
+        'schema_rebuild'     => true,
     ];
 
     /**

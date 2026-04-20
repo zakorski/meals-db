@@ -138,7 +138,7 @@ jQuery(document).ready(function($) {
 
         $.post(ajaxurl, {
             action: 'mealsdb_delete_draft',
-            nonce: '<?php echo wp_create_nonce("mealsdb_nonce"); ?>',
+            nonce: '<?php echo esc_js(wp_create_nonce("mealsdb_nonce")); ?>',
             id: draftId
         }, function(response) {
             if (response.success) {
