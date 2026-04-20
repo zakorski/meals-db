@@ -359,3 +359,33 @@ tr.mealsdb-required-disabled {
     font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
     font-size: 12px;
 }
+
+/* -----------------------------
+   Report-row tints (N4)
+
+   Replace per-row inline `style="background:#xxx;"` injection from
+   the report renderers with named classes so a strict CSP can drop
+   'unsafe-inline' on style-src and so site-level CSS can override
+   the colour without patching JS. The class names mirror the
+   semantic role (error / warning / zone / info), not the literal
+   colour, so a future restyle changes one rule instead of every
+   call site.
+------------------------------ */
+.mealsdb-row-tint-error { background: #f8d7da; }
+.mealsdb-row-tint-warn  { background: #fff3cd; }
+.mealsdb-row-tint-zone  { background: #ffe0b2; }
+.mealsdb-row-tint-info  { background: #d6eaf8; }
+
+.mealsdb-error-summary {
+    margin-bottom: 16px;
+    padding: 12px;
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+}
+
+.mealsdb-error-summary-pill {
+    display: inline-block;
+    margin: 2px 8px 2px 0;
+    padding: 2px 8px;
+    border-radius: 3px;
+}

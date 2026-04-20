@@ -19,18 +19,22 @@
 
     var csvData = '';
 
-    var errorColors = {
-        missing_first_name: '#f8d7da',
-        missing_last_name:  '#f8d7da',
-        nickname_too_long:  '#fff3cd',
-        missing_zone:       '#ffe0b2',
-        invalid_zone:       '#ffe0b2',
-        missing_address:    '#ffe0b2',
-        no_client_record:   '#d6eaf8'
+    // Map error_type → semantic CSS class. Colours live in admin.css
+    // under the .mealsdb-row-tint-* rules; injecting them inline here
+    // would require 'unsafe-inline' in style-src and would bypass any
+    // site-level CSS override.
+    var errorClasses = {
+        missing_first_name: 'mealsdb-row-tint-error',
+        missing_last_name:  'mealsdb-row-tint-error',
+        nickname_too_long:  'mealsdb-row-tint-warn',
+        missing_zone:       'mealsdb-row-tint-zone',
+        invalid_zone:       'mealsdb-row-tint-zone',
+        missing_address:    'mealsdb-row-tint-zone',
+        no_client_record:   'mealsdb-row-tint-info'
     };
 
     function buildSummary(summary) {
-        var html = '<div style="margin-bottom:16px; padding:12px; background:#f9f9f9; border:1px solid #ddd;">';
+        var html = '<div class="mealsdb-error-summary">';
         html += '<strong>Orders checked:</strong> ' + (parseInt(summary.total_orders_checked, 10) || 0);
         html += ' &nbsp;|&nbsp; <strong>Orders with errors:</strong> ' + (parseInt(summary.orders_with_errors, 10) || 0);
 
@@ -39,8 +43,8 @@
         if (keys.length) {
             html += '<br><br>';
             $.each(keys, function (_i, k) {
-                var bg = errorColors[k] || '#eee';
-                html += '<span style="display:inline-block; margin:2px 8px 2px 0; padding:2px 8px; background:' + bg + '; border-radius:3px;">';
+                var cls = errorClasses[k] || 'mealsdb-row-tint-info';
+                html += '<span class="mealsdb-error-summary-pill ' + cls + '">';
                 html += Report.esc(k.replace(/_/g, ' ')) + ': ' + (parseInt(counts[k], 10) || 0);
                 html += '</span>';
             });
@@ -67,10 +71,10 @@
         html += '</tr></thead><tbody>';
 
         $.each(errors, function (_i, e) {
-            var bg      = errorColors[e.error_type] || '';
-            var style   = bg ? ' style="background:' + bg + ';"' : '';
+            var cls     = errorClasses[e.error_type] || '';
+            var attr    = cls ? ' class="' + cls + '"' : '';
             var orderId = parseInt(e.order_id, 10) || 0;
-            html += '<tr' + style + '>';
+            html += '<tr' + attr + '>';
             html += '<td><a href="' + editUrl + orderId + '" target="_blank">#' + orderId + '</a></td>';
             html += '<td>' + Report.esc(e.order_date) + '</td>';
             html += '<td>' + Report.esc(e.customer_name) + '</td>';

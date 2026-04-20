@@ -35,7 +35,9 @@
         for (var i = 0; i < rows.length; i++) {
             var r     = rows[i];
             var diff  = parseFloat(r.difference);
-            var style = Math.abs(diff) > 0.005 ? ' style="background:#fff3cd;"' : '';
+            // Tint colour lives in admin.css (.mealsdb-row-tint-warn)
+            // so a strict CSP can drop 'unsafe-inline' for style-src.
+            var style = Math.abs(diff) > 0.005 ? ' class="mealsdb-row-tint-warn"' : '';
             var link  = '<a href="' + editUrl + (parseInt(r.client_id, 10) || 0) + '">' + Report.esc(r.first_name) + '</a>';
             html += '<tr' + style + '><td>' + link + '</td><td>' + Report.esc(r.last_name) + '</td>' +
                 '<td>' + Report.esc(r.client_type) + '</td>' +
@@ -110,7 +112,9 @@
         for (var i = 0; i < rows.length; i++) {
             var r     = rows[i];
             var diff  = parseFloat(r.difference);
-            var style = Math.abs(diff) > 0.005 ? ' style="background:#fff3cd;"' : '';
+            // Tint colour lives in admin.css (.mealsdb-row-tint-warn)
+            // so a strict CSP can drop 'unsafe-inline' for style-src.
+            var style = Math.abs(diff) > 0.005 ? ' class="mealsdb-row-tint-warn"' : '';
             var link  = '<a href="' + editUrl + (parseInt(r.client_id, 10) || 0) + '">' + Report.esc(r.first_name) + '</a>';
             html += '<tr' + style + '><td>' + link + '</td><td>' + Report.esc(r.last_name) + '</td>' +
                 '<td>' + Report.esc(r.client_type) + '</td>' +
