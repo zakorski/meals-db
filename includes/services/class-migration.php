@@ -18,6 +18,23 @@ class MealsDB_Migration {
 
     const BATCH_SIZE      = 100;
     const LOAD_CHUNK_BYTES = 10 * 1024 * 1024; // 10 MB per AJAX chunk
+    /**
+     * Max bytes fgets() will read into a single buffer in one call.
+     * Dumps from mysqldump --extended-insert can produce INSERT lines
+     * well over 1 MB on large orders tables, so we keep this large,
+     * but well under the 32 MB we used to allocate unconditionally —
+     * a malformed or adversarial dump with a single multi-MB line
+     * would otherwise have no upper bound on per-call memory.
+     */
+    const LOAD_FGETS_BYTES = 4 * 1024 * 1024;  // 4 MB line buffer
+    /**
+     * Upper bound on the size of an accumulated multi-line statement
+     * we are willing to execute. A single statement already fits
+     * comfortably inside max_allowed_packet (default 4 MB, practical
+     * ceiling 64 MB); anything beyond 16 MB is pathological and
+     * should be rejected rather than pushed at the server.
+     */
+    const MAX_STATEMENT_BYTES = 16 * 1024 * 1024; // 16 MB per statement
     const PROGRESS_OPTION = 'mealsdb_migration_progress';
     const LOG_OPTION      = 'mealsdb_migration_log';
 
@@ -268,25 +285,41 @@ class MealsDB_Migration {
                 }
                 $col_sql = implode( ', ', $col_names );
 
-                // Build a multi-row INSERT for the batch
+                // Build a multi-row INSERT for the batch. Use
+                // $wpdb->prepare() with %s placeholders rather than
+                // $wpdb->_real_escape(): prepare() is a public, supported
+                // API that routes through mysqli_real_escape_string on
+                // the same DB handle wpdb is connected to, with
+                // consistent quoting semantics; _real_escape() is a
+                // leading-underscore private helper that has been subtly
+                // broken in past WP versions when called with
+                // non-string input. NULL is still emitted literally
+                // since wpdb::prepare coerces '%s' binds to strings.
                 $value_groups = [];
+                $bind_values  = [];
                 while ( $row = $result->fetch_row() ) {
-                    $escaped = [];
+                    $placeholders = [];
                     foreach ( $row as $val ) {
                         if ( $val === null ) {
-                            $escaped[] = 'NULL';
+                            $placeholders[] = 'NULL';
                         } else {
-                            $escaped[] = "'" . $wpdb->_real_escape( $val ) . "'";
+                            $placeholders[] = '%s';
+                            $bind_values[]  = (string) $val;
                         }
                     }
-                    $value_groups[] = '(' . implode( ', ', $escaped ) . ')';
+                    $value_groups[] = '(' . implode( ', ', $placeholders ) . ')';
                     $total_rows++;
                 }
 
                 if ( ! empty( $value_groups ) ) {
                     $insert_sql = "INSERT IGNORE INTO {$local_esc} ({$col_sql}) VALUES " . implode( ', ', $value_groups );
+                    $prepared   = $wpdb->prepare( $insert_sql, ...$bind_values );
+                    if ( ! is_string( $prepared ) || $prepared === '' ) {
+                        $src_conn->close();
+                        return [ 'error' => "Failed to prepare INSERT batch for {$local_table}" ];
+                    }
                     $wpdb->suppress_errors( true );
-                    $wpdb->query( $insert_sql );
+                    $wpdb->query( $prepared );
                     $wpdb->suppress_errors( false );
                 }
 
@@ -344,7 +377,7 @@ class MealsDB_Migration {
         $errors     = [];
 
         while ( ! feof( $handle ) && $bytes_read < self::LOAD_CHUNK_BYTES ) {
-            $line = fgets( $handle, 32 * 1024 * 1024 ); // 32 MB line buffer
+            $line = fgets( $handle, self::LOAD_FGETS_BYTES );
             if ( $line === false ) {
                 break;
             }
@@ -386,6 +419,23 @@ class MealsDB_Migration {
                 }
             } else {
                 $buffer .= $line;
+            }
+
+            // Reject runaway statements. mysqldump with default settings
+            // produces INSERTs well under a megabyte, so a buffer that
+            // has grown past MAX_STATEMENT_BYTES without hitting a
+            // terminator is either a malformed dump or an attacker
+            // probing memory limits. Drop the partial statement, log
+            // the event, and resume scanning for the next top-level
+            // CREATE / INSERT / DROP.
+            if ( $in_target && strlen( $buffer ) > self::MAX_STATEMENT_BYTES ) {
+                $errors[]  = sprintf(
+                    'Statement exceeded MAX_STATEMENT_BYTES (%d bytes) and was skipped.',
+                    self::MAX_STATEMENT_BYTES
+                );
+                $buffer    = '';
+                $in_target = false;
+                continue;
             }
 
             // Execute when statement is complete (ends with ;)
