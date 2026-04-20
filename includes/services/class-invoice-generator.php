@@ -811,12 +811,21 @@ class MealsDB_Invoice_Generator {
         $csv[] = str_repeat(',', 99);
 
         // Row 3: Header with version (unchanged)
+        //
+        // The four top-of-file rows below were previously concatenated
+        // with implode(',', $rowN). That broke on any value containing
+        // a comma (notably the service-centre addresses with street
+        // names like "770 Main Street Assumption PL., 5th Floor,
+        // Moncton NB E1C 8R3") — the row's cells silently shifted right
+        // and misaligned every downstream column. Routing through
+        // MealsDB_CSV::row() fixes the RFC-4180 quoting AND
+        // neutralises formula-injection triggers in the same pass.
         $row3 = array_fill(0, 100, '');
         $row3[0] = '1';
         $row3[1] = 'Social Development';
         $row3[5] = 'Electronic Invoice Datasheet';
         $row3[9] = 'version 36e';
-        $csv[] = implode(',', $row3);
+        $csv[] = MealsDB_CSV::row($row3);
 
         // Row 4: Invoice metadata header row (unchanged from current)
         $row4 = array_fill(0, 100, '');
@@ -839,7 +848,7 @@ class MealsDB_Invoice_Generator {
         $row4[21] = 'Contact Phone No.';
         $row4[22] = 'Contact E-mail';
         $row4[23] = '# of Invoice Lines';
-        $csv[] = implode(',', $row4);
+        $csv[] = MealsDB_CSV::row($row4);
 
         // Row 5: Invoice metadata values (unchanged structure, updated totals)
         $row5 = array_fill(0, 100, '');
@@ -863,7 +872,7 @@ class MealsDB_Invoice_Generator {
         $row5[22] = self::CONTACT_EMAIL;
         $row5[23] = count($all_invoice_lines);
         $row5[24] = 'F';
-        $csv[] = implode(',', $row5);
+        $csv[] = MealsDB_CSV::row($row5);
 
         // Row 6: Column headers for data rows (unchanged)
         $row6 = array_fill(0, 100, '');
@@ -903,7 +912,7 @@ class MealsDB_Invoice_Generator {
         $row6[33] = 'Shift Diff. Stat Holiday Cost';
         $row6[34] = 'Tax';
         $row6[35] = 'Total Invoice Line Cost';
-        $csv[] = implode(',', $row6);
+        $csv[] = MealsDB_CSV::row($row6);
 
         // Data rows — one per invoice line.
         foreach ($all_invoice_lines as $line) {
