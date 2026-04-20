@@ -136,14 +136,21 @@
         });
 
         /**
-         * Show message to user
+         * Show message to user.
+         *
+         * `message` may originate from server-supplied error text or
+         * concatenated client names (see showOveragesMessage callers),
+         * so route through jQuery's text-setting API rather than the
+         * previous `.html('<p>' + message + '</p>')` which would let
+         * any < or & in the payload execute as HTML.
          */
         function showMessage(type, message) {
             var $message = $('#invoice_message');
             $message
                 .removeClass('notice-success notice-error notice-warning')
                 .addClass('notice notice-' + type)
-                .html('<p>' + message + '</p>')
+                .empty()
+                .append($('<p>').text(message == null ? '' : String(message)))
                 .slideDown();
 
             setTimeout(function() {
@@ -282,10 +289,16 @@
         });
 
         function showOveragesMessage(type, message) {
+            // Callers include paths that concatenate server-supplied
+            // error text (resp.data.message) and user-controlled client
+            // names (resp.data.skipped.join(', ')) into the message.
+            // Render through jQuery's text setter so none of that can
+            // execute as HTML.
             var $msg = $('#overages_message');
             $msg.removeClass('notice-success notice-error notice-warning')
                 .addClass('notice notice-' + type)
-                .html('<p>' + message + '</p>')
+                .empty()
+                .append($('<p>').text(message == null ? '' : String(message)))
                 .slideDown();
 
             setTimeout(function() { $msg.slideUp(); }, 8000);
