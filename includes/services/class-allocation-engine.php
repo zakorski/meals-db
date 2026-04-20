@@ -364,99 +364,102 @@ class MealsDB_Allocation_Engine {
 
         $delivery_alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
 
-        // Wrap the destructive delete + the new insert(s) in a single
-        // transaction so a concurrent deallocate (status-change hook,
-        // cron) can't race between the rows being cleared and the new
-        // rows being written and leave the DB in a half-written state.
+        // Compute the rows we WANT in delivery_allocations before opening
+        // the transaction. Used both for the idempotency fingerprint
+        // check below (skip no-op rewrites on webhook retries) and, if
+        // the check misses, as the source of the subsequent INSERTs.
+        $desired_rows = $this->build_desired_allocation_rows(
+            $client_id, $wc_order_id, $order_date_str, $delivery_date,
+            $coverage_start, $coverage_end, $month1, $month2,
+            $mains, $sides, $tax_sides, $nontax_sides,
+            $cov_start_dt, $cov_end_dt
+        );
+        $row_formats = ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d'];
+        $desired_fp  = self::fingerprint_allocation_rows($desired_rows);
+
+        // Lock the summary row(s) before touching delivery_allocations so
+        // concurrent allocate_order / deallocate_order calls for the same
+        // (client_id, billing_month) serialise cleanly. Without this lock
+        // two transactions can both DELETE+INSERT their own delivery rows
+        // and then both attempt a SUM over the table, each wanting shared
+        // locks on the other's uncommitted rows — the classic deadlock
+        // that forced the recalculate step out of the transaction in the
+        // original implementation. With FOR UPDATE on the summary row,
+        // the deadlock is eliminated and the recalculate can run inside
+        // the tx where it belongs.
+        //
+        // Months are locked in sorted order so two transactions spanning
+        // the same pair of months (e.g. order A touches Jan+Feb and
+        // order B touches Feb+Jan) can't acquire locks in reverse order
+        // and deadlock that way either.
+        $months_to_lock = ($month1 === $month2) ? [$month1] : [$month1, $month2];
+        sort($months_to_lock);
+
         $started = $this->wpdb->query('START TRANSACTION');
         $transaction_started = $started !== false;
 
         $affected_months = [];
         $insert_failed   = false;
+        $already_allocated = false;
 
         try {
-            // Delete existing allocations for this order (for re-processing).
-            $deleted = $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
-            if ($deleted === false) {
-                $insert_failed = true;
+            foreach ($months_to_lock as $lock_month) {
+                if (!$this->lock_allocation_month($client_id, $lock_month)) {
+                    $insert_failed = true;
+                    break;
+                }
             }
 
-            if (!$insert_failed && $month1 === $month2) {
-                // Single month — insert one row.
-                $rows = $this->wpdb->insert($delivery_alloc_table, [
-                    'client_id'        => $client_id,
-                    'wc_order_id'      => $wc_order_id,
-                    'order_date'       => $order_date_str,
-                    'delivery_date'    => $delivery_date,
-                    'coverage_start'   => $coverage_start,
-                    'coverage_end'     => $coverage_end,
-                    'billing_month'    => $month1,
-                    'mains_count'      => $mains,
-                    'sides_count'      => $sides,
-                    'tax_sides_count'  => $tax_sides,
-                    'nontax_sides_count' => $nontax_sides,
-                ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
-                if ($rows === false) {
-                    $insert_failed = true;
-                } else {
-                    $affected_months[] = $month1;
+            // Idempotency: compare the fingerprint of what's already in
+            // delivery_allocations for this wc_order_id against what we
+            // would write. If they match, the DELETE+INSERT cycle would
+            // land on bit-identical state (and recalculate would do the
+            // same SUMs over the same rows), so skip it entirely. Spares
+            // a webhook retry from churning through an unnecessary write
+            // cycle and dirtying the replication log.
+            if (!$insert_failed) {
+                $existing_rows = $this->wpdb->get_results($this->wpdb->prepare(
+                    "SELECT client_id, wc_order_id, order_date, delivery_date, coverage_start,
+                            coverage_end, billing_month, mains_count, sides_count,
+                            tax_sides_count, nontax_sides_count
+                     FROM {$delivery_alloc_table} WHERE wc_order_id = %d",
+                    $wc_order_id
+                ), ARRAY_A);
+                $existing_fp = self::fingerprint_allocation_rows(is_array($existing_rows) ? $existing_rows : []);
+                if ($existing_fp !== '' && $existing_fp === $desired_fp) {
+                    $already_allocated = true;
                 }
-            } elseif (!$insert_failed) {
-                // Coverage spans two months — split proportionally.
-                $end_of_month1    = new DateTime($cov_start_dt->format('Y-m-t'));
-                $start_of_month2  = new DateTime($cov_end_dt->format('Y-m-01'));
+            }
 
-                $days_in_month_1     = (int) $cov_start_dt->diff($end_of_month1)->days + 1;
-                $days_in_month_2     = (int) $start_of_month2->diff($cov_end_dt)->days + 1;
-                $total_coverage_days = $days_in_month_1 + $days_in_month_2;
-
-                $m1_mains        = (int) round($mains * $days_in_month_1 / $total_coverage_days);
-                $m2_mains        = $mains - $m1_mains;
-                $m1_sides        = (int) round($sides * $days_in_month_1 / $total_coverage_days);
-                $m2_sides        = $sides - $m1_sides;
-                $m1_tax_sides    = (int) round($tax_sides * $days_in_month_1 / $total_coverage_days);
-                $m2_tax_sides    = $tax_sides - $m1_tax_sides;
-                $m1_nontax_sides = (int) round($nontax_sides * $days_in_month_1 / $total_coverage_days);
-                $m2_nontax_sides = $nontax_sides - $m1_nontax_sides;
-
-                // Month 1 row.
-                $rows1 = $this->wpdb->insert($delivery_alloc_table, [
-                    'client_id'          => $client_id,
-                    'wc_order_id'        => $wc_order_id,
-                    'order_date'         => $order_date_str,
-                    'delivery_date'      => $delivery_date,
-                    'coverage_start'     => $coverage_start,
-                    'coverage_end'       => $end_of_month1->format('Y-m-d'),
-                    'billing_month'      => $month1,
-                    'mains_count'        => $m1_mains,
-                    'sides_count'        => $m1_sides,
-                    'tax_sides_count'    => $m1_tax_sides,
-                    'nontax_sides_count' => $m1_nontax_sides,
-                ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
-
-                // Month 2 row.
-                $rows2 = false;
-                if ($rows1 !== false) {
-                    $rows2 = $this->wpdb->insert($delivery_alloc_table, [
-                        'client_id'          => $client_id,
-                        'wc_order_id'        => $wc_order_id,
-                        'order_date'         => $order_date_str,
-                        'delivery_date'      => $delivery_date,
-                        'coverage_start'     => $start_of_month2->format('Y-m-d'),
-                        'coverage_end'       => $coverage_end,
-                        'billing_month'      => $month2,
-                        'mains_count'        => $m2_mains,
-                        'sides_count'        => $m2_sides,
-                        'tax_sides_count'    => $m2_tax_sides,
-                        'nontax_sides_count' => $m2_nontax_sides,
-                    ], ['%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d']);
-                }
-
-                if ($rows1 === false || $rows2 === false) {
+            // Delete existing allocations for this order (for re-processing).
+            if (!$insert_failed && !$already_allocated) {
+                $deleted = $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+                if ($deleted === false) {
                     $insert_failed = true;
-                } else {
-                    $affected_months[] = $month1;
-                    $affected_months[] = $month2;
+                }
+            }
+
+            if (!$insert_failed && !$already_allocated) {
+                foreach ($desired_rows as $row) {
+                    $result = $this->wpdb->insert($delivery_alloc_table, $row, $row_formats);
+                    if ($result === false) {
+                        $insert_failed = true;
+                        break;
+                    }
+                    if (!in_array($row['billing_month'], $affected_months, true)) {
+                        $affected_months[] = $row['billing_month'];
+                    }
+                }
+            }
+
+            // Recalculate inside the transaction. Safe because the
+            // summary-row lock above serialises us against other
+            // allocate/deallocate runs for the same (client_id, month),
+            // so the SUM can't race against uncommitted INSERT/DELETEs
+            // from a peer transaction.
+            if (!$insert_failed && !$already_allocated) {
+                foreach ($affected_months as $bm) {
+                    $this->recalculate_month_totals($client_id, $bm);
                 }
             }
 
@@ -478,13 +481,207 @@ class MealsDB_Allocation_Engine {
             error_log('[MealsDB Allocation Engine] allocate_order rolled back for wc_order_id=' . $wc_order_id . ': ' . $this->wpdb->last_error);
             return;
         }
+    }
 
-        // Recalculate affected months (outside the transaction so the
-        // recompute reads committed state and doesn't deadlock against
-        // the INSERTs we just did).
-        foreach ($affected_months as $bm) {
-            $this->recalculate_month_totals($client_id, $bm);
+    /**
+     * Build the desired delivery_allocations rows for an order.
+     *
+     * Factored out so allocate_order can fingerprint the intended state
+     * without duplicating the single/double-month branch — the same
+     * array produced here is compared against the existing rows for the
+     * idempotency check and, if the fingerprints differ, fed into the
+     * INSERT loop.
+     *
+     * @return array<int, array<string, mixed>> One row for a single-month
+     *         delivery, two rows for a month-straddling delivery (pro-rated).
+     */
+    private function build_desired_allocation_rows(
+        int $client_id,
+        int $wc_order_id,
+        string $order_date_str,
+        string $delivery_date,
+        string $coverage_start,
+        string $coverage_end,
+        string $month1,
+        string $month2,
+        int $mains,
+        int $sides,
+        int $tax_sides,
+        int $nontax_sides,
+        DateTime $cov_start_dt,
+        DateTime $cov_end_dt
+    ): array {
+        if ($month1 === $month2) {
+            return [
+                [
+                    'client_id'          => $client_id,
+                    'wc_order_id'        => $wc_order_id,
+                    'order_date'         => $order_date_str,
+                    'delivery_date'      => $delivery_date,
+                    'coverage_start'     => $coverage_start,
+                    'coverage_end'       => $coverage_end,
+                    'billing_month'      => $month1,
+                    'mains_count'        => $mains,
+                    'sides_count'        => $sides,
+                    'tax_sides_count'    => $tax_sides,
+                    'nontax_sides_count' => $nontax_sides,
+                ],
+            ];
         }
+
+        $end_of_month1       = new DateTime($cov_start_dt->format('Y-m-t'));
+        $start_of_month2     = new DateTime($cov_end_dt->format('Y-m-01'));
+        $days_in_month_1     = (int) $cov_start_dt->diff($end_of_month1)->days + 1;
+        $days_in_month_2     = (int) $start_of_month2->diff($cov_end_dt)->days + 1;
+        $total_coverage_days = $days_in_month_1 + $days_in_month_2;
+
+        if ($total_coverage_days <= 0) {
+            return [];
+        }
+
+        // Proportional split with residual conservation.
+        //
+        // One side gets round(total * days_in_month_1 / total_days);
+        // the other side gets (total - that_rounded), NOT a second
+        // round() call. That guarantees the two month values always
+        // sum back to the original, so a month-straddling order never
+        // inflates or deflates the client's overall consumption by
+        // a rounding penny.
+        //
+        // This is the allocation equivalent of the M1/M2 money-cents
+        // pattern: accumulate in one direction, absorb the residual
+        // at the boundary.
+        $m1_mains        = (int) round($mains * $days_in_month_1 / $total_coverage_days);
+        $m2_mains        = $mains - $m1_mains;
+        $m1_sides        = (int) round($sides * $days_in_month_1 / $total_coverage_days);
+        $m2_sides        = $sides - $m1_sides;
+        $m1_tax_sides    = (int) round($tax_sides * $days_in_month_1 / $total_coverage_days);
+        $m2_tax_sides    = $tax_sides - $m1_tax_sides;
+        $m1_nontax_sides = (int) round($nontax_sides * $days_in_month_1 / $total_coverage_days);
+        $m2_nontax_sides = $nontax_sides - $m1_nontax_sides;
+
+        return [
+            [
+                'client_id'          => $client_id,
+                'wc_order_id'        => $wc_order_id,
+                'order_date'         => $order_date_str,
+                'delivery_date'      => $delivery_date,
+                'coverage_start'     => $coverage_start,
+                'coverage_end'       => $end_of_month1->format('Y-m-d'),
+                'billing_month'      => $month1,
+                'mains_count'        => $m1_mains,
+                'sides_count'        => $m1_sides,
+                'tax_sides_count'    => $m1_tax_sides,
+                'nontax_sides_count' => $m1_nontax_sides,
+            ],
+            [
+                'client_id'          => $client_id,
+                'wc_order_id'        => $wc_order_id,
+                'order_date'         => $order_date_str,
+                'delivery_date'      => $delivery_date,
+                'coverage_start'     => $start_of_month2->format('Y-m-d'),
+                'coverage_end'       => $coverage_end,
+                'billing_month'      => $month2,
+                'mains_count'        => $m2_mains,
+                'sides_count'        => $m2_sides,
+                'tax_sides_count'    => $m2_tax_sides,
+                'nontax_sides_count' => $m2_nontax_sides,
+            ],
+        ];
+    }
+
+    /**
+     * Compute a stable fingerprint for a set of delivery_allocations
+     * rows. Used for the idempotency check in allocate_order so a
+     * webhook retry that would land on byte-identical state can skip
+     * the DELETE+INSERT+recalculate cycle.
+     *
+     * The returned hash is order-independent (rows are sorted by
+     * billing_month + coverage_start before hashing) and type-
+     * independent (wpdb returns numeric columns as strings while the
+     * desired rows hold PHP ints, so we normalise before comparison).
+     * Returns '' for an empty input — which the caller treats as
+     * "no fingerprint match" so an empty existing set never falsely
+     * matches a non-empty desired set.
+     */
+    private static function fingerprint_allocation_rows(array $rows): string {
+        if (empty($rows)) {
+            return '';
+        }
+
+        $normalised = array_map(static function ($row) {
+            return [
+                (int)    ($row['client_id']          ?? 0),
+                (int)    ($row['wc_order_id']        ?? 0),
+                (string) ($row['order_date']         ?? ''),
+                (string) ($row['delivery_date']      ?? ''),
+                (string) ($row['coverage_start']     ?? ''),
+                (string) ($row['coverage_end']       ?? ''),
+                (string) ($row['billing_month']      ?? ''),
+                (int)    ($row['mains_count']        ?? 0),
+                (int)    ($row['sides_count']        ?? 0),
+                (int)    ($row['tax_sides_count']    ?? 0),
+                (int)    ($row['nontax_sides_count'] ?? 0),
+            ];
+        }, $rows);
+
+        usort($normalised, static function ($a, $b) {
+            // Sort by billing_month (index 6) then coverage_start (index 4).
+            return [$a[6], $a[4]] <=> [$b[6], $b[4]];
+        });
+
+        return hash('sha256', serialize($normalised));
+    }
+
+    /**
+     * Acquire an exclusive row lock on the summary row for a
+     * (client_id, billing_month) pair so concurrent allocate/deallocate
+     * calls for the same pair serialise. Creates a zeroed stub row if
+     * one does not already exist — recalculate_month_totals() will
+     * overwrite those zeros with the correct values before the
+     * transaction commits, so peer transactions never see the stub.
+     *
+     * MUST be called inside an open transaction. The returned lock is
+     * released on COMMIT / ROLLBACK.
+     */
+    private function lock_allocation_month(int $client_id, string $billing_month): bool {
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+
+        // INSERT IGNORE creates the lock target when missing and is a
+        // no-op when the unique (client_id, billing_month) index hits.
+        // All other columns in client_allocations have DEFAULT 0 or
+        // nullable, so supplying just the two key columns is sufficient.
+        $insert_result = $this->wpdb->query($this->wpdb->prepare(
+            "INSERT IGNORE INTO {$table} (client_id, billing_month) VALUES (%d, %s)",
+            $client_id,
+            $billing_month
+        ));
+        if ($insert_result === false) {
+            error_log(sprintf(
+                '[MealsDB Allocation Engine] lock_allocation_month failed to ensure row for client %d month %s: %s',
+                $client_id,
+                $billing_month,
+                $this->wpdb->last_error
+            ));
+            return false;
+        }
+
+        $locked = $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT id FROM {$table} WHERE client_id = %d AND billing_month = %s FOR UPDATE",
+            $client_id,
+            $billing_month
+        ));
+        if ($locked === null) {
+            error_log(sprintf(
+                '[MealsDB Allocation Engine] lock_allocation_month SELECT FOR UPDATE returned null for client %d month %s: %s',
+                $client_id,
+                $billing_month,
+                $this->wpdb->last_error
+            ));
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -570,30 +767,88 @@ class MealsDB_Allocation_Engine {
      */
     public function deallocate_order(int $wc_order_id): void {
         $delivery_alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+        $alloc_table          = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
 
-        // Fetch affected client + billing_month pairs before deleting.
-        $affected = $this->wpdb->get_results($this->wpdb->prepare(
-            "SELECT DISTINCT client_id, billing_month FROM {$delivery_alloc_table} WHERE wc_order_id = %d",
-            $wc_order_id
-        ), ARRAY_A);
+        // Wrap in a transaction for symmetry with allocate_order. Before
+        // this change, deallocate_order did unprotected DELETE + UPDATE +
+        // recalculate, so a concurrent allocate_order for the same order
+        // could race our read of affected months against its insert of
+        // new delivery rows, or the post-delete recalculate could see
+        // partial state from an in-flight allocate for a different order
+        // in the same (client, month).
+        $started = $this->wpdb->query('START TRANSACTION');
+        $transaction_started = $started !== false;
 
-        // Delete all rows for this order.
-        $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+        $rolled_back = false;
 
-        // Check if this order carried a client contribution and clear it.
-        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-        $this->wpdb->query($this->wpdb->prepare(
-            "UPDATE {$alloc_table} SET contribution_applied = 0, contribution_order_id = NULL
-             WHERE contribution_order_id = %d",
-            $wc_order_id
-        ));
+        try {
+            // Fetch affected client + billing_month pairs before deleting.
+            // These rows are about to be DELETEd by us so no peer
+            // transaction can race us on them.
+            $affected = $this->wpdb->get_results($this->wpdb->prepare(
+                "SELECT DISTINCT client_id, billing_month FROM {$delivery_alloc_table} WHERE wc_order_id = %d",
+                $wc_order_id
+            ), ARRAY_A);
 
-        // Recalculate affected months.
-        if (is_array($affected)) {
-            foreach ($affected as $row) {
-                $this->recalculate_month_totals((int) $row['client_id'], $row['billing_month']);
+            // Lock each (client_id, billing_month) summary row in a
+            // deterministic order to avoid deadlocking with a peer that
+            // happens to touch the same pair in reverse sequence.
+            if (is_array($affected) && !empty($affected)) {
+                $lock_keys = [];
+                foreach ($affected as $row) {
+                    $lock_keys[] = [(int) $row['client_id'], (string) $row['billing_month']];
+                }
+                usort($lock_keys, static function ($a, $b) {
+                    return $a[0] === $b[0]
+                        ? strcmp($a[1], $b[1])
+                        : $a[0] <=> $b[0];
+                });
+
+                foreach ($lock_keys as [$lock_client_id, $lock_month]) {
+                    if (!$this->lock_allocation_month($lock_client_id, $lock_month)) {
+                        throw new RuntimeException(sprintf(
+                            'Failed to lock summary row for client %d month %s',
+                            $lock_client_id,
+                            $lock_month
+                        ));
+                    }
+                }
             }
+
+            // Delete all rows for this order.
+            $this->wpdb->delete($delivery_alloc_table, ['wc_order_id' => $wc_order_id], ['%d']);
+
+            // Clear any contribution marker this order carried.
+            $this->wpdb->query($this->wpdb->prepare(
+                "UPDATE {$alloc_table} SET contribution_applied = 0, contribution_order_id = NULL
+                 WHERE contribution_order_id = %d",
+                $wc_order_id
+            ));
+
+            // Recalculate affected months inside the tx; safe because the
+            // summary-row locks serialise us against peer writers.
+            if (is_array($affected)) {
+                foreach ($affected as $row) {
+                    $this->recalculate_month_totals((int) $row['client_id'], (string) $row['billing_month']);
+                }
+            }
+
+            if ($transaction_started) {
+                $this->wpdb->query('COMMIT');
+            }
+        } catch (\Throwable $e) {
+            if ($transaction_started) {
+                $this->wpdb->query('ROLLBACK');
+                $rolled_back = true;
+            }
+            error_log('[MealsDB Allocation Engine] deallocate_order rolled back for wc_order_id=' . $wc_order_id . ': ' . $e->getMessage());
         }
+
+        // Suppress the unused-variable notice on environments that
+        // enable E_ALL during tests; $rolled_back exists so future
+        // callers can observe the outcome if deallocate_order is ever
+        // promoted to a non-void return.
+        unset($rolled_back);
     }
 
     /**

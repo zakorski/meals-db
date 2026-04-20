@@ -96,8 +96,14 @@ class MealsDB_Ajax_Sync {
         }
 
         $field_name  = sanitize_text_field(wp_unslash($_POST['field'] ?? ''));
-        $source      = sanitize_text_field(wp_unslash($_POST['source'] ?? ''));
-        $target      = sanitize_text_field(wp_unslash($_POST['target'] ?? ''));
+        // $source / $target go straight into the IGNORED_CONFLICTS
+        // table as row values the next call compares against. Anything
+        // longer than a real field value represents a probing attempt
+        // or a paste accident; cap to 1 KB so a hostile caller can't
+        // push arbitrarily large rows into the table and inflate the
+        // DELETE-by-value path.
+        $source      = substr((string) sanitize_text_field(wp_unslash($_POST['source'] ?? '')), 0, 1024);
+        $target      = substr((string) sanitize_text_field(wp_unslash($_POST['target'] ?? '')), 0, 1024);
         $set_ignored = MealsDB_Helpers::bool_flag($_POST['ignored'] ?? null, false);
 
         // Whitelist field_name against the canonical sync field set so the

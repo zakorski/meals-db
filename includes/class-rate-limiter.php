@@ -20,7 +20,23 @@ class MealsDB_Rate_Limiter {
         'client_search' => 100,          // Client search operations
         'client_modify' => 50,           // Creating/updating clients
         'sync_operations' => 100,        // Sync operations
+        'delivery_slips' => 100,         // Delivery slip generation
+        'schema_rebuild' => 2,           // Catastrophic: drops every plugin table
         'default' => 100,                // Default for unlisted actions
+    ];
+
+    /**
+     * Actions that mutate state. If the rate-limit backend is
+     * unavailable, these fail CLOSED — an adversary can't otherwise
+     * loop a mutating endpoint at wire speed during a cache outage.
+     * Reads continue to fail open so a brief cache blip doesn't
+     * visibly break the admin UI.
+     */
+    private const MUTATING_ACTIONS = [
+        'quick_order_create' => true,
+        'client_modify'      => true,
+        'sync_operations'    => true,
+        'schema_rebuild'     => true,
     ];
 
     /**
@@ -51,6 +67,23 @@ class MealsDB_Rate_Limiter {
 
         $count = self::atomic_increment($key, HOUR_IN_SECONDS);
 
+        if ($count === 0) {
+            // atomic_increment signalled "no backend available".
+            // Refuse mutating actions so an adversary can't loop
+            // create/modify endpoints at wire speed during a cache
+            // outage; allow reads so the admin UI doesn't die on
+            // transient infra glitches.
+            if (self::is_mutating_action($action)) {
+                error_log(sprintf(
+                    '[MealsDB Rate Limit] Fail-closed: no backend available for mutating action "%s" (identity: %s)',
+                    $action,
+                    $identity
+                ));
+                return false;
+            }
+            return true;
+        }
+
         if ($count > $limit) {
             error_log(sprintf(
                 '[MealsDB Rate Limit] Action "%s" blocked for user/IP "%s" (attempts: %d, limit: %d)',
@@ -63,6 +96,14 @@ class MealsDB_Rate_Limiter {
         }
 
         return true;
+    }
+
+    /**
+     * Whether an action is classified as a mutation for the
+     * fail-closed-on-backend-loss policy in check_rate_limit.
+     */
+    public static function is_mutating_action(string $action): bool {
+        return isset(self::MUTATING_ACTIONS[$action]);
     }
 
     /**
@@ -91,8 +132,12 @@ class MealsDB_Rate_Limiter {
         // Fallback: atomic UPSERT on the options table.
         global $wpdb;
         if (!$wpdb instanceof wpdb) {
-            // No DB — fail open; better than hard-erroring legitimate traffic.
-            return 1;
+            // No DB AND no usable object cache — signal "no backend" to
+            // the caller. 0 is distinct from every real counter value
+            // (the cache path returns at least 1 on first hit, the DB
+            // path takes max(1, $count)), so check_rate_limit can
+            // apply fail-closed-or-open policy based on action kind.
+            return 0;
         }
 
         $option_name = '_transient_' . $key;

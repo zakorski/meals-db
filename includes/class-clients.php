@@ -114,8 +114,25 @@ class MealsDB_Clients {
         // Verify START TRANSACTION actually succeeded before assuming we
         // have transactional safety; otherwise COMMIT/ROLLBACK below would
         // be no-ops while the destructive deletes still happen.
+        //
+        // When the transaction cannot be started (DB unreachable, MyISAM
+        // storage engine with AUTOCOMMIT, connection in an aborted state),
+        // REFUSE the delete rather than proceed with autocommitted
+        // destructive work. delete_client cascades across drafts,
+        // ignored_conflicts, and the clients row itself; without a
+        // rollback available a partial failure mid-loop would corrupt
+        // the data model with no recovery path.
         $started = $wpdb->query('START TRANSACTION');
         $transaction_started = $started !== false;
+
+        if (!$transaction_started) {
+            error_log(sprintf(
+                '[MealsDB] delete_client aborted: START TRANSACTION failed (client_id=%d, last_error=%s)',
+                $client_id,
+                $wpdb->last_error !== '' ? $wpdb->last_error : 'unknown'
+            ));
+            return false;
+        }
 
         $success = true;
 

@@ -644,12 +644,83 @@ class MealsDB_Client_Form {
     }
 
     /**
+     * Bound the longest user-supplied fields BEFORE encryption.
+     *
+     * The full validate() pass includes the same length checks, but
+     * save() / update() accept already-validated data — and they also
+     * accept data that HASN'T been validated (draft-resume paths,
+     * callers that sanitize but skip validate). An unvalidated 10MB
+     * diet_concerns would otherwise get AES-CBC'd before any reject
+     * happens. The bounds here match the validate() table.
+     */
+    private static function payload_within_length_bounds(array $row): bool {
+        $max_lengths = [
+            'first_name'        => 100,
+            'last_name'         => 100,
+            'client_email'      => 255,
+            'diet_concerns'     => 5000,
+            'client_comments'   => 5000,
+            'customer_comments' => 5000, // DB-side alias
+            'individual_id'     => 50,
+            'requisition_id'    => 50,
+        ];
+        foreach ($max_lengths as $field => $max) {
+            if (!array_key_exists($field, $row)) {
+                continue;
+            }
+            $value = $row[$field];
+            if (!is_scalar($value)) {
+                continue;
+            }
+            if (strlen((string) $value) > $max) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Defence-in-depth capability gate for client writes.
+     *
+     * views/add-client.php and views/edit-client.php already call
+     * MealsDB_Permissions::enforce() + check_admin_referer() before
+     * reaching save()/update(). This guard exists so a future caller
+     * (WP-CLI command, REST endpoint, import script) that reaches
+     * these methods without going through the view layer can't write
+     * to meals_clients without the plugin's required capability.
+     *
+     * Returns true when the permission layer or WP functions aren't
+     * loaded (bootstrap, test fixtures) so unit tests exercising
+     * the form logic directly still work.
+     */
+    private static function is_authorized_to_modify_clients(): bool {
+        if (!class_exists('MealsDB_Permissions')
+            || !function_exists('is_user_logged_in')
+            || !function_exists('current_user_can')) {
+            return true;
+        }
+
+        if (MealsDB_Permissions::can_access_plugin()) {
+            return true;
+        }
+
+        $user_id = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+        error_log(sprintf('[MealsDB Client_Form] Unauthorized client write attempt by user_id=%d', $user_id));
+
+        return false;
+    }
+
+    /**
      * Save client data to meals_clients table.
      *
      * @param array $data
      * @return bool
      */
     public static function save(array $data): bool {
+        if (!self::is_authorized_to_modify_clients()) {
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) return false;
 
@@ -663,6 +734,17 @@ class MealsDB_Client_Form {
 
         if (empty($sanitized)) {
             error_log('[MealsDB] Save aborted: no valid data provided.');
+            return false;
+        }
+
+        // Fast-fail on oversized inputs BEFORE encryption. A hostile
+        // or sloppy caller that hands over a 10MB diet_concerns or
+        // customer_comments would otherwise burn the worker's AES-CBC
+        // cycles on the huge payload before any validation rejects
+        // it. Reject early with the same bound the full validate()
+        // pass uses.
+        if (!self::payload_within_length_bounds($sanitized)) {
+            error_log('[MealsDB] Save aborted: input exceeds length bounds before encryption.');
             return false;
         }
 
@@ -725,6 +807,10 @@ class MealsDB_Client_Form {
      * @return bool
      */
     public static function update(int $client_id, array $data): bool {
+        if (!self::is_authorized_to_modify_clients()) {
+            return false;
+        }
+
         if ($client_id <= 0) {
             return false;
         }
@@ -744,6 +830,12 @@ class MealsDB_Client_Form {
 
         if (empty($sanitized)) {
             error_log('[MealsDB] Update aborted: no valid data provided.');
+            return false;
+        }
+
+        // Length-bound before encryption — see save() for rationale.
+        if (!self::payload_within_length_bounds($sanitized)) {
+            error_log('[MealsDB] Update aborted: input exceeds length bounds before encryption.');
             return false;
         }
 

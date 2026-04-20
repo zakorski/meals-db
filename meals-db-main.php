@@ -30,11 +30,30 @@ if (!defined('MEALS_DB_PLUGIN_URL')) {
 }
 
 if (!defined('MEALS_DB_VERSION')) {
-    if (!function_exists('get_plugin_data')) {
+    // get_plugin_data() lives in wp-admin/includes/plugin.php, which
+    // isn't loaded automatically from every entry point — WP-CLI and
+    // cron contexts hit this file before wp-admin is available. Guard
+    // the require with a defined-ABSPATH check AND fall back cleanly
+    // when the helper still can't be loaded, otherwise activation via
+    // WP-CLI (`wp plugin activate meals-db`) fatals on a missing
+    // function.
+    if (!function_exists('get_plugin_data') && defined('ABSPATH') && is_readable(ABSPATH . 'wp-admin/includes/plugin.php')) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
-    $mealsdb_plugin_data = get_plugin_data(__FILE__, false, false);
-    define('MEALS_DB_VERSION', $mealsdb_plugin_data['Version'] ?? '0.0.0');
+    if (function_exists('get_plugin_data')) {
+        $mealsdb_plugin_data = get_plugin_data(__FILE__, false, false);
+        define('MEALS_DB_VERSION', $mealsdb_plugin_data['Version'] ?? '0.0.0');
+    } else {
+        // Fallback: parse the plugin header ourselves rather than
+        // hard-coding "0.0.0", so downstream version comparisons in
+        // mealsdb_maybe_upgrade_schema still work correctly.
+        $mealsdb_header = @file_get_contents(__FILE__, false, null, 0, 8192);
+        if (is_string($mealsdb_header) && preg_match('/^[\s\*]*Version:\s*(\S+)/mi', $mealsdb_header, $m)) {
+            define('MEALS_DB_VERSION', $m[1]);
+        } else {
+            define('MEALS_DB_VERSION', '0.0.0');
+        }
+    }
 }
 
 // Old Autoloader - Deprecated.
@@ -197,6 +216,195 @@ add_action('admin_notices', function () {
 });
 
 /**
+ * Security notice: encryption key is still stored in wp_options.
+ *
+ * The original implementation read the AES-256 key from
+ * mealsdb_settings.encryption_key. That works but any compromise of
+ * the MySQL data directory (backup tarball, replica dump, SQL-injection
+ * exfil) reveals the key alongside the ciphertext it protects. The
+ * remediated path reads from the MEALS_DB_KEY constant (wp-config.php)
+ * or the MEALS_DB_ENCRYPTION_KEY environment variable; when it's still
+ * coming from the database, flag it loudly so the operator migrates.
+ */
+add_action('admin_notices', function () {
+    if (!class_exists('MealsDB_Encryption')) {
+        return;
+    }
+    if (MealsDB_Encryption::key_source() !== 'option') {
+        return;
+    }
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    $opts = get_option('mealsdb_settings', []);
+    $key  = is_array($opts) && !empty($opts['encryption_key']) ? (string) $opts['encryption_key'] : '';
+
+    echo '<div class="notice notice-warning"><p><strong>';
+    echo esc_html__('Meals Database: encryption key is stored in wp_options.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html__(
+        'Move it to wp-config.php so a database dump can\'t reveal the key. Add this line above the "/* That\'s all, stop editing! */" marker:',
+        'meals-db'
+    );
+    echo '</p><p><code>';
+    if ($key !== '') {
+        echo "define('MEALS_DB_KEY', '" . esc_html($key) . "');";
+    } else {
+        echo "define('MEALS_DB_KEY', 'base64:YOUR_KEY_HERE');";
+    }
+    echo '</code></p><p>';
+    echo esc_html__(
+        'After adding the constant, reload this page to confirm the notice is gone, then delete the "encryption_key" entry from the Meals DB settings row in wp_options.',
+        'meals-db'
+    );
+    echo '</p></div>';
+});
+
+/**
+ * Security notice: the pre-HMAC legacy CBC decryption branch is still
+ * live (MEALSDB_DISABLE_LEGACY_DECRYPT constant not set).
+ *
+ * That branch runs AES-CBC decryption without integrity verification —
+ * the textbook Vaudenay padding-oracle setup. It exists so installs
+ * with pre-HMAC ciphertext in meals_clients can still decrypt during
+ * the migration window, but once the encryption migrator reports zero
+ * legacy rows the operator should flip the constant and ensure all
+ * decrypts go through the authenticated path.
+ *
+ * Surface two variants of the notice:
+ *   - If legacy payloads exist: instruct the operator to run the
+ *     migrator, with a count of outstanding rows.
+ *   - If zero legacy payloads: instruct the operator to set the
+ *     constant and close the attack surface entirely.
+ */
+add_action('admin_notices', function () {
+    if (!class_exists('MealsDB_Encryption') || !class_exists('MealsDB_Encryption_Migrator')) {
+        return;
+    }
+    if (MealsDB_Encryption::legacy_decrypt_disabled()) {
+        return;
+    }
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    // Inventory walks meals_clients so is cached for 6h by default.
+    // A plugin reader who just wants to check their admin pages pays
+    // the scan once per reading window.
+    $legacy_total = MealsDB_Encryption_Migrator::legacy_total_cached();
+
+    if ($legacy_total > 0) {
+        echo '<div class="notice notice-warning"><p><strong>';
+        echo esc_html(sprintf(
+            /* translators: %d: number of legacy encrypted rows */
+            _n(
+                'Meals Database: %d row is still in the legacy CBC format.',
+                'Meals Database: %d rows are still in the legacy CBC format.',
+                $legacy_total,
+                'meals-db'
+            ),
+            $legacy_total
+        ));
+        echo '</strong></p><p>';
+        echo esc_html__(
+            'The legacy format decrypts without integrity verification, which is susceptible to padding-oracle attacks. Run the encryption migrator (WP-CLI: "wp mealsdb reencrypt-legacy" or an admin action) to re-encrypt these rows under the authenticated format.',
+            'meals-db'
+        );
+        echo '</p><p>';
+        echo esc_html__(
+            'Once the migrator reports zero legacy rows, add this line to wp-config.php to disable the legacy path entirely:',
+            'meals-db'
+        );
+        echo '</p><p><code>';
+        echo "define('MEALSDB_DISABLE_LEGACY_DECRYPT', true);";
+        echo '</code></p></div>';
+        return;
+    }
+
+    // No legacy payloads left — nudge the operator to close the branch.
+    echo '<div class="notice notice-info is-dismissible"><p><strong>';
+    echo esc_html__('Meals Database: legacy decryption can be disabled.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html__(
+        'The encryption inventory is clean — no legacy CBC payloads remain. Add this line to wp-config.php so the plugin refuses any future legacy payload that might slip in via backup restore or migration:',
+        'meals-db'
+    );
+    echo '</p><p><code>';
+    echo "define('MEALSDB_DISABLE_LEGACY_DECRYPT', true);";
+    echo '</code></p></div>';
+});
+
+/**
+ * Runtime warning when WooCommerce has been deactivated while Meals DB
+ * is still active. Activation refused this up-front, but an operator
+ * may deactivate WC later. The plugin will keep loading (so the
+ * operator can still reach settings pages to fix things) but flag the
+ * problem loudly — every order-aware code path assumes WC is present.
+ */
+add_action('admin_notices', function () {
+    if (class_exists('WooCommerce')) {
+        return;
+    }
+    if (!current_user_can('activate_plugins')) {
+        return;
+    }
+    echo '<div class="notice notice-error"><p><strong>';
+    echo esc_html__('Meals Database: WooCommerce is not active.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html__(
+        'Meals DB depends on WooCommerce for orders, products, and capability checks. Reactivate WooCommerce or deactivate Meals DB to restore normal behaviour — several admin pages will fatal on load until one or the other happens.',
+        'meals-db'
+    );
+    echo '</p></div>';
+});
+
+/**
+ * Previous-uninstall drop-failure notice.
+ *
+ * If uninstall.php couldn't DROP one or more of the plugin tables
+ * (permissions, foreign-key checks, table still in use), it writes
+ * the failed table names into a 30-day site transient. Surface that
+ * as an admin notice on the next activation so the operator knows
+ * orphaned tables are still around and can clean them up manually.
+ * Dismissable via the transient delete button in the notice.
+ */
+add_action('admin_notices', function () {
+    $failed = get_transient('mealsdb_uninstall_drop_failures');
+    if (!is_array($failed) || empty($failed)) {
+        return;
+    }
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    if (isset($_GET['mealsdb_ack_drop_failures']) && check_admin_referer('mealsdb_ack_drop_failures')) {
+        delete_transient('mealsdb_uninstall_drop_failures');
+        return;
+    }
+
+    echo '<div class="notice notice-warning"><p><strong>';
+    echo esc_html__('Meals Database: tables left behind from a previous uninstall.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html(sprintf(
+        _n(
+            'The uninstaller could not drop %d table last time this plugin was removed:',
+            'The uninstaller could not drop %d tables last time this plugin was removed:',
+            count($failed),
+            'meals-db'
+        ),
+        count($failed)
+    ));
+    echo '</p><ul style="list-style:disc;padding-left:24px;"><li>';
+    echo implode('</li><li>', array_map('esc_html', $failed));
+    echo '</li></ul><p>';
+    echo esc_html__('Drop them manually with phpMyAdmin or the mysql CLI once you\'ve confirmed the data is no longer needed.', 'meals-db');
+    $ack_url = wp_nonce_url(add_query_arg('mealsdb_ack_drop_failures', '1'), 'mealsdb_ack_drop_failures');
+    echo ' <a href="' . esc_url($ack_url) . '">' . esc_html__('Dismiss', 'meals-db') . '</a>';
+    echo '</p></div>';
+});
+
+/**
  * Check minimum PHP and WordPress versions before allowing activation.
  */
 register_activation_hook(__FILE__, 'meals_db_check_requirements');
@@ -239,6 +447,27 @@ function meals_db_check_requirements() {
         );
     }
 
+    // WooCommerce is a hard dependency — the plugin's capability gate
+    // (MealsDB_Permissions::required_capability() defaults to
+    // 'manage_woocommerce') assumes it's present, and most of the
+    // reporting / order code calls wc_get_order() / wc_get_product()
+    // directly. Activating without WooCommerce would silently admit
+    // users through the capability check (any administrator satisfies
+    // 'manage_woocommerce' in WP core even when the mapped meta-cap
+    // is missing) and then fatal on the first AJAX request that hits
+    // a WC helper. Refuse activation up-front with a clear message.
+    if (!class_exists('WooCommerce')) {
+        deactivate_plugins(plugin_basename(__FILE__));
+        wp_die(
+            esc_html__(
+                'Meals DB requires WooCommerce to be installed and active. Please activate WooCommerce first, then try activating Meals DB again.',
+                'meals-db'
+            ),
+            esc_html__('Plugin Activation Error', 'meals-db'),
+            ['back_link' => true]
+        );
+    }
+
     // Schema installation and zone-schedule seeding run on the next
     // admin page load via mealsdb_maybe_upgrade_schema(), which is
     // atomic, idempotent, and also handles auto-updates and manual
@@ -250,9 +479,21 @@ function meals_db_check_requirements() {
 
 /**
  * Clean up scheduled events on plugin deactivation.
+ *
+ * Every cron hook the plugin schedules MUST appear here, otherwise
+ * WordPress will keep firing it after deactivation against
+ * undefined callbacks (PHP fatal: "Call to undefined function" on
+ * each cron tick). Today the plugin schedules:
+ *
+ *   - mealsdb_nightly_allocation_sync (class-allocation-hooks.php)
+ *   - mealsdb_nightly_sync            (class-sync.php)
+ *
+ * The original handler only cleared the first one; the second was
+ * orphaned and would re-fire daily on a deactivated install.
  */
 register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook('mealsdb_nightly_allocation_sync');
+    wp_clear_scheduled_hook('mealsdb_nightly_sync');
 });
 
 // Register the plugin update checker against the GitHub repository.

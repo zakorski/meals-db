@@ -110,7 +110,11 @@ class MealsDB_Sync_Mutate {
             return $wp_result;
         }
 
-        // Now update the corresponding Meals DB client to keep both in sync
+        // Now update the corresponding Meals DB client to keep both in sync.
+        // The primary WP write already committed — a secondary failure here
+        // leaves the two systems diverged. Capture the outcome so callers
+        // (and a future reconciliation job) can see which writes landed
+        // incompletely, instead of silently discarding the return value.
         $client_id = $this->get_client_id_from_wp_user($woo_user_id);
 
         if ($client_id > 0) {
@@ -124,10 +128,29 @@ class MealsDB_Sync_Mutate {
                 // Only update if the field exists in the client table
                 if (isset($column_map[$field])) {
                     $column = $column_map[$field];
-                    $this->update_meals_client($client_id, [
+                    $reconciled = $this->update_meals_client($client_id, [
                         $column => $new_value,
                     ]);
+                    if ($reconciled === false) {
+                        self::record_partial_sync_failure(
+                            $woo_user_id,
+                            $client_id,
+                            $field,
+                            $new_value,
+                            'wp_to_meals_db',
+                            'WP user update succeeded but Meals DB client reconciliation failed'
+                        );
+                    }
                 }
+            } else {
+                self::record_partial_sync_failure(
+                    $woo_user_id,
+                    $client_id,
+                    $field,
+                    $new_value,
+                    'wp_to_meals_db',
+                    'WP user update succeeded but Meals DB connection unavailable for reconciliation'
+                );
             }
         }
 
@@ -197,7 +220,7 @@ class MealsDB_Sync_Mutate {
         $existing_value = $connection->get_var($connection->prepare($select_sql, $client_id));
 
         if ($existing_value === null && $connection->last_error !== '') {
-            error_log('[MealsDB Sync] Failed to execute Meals DB client lookup: ' . $connection->last_error);
+            error_log('[MealsDB Sync] Failed to execute Meals DB client lookup: ' . self::redact_sql_error($connection->last_error));
 
             return new WP_Error(
                 'mealsdb_sync_failed',
@@ -234,16 +257,97 @@ class MealsDB_Sync_Mutate {
             'woocommerce'
         );
 
-        // Now update the corresponding WordPress user to keep both in sync
+        // Now update the corresponding WordPress user to keep both in
+        // sync. Primary Meals-DB write already committed; capture the
+        // secondary WP update's outcome so a failure here is logged
+        // and audited instead of silently dropped.
         $wp_user_id = $this->get_wp_user_id_from_client($client_id);
 
         if ($wp_user_id > 0) {
-            $this->update_wp_user($wp_user_id, [
+            $secondary = $this->update_wp_user($wp_user_id, [
                 $field => $new_value,
             ]);
+            if (is_wp_error($secondary)) {
+                self::record_partial_sync_failure(
+                    $wp_user_id,
+                    $client_id,
+                    $field,
+                    $new_value,
+                    'meals_db_to_wp',
+                    'Meals DB update succeeded but WP user reconciliation failed: ' . $secondary->get_error_message()
+                );
+            }
         }
 
         return true;
+    }
+
+    /**
+     * Record a partial-sync divergence between WP users and meals_clients.
+     *
+     * A "partial" sync is one where the primary (authoritative) write
+     * committed but the secondary reconciliation write to the other
+     * system failed. The two systems are now out of step. This helper:
+     *
+     *   1. Emits a loud error_log entry so admin tooling / log scrapers
+     *      notice.
+     *   2. Writes an audit row via MealsDB_Logger so a reconciliation
+     *      job (future) can pick the drift up and retry.
+     *
+     * We intentionally do NOT bubble a WP_Error back to the caller
+     * here: returning an error for a partial failure would render as
+     * "sync failed" in the admin UI when in fact the primary write
+     * did land, and operators would be tempted to retry — doubling
+     * the reconciliation load.
+     */
+    /**
+     * Redact row-level values from a MySQL error string before
+     * error_log. MySQL surfaces data values inside single quotes in
+     * classic errors ("Duplicate entry 'x@y.com' for key 'email'",
+     * "Data too long for column 'foo' at row 1"). The error class is
+     * diagnostically useful; the quoted value might be cleartext PII
+     * that shouldn't land in a shared error log. Replace every
+     * single-quoted run with a fixed placeholder.
+     *
+     * Ciphertext values from encrypted columns are safe to log but
+     * they're base64 — noisy and also get scrubbed by this regex.
+     * Net result: logs are cleaner AND never leak cleartext.
+     */
+    private static function redact_sql_error(string $error): string {
+        if ($error === '') {
+            return 'unknown error';
+        }
+        $redacted = preg_replace("/'[^']*'/", "'[redacted]'", $error);
+        return $redacted ?? $error;
+    }
+
+    private static function record_partial_sync_failure(
+        int $wp_user_id,
+        int $client_id,
+        string $field,
+        string $new_value,
+        string $direction,
+        string $reason
+    ): void {
+        error_log(sprintf(
+            '[MealsDB Sync] Partial sync: %s direction=%s wp_user_id=%d client_id=%d field=%s',
+            $reason,
+            $direction,
+            $wp_user_id,
+            $client_id,
+            $field
+        ));
+
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log(
+                'sync_partial_failure',
+                $client_id,
+                $field,
+                null,
+                $new_value,
+                $direction
+            );
+        }
     }
 
     /**
@@ -296,10 +400,39 @@ class MealsDB_Sync_Mutate {
 
         $values[] = $client_id;
 
-        $result = $connection->query($connection->prepare($sql, ...$values));
+        // Wrap in an explicit transaction for symmetry with
+        // link_meals_client_to_wc_user and so a future caller that adds
+        // an accompanying write (audit log row, related-table update)
+        // gets atomicity for free. InnoDB runs a single UPDATE
+        // atomically even without BEGIN/COMMIT, but the explicit bracket
+        // also makes ROLLBACK available if the encryption or column-map
+        // bookkeeping below ever grows past a single statement.
+        $transaction_started = $connection->query('START TRANSACTION') !== false;
 
-        if ($result === false) {
-            error_log('[MealsDB Sync] Failed to execute Meals DB client update: ' . ($connection->last_error ?? 'unknown error'));
+        try {
+            $result = $connection->query($connection->prepare($sql, ...$values));
+
+            if ($result === false) {
+                if ($transaction_started) {
+                    $connection->query('ROLLBACK');
+                }
+                error_log('[MealsDB Sync] Failed to execute Meals DB client update: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
+                return false;
+            }
+
+            if ($transaction_started) {
+                $commit = $connection->query('COMMIT');
+                if ($commit === false) {
+                    $connection->query('ROLLBACK');
+                    error_log('[MealsDB Sync] Failed to commit Meals DB client update: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
+                    return false;
+                }
+            }
+        } catch (\Throwable $e) {
+            if ($transaction_started) {
+                $connection->query('ROLLBACK');
+            }
+            error_log('[MealsDB Sync] Meals DB client update threw: ' . $e->getMessage());
             return false;
         }
 
@@ -372,16 +505,43 @@ class MealsDB_Sync_Mutate {
             implode(', ', $placeholders)
         );
 
-        $result = $connection->query($connection->prepare($sql, ...$values));
+        // Match update_meals_client: wrap the INSERT in an explicit
+        // transaction so a concurrent failure (disk full, key conflict
+        // from a racing create for the same identity) rolls back
+        // cleanly and so a future caller extending this method with an
+        // audit-log insert gets atomicity for free.
+        $transaction_started = $connection->query('START TRANSACTION') !== false;
 
-        if ($result === false) {
-            error_log('[MealsDB Sync] Failed to execute Meals DB client insert: ' . ($connection->last_error ?? 'unknown error'));
+        try {
+            $result = $connection->query($connection->prepare($sql, ...$values));
+
+            if ($result === false) {
+                if ($transaction_started) {
+                    $connection->query('ROLLBACK');
+                }
+                error_log('[MealsDB Sync] Failed to execute Meals DB client insert: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
+                return false;
+            }
+
+            $insert_id = (int) $connection->insert_id;
+
+            if ($transaction_started) {
+                $commit = $connection->query('COMMIT');
+                if ($commit === false) {
+                    $connection->query('ROLLBACK');
+                    error_log('[MealsDB Sync] Failed to commit Meals DB client insert: ' . self::redact_sql_error((string) ($connection->last_error ?? '')));
+                    return false;
+                }
+            }
+
+            return $insert_id > 0 ? $insert_id : false;
+        } catch (\Throwable $e) {
+            if ($transaction_started) {
+                $connection->query('ROLLBACK');
+            }
+            error_log('[MealsDB Sync] Meals DB client insert threw: ' . $e->getMessage());
             return false;
         }
-
-        $insert_id = $connection->insert_id;
-
-        return $insert_id > 0 ? $insert_id : false;
     }
 
     /**

@@ -74,8 +74,14 @@ class MealsDB_Sync_Query {
 
         $query_error = null;
 
-        $clients = $this->batched_query(
-            function (int $batch_size, int $page, int $offset) use ($connection, &$query_error): array {
+        // Keyset pagination on client_id. Switched from OFFSET because a
+        // concurrent INSERT (admin saving a client form during a sync)
+        // would shift every subsequent page's window and either skip
+        // or duplicate rows depending on the direction of the shift.
+        // client_id is the PK so every row is guaranteed to have a
+        // unique, monotonically-assigned key — perfect for cursoring.
+        $clients = $this->keyset_batched_query(
+            function (int $batch_size, $last_key) use ($connection, &$query_error): array {
                 $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
                 $available_columns = $this->get_table_columns($clients_table);
                 $column_map = $this->build_client_column_map($available_columns);
@@ -87,6 +93,13 @@ class MealsDB_Sync_Query {
                     );
 
                     return [];
+                }
+
+                // client_id must always be in the SELECT list so the
+                // extractor below can read the cursor value. Force it
+                // in if the column map didn't include it.
+                if (!isset($column_map['client_id'])) {
+                    $column_map = ['client_id' => 'client_id'] + $column_map;
                 }
 
                 $quoted_columns = [];
@@ -101,12 +114,19 @@ class MealsDB_Sync_Query {
                 }
 
                 $escaped_table = str_replace('`', '``', $clients_table);
-                $sql = sprintf(
-                    "SELECT %s FROM `%s` WHERE client_type IN ('SDNB', 'Veteran') LIMIT %d OFFSET %d",
-                    implode(', ', $quoted_columns),
-                    $escaped_table,
-                    (int) $batch_size,
-                    (int) $offset
+                $cursor = $last_key === null ? 0 : (int) $last_key;
+                $sql = $connection->prepare(
+                    sprintf(
+                        "SELECT %s FROM `%s`
+                         WHERE client_type IN ('SDNB', 'Veteran')
+                           AND client_id > %%d
+                         ORDER BY client_id ASC
+                         LIMIT %%d",
+                        implode(', ', $quoted_columns),
+                        $escaped_table
+                    ),
+                    $cursor,
+                    $batch_size
                 );
 
                 $rows = $connection->get_results($sql, ARRAY_A);
@@ -127,6 +147,13 @@ class MealsDB_Sync_Query {
                 }
 
                 return $rows;
+            },
+            // Extract the cursor from the last row of each batch.
+            // Returns 0 rather than null for a missing / zero client_id
+            // so the loop doesn't infinite-spin on a malformed row.
+            static function (array $row) {
+                $id = isset($row['client_id']) ? (int) $row['client_id'] : 0;
+                return $id > 0 ? $id : 0;
             }
         );
 
@@ -268,13 +295,41 @@ class MealsDB_Sync_Query {
         // household. The underlying query is  LIKE %needle%  against
         // wp_usermeta, which cannot use an index — caching is the
         // highest-leverage improvement without a schema change.
+        //
+        // Bound the cache to keep an unusually long render loop (or a
+        // long-running CLI consumer) from accumulating one entry per
+        // distinct (name, phone) tuple in memory until the request
+        // ends. 1024 entries comfortably covers a full sync dashboard
+        // with thousands of clients while capping the worst-case
+        // resident set. When the cap is reached the oldest half is
+        // dropped — cheaper than a true LRU, and "old" entries are
+        // also the least likely to recur because the dashboard walks
+        // mismatches in stable order.
         static $cache = [];
+        $cache_max = 1024;
         $cache_key = md5($first_name . '|' . $last_name . '|' . $phone_raw);
         if (array_key_exists($cache_key, $cache)) {
             return $cache[$cache_key];
         }
+        if (count($cache) >= $cache_max) {
+            $cache = array_slice($cache, intdiv($cache_max, 2), null, true);
+        }
 
+        // Phone normalisation: strip everything but digits, drop a
+        // leading '1' that's just the NANP country code, and keep the
+        // last 10 digits at most. Without these steps:
+        //   - "+1 (506) 555-0100" and "5065550100" wouldn't match,
+        //   - extensions ("...x123") would tail-pollute the LIKE
+        //     comparison and produce false negatives,
+        //   - international numbers with longer country codes still
+        //     compare against their last 10 digits (best effort).
         $normalized_phone = preg_replace('/\D+/', '', $phone_raw);
+        if ($normalized_phone !== null && strlen($normalized_phone) === 11 && strpos($normalized_phone, '1') === 0) {
+            $normalized_phone = substr($normalized_phone, 1);
+        }
+        if ($normalized_phone !== null && strlen($normalized_phone) > 10) {
+            $normalized_phone = substr($normalized_phone, -10);
+        }
 
         $conditions = [];
         $params     = [];
@@ -333,7 +388,33 @@ class MealsDB_Sync_Query {
             return [];
         }
 
-        $results = $wpdb->get_results($prepared, ARRAY_A);
+        // The LIKE '%needle%' shape above can't use an index on
+        // wp_usermeta.meta_value (leading wildcard AND wrapping
+        // LOWER() both defeat indexing). On a large site this
+        // devolves to a scan of the entire usermeta table per match
+        // attempt. A proper fix needs a denormalised
+        // meals_user_search_index table with insert/update/delete
+        // hooks on user_meta — out of scope for this review.
+        //
+        // In the meantime, time the query and emit an error_log
+        // warning if it crosses a threshold so the operator can see
+        // the cost in their diagnostic log instead of discovering
+        // it through a complaint about a slow dashboard. 2 seconds
+        // is conservative — a healthy small install responds in
+        // milliseconds.
+        $query_started_at = microtime(true);
+        $results          = $wpdb->get_results($prepared, ARRAY_A);
+        $elapsed          = microtime(true) - $query_started_at;
+        if ($elapsed > 2.0) {
+            error_log(sprintf(
+                '[MealsDB Sync] find_candidate_wc_matches_for_client slow query: %.2fs (first=%s last=%s phone=%s). '
+                . 'Consider denormalising wp_usermeta name lookups into a dedicated search table.',
+                $elapsed,
+                $first_name,
+                $last_name,
+                $normalized_phone
+            ));
+        }
 
         if (!is_array($results)) {
             return [];
@@ -394,6 +475,54 @@ class MealsDB_Sync_Query {
 
             $page++;
             $offset += $batch_size;
+        }
+
+        return $results;
+    }
+
+    /**
+     * Keyset-paginated batched query.
+     *
+     * Calls $callback repeatedly with ($batch_size, $last_seen_key),
+     * expecting an array of rows sorted ascending by the callback's
+     * key column. Extracts the next cursor via $key_extractor on the
+     * last row of each batch; iterates until a short batch arrives.
+     *
+     * Preferred over the offset variant above when:
+     *
+     *   - The underlying table can change under us while we iterate
+     *     (OFFSET pagination silently skips or duplicates rows when
+     *     the row count shifts mid-walk).
+     *   - The table is large enough that deep OFFSETs matter for
+     *     performance — MySQL still reads and discards OFFSET rows
+     *     even when an index is in play.
+     *
+     * The callback must emit rows in key-ascending order AND include
+     * the key column in the returned row; the extractor uses that
+     * column value as the next cursor. A callback that returns rows
+     * out of order or without the key column will silently re-fetch
+     * the same batch forever — not a safety issue but a hang.
+     *
+     * @param callable(int $batch_size, int|string|null $last_key): array $callback
+     * @param callable(array $row): (int|string)                          $key_extractor
+     */
+    private function keyset_batched_query(callable $callback, callable $key_extractor, int $batch_size = 500): array {
+        $results  = [];
+        $last_key = null;
+
+        while (true) {
+            $batch = $callback($batch_size, $last_key);
+            if (!is_array($batch) || $batch === []) {
+                break;
+            }
+
+            $results = array_merge($results, $batch);
+            $last_row = end($batch);
+            $last_key = $last_row !== false ? $key_extractor($last_row) : null;
+
+            if (count($batch) < $batch_size || $last_key === null) {
+                break;
+            }
         }
 
         return $results;

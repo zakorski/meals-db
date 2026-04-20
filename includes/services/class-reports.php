@@ -39,6 +39,34 @@ class MealsDB_Reports {
     }
 
     /**
+     * Defence-in-depth capability gate for report data access.
+     *
+     * AJAX handlers already run their own capability check before
+     * instantiating this service. This guard ensures that any future
+     * caller (WP-CLI, REST, custom cron) that reaches a report method
+     * without the plugin's required capability receives an empty result
+     * instead of silently exfiltrating aggregate PII.
+     *
+     * Returns true when the plugin's permission layer is not loaded
+     * (e.g. during bootstrap or in test fixtures) so unit tests that
+     * exercise the reporting SQL without a full WP stack still pass.
+     */
+    private static function is_authorized_to_read_reports(): bool {
+        if (!class_exists('MealsDB_Permissions')) {
+            return true;
+        }
+
+        if (MealsDB_Permissions::can_access_plugin()) {
+            return true;
+        }
+
+        $user_id = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+        error_log(sprintf('[MealsDB Reports] Unauthorized report access attempt by user_id=%d', $user_id));
+
+        return false;
+    }
+
+    /**
      * Calculate resupply requirements for order items within the given date range.
      *
      * @param string|int $start_date
@@ -47,6 +75,10 @@ class MealsDB_Reports {
      * @return array<int, array<string, mixed>>
      */
     public function get_resupply_requirements($start_date, $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -105,6 +137,10 @@ class MealsDB_Reports {
      * @return array<int, array<string, mixed>>
      */
     public function get_meal_breakdown($start_date, $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -176,18 +212,24 @@ class MealsDB_Reports {
         }
 
         $headers = array_keys(reset($rows));
-        fputcsv($handle, $headers);
+        // Route every row through MealsDB_CSV::row() so cells that start
+        // with =, +, -, @, tab, or CR are prefixed with a single quote
+        // to neutralise formula injection (CWE-1236). fputcsv() handles
+        // RFC-4180 quoting but NOT formula neutralisation, so client
+        // names / product names sourced from user input were previously
+        // executable when the CSV was opened in Excel or Sheets.
+        fwrite($handle, MealsDB_CSV::row($headers) . "\n");
 
         foreach ($rows as $row) {
             $line = [];
             foreach ($headers as $header) {
-                $value = isset($row[$header]) ? $row[$header] : '';
+                $value = $row[$header] ?? '';
                 if (is_array($value)) {
                     $value = json_encode($value);
                 }
                 $line[] = $value;
             }
-            fputcsv($handle, $line);
+            fwrite($handle, MealsDB_CSV::row($line) . "\n");
         }
 
         rewind($handle);
@@ -255,6 +297,10 @@ class MealsDB_Reports {
      * @return array<int, array<string, mixed>> Keyed by wc_product_id.
      */
     public function get_demand_history(int $trailing_weeks = 8): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -346,6 +392,10 @@ class MealsDB_Reports {
         int $order_horizon_weeks = 6,
         float $decay_factor = 0.85
     ): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
         if (!$this->wpdb instanceof wpdb) {
             return [];
         }
@@ -635,16 +685,20 @@ class MealsDB_Reports {
             return '';
         }
 
-        fputcsv($handle, [
+        // MealsDB_CSV::row() neutralises formula injection in every cell
+        // — matters here because product_name is user-controlled and
+        // seasonal_note is a server-generated string that could be
+        // edited by a future caller.
+        fwrite($handle, MealsDB_CSV::row([
             'SKU', 'Product Name', 'Avg/Week', 'Seasonal Idx', 'Adj/Week',
             'Projected', 'Buffer', 'Qty Needed', 'Stock', 'Future',
             'Available', 'Units Needed', 'Case Size', 'Cases', 'Order Qty', 'Note',
-        ]);
+        ]) . "\n");
 
         $total_cases = 0;
 
         foreach ($po_rows as $row) {
-            fputcsv($handle, [
+            fwrite($handle, MealsDB_CSV::row([
                 $row['sku'],
                 $row['product_name'],
                 $row['weighted_avg_weekly'],
@@ -661,14 +715,15 @@ class MealsDB_Reports {
                 $row['cases_to_buy'],
                 $row['order_quantity'],
                 $row['seasonal_note'],
-            ]);
+            ]) . "\n");
             $total_cases += $row['cases_to_buy'];
         }
 
-        fputcsv($handle, []);
-        fputcsv($handle, [
+        // Blank separator row then grand-total row.
+        fwrite($handle, "\n");
+        fwrite($handle, MealsDB_CSV::row([
             'TOTAL', '', '', '', '', '', '', '', '', '', '', '', '', $total_cases, '', '',
-        ]);
+        ]) . "\n");
 
         rewind($handle);
         $csv = stream_get_contents($handle);
@@ -685,6 +740,10 @@ class MealsDB_Reports {
      * @return array ['rows' => [...], 'summary' => [...]]
      */
     public function contribution_reconciliation(string $start_date, string $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return ['rows' => [], 'summary' => self::empty_contribution_summary()];
+        }
+
         if (!$this->order_query instanceof MealsDB_WC_Order_Query) {
             return ['rows' => [], 'summary' => self::empty_contribution_summary()];
         }
@@ -750,6 +809,10 @@ class MealsDB_Reports {
      * @return array ['rows' => [...], 'summary' => [...]]
      */
     public function delivery_fee_reconciliation(string $start_date, string $end_date): array {
+        if (!self::is_authorized_to_read_reports()) {
+            return ['rows' => [], 'summary' => self::empty_delivery_summary()];
+        }
+
         if (!$this->order_query instanceof MealsDB_WC_Order_Query) {
             return ['rows' => [], 'summary' => self::empty_delivery_summary()];
         }
@@ -823,6 +886,10 @@ class MealsDB_Reports {
      */
     public function private_customer_report(string $start_date, string $end_date): array {
         $empty = ['rows' => [], 'grand_totals' => self::empty_private_report_totals()];
+
+        if (!self::is_authorized_to_read_reports()) {
+            return $empty;
+        }
 
         if (!$this->wpdb instanceof wpdb) {
             return $empty;
@@ -1066,14 +1133,18 @@ class MealsDB_Reports {
             return '';
         }
 
-        fputcsv($handle, [
+        // first_name / last_name are decrypted user-supplied strings —
+        // route through MealsDB_CSV::row() so a client whose first_name
+        // starts with '=' or '@' can't ship executable formula payloads
+        // in the private customer sales export.
+        fwrite($handle, MealsDB_CSV::row([
             'First Name', 'Last Name', 'Total Mains', 'Total Sides',
             'Total Purchased Before Tax', 'Total Tax Charged', 'Final Total',
-        ]);
+        ]) . "\n");
 
-        $rows = isset($data['rows']) ? $data['rows'] : [];
+        $rows = $data['rows'] ?? [];
         foreach ($rows as $row) {
-            fputcsv($handle, [
+            fwrite($handle, MealsDB_CSV::row([
                 $row['first_name'],
                 $row['last_name'],
                 $row['total_mains'],
@@ -1081,19 +1152,19 @@ class MealsDB_Reports {
                 number_format($row['total_before_tax'], 2, '.', ''),
                 number_format($row['total_tax'], 2, '.', ''),
                 number_format($row['final_total'], 2, '.', ''),
-            ]);
+            ]) . "\n");
         }
 
         // Grand Total row.
-        $grand = isset($data['grand_totals']) ? $data['grand_totals'] : self::empty_private_report_totals();
-        fputcsv($handle, [
+        $grand = $data['grand_totals'] ?? self::empty_private_report_totals();
+        fwrite($handle, MealsDB_CSV::row([
             'Grand Total', '',
             $grand['total_mains'],
             $grand['total_sides'],
             number_format($grand['total_before_tax'], 2, '.', ''),
             number_format($grand['total_tax'], 2, '.', ''),
             number_format($grand['final_total'], 2, '.', ''),
-        ]);
+        ]) . "\n");
 
         rewind($handle);
         $csv = stream_get_contents($handle);
@@ -1118,6 +1189,10 @@ class MealsDB_Reports {
             'orders_with_errors'   => 0,
             'error_counts'         => [],
         ];
+
+        if (!self::is_authorized_to_read_reports()) {
+            return ['errors' => [], 'summary' => $empty_summary];
+        }
 
         if (!$this->wpdb instanceof wpdb) {
             return ['errors' => [], 'summary' => $empty_summary];

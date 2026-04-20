@@ -85,11 +85,27 @@
         $('#mig-phase-' + phase + ' .mealsdb-mig-phase-bar').css('width', pct + '%');
     }
 
+    // HTML-escape via the DOM's own textContent → innerHTML round-trip
+    // so we don't have to maintain an entity table. Used below for the
+    // stats rendering where both keys and values come from the AJAX
+    // response and could contain characters the browser would treat
+    // as markup.
+    function escHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+    }
+
     function statsHtml(stats) {
         if (!stats || typeof stats !== 'object') return '';
         var parts = [];
         $.each(stats, function (k, v) {
-            parts.push('<strong>' + k + ':</strong> ' + v);
+            // Keys are server-defined today (e.g. "processed", "skipped")
+            // but the values come back from the migration service's
+            // aggregated state. Escape both so a migration tool that
+            // ever reports a free-form key or an error string as a
+            // "value" doesn't land an XSS here.
+            parts.push('<strong>' + escHtml(k) + ':</strong> ' + escHtml(v));
         });
         return parts.join(' &nbsp;|&nbsp; ');
     }

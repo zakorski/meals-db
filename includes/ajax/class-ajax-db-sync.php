@@ -41,7 +41,11 @@ class MealsDB_Ajax_DB_Sync {
                 $result = MealsDB_Migration::create_rates( $offset, $dry_run );
                 break;
             default:
-                wp_send_json_error( [ 'message' => 'Invalid phase: ' . $phase ] );
+                // Don't echo the user-supplied phase back in the error.
+                // Reflecting untrusted input in admin-visible messages
+                // is a small but unnecessary info-disclosure lever; the
+                // operator already knows what they submitted.
+                wp_send_json_error( [ 'message' => 'Invalid phase.' ] );
         }
 
         if ( isset( $result['error'] ) ) {

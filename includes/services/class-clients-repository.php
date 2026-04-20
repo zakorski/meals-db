@@ -323,8 +323,18 @@ class MealsDB_Clients_Repository {
             }
 
             if ($search !== null && $search !== '') {
+                // Cap the search needle. Real names cap out around 50
+                // characters; an unbounded payload here is either an
+                // input mistake or a probing attempt to inflate the
+                // %needle% scan. The trailing wildcards on the LIKE
+                // pattern already prevent any index from helping —
+                // bounding the needle at least keeps memory and the
+                // network round-trip predictable.
+                $needle = function_exists('mb_substr')
+                    ? mb_substr($search, 0, 100)
+                    : substr($search, 0, 100);
                 $conditions[] = '(LOWER(first_name) LIKE %s OR LOWER(last_name) LIKE %s OR LOWER(CONCAT(first_name, " ", last_name)) LIKE %s)';
-                $like = '%' . $wpdb->esc_like(strtolower($search)) . '%';
+                $like = '%' . $wpdb->esc_like(strtolower($needle)) . '%';
                 $prepare_args[] = $like;
                 $prepare_args[] = $like;
                 $prepare_args[] = $like;
@@ -380,8 +390,18 @@ class MealsDB_Clients_Repository {
                 $prepare_args[] = strtoupper($client_type);
             }
             if ($search !== null && $search !== '') {
+                // Cap the search needle. Real names cap out around 50
+                // characters; an unbounded payload here is either an
+                // input mistake or a probing attempt to inflate the
+                // %needle% scan. The trailing wildcards on the LIKE
+                // pattern already prevent any index from helping —
+                // bounding the needle at least keeps memory and the
+                // network round-trip predictable.
+                $needle = function_exists('mb_substr')
+                    ? mb_substr($search, 0, 100)
+                    : substr($search, 0, 100);
                 $conditions[] = '(LOWER(first_name) LIKE %s OR LOWER(last_name) LIKE %s OR LOWER(CONCAT(first_name, " ", last_name)) LIKE %s)';
-                $like = '%' . $wpdb->esc_like(strtolower($search)) . '%';
+                $like = '%' . $wpdb->esc_like(strtolower($needle)) . '%';
                 $prepare_args[] = $like;
                 $prepare_args[] = $like;
                 $prepare_args[] = $like;

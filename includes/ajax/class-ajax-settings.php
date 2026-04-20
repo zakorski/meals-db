@@ -53,11 +53,33 @@ class MealsDB_Ajax_Settings {
 
         update_option( 'mealsdb_settings', $settings, false );
 
-        // Save overage product IDs if provided.
+        // Save overage product IDs if provided. Validate each against
+        // wc_get_product() — previously any positive integer was
+        // accepted, so a typo could point the overage flow at a
+        // non-existent product (wc_create_order::add_product then
+        // quietly skips, leaving the operator wondering why overage
+        // orders were empty) or at an unrelated product entirely.
         $overage_mains = intval( $_POST['overage_mains'] ?? 0 );
         $overage_tax   = intval( $_POST['overage_taxable_sides'] ?? 0 );
         $overage_nt    = intval( $_POST['overage_nontax_sides'] ?? 0 );
         if ( $overage_mains > 0 || $overage_tax > 0 || $overage_nt > 0 ) {
+            $verify = static function ( int $pid ): int {
+                if ( $pid <= 0 ) {
+                    return 0;
+                }
+                if ( function_exists( 'wc_get_product' ) && ! wc_get_product( $pid ) ) {
+                    return 0;
+                }
+                return $pid;
+            };
+            $overage_mains = $verify( $overage_mains );
+            $overage_tax   = $verify( $overage_tax );
+            $overage_nt    = $verify( $overage_nt );
+
+            if ( $overage_mains === 0 && $overage_tax === 0 && $overage_nt === 0 ) {
+                wp_send_json_error( [ 'message' => 'All provided overage product IDs refer to missing WooCommerce products.' ] );
+            }
+
             update_option( 'mealsdb_overage_product_ids', [
                 'mains'         => $overage_mains,
                 'taxable_sides' => $overage_tax,

@@ -17,10 +17,25 @@ if ($preserve_data) {
 }
 
 // Reuse the runtime environment and database helpers so uninstall stays in sync with
-// the plugin's connection settings.
+// the plugin's connection settings. Guard every class reference — if the
+// autoloader fails to register (e.g. the plugin directory is being
+// pruned by the WP updater while uninstall runs), downstream
+// MealsDB_Tables::all() would fatal and WP would still mark the
+// plugin deleted without cleaning up a single table.
 $plugin_dir = plugin_dir_path(__FILE__);
-require_once $plugin_dir . 'includes/class-autoloader.php';
-MealsDB_Autoloader::register($plugin_dir);
+if (is_readable($plugin_dir . 'includes/class-autoloader.php')) {
+    require_once $plugin_dir . 'includes/class-autoloader.php';
+    if (class_exists('MealsDB_Autoloader')) {
+        MealsDB_Autoloader::register($plugin_dir);
+    }
+}
+
+if (!class_exists('MealsDB_Tables') || !class_exists('MealsDB_DB')) {
+    // Autoloader didn't register — nothing we can do about table
+    // cleanup. Still clear options + crons below; those don't
+    // depend on plugin classes.
+    error_log('[MealsDB Uninstall] Autoloader unavailable; table cleanup skipped, options/crons only.');
+}
 
 /**
  * Drop every Meals DB table on the current site, clear cron, and purge
@@ -30,36 +45,54 @@ MealsDB_Autoloader::register($plugin_dir);
 function mealsdb_uninstall_cleanup_current_site(): void {
     global $wpdb;
 
-    // Drop every plugin-specific table. Ordered so child tables drop before
-    // parents (CLIENT_RATES, CLIENT_ALLOCATIONS, DELIVERY_ALLOCATIONS reference
-    // CLIENTS). Derived from the canonical table list in MealsDB_Tables so this
-    // list cannot drift from the schema again.
-    $drop_order = [
-        MealsDB_Tables::CLIENT_RATES,
-        MealsDB_Tables::CLIENT_ALLOCATIONS,
-        MealsDB_Tables::DELIVERY_ALLOCATIONS,
-        MealsDB_Tables::DRAFTS,
-        MealsDB_Tables::IGNORED_CONFLICTS,
-        MealsDB_Tables::AUDIT_LOG,
-        MealsDB_Tables::STAFF,
-        MealsDB_Tables::PRODUCTS,
-        MealsDB_Tables::CLIENTS,
-    ];
+    $drop_failures = [];
 
-    foreach (MealsDB_Tables::all() as $base) {
-        if (!in_array($base, $drop_order, true)) {
-            $drop_order[] = $base;
+    // Drop every plugin-specific table — only if the plugin classes
+    // loaded successfully. Options and crons are still cleaned below
+    // regardless, so a half-successful uninstall still leaves
+    // WordPress in a sane state.
+    if (class_exists('MealsDB_Tables') && class_exists('MealsDB_DB')) {
+        // Ordered so child tables drop before parents (CLIENT_RATES,
+        // CLIENT_ALLOCATIONS, DELIVERY_ALLOCATIONS reference CLIENTS).
+        // Derived from the canonical table list so this cannot drift.
+        $drop_order = [
+            MealsDB_Tables::CLIENT_RATES,
+            MealsDB_Tables::CLIENT_ALLOCATIONS,
+            MealsDB_Tables::DELIVERY_ALLOCATIONS,
+            MealsDB_Tables::DRAFTS,
+            MealsDB_Tables::IGNORED_CONFLICTS,
+            MealsDB_Tables::AUDIT_LOG,
+            MealsDB_Tables::STAFF,
+            MealsDB_Tables::PRODUCTS,
+            MealsDB_Tables::CLIENTS,
+        ];
+
+        foreach (MealsDB_Tables::all() as $base) {
+            if (!in_array($base, $drop_order, true)) {
+                $drop_order[] = $base;
+            }
+        }
+
+        foreach ($drop_order as $base) {
+            $table   = MealsDB_DB::get_table_name($base);
+            $escaped = str_replace('`', '``', $table);
+            $sql     = "DROP TABLE IF EXISTS `{$escaped}`";
+            $wpdb->query($sql);
+            if ($wpdb->last_error) {
+                error_log("Failed to drop $table: " . $wpdb->last_error);
+                $drop_failures[] = $table;
+            }
         }
     }
 
-    foreach ($drop_order as $base) {
-        $table   = MealsDB_DB::get_table_name($base);
-        $escaped = str_replace('`', '``', $table);
-        $sql     = "DROP TABLE IF EXISTS `{$escaped}`";
-        $wpdb->query($sql);
-        if ($wpdb->last_error) {
-            error_log("Failed to drop $table: " . $wpdb->last_error);
-        }
+    // Record any drop failures in a site transient so the next
+    // plugin reactivation can surface an admin notice asking the
+    // operator to clean them up manually. Without this, a failed
+    // DROP (permissions, foreign-key-checks, table-in-use) would
+    // only surface in the error log, which many operators never
+    // see.
+    if (!empty($drop_failures)) {
+        set_transient('mealsdb_uninstall_drop_failures', $drop_failures, DAY_IN_SECONDS * 30);
     }
 
     // Clear scheduled events. Note: the actual hook name registered by the

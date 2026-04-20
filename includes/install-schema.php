@@ -41,6 +41,24 @@ class MealsDB_Installer {
 
     /**
      * Seed meals_client_rates from existing meals_clients.rate column.
+     *
+     * Three-step migration:
+     *   1. INSERT ... SELECT into meals_client_rates from the flat
+     *      rate column on meals_clients.
+     *   2. UPDATE meals_clients.default_rate_id from the row just
+     *      inserted.
+     *   3. DDL: ALTER TABLE ... DROP COLUMN rate.
+     *
+     * Steps 1 and 2 are DML and wrapped in a transaction. Step 3 is
+     * DDL — MySQL implicitly commits before any DDL, so it cannot
+     * participate in the transaction; the previous implementation
+     * issued DROP COLUMN unconditionally, meaning a failed backfill
+     * in step 2 would nonetheless lose the source data forever.
+     *
+     * The fix: if steps 1 and 2 don't both succeed, ROLLBACK and
+     * return. The rate column is preserved so a later install()
+     * run can retry from scratch. Step 3 only executes when the
+     * backfill committed cleanly.
      */
     private static function migrate_rate_to_client_rates(): void {
         global $wpdb;
@@ -48,9 +66,11 @@ class MealsDB_Installer {
         $rates_table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
-        // Check if meals_client_rates table is empty
-        $count = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$rates_table}`");
-        if ($count > 0) {
+        // Check if meals_client_rates table is empty. Use LIMIT 1 —
+        // COUNT(*) walks the full table and the existing query is
+        // only asking "is anything here?".
+        $has_rows = $wpdb->get_var("SELECT 1 FROM `{$rates_table}` LIMIT 1");
+        if ($has_rows !== null) {
             return;
         }
 
@@ -63,18 +83,43 @@ class MealsDB_Installer {
             return;
         }
 
+        $started = $wpdb->query('START TRANSACTION');
+        if ($started === false) {
+            error_log('[MealsDB Installer] rate migration aborted: START TRANSACTION failed.');
+            return;
+        }
+
         // Seed rates from existing flat rate values
         $insert_sql = "INSERT INTO `{$rates_table}` (client_id, label, rate, is_default, created_at) SELECT client_id, 'Standard', rate, 1, NOW() FROM `{$clients_table}` WHERE rate > 0";
-        $wpdb->query($insert_sql);
+        $insert_result = $wpdb->query($insert_sql);
+        if ($insert_result === false) {
+            error_log(sprintf('[MealsDB Installer] Seed INSERT failed, rolling back: %s', $wpdb->last_error));
+            $wpdb->query('ROLLBACK');
+            return;
+        }
         $seeded = $wpdb->rows_affected;
         error_log(sprintf('[MealsDB Installer] Seeded %d rows into meals_client_rates', $seeded));
 
         // Back-fill default_rate_id on meals_clients
         $backfill_sql = "UPDATE `{$clients_table}` c INNER JOIN `{$rates_table}` r ON r.client_id = c.client_id AND r.is_default = 1 SET c.default_rate_id = r.rate_id";
-        $wpdb->query($backfill_sql);
+        $backfill_result = $wpdb->query($backfill_sql);
+        if ($backfill_result === false) {
+            error_log(sprintf('[MealsDB Installer] default_rate_id backfill failed, rolling back: %s', $wpdb->last_error));
+            $wpdb->query('ROLLBACK');
+            return;
+        }
         error_log(sprintf('[MealsDB Installer] Back-filled default_rate_id for %d clients', $wpdb->rows_affected));
 
-        // Drop the now-redundant rate column
+        if ($wpdb->query('COMMIT') === false) {
+            error_log(sprintf('[MealsDB Installer] COMMIT failed for rate migration: %s', $wpdb->last_error));
+            $wpdb->query('ROLLBACK');
+            return;
+        }
+
+        // Drop the now-redundant rate column. Runs AFTER the DML tx
+        // has committed — DDL implicitly commits in MySQL, so it
+        // couldn't join the transaction above, but it only fires
+        // when steps 1 and 2 above are known-good.
         $drop_sql = "ALTER TABLE `{$clients_table}` DROP COLUMN rate";
         if ($wpdb->query($drop_sql) === false) {
             error_log(sprintf('[MealsDB Installer] Failed to drop meals_clients.rate column: %s', $wpdb->last_error));
