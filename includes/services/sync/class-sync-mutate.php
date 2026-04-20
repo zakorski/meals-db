@@ -110,7 +110,11 @@ class MealsDB_Sync_Mutate {
             return $wp_result;
         }
 
-        // Now update the corresponding Meals DB client to keep both in sync
+        // Now update the corresponding Meals DB client to keep both in sync.
+        // The primary WP write already committed — a secondary failure here
+        // leaves the two systems diverged. Capture the outcome so callers
+        // (and a future reconciliation job) can see which writes landed
+        // incompletely, instead of silently discarding the return value.
         $client_id = $this->get_client_id_from_wp_user($woo_user_id);
 
         if ($client_id > 0) {
@@ -124,10 +128,29 @@ class MealsDB_Sync_Mutate {
                 // Only update if the field exists in the client table
                 if (isset($column_map[$field])) {
                     $column = $column_map[$field];
-                    $this->update_meals_client($client_id, [
+                    $reconciled = $this->update_meals_client($client_id, [
                         $column => $new_value,
                     ]);
+                    if ($reconciled === false) {
+                        self::record_partial_sync_failure(
+                            $woo_user_id,
+                            $client_id,
+                            $field,
+                            $new_value,
+                            'wp_to_meals_db',
+                            'WP user update succeeded but Meals DB client reconciliation failed'
+                        );
+                    }
                 }
+            } else {
+                self::record_partial_sync_failure(
+                    $woo_user_id,
+                    $client_id,
+                    $field,
+                    $new_value,
+                    'wp_to_meals_db',
+                    'WP user update succeeded but Meals DB connection unavailable for reconciliation'
+                );
             }
         }
 
@@ -234,16 +257,76 @@ class MealsDB_Sync_Mutate {
             'woocommerce'
         );
 
-        // Now update the corresponding WordPress user to keep both in sync
+        // Now update the corresponding WordPress user to keep both in
+        // sync. Primary Meals-DB write already committed; capture the
+        // secondary WP update's outcome so a failure here is logged
+        // and audited instead of silently dropped.
         $wp_user_id = $this->get_wp_user_id_from_client($client_id);
 
         if ($wp_user_id > 0) {
-            $this->update_wp_user($wp_user_id, [
+            $secondary = $this->update_wp_user($wp_user_id, [
                 $field => $new_value,
             ]);
+            if (is_wp_error($secondary)) {
+                self::record_partial_sync_failure(
+                    $wp_user_id,
+                    $client_id,
+                    $field,
+                    $new_value,
+                    'meals_db_to_wp',
+                    'Meals DB update succeeded but WP user reconciliation failed: ' . $secondary->get_error_message()
+                );
+            }
         }
 
         return true;
+    }
+
+    /**
+     * Record a partial-sync divergence between WP users and meals_clients.
+     *
+     * A "partial" sync is one where the primary (authoritative) write
+     * committed but the secondary reconciliation write to the other
+     * system failed. The two systems are now out of step. This helper:
+     *
+     *   1. Emits a loud error_log entry so admin tooling / log scrapers
+     *      notice.
+     *   2. Writes an audit row via MealsDB_Logger so a reconciliation
+     *      job (future) can pick the drift up and retry.
+     *
+     * We intentionally do NOT bubble a WP_Error back to the caller
+     * here: returning an error for a partial failure would render as
+     * "sync failed" in the admin UI when in fact the primary write
+     * did land, and operators would be tempted to retry — doubling
+     * the reconciliation load.
+     */
+    private static function record_partial_sync_failure(
+        int $wp_user_id,
+        int $client_id,
+        string $field,
+        string $new_value,
+        string $direction,
+        string $reason
+    ): void {
+        error_log(sprintf(
+            '[MealsDB Sync] Partial sync: %s direction=%s wp_user_id=%d client_id=%d field=%s',
+            $reason,
+            $direction,
+            $wp_user_id,
+            $client_id,
+            $field
+        ));
+
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log(
+                'sync_partial_failure',
+                $client_id,
+                $field,
+                null,
+                $new_value,
+                $direction
+            );
+        }
     }
 
     /**
