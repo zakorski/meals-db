@@ -74,8 +74,14 @@ class MealsDB_Sync_Query {
 
         $query_error = null;
 
-        $clients = $this->batched_query(
-            function (int $batch_size, int $page, int $offset) use ($connection, &$query_error): array {
+        // Keyset pagination on client_id. Switched from OFFSET because a
+        // concurrent INSERT (admin saving a client form during a sync)
+        // would shift every subsequent page's window and either skip
+        // or duplicate rows depending on the direction of the shift.
+        // client_id is the PK so every row is guaranteed to have a
+        // unique, monotonically-assigned key — perfect for cursoring.
+        $clients = $this->keyset_batched_query(
+            function (int $batch_size, $last_key) use ($connection, &$query_error): array {
                 $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
                 $available_columns = $this->get_table_columns($clients_table);
                 $column_map = $this->build_client_column_map($available_columns);
@@ -87,6 +93,13 @@ class MealsDB_Sync_Query {
                     );
 
                     return [];
+                }
+
+                // client_id must always be in the SELECT list so the
+                // extractor below can read the cursor value. Force it
+                // in if the column map didn't include it.
+                if (!isset($column_map['client_id'])) {
+                    $column_map = ['client_id' => 'client_id'] + $column_map;
                 }
 
                 $quoted_columns = [];
@@ -101,12 +114,19 @@ class MealsDB_Sync_Query {
                 }
 
                 $escaped_table = str_replace('`', '``', $clients_table);
-                $sql = sprintf(
-                    "SELECT %s FROM `%s` WHERE client_type IN ('SDNB', 'Veteran') LIMIT %d OFFSET %d",
-                    implode(', ', $quoted_columns),
-                    $escaped_table,
-                    (int) $batch_size,
-                    (int) $offset
+                $cursor = $last_key === null ? 0 : (int) $last_key;
+                $sql = $connection->prepare(
+                    sprintf(
+                        "SELECT %s FROM `%s`
+                         WHERE client_type IN ('SDNB', 'Veteran')
+                           AND client_id > %%d
+                         ORDER BY client_id ASC
+                         LIMIT %%d",
+                        implode(', ', $quoted_columns),
+                        $escaped_table
+                    ),
+                    $cursor,
+                    $batch_size
                 );
 
                 $rows = $connection->get_results($sql, ARRAY_A);
@@ -127,6 +147,13 @@ class MealsDB_Sync_Query {
                 }
 
                 return $rows;
+            },
+            // Extract the cursor from the last row of each batch.
+            // Returns 0 rather than null for a missing / zero client_id
+            // so the loop doesn't infinite-spin on a malformed row.
+            static function (array $row) {
+                $id = isset($row['client_id']) ? (int) $row['client_id'] : 0;
+                return $id > 0 ? $id : 0;
             }
         );
 
@@ -422,6 +449,54 @@ class MealsDB_Sync_Query {
 
             $page++;
             $offset += $batch_size;
+        }
+
+        return $results;
+    }
+
+    /**
+     * Keyset-paginated batched query.
+     *
+     * Calls $callback repeatedly with ($batch_size, $last_seen_key),
+     * expecting an array of rows sorted ascending by the callback's
+     * key column. Extracts the next cursor via $key_extractor on the
+     * last row of each batch; iterates until a short batch arrives.
+     *
+     * Preferred over the offset variant above when:
+     *
+     *   - The underlying table can change under us while we iterate
+     *     (OFFSET pagination silently skips or duplicates rows when
+     *     the row count shifts mid-walk).
+     *   - The table is large enough that deep OFFSETs matter for
+     *     performance — MySQL still reads and discards OFFSET rows
+     *     even when an index is in play.
+     *
+     * The callback must emit rows in key-ascending order AND include
+     * the key column in the returned row; the extractor uses that
+     * column value as the next cursor. A callback that returns rows
+     * out of order or without the key column will silently re-fetch
+     * the same batch forever — not a safety issue but a hang.
+     *
+     * @param callable(int $batch_size, int|string|null $last_key): array $callback
+     * @param callable(array $row): (int|string)                          $key_extractor
+     */
+    private function keyset_batched_query(callable $callback, callable $key_extractor, int $batch_size = 500): array {
+        $results  = [];
+        $last_key = null;
+
+        while (true) {
+            $batch = $callback($batch_size, $last_key);
+            if (!is_array($batch) || $batch === []) {
+                break;
+            }
+
+            $results = array_merge($results, $batch);
+            $last_row = end($batch);
+            $last_key = $last_row !== false ? $key_extractor($last_row) : null;
+
+            if (count($batch) < $batch_size || $last_key === null) {
+                break;
+            }
         }
 
         return $results;
