@@ -243,6 +243,80 @@ add_action('admin_notices', function () {
 });
 
 /**
+ * Security notice: the pre-HMAC legacy CBC decryption branch is still
+ * live (MEALSDB_DISABLE_LEGACY_DECRYPT constant not set).
+ *
+ * That branch runs AES-CBC decryption without integrity verification —
+ * the textbook Vaudenay padding-oracle setup. It exists so installs
+ * with pre-HMAC ciphertext in meals_clients can still decrypt during
+ * the migration window, but once the encryption migrator reports zero
+ * legacy rows the operator should flip the constant and ensure all
+ * decrypts go through the authenticated path.
+ *
+ * Surface two variants of the notice:
+ *   - If legacy payloads exist: instruct the operator to run the
+ *     migrator, with a count of outstanding rows.
+ *   - If zero legacy payloads: instruct the operator to set the
+ *     constant and close the attack surface entirely.
+ */
+add_action('admin_notices', function () {
+    if (!class_exists('MealsDB_Encryption') || !class_exists('MealsDB_Encryption_Migrator')) {
+        return;
+    }
+    if (MealsDB_Encryption::legacy_decrypt_disabled()) {
+        return;
+    }
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    // Inventory walks meals_clients so is cached for 6h by default.
+    // A plugin reader who just wants to check their admin pages pays
+    // the scan once per reading window.
+    $legacy_total = MealsDB_Encryption_Migrator::legacy_total_cached();
+
+    if ($legacy_total > 0) {
+        echo '<div class="notice notice-warning"><p><strong>';
+        echo esc_html(sprintf(
+            /* translators: %d: number of legacy encrypted rows */
+            _n(
+                'Meals Database: %d row is still in the legacy CBC format.',
+                'Meals Database: %d rows are still in the legacy CBC format.',
+                $legacy_total,
+                'meals-db'
+            ),
+            $legacy_total
+        ));
+        echo '</strong></p><p>';
+        echo esc_html__(
+            'The legacy format decrypts without integrity verification, which is susceptible to padding-oracle attacks. Run the encryption migrator (WP-CLI: "wp mealsdb reencrypt-legacy" or an admin action) to re-encrypt these rows under the authenticated format.',
+            'meals-db'
+        );
+        echo '</p><p>';
+        echo esc_html__(
+            'Once the migrator reports zero legacy rows, add this line to wp-config.php to disable the legacy path entirely:',
+            'meals-db'
+        );
+        echo '</p><p><code>';
+        echo "define('MEALSDB_DISABLE_LEGACY_DECRYPT', true);";
+        echo '</code></p></div>';
+        return;
+    }
+
+    // No legacy payloads left — nudge the operator to close the branch.
+    echo '<div class="notice notice-info is-dismissible"><p><strong>';
+    echo esc_html__('Meals Database: legacy decryption can be disabled.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html__(
+        'The encryption inventory is clean — no legacy CBC payloads remain. Add this line to wp-config.php so the plugin refuses any future legacy payload that might slip in via backup restore or migration:',
+        'meals-db'
+    );
+    echo '</p><p><code>';
+    echo "define('MEALSDB_DISABLE_LEGACY_DECRYPT', true);";
+    echo '</code></p></div>';
+});
+
+/**
  * Check minimum PHP and WordPress versions before allowing activation.
  */
 register_activation_hook(__FILE__, 'meals_db_check_requirements');
