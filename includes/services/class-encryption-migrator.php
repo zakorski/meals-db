@@ -132,6 +132,20 @@ class MealsDB_Encryption_Migrator {
     }
 
     /**
+     * Default threshold for the reencrypt_legacy circuit breaker.
+     *
+     * When cumulative per-row failures cross this count inside a single
+     * call, the batch aborts. Protects against the "wrong key" and
+     * "corrupted ciphertext" failure modes: without a threshold the
+     * migrator would plough through every legacy row in the table and
+     * emit one error_log line per, filling logs and hiding the root
+     * cause. 50 is low enough that a real bulk corruption is caught
+     * fast, high enough that isolated one-row accidents don't abort
+     * an otherwise-healthy run.
+     */
+    private const FAILURE_THRESHOLD = 50;
+
+    /**
      * Re-encrypt every legacy-format value under the current authenticated format.
      *
      * Runs row-by-row with a per-row transaction so a failure on one client
@@ -139,21 +153,30 @@ class MealsDB_Encryption_Migrator {
      * MealsDB_Encryption::decrypt() is what makes this possible; keep it in
      * place until inventory() reports zero legacy rows on every environment.
      *
-     * @param int  $batch_size Max rows per column per call. Default 200.
-     * @param bool $dry_run    When true, report what would change but don't write.
-     * @return array{processed:int, reencrypted:int, failed:int, columns:array<string,int>}
+     * Circuit-breaker: once $stats['failed'] reaches the supplied
+     * $failure_threshold (default 50) the run aborts. The stats array
+     * then carries an 'aborted' => true flag and 'abort_reason'
+     * describing why, so the caller can surface it in the UI without
+     * mistaking the early return for a clean finish.
+     *
+     * @param int  $batch_size        Max rows per column per call. Default 200.
+     * @param bool $dry_run           When true, report what would change but don't write.
+     * @param int  $failure_threshold Abort after this many cumulative per-row failures. 0 = no threshold.
+     * @return array{processed:int, reencrypted:int, failed:int, aborted:bool, abort_reason:?string, columns:array<string,int>}
      */
-    public static function reencrypt_legacy(int $batch_size = 200, bool $dry_run = false): array {
+    public static function reencrypt_legacy(int $batch_size = 200, bool $dry_run = false, int $failure_threshold = self::FAILURE_THRESHOLD): array {
         global $wpdb;
 
         $table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $columns = MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS;
 
         $stats = [
-            'processed'   => 0,
-            'reencrypted' => 0,
-            'failed'      => 0,
-            'columns'     => array_fill_keys($columns, 0),
+            'processed'    => 0,
+            'reencrypted'  => 0,
+            'failed'       => 0,
+            'aborted'      => false,
+            'abort_reason' => null,
+            'columns'      => array_fill_keys($columns, 0),
         ];
 
         foreach ($columns as $col) {
@@ -216,6 +239,17 @@ class MealsDB_Encryption_Migrator {
                         $col,
                         $e->getMessage()
                     ));
+
+                    if ($failure_threshold > 0 && $stats['failed'] >= $failure_threshold) {
+                        $stats['aborted']      = true;
+                        $stats['abort_reason'] = sprintf(
+                            'Aborted after %d failures (threshold=%d). Check the error log for the root cause before re-running.',
+                            $stats['failed'],
+                            $failure_threshold
+                        );
+                        error_log('[MealsDB Encryption Migrator] ' . $stats['abort_reason']);
+                        break 2; // Exit both the row loop AND the column loop.
+                    }
                 }
             }
         }
