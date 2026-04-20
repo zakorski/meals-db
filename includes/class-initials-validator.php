@@ -314,8 +314,15 @@ class MealsDB_Initials_Validator {
 		if (!$wpdb) {
 			return [];
 		}
+		// esc_sql() doubles quote characters but does nothing for the
+		// backtick that delimits identifiers, so using it on a table
+		// name is the wrong helper — the interpolation is safe today
+		// only because the table name comes from the MealsDB_Tables
+		// constants, not user input. Use the same backtick-doubling
+		// escape the rest of the codebase uses for identifiers.
 		$clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-		$rows = $wpdb->get_col(sprintf("SELECT delivery_initials FROM `%s` WHERE delivery_initials <> '' AND delivery_initials IS NOT NULL", esc_sql($clients_table)));
+		$escaped_table = str_replace('`', '``', $clients_table);
+		$rows = $wpdb->get_col(sprintf("SELECT delivery_initials FROM `%s` WHERE delivery_initials <> '' AND delivery_initials IS NOT NULL", $escaped_table));
 		$set = [];
 		if (is_array($rows)) {
 			foreach ($rows as $r) {

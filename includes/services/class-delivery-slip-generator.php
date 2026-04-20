@@ -37,7 +37,21 @@ class MealsDB_Delivery_Slip_Generator {
     public function get_clients_for_delivery_date(string $delivery_date): array {
         global $wpdb;
 
-        $day_name  = date('l', strtotime($delivery_date));
+        // strtotime() falls back to "now" on unparseable input, so a
+        // malformed $delivery_date (e.g. "2026-13-01" or a typo) would
+        // silently return clients scheduled for today instead of
+        // erroring. Require strict Y-m-d format up front so a caller
+        // that fumbles the parameter gets an empty result rather than
+        // the wrong dataset.
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery_date)) {
+            return [];
+        }
+        $ts = strtotime($delivery_date);
+        if ($ts === false) {
+            return [];
+        }
+
+        $day_name  = date('l', $ts);
         $day_lower = strtolower($day_name);
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);

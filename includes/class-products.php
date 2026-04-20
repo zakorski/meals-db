@@ -63,6 +63,18 @@ class MealsDB_Products {
      * @return bool True on success, false otherwise.
      */
     public static function save_product_data(int $product_id, array $data): bool {
+        // Defence-in-depth: the product-tab UI already calls this
+        // behind a save_post capability check, but any future caller
+        // (WP-CLI import, REST endpoint, custom bulk editor) that
+        // reaches this service method directly should not be able to
+        // upsert product-cost rows without the appropriate WC cap.
+        if (function_exists('current_user_can')
+            && !current_user_can('edit_product', $product_id)
+            && !current_user_can('manage_woocommerce')) {
+            error_log(sprintf('[MealsDB Products] save_product_data blocked: insufficient capability for product_id=%d', $product_id));
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) {
             return false;
@@ -144,9 +156,16 @@ class MealsDB_Products {
             $case_size = 1;
         }
 
-        $unit_cost = isset($merged['unit_cost']) && is_numeric($merged['unit_cost'])
+        // Clamp unit_cost to a sane range. Without bounds, a typo
+        // (1e9 instead of 1.9) silently accepts a price that would
+        // break every downstream cost rollup and inflate resupply
+        // projections. The DB column is DECIMAL(10,2) — max 99999999.99
+        // — so setting a ceiling here gives a clearer error path
+        // than the silent DECIMAL overflow.
+        $unit_cost_raw = isset($merged['unit_cost']) && is_numeric($merged['unit_cost'])
             ? (float) $merged['unit_cost']
             : 0.00;
+        $unit_cost = max(0.00, min(99999.99, $unit_cost_raw));
 
         return [
             'wc_product_id'   => (int) $product_id,
