@@ -268,13 +268,41 @@ class MealsDB_Sync_Query {
         // household. The underlying query is  LIKE %needle%  against
         // wp_usermeta, which cannot use an index — caching is the
         // highest-leverage improvement without a schema change.
+        //
+        // Bound the cache to keep an unusually long render loop (or a
+        // long-running CLI consumer) from accumulating one entry per
+        // distinct (name, phone) tuple in memory until the request
+        // ends. 1024 entries comfortably covers a full sync dashboard
+        // with thousands of clients while capping the worst-case
+        // resident set. When the cap is reached the oldest half is
+        // dropped — cheaper than a true LRU, and "old" entries are
+        // also the least likely to recur because the dashboard walks
+        // mismatches in stable order.
         static $cache = [];
+        $cache_max = 1024;
         $cache_key = md5($first_name . '|' . $last_name . '|' . $phone_raw);
         if (array_key_exists($cache_key, $cache)) {
             return $cache[$cache_key];
         }
+        if (count($cache) >= $cache_max) {
+            $cache = array_slice($cache, intdiv($cache_max, 2), null, true);
+        }
 
+        // Phone normalisation: strip everything but digits, drop a
+        // leading '1' that's just the NANP country code, and keep the
+        // last 10 digits at most. Without these steps:
+        //   - "+1 (506) 555-0100" and "5065550100" wouldn't match,
+        //   - extensions ("...x123") would tail-pollute the LIKE
+        //     comparison and produce false negatives,
+        //   - international numbers with longer country codes still
+        //     compare against their last 10 digits (best effort).
         $normalized_phone = preg_replace('/\D+/', '', $phone_raw);
+        if ($normalized_phone !== null && strlen($normalized_phone) === 11 && strpos($normalized_phone, '1') === 0) {
+            $normalized_phone = substr($normalized_phone, 1);
+        }
+        if ($normalized_phone !== null && strlen($normalized_phone) > 10) {
+            $normalized_phone = substr($normalized_phone, -10);
+        }
 
         $conditions = [];
         $params     = [];

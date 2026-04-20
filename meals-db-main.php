@@ -415,9 +415,21 @@ function meals_db_check_requirements() {
 
 /**
  * Clean up scheduled events on plugin deactivation.
+ *
+ * Every cron hook the plugin schedules MUST appear here, otherwise
+ * WordPress will keep firing it after deactivation against
+ * undefined callbacks (PHP fatal: "Call to undefined function" on
+ * each cron tick). Today the plugin schedules:
+ *
+ *   - mealsdb_nightly_allocation_sync (class-allocation-hooks.php)
+ *   - mealsdb_nightly_sync            (class-sync.php)
+ *
+ * The original handler only cleared the first one; the second was
+ * orphaned and would re-fire daily on a deactivated install.
  */
 register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook('mealsdb_nightly_allocation_sync');
+    wp_clear_scheduled_hook('mealsdb_nightly_sync');
 });
 
 // Register the plugin update checker against the GitHub repository.
