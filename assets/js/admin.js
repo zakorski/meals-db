@@ -338,6 +338,19 @@ jQuery(document).ready(function($) {
     // 🔁 Sync All Selected Fields
     // -----------------------------
     $('#mealsdb-sync-all').on('click', function () {
+        // Double-submit guard: a rapid second click while the first
+        // batch of POSTs is still in flight would issue every sync_field
+        // request twice. Each is rate-limited server-side, but the
+        // duplicate noise blows the per-user quota for no reason and
+        // obscures real failures in the audit log. Disable the button
+        // until every in-flight request resolves.
+        const $btn = $(this);
+        if ($btn.prop('disabled')) {
+            return;
+        }
+        $btn.prop('disabled', true);
+
+        const pending = [];
         $('.mealsdb-mismatch-row').each(function () {
             const $row = $(this);
             const selected = $row.find('input[type=radio]:checked').val();
@@ -354,7 +367,7 @@ jQuery(document).ready(function($) {
                 ? (source.data('value') ?? source.text())
                 : (target.data('value') ?? target.text());
 
-            $.post(ajaxurl, {
+            pending.push($.post(ajaxurl, {
                 action: 'mealsdb_sync_field',
                 nonce: mealsdb.nonce,
                 woo_user_id: woo_id,
@@ -366,7 +379,16 @@ jQuery(document).ready(function($) {
                 if (res.success) {
                     $row.fadeOut();
                 }
-            });
+            }));
+        });
+
+        if (pending.length === 0) {
+            $btn.prop('disabled', false);
+            return;
+        }
+
+        $.when.apply($, pending).always(function () {
+            $btn.prop('disabled', false);
         });
     });
 

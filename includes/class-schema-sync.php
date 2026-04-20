@@ -152,14 +152,39 @@ class MealsDB_Schema_Sync {
 
     /**
      * Determine if the target table exists.
+     *
+     * Per-request cache backed by a single SHOW TABLES query rather
+     * than one SHOW TABLES LIKE %s per call. run_full_sync() iterates
+     * every canonical table (currently 7+) and previously issued one
+     * round-trip per check; on a schema upgrade that fires from
+     * admin_init, the per-query latency dominated. One up-front list
+     * walks the same metadata in a single query.
+     *
+     * The cache is keyed on the wpdb's host/dbname identity (so two
+     * connections to different databases don't share state) and lazily
+     * invalidates if SHOW TABLES errors — the next call retries
+     * cleanly without poisoning the cache with a half-built set.
      */
     private static function table_exists($wpdb, string $table): bool {
-        $result = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
-        if ($result === null && $wpdb->last_error) {
-            throw new RuntimeException($wpdb->last_error);
+        static $caches = [];
+
+        $cache_key = (string) ($wpdb->dbhost ?? '') . '|' . (string) ($wpdb->dbname ?? '');
+
+        if (!isset($caches[$cache_key])) {
+            $rows = $wpdb->get_col('SHOW TABLES');
+            if ($rows === null && $wpdb->last_error) {
+                throw new RuntimeException($wpdb->last_error);
+            }
+            $set = [];
+            if (is_array($rows)) {
+                foreach ($rows as $name) {
+                    $set[(string) $name] = true;
+                }
+            }
+            $caches[$cache_key] = $set;
         }
 
-        return $result !== null;
+        return isset($caches[$cache_key][$table]);
     }
 
     /**
