@@ -317,6 +317,30 @@ add_action('admin_notices', function () {
 });
 
 /**
+ * Runtime warning when WooCommerce has been deactivated while Meals DB
+ * is still active. Activation refused this up-front, but an operator
+ * may deactivate WC later. The plugin will keep loading (so the
+ * operator can still reach settings pages to fix things) but flag the
+ * problem loudly — every order-aware code path assumes WC is present.
+ */
+add_action('admin_notices', function () {
+    if (class_exists('WooCommerce')) {
+        return;
+    }
+    if (!current_user_can('activate_plugins')) {
+        return;
+    }
+    echo '<div class="notice notice-error"><p><strong>';
+    echo esc_html__('Meals Database: WooCommerce is not active.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html__(
+        'Meals DB depends on WooCommerce for orders, products, and capability checks. Reactivate WooCommerce or deactivate Meals DB to restore normal behaviour — several admin pages will fatal on load until one or the other happens.',
+        'meals-db'
+    );
+    echo '</p></div>';
+});
+
+/**
  * Check minimum PHP and WordPress versions before allowing activation.
  */
 register_activation_hook(__FILE__, 'meals_db_check_requirements');
@@ -353,6 +377,27 @@ function meals_db_check_requirements() {
                 ),
                 $required_wp_version,
                 $wp_version
+            ),
+            esc_html__('Plugin Activation Error', 'meals-db'),
+            ['back_link' => true]
+        );
+    }
+
+    // WooCommerce is a hard dependency — the plugin's capability gate
+    // (MealsDB_Permissions::required_capability() defaults to
+    // 'manage_woocommerce') assumes it's present, and most of the
+    // reporting / order code calls wc_get_order() / wc_get_product()
+    // directly. Activating without WooCommerce would silently admit
+    // users through the capability check (any administrator satisfies
+    // 'manage_woocommerce' in WP core even when the mapped meta-cap
+    // is missing) and then fatal on the first AJAX request that hits
+    // a WC helper. Refuse activation up-front with a clear message.
+    if (!class_exists('WooCommerce')) {
+        deactivate_plugins(plugin_basename(__FILE__));
+        wp_die(
+            esc_html__(
+                'Meals DB requires WooCommerce to be installed and active. Please activate WooCommerce first, then try activating Meals DB again.',
+                'meals-db'
             ),
             esc_html__('Plugin Activation Error', 'meals-db'),
             ['back_link' => true]
