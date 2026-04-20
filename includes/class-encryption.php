@@ -141,7 +141,18 @@ class MealsDB_Encryption {
      */
     public static function encrypt(string $plaintext): string {
         $key = self::get_key();
-        $iv = openssl_random_pseudo_bytes(16); // 128-bit IV
+        // random_bytes() draws from /dev/urandom (or BCryptGenRandom on
+        // Windows) and throws on entropy failure. openssl_random_
+        // pseudo_bytes() is a legacy wrapper that can silently fall
+        // back to a weaker source when OpenSSL's entropy pool is
+        // unseeded — surfacing the exception here is preferable to
+        // producing a cryptographically-dubious IV. Both calls return
+        // exactly 16 raw bytes for our 128-bit AES-CBC IV.
+        try {
+            $iv = random_bytes(16);
+        } catch (\Throwable $e) {
+            throw new Exception('IV generation failed: ' . $e->getMessage());
+        }
 
         $ciphertext = openssl_encrypt(
             $plaintext,
