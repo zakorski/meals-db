@@ -388,7 +388,33 @@ class MealsDB_Sync_Query {
             return [];
         }
 
-        $results = $wpdb->get_results($prepared, ARRAY_A);
+        // The LIKE '%needle%' shape above can't use an index on
+        // wp_usermeta.meta_value (leading wildcard AND wrapping
+        // LOWER() both defeat indexing). On a large site this
+        // devolves to a scan of the entire usermeta table per match
+        // attempt. A proper fix needs a denormalised
+        // meals_user_search_index table with insert/update/delete
+        // hooks on user_meta — out of scope for this review.
+        //
+        // In the meantime, time the query and emit an error_log
+        // warning if it crosses a threshold so the operator can see
+        // the cost in their diagnostic log instead of discovering
+        // it through a complaint about a slow dashboard. 2 seconds
+        // is conservative — a healthy small install responds in
+        // milliseconds.
+        $query_started_at = microtime(true);
+        $results          = $wpdb->get_results($prepared, ARRAY_A);
+        $elapsed          = microtime(true) - $query_started_at;
+        if ($elapsed > 2.0) {
+            error_log(sprintf(
+                '[MealsDB Sync] find_candidate_wc_matches_for_client slow query: %.2fs (first=%s last=%s phone=%s). '
+                . 'Consider denormalising wp_usermeta name lookups into a dedicated search table.',
+                $elapsed,
+                $first_name,
+                $last_name,
+                $normalized_phone
+            ));
+        }
 
         if (!is_array($results)) {
             return [];
