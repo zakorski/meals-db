@@ -197,6 +197,52 @@ add_action('admin_notices', function () {
 });
 
 /**
+ * Security notice: encryption key is still stored in wp_options.
+ *
+ * The original implementation read the AES-256 key from
+ * mealsdb_settings.encryption_key. That works but any compromise of
+ * the MySQL data directory (backup tarball, replica dump, SQL-injection
+ * exfil) reveals the key alongside the ciphertext it protects. The
+ * remediated path reads from the MEALS_DB_KEY constant (wp-config.php)
+ * or the MEALS_DB_ENCRYPTION_KEY environment variable; when it's still
+ * coming from the database, flag it loudly so the operator migrates.
+ */
+add_action('admin_notices', function () {
+    if (!class_exists('MealsDB_Encryption')) {
+        return;
+    }
+    if (MealsDB_Encryption::key_source() !== 'option') {
+        return;
+    }
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    $opts = get_option('mealsdb_settings', []);
+    $key  = is_array($opts) && !empty($opts['encryption_key']) ? (string) $opts['encryption_key'] : '';
+
+    echo '<div class="notice notice-warning"><p><strong>';
+    echo esc_html__('Meals Database: encryption key is stored in wp_options.', 'meals-db');
+    echo '</strong></p><p>';
+    echo esc_html__(
+        'Move it to wp-config.php so a database dump can\'t reveal the key. Add this line above the "/* That\'s all, stop editing! */" marker:',
+        'meals-db'
+    );
+    echo '</p><p><code>';
+    if ($key !== '') {
+        echo "define('MEALS_DB_KEY', '" . esc_html($key) . "');";
+    } else {
+        echo "define('MEALS_DB_KEY', 'base64:YOUR_KEY_HERE');";
+    }
+    echo '</code></p><p>';
+    echo esc_html__(
+        'After adding the constant, reload this page to confirm the notice is gone, then delete the "encryption_key" entry from the Meals DB settings row in wp_options.',
+        'meals-db'
+    );
+    echo '</p></div>';
+});
+
+/**
  * Check minimum PHP and WordPress versions before allowing activation.
  */
 register_activation_hook(__FILE__, 'meals_db_check_requirements');

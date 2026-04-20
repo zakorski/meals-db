@@ -27,31 +27,95 @@ class MealsDB_Encryption {
     ];
 
     /**
-     * Get the AES key from environment variable or wp-config.php constants.
+     * Resolve the encryption key and record which source supplied it.
+     *
+     * Priority order (most secure first):
+     *   1. MEALS_DB_KEY constant — defined in wp-config.php or a
+     *      config-local PHP file outside the document root. Not
+     *      readable from a SQL dump or a leaked wp_options backup.
+     *   2. MEALS_DB_ENCRYPTION_KEY environment variable — for
+     *      containerised / 12-factor deployments where wp-config is
+     *      baked into the image and secrets come from the orchestrator.
+     *   3. mealsdb_settings.encryption_key option — the original
+     *      storage. Deprecated: any compromise of the MySQL data
+     *      directory (backup tarball, replica dump, SQL-injection
+     *      exfil) leaks every encrypted PII column. Callers that use
+     *      this path get a one-time error_log warning and an admin
+     *      notice so operators migrate to the constant.
+     *
+     * @return array{key: string, source: string}
+     */
+    private static function resolve_key_material(): array {
+        $key_b64 = '';
+        $source  = 'missing';
+
+        if (defined('MEALS_DB_KEY') && is_string(MEALS_DB_KEY) && MEALS_DB_KEY !== '') {
+            $key_b64 = MEALS_DB_KEY;
+            $source  = 'constant';
+        }
+
+        if ($key_b64 === '') {
+            $env = getenv('MEALS_DB_ENCRYPTION_KEY');
+            if (is_string($env) && $env !== '') {
+                $key_b64 = $env;
+                $source  = 'env';
+            }
+        }
+
+        if ($key_b64 === '' && function_exists('get_option')) {
+            $opts = get_option('mealsdb_settings', []);
+            if (is_array($opts) && !empty($opts['encryption_key'])) {
+                $key_b64 = (string) $opts['encryption_key'];
+                $source  = 'option';
+                self::warn_once_on_db_key();
+            }
+        }
+
+        return ['key' => $key_b64, 'source' => $source];
+    }
+
+    /**
+     * Where the currently-active encryption key lives.
+     *
+     * Exposed so the admin-notices hook in meals-db-main.php (and any
+     * future diagnostics tool) can surface a "migrate your key out of
+     * the database" banner without triggering the actual decryption
+     * work.
+     *
+     * @return string One of 'constant', 'env', 'option', 'missing'.
+     */
+    public static function key_source(): string {
+        try {
+            return self::resolve_key_material()['source'];
+        } catch (\Throwable $e) {
+            return 'missing';
+        }
+    }
+
+    /**
+     * Emit a single error_log warning per request when the key is
+     * still being read from wp_options. Kept lightweight — the full
+     * remediation UX lives in the admin notice.
+     */
+    private static function warn_once_on_db_key(): void {
+        static $warned = false;
+        if ($warned) {
+            return;
+        }
+        $warned = true;
+        error_log('[MealsDB Encryption] WARNING: encryption key sourced from wp_options (mealsdb_settings.encryption_key). Move it to the MEALS_DB_KEY constant in wp-config.php so a database dump does not leak the key.');
+    }
+
+    /**
+     * Get the AES key from the highest-priority available source.
      *
      * @return string
      */
     private static function get_key(): string {
-        // 1. WordPress options (Settings tab)
-        $key_b64 = '';
-        if (function_exists('get_option')) {
-            $opts = get_option('mealsdb_settings', []);
-            if (is_array($opts) && !empty($opts['encryption_key'])) {
-                $key_b64 = $opts['encryption_key'];
-            }
-        }
+        $resolved = self::resolve_key_material();
+        $key_b64  = $resolved['key'];
 
-        // 2. Environment variable
-        if (!$key_b64) {
-            $key_b64 = getenv('MEALS_DB_ENCRYPTION_KEY');
-        }
-
-        // 3. wp-config.php constant (backward compatibility)
-        if (!$key_b64 && defined('MEALS_DB_KEY')) {
-            $key_b64 = MEALS_DB_KEY;
-        }
-
-        if (!$key_b64) {
+        if ($key_b64 === '') {
             throw new Exception('Missing Meals DB encryption key configuration.');
         }
 
