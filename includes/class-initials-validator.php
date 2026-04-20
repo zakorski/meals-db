@@ -326,14 +326,23 @@ class MealsDB_Initials_Validator {
 	}
 
 	private static function is_address_empty($address) {
-		// Require street_name + city + postal_code for a "non-empty"
+		// Require street_name + city + postal for a "non-empty"
 		// address. Allowing a missing postal would let two unrelated
 		// houses on the same street+city share initials despite having
 		// different postals; treating that as "empty" forces the
 		// uniqueness check to assign independent initials.
+		//
+		// NOTE: the key is `postal`, not `postal_code`, because
+		// normalize_delivery_address() returns the normalised array
+		// with that shorter key. The original code checked
+		// `$address['postal_code']` which never existed on a
+		// normalised array, so is_address_empty() always returned
+		// true and address-based initials sharing was silently dead:
+		// every legitimately-shared household received the "please
+		// provide a delivery address" error even when they had one.
 		return empty($address['street_name'])
 			|| empty($address['city'])
-			|| empty($address['postal_code']);
+			|| empty($address['postal']);
 	}
 
 	/**
