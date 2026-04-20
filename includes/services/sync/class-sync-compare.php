@@ -15,7 +15,27 @@ class MealsDB_Sync_Compare {
      *
      * @var array<string, array<int, WP_User>>
      */
-    private $wp_users_cache = [];
+    /**
+     * Cache of WP user lists, keyed by the query object that produced
+     * them. Static so multiple MealsDB_Sync_Compare instances in the
+     * same request (dashboard + a downstream reconciliation job, for
+     * example) share the cache instead of each re-fetching thousands
+     * of WP users from the same underlying query.
+     *
+     * Keyed by spl_object_id($query). To protect against PHP recycling
+     * that ID after the original object is freed (which would hand a
+     * stale user list to a new, unrelated query object), pin the
+     * referenced query in $pinned_queries so it stays live for the
+     * whole request.
+     *
+     * @var array<int, array<int, array<string, mixed>>>
+     */
+    private static $wp_users_cache = [];
+
+    /**
+     * @var array<int, MealsDB_Sync_Query>
+     */
+    private static $pinned_queries = [];
 
     /**
      * Retrieve and compare Meals DB and WordPress data to identify mismatches.
@@ -334,12 +354,18 @@ class MealsDB_Sync_Compare {
      * @return array<int, array<string, mixed>>
      */
     public function find_probable_matches_for_client(array $client, MealsDB_Sync_Query $query): array {
-        $key = spl_object_hash($query);
-        if (!isset($this->wp_users_cache[$key])) {
-            $this->wp_users_cache[$key] = $query->get_wp_users();
+        $key = spl_object_id($query);
+        if (!isset(self::$wp_users_cache[$key])) {
+            // Pin the query object for the rest of the request so PHP
+            // can't recycle its object id after the caller's only ref
+            // goes out of scope — without this pin, a new query object
+            // could hash to the same id and inherit the wrong cached
+            // user list.
+            self::$pinned_queries[$key] = $query;
+            self::$wp_users_cache[$key] = $query->get_wp_users();
         }
 
-        return $this->find_probable_matches($client, $this->wp_users_cache[$key]);
+        return $this->find_probable_matches($client, self::$wp_users_cache[$key]);
     }
 
     /**
@@ -361,10 +387,22 @@ class MealsDB_Sync_Compare {
         foreach ($map as $field => $woo_value) {
             $plugin_value = $client[$field] ?? '';
 
-            // Use mb_strtolower so non-ASCII names (Î, é, etc.) compare
-            // by Unicode case rather than byte-equality.
-            $plugin_norm = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $plugin_value, 'UTF-8') : strtolower((string) $plugin_value));
-            $woo_norm    = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $woo_value, 'UTF-8') : strtolower((string) $woo_value));
+            if ($field === 'phone_primary') {
+                // Phone comparison was previously just mb_strtolower +
+                // trim, which would flag every (506) 555-0100 vs
+                // 5065550100 pair as a mismatch even though they're
+                // the same number. Route through normalize_phone() to
+                // strip formatting, drop a leading NANP '1', and
+                // compare by the last 10 digits.
+                $plugin_norm = $this->normalize_phone((string) $plugin_value);
+                $woo_norm    = $this->normalize_phone((string) $woo_value);
+            } else {
+                // Use mb_strtolower so non-ASCII names (Î, é, etc.)
+                // compare by Unicode case rather than byte-equality.
+                $plugin_norm = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $plugin_value, 'UTF-8') : strtolower((string) $plugin_value));
+                $woo_norm    = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $woo_value, 'UTF-8') : strtolower((string) $woo_value));
+            }
+
             if ($plugin_norm !== $woo_norm) {
                 $mismatches[$field] = [
                     'meals_db'    => $plugin_value,
@@ -497,10 +535,33 @@ class MealsDB_Sync_Compare {
     }
 
     /**
-     * Normalize a phone number by stripping non-digit characters.
+     * Canonicalise a phone number so two formats of the same number
+     * compare equal.
+     *
+     *   - Strip every non-digit character (parens, spaces, dashes, "+").
+     *   - Drop a leading NANP country-code '1' when the residue is
+     *     exactly 11 digits. "+1 5065550100" → "5065550100".
+     *   - Keep at most the last 10 digits. Tolerates extension tails
+     *     ("…x123") and best-effort matches international numbers
+     *     the user typed with a longer country code.
+     *
+     * Previously this was just preg_replace('/\D+/', '', $value), so
+     * "(506) 555-0100" and "5065550100" normalised to different
+     * lengths and the downstream compare_fields() flagged them as
+     * mismatches on every dashboard render.
      */
     private function normalize_phone(string $value): string {
-        return preg_replace('/\D+/', '', $value) ?? '';
+        $digits = preg_replace('/\D+/', '', $value);
+        if ($digits === null || $digits === '') {
+            return '';
+        }
+        if (strlen($digits) === 11 && strpos($digits, '1') === 0) {
+            $digits = substr($digits, 1);
+        }
+        if (strlen($digits) > 10) {
+            $digits = substr($digits, -10);
+        }
+        return $digits;
     }
 
     /**
