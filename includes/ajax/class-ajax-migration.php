@@ -289,12 +289,12 @@ class MealsDB_Ajax_Migration {
         set_time_limit( 300 );
 
         $file_path     = self::sanitize_path( (string) wp_unslash( $_POST['file_path'] ?? '' ) );
-        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
+        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
         $byte_offset   = (int) ( $_POST['byte_offset'] ?? 0 );
         $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
 
-        if ( ! $file_path || ! $source_prefix ) {
-            wp_send_json_error( [ 'message' => 'Missing file_path or source_prefix.' ] );
+        if ( ! $file_path ) {
+            wp_send_json_error( [ 'message' => 'Missing file_path.' ] );
         }
 
         $result = MealsDB_Migration::load_source( $file_path, $source_prefix, $byte_offset, $dry_run );
@@ -319,7 +319,7 @@ class MealsDB_Ajax_Migration {
         self::verify();
         set_time_limit( 300 );
 
-        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
+        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
         $table_index   = (int) ( $_POST['table_index'] ?? 0 );
         $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
 
@@ -340,7 +340,7 @@ class MealsDB_Ajax_Migration {
             $pass = (string) wp_unslash( $_POST['db_pass'] ?? '' );
         }
 
-        if ( ! $host || ! $name || ! $user || ! $source_prefix ) {
+        if ( ! $host || ! $name || ! $user ) {
             wp_send_json_error( [ 'message' => 'Missing database connection parameters. Re-run "Test connection" to refresh credentials.' ] );
         }
 
@@ -369,7 +369,7 @@ class MealsDB_Ajax_Migration {
         $phase         = (int) ( $_POST['phase'] ?? 0 );
         $offset        = (int) ( $_POST['offset'] ?? 0 );
         $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
-        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
+        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
 
         $result = [];
 
@@ -422,10 +422,7 @@ class MealsDB_Ajax_Migration {
     public static function cleanup(): void {
         self::verify();
 
-        $source_prefix = sanitize_text_field( wp_unslash( $_POST['source_prefix'] ?? '' ) );
-        if ( ! $source_prefix ) {
-            wp_send_json_error( [ 'message' => 'Missing source_prefix.' ] );
-        }
+        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
 
         $result = MealsDB_Migration::cleanup( $source_prefix );
         MealsDB_Migration::append_log( "Cleanup: dropped {$result['dropped']} source tables." );
@@ -458,6 +455,37 @@ class MealsDB_Ajax_Migration {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
         }
+    }
+
+    /**
+     * Validate a WordPress table prefix supplied by the UI.
+     *
+     * WP core requires table prefixes to match /^[a-zA-Z0-9_]+$/ —
+     * the installer enforces that and every downstream query in
+     * MealsDB_Migration concatenates the prefix into SQL via
+     * sprintf(), so any character outside that class would either
+     * produce a malformed query or widen the attack surface. Reject
+     * early with a clear message instead of passing through and
+     * letting the storage layer throw a less helpful error.
+     *
+     * Returns the validated prefix, or exits with wp_send_json_error.
+     */
+    private static function require_source_prefix( string $raw ): string {
+        $prefix = sanitize_text_field( $raw );
+        if ( $prefix === '' ) {
+            wp_send_json_error( [ 'message' => 'Missing source_prefix.' ] );
+        }
+        if ( ! preg_match( '/^[a-zA-Z0-9_]+$/', $prefix ) ) {
+            wp_send_json_error( [
+                'message' => 'Invalid source_prefix. Table prefixes must match ^[a-zA-Z0-9_]+$.',
+            ] );
+        }
+        // Guard against absurd lengths — no real WP install uses a
+        // 200-char prefix and anything beyond that is a probing attempt.
+        if ( strlen( $prefix ) > 64 ) {
+            wp_send_json_error( [ 'message' => 'source_prefix too long.' ] );
+        }
+        return $prefix;
     }
 
     /**
