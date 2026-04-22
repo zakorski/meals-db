@@ -177,6 +177,17 @@ if ( $has_enc_key ) {
             <span id="mealsdb-backfill-result" style="margin-left:12px;"></span>
         </p>
 
+        <h2><?php echo esc_html__( 'Backfill Next-Order / Next-Delivery Dates', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( "Populate next_order_date / next_delivery_date on each client using their last-order/last-delivery user meta plus the configured ordering / delivery frequencies. Only fills empty columns so existing values are preserved. Safe to re-run.", 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-backfill-next-dates">
+                <?php echo esc_html__( 'Backfill Next Dates', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-backfill-next-dates-result" style="margin-left:12px;"></span>
+        </p>
+
         <h2><?php echo esc_html__( 'Sync Product Display Data', 'meals-db' ); ?></h2>
         <p class="description">
             <?php echo esc_html__( 'Rebuild the cached product display data (name, price, image, categories) used by the Quick Order page. This is done automatically when products are saved, but you can run a full sync here.', 'meals-db' ); ?>

@@ -96,6 +96,21 @@ add_action('plugins_loaded', function () {
     MealsDB_Product_Display_Sync::init();
     MealsDB_Sync::register_hooks();
     MealsDB_Allocation_Hooks::init();
+
+    // Task engine (Phase R1 + R2).
+    MealsDB_Task_Type_Generic_Reminder::register();
+    MealsDB_Task_Type_Call_Client::register();
+    MealsDB_Task_Type_Place_PO::register();
+    MealsDB_Task_Type_Confirm_PO_Arrival::register();
+    MealsDB_Task_Type_Physical_Count::register();
+
+    MealsDB_Task_Rules::register_strategy(
+        'clients_due_to_reorder',
+        [MealsDB_Task_Type_Call_Client::class, 'clients_due_to_reorder_strategy']
+    );
+
+    MealsDB_Ajax_Tasks::init();
+    MealsDB_Task_Cron::init();
 });
 
 /**
@@ -494,6 +509,7 @@ function meals_db_check_requirements() {
 register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook('mealsdb_nightly_allocation_sync');
     wp_clear_scheduled_hook('mealsdb_nightly_sync');
+    wp_clear_scheduled_hook('mealsdb_nightly_task_sync');
 });
 
 // Register the plugin update checker against the GitHub repository.

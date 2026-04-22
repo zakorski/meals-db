@@ -15,6 +15,9 @@ class MealsDB_Tables
     public const IGNORED_CONFLICTS = 'meals_ignored_conflicts';
     public const CLIENT_ALLOCATIONS = 'meals_client_allocations';
     public const DELIVERY_ALLOCATIONS = 'meals_delivery_allocations';
+    public const SCHEDULE_RULES = 'meals_schedule_rules';
+    public const TASKS = 'meals_tasks';
+    public const PURCHASE_ORDERS = 'meals_purchase_orders';
 
     /**
      * Retrieve all canonical table names.
@@ -33,6 +36,9 @@ class MealsDB_Tables
             self::IGNORED_CONFLICTS,
             self::CLIENT_ALLOCATIONS,
             self::DELIVERY_ALLOCATIONS,
+            self::SCHEDULE_RULES,
+            self::TASKS,
+            self::PURCHASE_ORDERS,
         ];
     }
 }

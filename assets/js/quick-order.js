@@ -206,8 +206,21 @@
                     if (this.$summaryDate && this.$summaryDate.length) {
                         this.$summaryDate.text(value ? value : this.translate('Not set'));
                     }
+                    // Re-derive the rule-default next dates from the
+                    // new order date.
+                    const clientId = this.$clientSelect && this.$clientSelect.length
+                        ? parseInt(this.$clientSelect.val(), 10) : 0;
+                    if (clientId > 0) {
+                        this.fetchNextDates(clientId);
+                    }
                 });
             }
+
+            $(document).on('click', '#mealsdb-qo-next-reset', () => {
+                const defaults = (this.state && this.state.nextDatesDefaults) || {};
+                $('#mealsdb-qo-next-order-date').val(defaults.order || '');
+                $('#mealsdb-qo-next-delivery-date').val(defaults.delivery || '');
+            });
 
             if (this.$rateSelect && this.$rateSelect.length) {
                 this.$rateSelect.on('change', () => {
@@ -1450,6 +1463,8 @@
                     date: orderDate,
                     items: payloadItems,
                     rate_id: rateId,
+                    next_order_date: $('#mealsdb-qo-next-order-date').val() || '',
+                    next_delivery_date: $('#mealsdb-qo-next-delivery-date').val() || '',
                 },
             }).done((response) => {
                 if (!this.isSuccessfulResponse(response)) {
@@ -1697,8 +1712,51 @@
             this.renderSummary();
             this.fetchClientRates(clientId);
             this.fetchClientAllocation(clientId);
+            this.fetchNextDates(clientId);
 
             $(document).trigger('mealsdb_update_summary');
+        },
+
+        /**
+         * Fetch the client's stored next_order_date / next_delivery_date
+         * and the "rule defaults" (order date + configured frequency), and
+         * populate the next-cycle panel.
+         */
+        fetchNextDates(userId) {
+            if (!Number.isInteger(userId) || userId <= 0) {
+                $('#mealsdb-qo-next-dates').hide();
+                return;
+            }
+            const self = this;
+            $.ajax({
+                url: this.getAjaxUrl(),
+                method: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'mealsdb_qo_get_next_dates',
+                    nonce: this.getSecurityNonce('createOrder'),
+                    client_id: userId,
+                    order_date: this.$orderDate ? (this.$orderDate.val() || '') : '',
+                },
+            }).done(function(resp) {
+                if (!resp || !resp.success) return;
+                const d = resp.data || {};
+                self.state.nextDatesDefaults = {
+                    order: d.rule_default_order || '',
+                    delivery: d.rule_default_delivery || '',
+                };
+                const $panel = $('#mealsdb-qo-next-dates');
+                if (!d.has_client) { $panel.hide(); return; }
+                $panel.show();
+                $('#mealsdb-qo-next-order-date').val(d.next_order_date || d.rule_default_order || '');
+                $('#mealsdb-qo-next-delivery-date').val(d.next_delivery_date || d.rule_default_delivery || '');
+                $('#mealsdb-qo-next-order-default').text(
+                    d.rule_default_order ? 'Normally: ' + d.rule_default_order : ''
+                );
+                $('#mealsdb-qo-next-delivery-default').text(
+                    d.rule_default_delivery ? 'Normally: ' + d.rule_default_delivery : ''
+                );
+            });
         },
 
         fetchClientRates(userId, preselectRateId) {

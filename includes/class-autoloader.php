@@ -40,6 +40,7 @@ class MealsDB_Autoloader {
             'includes/ajax',
             'includes/services',
             'includes/services/sync',
+            'includes/task-types',
         ];
 
         if (function_exists('apply_filters')) {

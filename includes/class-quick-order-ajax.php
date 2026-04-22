@@ -20,6 +20,7 @@ class MealsDB_Quick_Order_Ajax {
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
         add_action('wp_ajax_mealsdb_qo_get_client_allocation', [self::class, 'get_client_allocation']);
         add_action('wp_ajax_mealsdb_get_client_allocation_history', [self::class, 'get_client_allocation_history']);
+        add_action('wp_ajax_mealsdb_qo_get_next_dates', [self::class, 'get_next_dates']);
         MealsDB_Ajax_Rates::init();
     }
 
@@ -344,6 +345,12 @@ class MealsDB_Quick_Order_Ajax {
             $order_timestamp = $order_date->format('Y-m-d H:i:s');
             update_user_meta($client_id, 'last_order_date', $order_timestamp);
             update_user_meta($client_id, 'last_call_date', $order_timestamp);
+
+            // R2: persist the next-order / next-delivery dates the operator
+            // confirmed on the form. These become the anchor for the
+            // following cycle — see phase-R2-task-workflows Part A
+            // ("rule resumes from new anchor").
+            self::persist_next_dates($client_db_id, $client_id, $order_date);
 
             $order_id = $order->get_id();
             wp_send_json([
@@ -944,6 +951,145 @@ class MealsDB_Quick_Order_Ajax {
         );
 
         return $row !== null;
+    }
+
+    /**
+     * Save the next_order_date / next_delivery_date values the operator
+     * confirmed on the Quick Order form to meals_clients. If the form
+     * didn't supply values, fall back to the "rule default" — the just-
+     * placed order date + the client's configured frequency — so the
+     * next cycle always has an anchor.
+     */
+    private static function persist_next_dates(int $client_db_id, int $wp_user_id, DateTimeImmutable $order_date): void {
+        if ($client_db_id <= 0) {
+            return;
+        }
+
+        $submitted_order    = self::sanitize_date_input($_POST['next_order_date'] ?? null);
+        $submitted_delivery = self::sanitize_date_input($_POST['next_delivery_date'] ?? null);
+
+        // Load frequencies so we can compute the rule-default when the form
+        // didn't provide them (e.g. older JS deployed against newer PHP).
+        global $wpdb;
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $client = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT ordering_frequency, delivery_frequency FROM `{$clients_table}` WHERE client_id = %d",
+                $client_db_id
+            ),
+            ARRAY_A
+        );
+
+        $ordering_days = isset($client['ordering_frequency']) ? (int) $client['ordering_frequency'] : 0;
+        $delivery_days = isset($client['delivery_frequency']) ? (int) $client['delivery_frequency'] : 0;
+
+        $patch = [];
+        if ($submitted_order !== null) {
+            $patch['next_order_date'] = $submitted_order;
+        } elseif ($ordering_days > 0) {
+            $patch['next_order_date'] = $order_date->modify('+' . $ordering_days . ' days')->format('Y-m-d');
+        }
+        if ($submitted_delivery !== null) {
+            $patch['next_delivery_date'] = $submitted_delivery;
+        } elseif ($delivery_days > 0) {
+            $patch['next_delivery_date'] = $order_date->modify('+' . $delivery_days . ' days')->format('Y-m-d');
+        }
+
+        if (empty($patch)) {
+            return;
+        }
+
+        $updated = $wpdb->update($clients_table, $patch, ['client_id' => $client_db_id]);
+        if ($updated === false) {
+            error_log('[MealsDB QuickOrder] Failed to persist next_order/delivery_date: ' . $wpdb->last_error);
+            return;
+        }
+
+        // Mirror to usermeta so the sync layer and any external consumers
+        // stay coherent with the map defined in class-sync.php.
+        if ($wp_user_id > 0 && function_exists('update_user_meta')) {
+            foreach ($patch as $col => $value) {
+                $meta_key = $col === 'next_order_date' ? 'mealsdb_next_order_date' : 'mealsdb_next_delivery_date';
+                update_user_meta($wp_user_id, $meta_key, $value);
+            }
+        }
+    }
+
+    private static function sanitize_date_input($raw): ?string {
+        if (!is_string($raw)) {
+            return null;
+        }
+        $raw = trim(wp_unslash($raw));
+        if ($raw === '') {
+            return null;
+        }
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw) ? $raw : null;
+    }
+
+    /**
+     * AJAX endpoint: read the client's stored next_order_date /
+     * next_delivery_date plus the rule-defaults that would apply if today's
+     * order follows the standard cadence. Used by the Quick Order UI panel.
+     */
+    public static function get_next_dates(): void {
+        self::verify_request();
+
+        $client_id = isset($_REQUEST['client_id']) ? (int) $_REQUEST['client_id'] : 0;
+        $order_date_str = isset($_REQUEST['order_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['order_date'])) : '';
+
+        if ($client_id <= 0) {
+            wp_send_json_error(['message' => __('Client id required.', 'meals-db')]);
+        }
+
+        $client_db_id = self::get_active_client_id_for_user($client_id);
+        if ($client_db_id <= 0) {
+            wp_send_json_success([
+                'has_client'      => false,
+                'next_order_date' => null,
+                'next_delivery_date' => null,
+                'rule_default_order'    => null,
+                'rule_default_delivery' => null,
+            ]);
+        }
+
+        global $wpdb;
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $client = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT ordering_frequency, delivery_frequency, next_order_date, next_delivery_date
+                 FROM `{$clients_table}` WHERE client_id = %d",
+                $client_db_id
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($client)) {
+            wp_send_json_error(['message' => __('Client record not found.', 'meals-db')]);
+        }
+
+        try {
+            $order_date = preg_match('/^\d{4}-\d{2}-\d{2}$/', $order_date_str)
+                ? new DateTimeImmutable($order_date_str)
+                : new DateTimeImmutable('now');
+        } catch (Throwable $e) {
+            $order_date = new DateTimeImmutable('now');
+        }
+
+        $ordering_days = (int) ($client['ordering_frequency'] ?? 0);
+        $delivery_days = (int) ($client['delivery_frequency'] ?? 0);
+
+        $rule_order    = $ordering_days > 0 ? $order_date->modify('+' . $ordering_days . ' days')->format('Y-m-d') : null;
+        $rule_delivery = $delivery_days > 0 ? $order_date->modify('+' . $delivery_days . ' days')->format('Y-m-d') : null;
+
+        wp_send_json_success([
+            'has_client'            => true,
+            'next_order_date'       => $client['next_order_date'] ?: null,
+            'next_delivery_date'    => $client['next_delivery_date'] ?: null,
+            'rule_default_order'    => $rule_order,
+            'rule_default_delivery' => $rule_delivery,
+            'ordering_frequency'    => $ordering_days,
+            'delivery_frequency'    => $delivery_days,
+        ]);
     }
 
     /**
