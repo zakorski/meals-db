@@ -273,6 +273,21 @@ class MealsDB_Allocation_Engine {
             return;
         }
 
+        // Private customers have no monthly allowance — running them
+        // through the allocation engine would create zero-filled rows
+        // that pollute the reports. Allocation hooks fire on every WC
+        // order, so this guard catches the case where a Private
+        // customer's order happens to carry mealsdb_client_user_id meta
+        // (e.g. via QuickOrder).
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $client_type = (string) $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT client_type FROM {$clients_table} WHERE client_id = %d LIMIT 1",
+            $client_id
+        ));
+        if ($client_type === 'Private') {
+            return;
+        }
+
         // Get order date.
         $order_date_str = $this->wpdb->get_var($this->wpdb->prepare(
             "SELECT DATE(date_created_gmt) FROM {$orders_table} WHERE id = %d",

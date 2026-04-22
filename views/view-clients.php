@@ -3,38 +3,70 @@ defined('ABSPATH') || exit;
 
 MealsDB_Permissions::enforce();
 
-$selected_type = isset($_GET['client_type']) ? $_GET['client_type'] : '';
-$search_term = isset($_GET['search']) ? $_GET['search'] : '';
-
+// Phase S: the client list could suddenly explode with Private customers
+// once the promotion trigger starts populating meals_clients. Admins
+// usually want the government-client view, so default to SDNB+Veteran
+// and surface a preset selector that persists in the URL.
+$type_preset = isset($_GET['type_preset']) ? (string) $_GET['type_preset'] : 'government';
 if (function_exists('wp_unslash')) {
-    $selected_type = wp_unslash($selected_type);
+    $type_preset = wp_unslash($type_preset);
+}
+if (function_exists('sanitize_text_field')) {
+    $type_preset = sanitize_text_field($type_preset);
+}
+
+$valid_presets = ['government', 'all', 'sdnb', 'veteran', 'private'];
+if (!in_array($type_preset, $valid_presets, true)) {
+    $type_preset = 'government';
+}
+
+$preset_map = [
+    'all'        => null,
+    'government' => ['SDNB', 'Veteran'],
+    'sdnb'       => 'SDNB',
+    'veteran'    => 'Veteran',
+    'private'    => 'Private',
+];
+$client_type_filter = $preset_map[$type_preset];
+
+$search_term = isset($_GET['search']) ? $_GET['search'] : '';
+if (function_exists('wp_unslash')) {
     $search_term = wp_unslash($search_term);
 }
-
 if (function_exists('sanitize_text_field')) {
-    $selected_type = sanitize_text_field($selected_type);
     $search_term = sanitize_text_field($search_term);
 } else {
-    $selected_type = trim((string) $selected_type);
     $search_term = trim((string) $search_term);
 }
-
-$client_types = MealsDB_Clients::get_client_types();
 
 $per_page    = 100;
 $paged       = max(1, (int) ($_GET['paged'] ?? 1));
 $offset      = ($paged - 1) * $per_page;
-$total       = MealsDB_Clients::count_clients($selected_type, $search_term);
+$total       = MealsDB_Clients::count_clients($client_type_filter, $search_term);
 $total_pages = $total > 0 ? (int) ceil($total / $per_page) : 1;
 if ($paged > $total_pages) {
     $paged  = $total_pages;
     $offset = ($paged - 1) * $per_page;
 }
 
-$clients = MealsDB_Clients::get_clients($selected_type, $search_term, false, $per_page, $offset);
+$clients = MealsDB_Clients::get_clients($client_type_filter, $search_term, false, $per_page, $offset);
 
 $base_url = admin_url('admin.php?page=mealsdb&tab=clients');
 $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
+
+$preset_labels = [
+    'government' => __('SDNB + Veteran (default)', 'meals-db'),
+    'all'        => __('All Client Types', 'meals-db'),
+    'sdnb'       => __('SDNB only', 'meals-db'),
+    'veteran'    => __('Veteran only', 'meals-db'),
+    'private'    => __('Private only', 'meals-db'),
+];
+
+$badge_styles = [
+    'SDNB'    => 'background:#2271b1;color:#fff;',
+    'Veteran' => 'background:#8a6e00;color:#fff;',
+    'Private' => 'background:#50575e;color:#fff;',
+];
 ?>
 
 <div class="wrap mealsdb-view-clients">
@@ -45,10 +77,9 @@ $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
         <input type="hidden" name="tab" value="clients" />
 
         <label for="mealsdb-filter-client-type" class="screen-reader-text"><?php esc_html_e('Filter by client type', 'meals-db'); ?></label>
-        <select id="mealsdb-filter-client-type" name="client_type">
-            <option value=""><?php esc_html_e('All Client Types', 'meals-db'); ?></option>
-            <?php foreach ($client_types as $type) : ?>
-                <option value="<?php echo esc_attr($type); ?>" <?php selected($selected_type, $type); ?>><?php echo esc_html($type); ?></option>
+        <select id="mealsdb-filter-client-type" name="type_preset">
+            <?php foreach ($preset_labels as $preset_key => $preset_label) : ?>
+                <option value="<?php echo esc_attr($preset_key); ?>" <?php selected($type_preset, $preset_key); ?>><?php echo esc_html($preset_label); ?></option>
             <?php endforeach; ?>
         </select>
 
@@ -98,7 +129,17 @@ $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
                     <tr class="<?php echo esc_attr($row_class_attr); ?>" data-client-id="<?php echo esc_attr($client_id); ?>">
                         <td><?php echo esc_html($client['first_name'] ?? ''); ?></td>
                         <td><?php echo esc_html($client['last_name'] ?? ''); ?></td>
-                        <td><?php echo esc_html($client['client_type'] ?? ''); ?></td>
+                        <td>
+                            <?php
+                            $row_type = (string) ($client['client_type'] ?? '');
+                            $badge_style = $badge_styles[$row_type] ?? 'background:#ddd;color:#333;';
+                            if ($row_type !== '') :
+                            ?>
+                                <span class="mealsdb-client-type-badge" style="display:inline-block;padding:2px 8px;border-radius:3px;font-size:12px;font-weight:600;<?php echo esc_attr($badge_style); ?>">
+                                    <?php echo esc_html($row_type); ?>
+                                </span>
+                            <?php endif; ?>
+                        </td>
                         <td><?php echo esc_html($client['assigned_worker_name'] ?? '—'); ?></td>
                         <td>
                             <?php if (!empty($client['assigned_worker_email'])) : ?>
@@ -155,8 +196,8 @@ $edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
             'page' => 'mealsdb',
             'tab'  => 'clients',
         ];
-        if ($selected_type !== '') {
-            $pagination_args['client_type'] = $selected_type;
+        if ($type_preset !== '' && $type_preset !== 'government') {
+            $pagination_args['type_preset'] = $type_preset;
         }
         if ($search_term !== '') {
             $pagination_args['search'] = $search_term;

@@ -30,12 +30,12 @@ class MealsDB_Clients {
     /**
      * Fetch a paginated list of clients for the admin table.
      *
-     * @param string|null $client_type  Optional client type filter.
-     * @param string|null $search       Optional search string that matches first or last name.
-     * @param bool        $show_inactive Whether inactive clients should be included in the results.
+     * @param string|array<int,string>|null $client_type  Optional client type filter (string or array for IN()).
+     * @param string|null                   $search       Optional search string that matches first or last name.
+     * @param bool                          $show_inactive Whether inactive clients should be included in the results.
      * @return array<int, array<string, string|null>>
      */
-    public static function get_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
+    public static function get_clients($client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
         global $wpdb;
         if (!$wpdb) {
             return [];
@@ -48,8 +48,10 @@ class MealsDB_Clients {
 
     /**
      * Count clients matching the given filters (for pagination UIs).
+     *
+     * @param string|array<int,string>|null $client_type
      */
-    public static function count_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): int {
+    public static function count_clients($client_type = null, ?string $search = null, bool $show_inactive = false): int {
         global $wpdb;
         if (!$wpdb) {
             return 0;

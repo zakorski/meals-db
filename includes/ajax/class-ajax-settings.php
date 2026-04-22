@@ -17,6 +17,74 @@ class MealsDB_Ajax_Settings {
         add_action( 'wp_ajax_mealsdb_save_settings', [ self::class, 'save_settings' ] );
         add_action( 'wp_ajax_mealsdb_generate_encryption_key', [ self::class, 'generate_key' ] );
         add_action( 'wp_ajax_mealsdb_backfill_next_dates', [ self::class, 'backfill_next_dates' ] );
+        add_action( 'wp_ajax_mealsdb_preview_private_backfill', [ self::class, 'preview_private_backfill' ] );
+        add_action( 'wp_ajax_mealsdb_run_private_backfill', [ self::class, 'run_private_backfill' ] );
+        add_action( 'wp_ajax_mealsdb_preview_private_deactivation', [ self::class, 'preview_private_deactivation' ] );
+        add_action( 'wp_ajax_mealsdb_run_private_deactivation', [ self::class, 'run_private_deactivation' ] );
+    }
+
+    /**
+     * Preview WC users who would be promoted into meals_clients by the
+     * Phase S backfill. Read-only — does not modify any rows.
+     */
+    public static function preview_private_backfill(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
+        $rows = MealsDB_Backfill_Private_Clients::preview( $lookback );
+        wp_send_json_success( [
+            'count' => count( $rows ),
+            'rows'  => $rows,
+        ] );
+    }
+
+    /**
+     * Promote every eligible user returned by the preview.
+     */
+    public static function run_private_backfill(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
+        $stats = MealsDB_Backfill_Private_Clients::run( $lookback, false );
+        wp_send_json_success( $stats );
+    }
+
+    /**
+     * Preview the one-time deactivation sweep: Private meals_clients
+     * with no active WC orders in the lookback window.
+     */
+    public static function preview_private_deactivation(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
+        $rows = MealsDB_Backfill_Private_Clients::deactivation_sweep_preview( $lookback );
+        wp_send_json_success( [
+            'count' => count( $rows ),
+            'rows'  => $rows,
+        ] );
+    }
+
+    /**
+     * Execute the deactivation sweep.
+     */
+    public static function run_private_deactivation(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
+        $stats = MealsDB_Backfill_Private_Clients::deactivation_sweep_run( $lookback );
+        wp_send_json_success( $stats );
     }
 
     /**

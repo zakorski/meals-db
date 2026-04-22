@@ -88,6 +88,163 @@
         });
     });
 
+    // Private customer backfill — preview (read-only).
+    $('#mealsdb-private-backfill-preview').on('click', function () {
+        var $btn    = $(this);
+        var $run    = $('#mealsdb-private-backfill-run');
+        var $result = $('#mealsdb-private-backfill-result');
+        var $rows   = $('#mealsdb-private-backfill-rows');
+        var lookback = parseInt($('#mealsdb-private-backfill-lookback').val(), 10) || 24;
+        $btn.prop('disabled', true);
+        $run.prop('disabled', true);
+        $rows.hide().empty();
+        $result.text('Loading preview...'); tint($result, '#666');
+
+        $.post(ajaxUrl, {
+            action: 'mealsdb_preview_private_backfill',
+            nonce: nonces.general || '',
+            lookback_months: lookback
+        }, function (resp) {
+            $btn.prop('disabled', false);
+            if (resp && resp.success) {
+                var count = (resp.data && resp.data.count) || 0;
+                var rows  = (resp.data && resp.data.rows) || [];
+                $result.text(count + ' user(s) eligible for promotion.'); tint($result, '#46b450');
+                if (rows.length) {
+                    var html = '<table class="widefat striped"><thead><tr><th>WP User</th><th>Name</th><th>Email</th><th>Orders</th></tr></thead><tbody>';
+                    for (var i = 0; i < rows.length; i++) {
+                        var r = rows[i];
+                        html += '<tr><td>' + r.wp_user_id + '</td><td>' + $('<div>').text(r.name || '').html() +
+                                '</td><td>' + $('<div>').text(r.email || '').html() +
+                                '</td><td>' + r.order_count + '</td></tr>';
+                    }
+                    html += '</tbody></table>';
+                    $rows.html(html).show();
+                    $run.prop('disabled', false);
+                }
+            } else {
+                $result.text((resp && resp.data && resp.data.message) || 'Preview failed.');
+                tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    });
+
+    // Private customer backfill — run (mutating).
+    $('#mealsdb-private-backfill-run').on('click', function () {
+        var $btn    = $(this);
+        var $result = $('#mealsdb-private-backfill-result');
+        var lookback = parseInt($('#mealsdb-private-backfill-lookback').val(), 10) || 24;
+        if (!window.confirm('Promote all eligible WC users into meals_clients as Private customers?')) {
+            return;
+        }
+        $btn.prop('disabled', true);
+        $result.text('Running backfill...'); tint($result, '#666');
+
+        $.post(ajaxUrl, {
+            action: 'mealsdb_run_private_backfill',
+            nonce: nonces.general || '',
+            lookback_months: lookback
+        }, function (resp) {
+            $btn.prop('disabled', false);
+            if (resp && resp.success) {
+                var d = resp.data || {};
+                $result.text(
+                    'Promoted ' + (d.promoted || 0) + ' of ' + (d.eligible || 0) +
+                    ' (errors: ' + (d.errors || 0) + ', skipped: ' + (d.skipped || 0) + ').'
+                );
+                tint($result, '#46b450');
+                $('#mealsdb-private-backfill-rows').hide().empty();
+            } else {
+                $result.text((resp && resp.data && resp.data.message) || 'Backfill failed.');
+                tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    });
+
+    // Private deactivation sweep — preview.
+    $('#mealsdb-private-deact-preview').on('click', function () {
+        var $btn    = $(this);
+        var $run    = $('#mealsdb-private-deact-run');
+        var $result = $('#mealsdb-private-deact-result');
+        var $rows   = $('#mealsdb-private-deact-rows');
+        var lookback = parseInt($('#mealsdb-private-deact-lookback').val(), 10) || 24;
+        $btn.prop('disabled', true);
+        $run.prop('disabled', true);
+        $rows.hide().empty();
+        $result.text('Loading preview...'); tint($result, '#666');
+
+        $.post(ajaxUrl, {
+            action: 'mealsdb_preview_private_deactivation',
+            nonce: nonces.general || '',
+            lookback_months: lookback
+        }, function (resp) {
+            $btn.prop('disabled', false);
+            if (resp && resp.success) {
+                var count = (resp.data && resp.data.count) || 0;
+                var rows  = (resp.data && resp.data.rows) || [];
+                $result.text(count + ' stale Private record(s) found.'); tint($result, '#46b450');
+                if (rows.length) {
+                    var html = '<table class="widefat striped"><thead><tr><th>Client ID</th><th>WP User</th><th>Name</th></tr></thead><tbody>';
+                    for (var i = 0; i < rows.length; i++) {
+                        var r = rows[i];
+                        html += '<tr><td>' + r.client_id + '</td><td>' + r.wp_user_id +
+                                '</td><td>' + $('<div>').text(r.name || '').html() + '</td></tr>';
+                    }
+                    html += '</tbody></table>';
+                    $rows.html(html).show();
+                    $run.prop('disabled', false);
+                }
+            } else {
+                $result.text((resp && resp.data && resp.data.message) || 'Preview failed.');
+                tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    });
+
+    // Private deactivation sweep — run.
+    $('#mealsdb-private-deact-run').on('click', function () {
+        var $btn    = $(this);
+        var $result = $('#mealsdb-private-deact-result');
+        var lookback = parseInt($('#mealsdb-private-deact-lookback').val(), 10) || 24;
+        if (!window.confirm('Deactivate every stale Private customer identified by the preview?')) {
+            return;
+        }
+        $btn.prop('disabled', true);
+        $result.text('Running sweep...'); tint($result, '#666');
+
+        $.post(ajaxUrl, {
+            action: 'mealsdb_run_private_deactivation',
+            nonce: nonces.general || '',
+            lookback_months: lookback
+        }, function (resp) {
+            $btn.prop('disabled', false);
+            if (resp && resp.success) {
+                var d = resp.data || {};
+                $result.text(
+                    'Deactivated ' + (d.deactivated || 0) + ' of ' + (d.candidates || 0) +
+                    ' (errors: ' + (d.errors || 0) + ').'
+                );
+                tint($result, '#46b450');
+                $('#mealsdb-private-deact-rows').hide().empty();
+            } else {
+                $result.text((resp && resp.data && resp.data.message) || 'Sweep failed.');
+                tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    });
+
     // Sync product display data
     $('#mealsdb-sync-products').on('click', function () {
         var $btn    = $(this);
