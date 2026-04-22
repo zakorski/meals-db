@@ -362,6 +362,18 @@ class MealsDB_Admin_UI {
             true
         );
 
+        if ($tab === 'tasks') {
+            $task_form_path = MEALS_DB_PLUGIN_DIR . 'assets/js/task-form.js';
+            $task_form_version = file_exists($task_form_path) ? filemtime($task_form_path) : MEALS_DB_VERSION;
+            wp_enqueue_script(
+                'mealsdb-task-form',
+                MEALS_DB_PLUGIN_URL . 'assets/js/task-form.js',
+                [],
+                $task_form_version,
+                true
+            );
+        }
+
         $client_actions_path = MEALS_DB_PLUGIN_DIR . 'assets/js/client-actions.js';
         $client_actions_version = file_exists($client_actions_path) ? filemtime($client_actions_path) : MEALS_DB_VERSION;
         wp_enqueue_script(
@@ -686,6 +698,17 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/settings.php');
                 break;
 
+            case 'tasks':
+                $action = isset($_GET['action']) ? sanitize_key(wp_unslash((string) $_GET['action'])) : '';
+                if ($action === 'detail') {
+                    include MealsDB_Plugin::path('views/task-detail.php');
+                } elseif ($action === 'rules') {
+                    include MealsDB_Plugin::path('views/task-rules.php');
+                } else {
+                    include MealsDB_Plugin::path('views/tasks-list.php');
+                }
+                break;
+
             default:
                 echo '<p>Invalid tab selected.</p>';
         }
@@ -806,6 +829,7 @@ class MealsDB_Admin_UI {
             'fees'     => __('Fee Reconciliation', 'meals-db'),
             'privates' => __('Private Sales', 'meals-db'),
             'errors'   => __('Order Errors', 'meals-db'),
+            'tasks'    => __('Tasks', 'meals-db'),
             'updates'  => __('Updates', 'meals-db'),
             'settings' => __('Settings', 'meals-db'),
         ];

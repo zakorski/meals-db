@@ -37,6 +37,51 @@ class MealsDB_Installer {
         // Run one-time migrations
         self::migrate_rate_to_client_rates();
         self::drop_defunct_transaction_tables();
+
+        // Seed the first task-engine rule so a freshly-installed site has
+        // something to exercise the cron pass with. Safe to call on every
+        // install — it no-ops when the seed rule already exists.
+        self::seed_task_engine();
+    }
+
+    /**
+     * Seed one sample task rule so the engine has something to run out of the box.
+     */
+    private static function seed_task_engine(): void {
+        global $wpdb;
+
+        $rules_table = MealsDB_DB::get_table_name(MealsDB_Tables::SCHEDULE_RULES);
+        $seed_name = 'Weekly overdue task review';
+
+        $existing = $wpdb->get_var($wpdb->prepare(
+            "SELECT rule_id FROM `{$rules_table}` WHERE name = %s LIMIT 1",
+            $seed_name
+        ));
+        if ($existing) {
+            return;
+        }
+
+        if (!class_exists('MealsDB_Task_Rules') || !class_exists('MealsDB_Task_Type_Generic_Reminder')) {
+            return;
+        }
+
+        $rules = new MealsDB_Task_Rules();
+        $rules->create_rule([
+            'name'             => $seed_name,
+            'task_type'        => MealsDB_Task_Type_Generic_Reminder::TYPE_ID,
+            'spawn_type'       => MealsDB_Task_Rules::SPAWN_FIXED,
+            'recurrence'       => [
+                'type'         => 'weekly',
+                'interval'     => 1,
+                'days_of_week' => ['monday'],
+                'time'         => '08:00',
+            ],
+            'payload_template' => [
+                'description' => 'Review overdue tasks for the week.',
+            ],
+            'assignee_role' => 'admin',
+            'is_active'     => 1,
+        ]);
     }
 
     /**
