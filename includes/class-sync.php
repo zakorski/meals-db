@@ -167,7 +167,7 @@ class MealsDB_Sync {
             return;
         }
 
-        $client = self::find_government_client_by_wp_user($user_id);
+        $client = self::find_tracked_client_by_wp_user($user_id);
         if ($client === null) {
             return;
         }
@@ -200,7 +200,7 @@ class MealsDB_Sync {
             return;
         }
 
-        $client = self::find_government_client_by_wp_user($user_id);
+        $client = self::find_tracked_client_by_wp_user($user_id);
         if ($client === null) {
             return;
         }
@@ -228,7 +228,7 @@ class MealsDB_Sync {
             return;
         }
 
-        $client = self::find_government_client_by_wp_user($customer_id);
+        $client = self::find_tracked_client_by_wp_user($customer_id);
         if ($client === null) {
             return;
         }
@@ -278,7 +278,7 @@ class MealsDB_Sync {
         while (true) {
             $batch = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT * FROM `{$escaped_table}` WHERE client_type IN ('SDNB', 'Veteran') AND `{$escaped_column}` > 0 ORDER BY client_id ASC LIMIT %d OFFSET %d",
+                    "SELECT * FROM `{$escaped_table}` WHERE client_type IN ('SDNB', 'Veteran', 'Private') AND `{$escaped_column}` > 0 ORDER BY client_id ASC LIMIT %d OFFSET %d",
                     $batch_size,
                     $offset
                 ),
@@ -499,11 +499,15 @@ class MealsDB_Sync {
     // ------------------------------------------------------------------
 
     /**
-     * Look up a government client record linked to a WordPress user.
+     * Look up a meals_clients record linked to a WordPress user.
      *
-     * @return array<string, mixed>|null Client row, or null if not found or not government.
+     * Historically this gated on SDNB/Veteran only; as of Phase S,
+     * Private customers are first-class records too so the sync hooks
+     * push WP-authoritative identity fields to every tracked client.
+     *
+     * @return array<string, mixed>|null Client row, or null if no record exists.
      */
-    private static function find_government_client_by_wp_user(int $wp_user_id): ?array {
+    private static function find_tracked_client_by_wp_user(int $wp_user_id): ?array {
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -515,7 +519,7 @@ class MealsDB_Sync {
         $escaped_table = str_replace('`', '``', $clients_table);
         $escaped_col   = str_replace('`', '``', $wp_column);
         $sql = $wpdb->prepare(
-            "SELECT * FROM `{$escaped_table}` WHERE `{$escaped_col}` = %d AND client_type IN ('SDNB', 'Veteran') LIMIT 1",
+            "SELECT * FROM `{$escaped_table}` WHERE `{$escaped_col}` = %d AND client_type IN ('SDNB', 'Veteran', 'Private') LIMIT 1",
             $wp_user_id
         );
 

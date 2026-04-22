@@ -128,12 +128,10 @@ class MealsDB_Clients_Repository {
             return false;
         }
 
-        // Type gate: Private clients are not stored in the external database
         $client_type = $data['client_type'] ?? '';
-        if (is_string($client_type) && $client_type !== '' && !self::is_government_client($client_type)) {
+        if (is_string($client_type) && $client_type !== '' && !self::is_recognised_client_type($client_type)) {
             error_log(sprintf(
-                '[MealsDB Clients Repository] Skipped external DB write for Private client (client_id=%s, type=%s).',
-                $data['client_id'] ?? 'new',
+                '[MealsDB Clients Repository] Rejected unknown client_type on create: %s',
                 $client_type
             ));
             return false;
@@ -152,6 +150,14 @@ class MealsDB_Clients_Repository {
             error_log('[MealsDB Clients Repository] Exception while creating client: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Return the insert ID from the most recent create_client() call.
+     */
+    public function last_insert_id(): int {
+        global $wpdb;
+        return isset($wpdb->insert_id) ? (int) $wpdb->insert_id : 0;
     }
 
     /**
@@ -178,12 +184,13 @@ class MealsDB_Clients_Repository {
             return false;
         }
 
-        // Type gate: verify the existing record is not a Private client
-        $existing = $this->get_client_by_id($client_id);
-        if (is_array($existing)) {
-            $existing_type = $existing['client_type'] ?? '';
-            if ($existing_type !== '' && !self::is_government_client($existing_type)) {
-                error_log(sprintf('[MealsDB Clients Repository] Skipped external DB update for Private client ID %d', $client_id));
+        // Validate the new client_type if caller is trying to change it.
+        if (isset($data['client_type']) && is_string($data['client_type']) && $data['client_type'] !== '') {
+            if (!self::is_recognised_client_type($data['client_type'])) {
+                error_log(sprintf(
+                    '[MealsDB Clients Repository] Rejected unknown client_type on update: %s',
+                    $data['client_type']
+                ));
                 return false;
             }
         }
@@ -283,14 +290,15 @@ class MealsDB_Clients_Repository {
     /**
      * Search clients with optional filters.
      *
-     * @param string|null $client_type   Optional client type filter.
-     * @param string|null $search        Optional search string that matches first or last name.
-     * @param bool        $show_inactive Whether inactive clients should be included in the results.
-     * @param int         $limit         Max rows per page. Hard-capped to 1000.
-     * @param int         $offset        Row offset. Clamped to 0.
+     * @param string|array<int,string>|null $client_type   Optional client type filter.
+     *                                                     Pass an array to match multiple types via IN().
+     * @param string|null                   $search        Optional search string that matches first or last name.
+     * @param bool                          $show_inactive Whether inactive clients should be included in the results.
+     * @param int                           $limit         Max rows per page. Hard-capped to 1000.
+     * @param int                           $offset        Row offset. Clamped to 0.
      * @return array<int, array<string, string|null>>
      */
-    public function search_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
+    public function search_clients($client_type = null, ?string $search = null, bool $show_inactive = false, int $limit = 100, int $offset = 0): array {
         global $wpdb;
 
         if (!$this->ensure_table_name()) {
@@ -317,9 +325,12 @@ class MealsDB_Clients_Repository {
                 $conditions[] = 'active = 1';
             }
 
-            if ($client_type !== null && $client_type !== '') {
-                $conditions[] = 'UPPER(client_type) = %s';
-                $prepare_args[] = strtoupper($client_type);
+            $type_clause = self::build_client_type_clause($client_type);
+            if ($type_clause !== null) {
+                $conditions[] = $type_clause['sql'];
+                foreach ($type_clause['args'] as $arg) {
+                    $prepare_args[] = $arg;
+                }
             }
 
             if ($search !== null && $search !== '') {
@@ -368,8 +379,10 @@ class MealsDB_Clients_Repository {
      * Count clients matching the same filters as search_clients() so the
      * view can render pagination totals without having to also materialise
      * every row.
+     *
+     * @param string|array<int,string>|null $client_type
      */
-    public function count_clients(?string $client_type = null, ?string $search = null, bool $show_inactive = false): int {
+    public function count_clients($client_type = null, ?string $search = null, bool $show_inactive = false): int {
         global $wpdb;
 
         if (!$this->ensure_table_name()) {
@@ -385,9 +398,12 @@ class MealsDB_Clients_Repository {
             if (!$show_inactive && $has_active) {
                 $conditions[] = 'active = 1';
             }
-            if ($client_type !== null && $client_type !== '') {
-                $conditions[]   = 'UPPER(client_type) = %s';
-                $prepare_args[] = strtoupper($client_type);
+            $type_clause = self::build_client_type_clause($client_type);
+            if ($type_clause !== null) {
+                $conditions[] = $type_clause['sql'];
+                foreach ($type_clause['args'] as $arg) {
+                    $prepare_args[] = $arg;
+                }
             }
             if ($search !== null && $search !== '') {
                 // Cap the search needle. Real names cap out around 50
@@ -464,11 +480,140 @@ class MealsDB_Clients_Repository {
 
     /**
      * Check if a client type is a government client (SDNB or Veteran).
-     *
-     * Only government clients are stored in the external encrypted database.
      */
     private static function is_government_client(string $client_type): bool {
         return $client_type === 'SDNB' || $client_type === 'Veteran';
+    }
+
+    /**
+     * Build the WHERE-clause fragment + prepared args for filtering by
+     * client_type. Accepts a single string, an array of strings, or null.
+     * Returns null when the filter should be omitted entirely.
+     *
+     * @param string|array<int,string>|null $client_type
+     * @return array{sql:string, args:array<int,string>}|null
+     */
+    private static function build_client_type_clause($client_type): ?array {
+        if ($client_type === null) {
+            return null;
+        }
+        if (is_string($client_type)) {
+            $client_type = trim($client_type);
+            if ($client_type === '') {
+                return null;
+            }
+            return [
+                'sql'  => 'UPPER(client_type) = %s',
+                'args' => [strtoupper($client_type)],
+            ];
+        }
+        if (is_array($client_type)) {
+            $types = [];
+            foreach ($client_type as $t) {
+                if (is_string($t) && trim($t) !== '') {
+                    $types[] = strtoupper(trim($t));
+                }
+            }
+            $types = array_values(array_unique($types));
+            if (empty($types)) {
+                return null;
+            }
+            $placeholders = implode(',', array_fill(0, count($types), '%s'));
+            return [
+                'sql'  => 'UPPER(client_type) IN (' . $placeholders . ')',
+                'args' => $types,
+            ];
+        }
+        return null;
+    }
+
+    /**
+     * Client types the schema's ENUM accepts.
+     */
+    private static function is_recognised_client_type(string $client_type): bool {
+        return in_array($client_type, ['SDNB', 'Veteran', 'Private'], true);
+    }
+
+    /**
+     * Fetch the meals_clients row linked to a WordPress user, or null when
+     * no record exists. Returns the raw row including encrypted PII blobs —
+     * callers that render to the UI should decrypt via MealsDB_Encryption.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function get_by_wp_user_id(int $wp_user_id): ?array {
+        global $wpdb;
+        if ($wp_user_id <= 0 || !($wpdb instanceof wpdb)) {
+            return null;
+        }
+
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $escaped = str_replace('`', '``', $table);
+
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM `{$escaped}` WHERE wp_user_id = %d LIMIT 1",
+            $wp_user_id
+        ), ARRAY_A);
+
+        return is_array($row) ? $row : null;
+    }
+
+    /**
+     * Return every wp_user_id already present in meals_clients so the
+     * backfill can diff against the candidate set without N round-trips.
+     *
+     * @return int[]
+     */
+    public static function get_all_wp_user_ids(): array {
+        global $wpdb;
+        if (!($wpdb instanceof wpdb)) {
+            return [];
+        }
+
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $escaped = str_replace('`', '``', $table);
+
+        $ids = $wpdb->get_col(
+            "SELECT wp_user_id FROM `{$escaped}` WHERE wp_user_id > 0"
+        );
+
+        if (!is_array($ids)) {
+            return [];
+        }
+
+        return array_map('intval', $ids);
+    }
+
+    /**
+     * Static convenience for creating a client row, returning the new
+     * client_id on success (0 on failure). Encrypts PII columns in the
+     * same step so callers don't have to coordinate that separately.
+     *
+     * @param array<string, mixed> $data Raw column values keyed by DB column.
+     *                                   PII columns named in
+     *                                   MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS
+     *                                   are encrypted before insert.
+     */
+    public static function create(array $data): int {
+        if (empty($data)) {
+            return 0;
+        }
+
+        // Encrypt sensitive columns if present. Inserts that don't touch
+        // those columns pass through unchanged.
+        try {
+            $data = MealsDB_Encryption::encrypt_columns($data);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB Clients Repository] Create aborted: encryption failure (' . $e->getMessage() . ').');
+            return 0;
+        }
+
+        $repo = new self();
+        if (!$repo->create_client($data)) {
+            return 0;
+        }
+
+        return $repo->last_insert_id();
     }
 
     /**

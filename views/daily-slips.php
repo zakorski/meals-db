@@ -138,6 +138,46 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
         return String(parseInt(v, 10) || 0);
     }
 
+    function money(v) {
+        if (v === null || v === undefined || v === '') return '';
+        var n = parseFloat(v);
+        if (isNaN(n)) return '';
+        return '$' + n.toFixed(2);
+    }
+
+    // Render the customer-facing invoice block that gets appended to
+    // the per-entry items cell for private customers. The .mealsdb-private-pricing
+    // wrapper is the hook the PDF renderer will style against later.
+    function renderPrivatePricing(p) {
+        if (!p) return '';
+        var html = '<div class="mealsdb-private-pricing" style="margin-top:8px; padding-top:6px; border-top:1px dashed #999; font-size:12px;">';
+        html += '<table style="width:100%; border:0; margin:0;">';
+        html += '<thead><tr><th style="border:0; text-align:left;">Item</th>' +
+                '<th style="border:0; text-align:right;">Unit</th>' +
+                '<th style="border:0; text-align:right;">Line</th></tr></thead><tbody>';
+        $.each(p.items || [], function(i, line) {
+            html += '<tr>' +
+                '<td style="border:0;">' + intText(line.quantity) + 'x ' + esc(line.name) + '</td>' +
+                '<td style="border:0; text-align:right;">' + money(line.unit_price) + '</td>' +
+                '<td style="border:0; text-align:right;">' + money(line.line_total) + '</td>' +
+                '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '<div style="margin-top:4px;">Subtotal: <strong>' + money(p.subtotal) + '</strong></div>';
+        html += '<div>Tax: <strong>' + money(p.tax) + '</strong></div>';
+        html += '<div>Delivery Fee: <strong>' + money(p.delivery_fee) + '</strong></div>';
+        html += '<div>Total: <strong>' + money(p.grand_total) + '</strong></div>';
+        html += '<div>Payment: <strong>' + esc(p.payment_method || '') + '</strong>';
+        if (p.is_prepaid) {
+            html += ' &middot; <em>Prepaid</em>';
+        } else if (p.collection_amount !== null && p.collection_amount !== undefined) {
+            html += ' &middot; Collect: <strong>' + money(p.collection_amount) + '</strong>';
+        }
+        html += '</div>';
+        html += '</div>';
+        return html;
+    }
+
     function renderPackingSlip(data) {
         var entries = data.entries || [];
         var noZone  = data.no_zone || [];
@@ -166,9 +206,13 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             $.each(entry.items, function(j, item) {
                 items.push(intText(item.quantity) + 'x ' + esc(item.name) + ' (' + esc(item.product_type) + ')');
             });
+            var itemsCell = items.join('<br>');
+            if (entry.pricing) {
+                itemsCell += renderPrivatePricing(entry.pricing);
+            }
             html += '<tr><td>' + esc(entry.initials) + '</td><td>' + esc(entry.zone) + '</td><td>' + esc(entry.area_name) + '</td>';
             html += '<td>' + intText(entry.mains_count) + '</td><td>' + intText(entry.sides_count) + '</td>';
-            html += '<td>' + items.join('<br>') + '</td></tr>';
+            html += '<td>' + itemsCell + '</td></tr>';
         });
         html += '</tbody></table>';
 

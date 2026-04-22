@@ -57,7 +57,8 @@ class MealsDB_Delivery_Slip_Generator {
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $sql   = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
-                    delivery_area_name, delivery_city, delivery_street_name
+                    delivery_area_name, delivery_city, delivery_street_name,
+                    client_type, delivery_fee, payment_method
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s",
             $day_lower
@@ -151,7 +152,8 @@ class MealsDB_Delivery_Slip_Generator {
 
         $sql = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
-                    delivery_area_name, delivery_city, delivery_street_name
+                    delivery_area_name, delivery_city, delivery_street_name,
+                    client_type, delivery_fee, payment_method
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN ({$placeholders})",
             ...$zone_names
@@ -377,6 +379,8 @@ class MealsDB_Delivery_Slip_Generator {
                 'mains_count' => $cats['mains_count'],
                 'sides_count' => $cats['sides_count'],
                 'side_detail' => $cats['side_detail'],
+                'client_type' => (string) ($client['client_type'] ?? ''),
+                'pricing'     => $this->build_pricing_for_entry($order, $client),
             ];
 
             // Separate entries with no zone assignment.
@@ -773,7 +777,8 @@ class MealsDB_Delivery_Slip_Generator {
             $total          = (float) $wc_order->get_total();
             $payment_method = $wc_order->get_payment_method();
 
-            // Collection calculation.
+            // Collection calculation — delegate to the shared helper so
+            // the driver slip and packing slip stay in lockstep.
             $delivery_fee        = (float) ($client['delivery_fee'] ?? 0);
             $client_contribution = (float) ($client['client_contribution'] ?? 0);
             $collect             = null;
@@ -781,7 +786,6 @@ class MealsDB_Delivery_Slip_Generator {
             $client_type         = strtolower($client['client_type'] ?? '');
 
             if (in_array($client_type, ['sdnb', 'veteran'], true)) {
-                // Build order data with date for first-delivery check.
                 $order_with_date = $order;
                 $order_with_date['order_id'] = $order_id;
                 $wc_date = $wc_order->get_date_created();
@@ -790,17 +794,16 @@ class MealsDB_Delivery_Slip_Generator {
                 }
                 $is_first_delivery = $this->is_first_delivery_of_month($client, $order_with_date);
 
-                if ($is_first_delivery && $client_contribution > 0) {
-                    $contribution_due = $client_contribution;
-                }
-
-                $collect = $delivery_fee + $contribution_due;
+                $gov = MealsDB_Collection_Calculator::for_government(
+                    $delivery_fee,
+                    $client_contribution,
+                    $is_first_delivery
+                );
+                $collect          = (float) $gov['collect'];
+                $contribution_due = (float) $gov['contribution_due'];
             } elseif ($client_type === 'private') {
-                if ($payment_method === 'cash') {
-                    $collect = $total + $delivery_fee;
-                } elseif ($delivery_fee > 0) {
-                    $collect = $delivery_fee;
-                }
+                $priv = MealsDB_Collection_Calculator::for_private($total, $delivery_fee, $payment_method);
+                $collect = $priv['collect'];
             }
 
             $zones[$zone_key]['orders'][] = [
@@ -837,6 +840,82 @@ class MealsDB_Delivery_Slip_Generator {
         unset($zone);
 
         return $result;
+    }
+
+    /**
+     * Build the pricing/invoice payload for a packing slip entry.
+     *
+     * Returns null for non-private customers — the packing slip only
+     * carries pricing when it doubles as the customer-facing invoice.
+     * SDNB / Veteran entries are intentionally left as null so the
+     * template can branch on presence alone.
+     *
+     * @param array<string, mixed> $order  Order row with items attached.
+     * @param array<string, mixed> $client Client row.
+     *
+     * @return array{items: array<int, array<string, mixed>>, subtotal: float, tax: float, delivery_fee: float, grand_total: float, payment_method: string, collection_amount: float|null, is_prepaid: bool}|null
+     */
+    private function build_pricing_for_entry(array $order, array $client): ?array {
+        $client_type = strtolower((string) ($client['client_type'] ?? ''));
+        if ($client_type !== 'private') {
+            return null;
+        }
+
+        if (!function_exists('wc_get_order')) {
+            return null;
+        }
+
+        $order_id = (int) ($order['order_id'] ?? 0);
+        $wc_order = $order_id > 0 ? wc_get_order($order_id) : null;
+        if (!($wc_order instanceof WC_Order)) {
+            return null;
+        }
+
+        $items = [];
+        foreach ($wc_order->get_items() as $item) {
+            if (!($item instanceof WC_Order_Item_Product)) {
+                continue;
+            }
+            $qty = (int) $item->get_quantity();
+            $subtotal = (float) $item->get_subtotal();
+            $unit = $qty > 0 ? $subtotal / $qty : 0.0;
+
+            $items[] = [
+                'wc_product_id' => (int) $item->get_product_id(),
+                'name'          => (string) $item->get_name(),
+                'quantity'      => $qty,
+                'unit_price'    => round($unit, 2),
+                'line_total'    => round($subtotal, 2),
+            ];
+        }
+
+        // Sort invoice items by SKU-ish order — use product id ascending
+        // as a stable, deterministic tiebreak since we don't fetch SKU here.
+        usort($items, function ($a, $b) {
+            return $a['wc_product_id'] <=> $b['wc_product_id'];
+        });
+
+        $subtotal       = (float) $wc_order->get_subtotal();
+        $tax            = (float) $wc_order->get_total_tax();
+        $grand_total    = (float) $wc_order->get_total();
+        $delivery_fee   = (float) ($client['delivery_fee'] ?? 0);
+        // Prefer the client's configured payment_method so the
+        // collection amount matches what the driver slip reports,
+        // even if the WC order happened to record a different gateway.
+        $payment_method = (string) ($client['payment_method'] ?? $wc_order->get_payment_method());
+
+        $collection = MealsDB_Collection_Calculator::for_private($grand_total, $delivery_fee, $payment_method);
+
+        return [
+            'items'             => $items,
+            'subtotal'          => round($subtotal, 2),
+            'tax'               => round($tax, 2),
+            'delivery_fee'      => round($delivery_fee, 2),
+            'grand_total'       => round($grand_total, 2),
+            'payment_method'    => $payment_method,
+            'collection_amount' => $collection['collect'] === null ? null : round((float) $collection['collect'], 2),
+            'is_prepaid'        => (bool) $collection['is_prepaid'],
+        ];
     }
 
     /**

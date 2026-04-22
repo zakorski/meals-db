@@ -118,7 +118,7 @@ class MealsDB_Sync_Query {
                 $sql = $connection->prepare(
                     sprintf(
                         "SELECT %s FROM `%s`
-                         WHERE client_type IN ('SDNB', 'Veteran')
+                         WHERE client_type IN ('SDNB', 'Veteran', 'Private')
                            AND client_id > %%d
                          ORDER BY client_id ASC
                          LIMIT %%d",
