@@ -709,6 +709,10 @@ class MealsDB_Admin_UI {
                 }
                 break;
 
+            case 'po_admin':
+                include MealsDB_Plugin::path('views/purchase-orders.php');
+                break;
+
             default:
                 echo '<p>Invalid tab selected.</p>';
         }
@@ -830,6 +834,7 @@ class MealsDB_Admin_UI {
             'privates' => __('Private Sales', 'meals-db'),
             'errors'   => __('Order Errors', 'meals-db'),
             'tasks'    => __('Tasks', 'meals-db'),
+            'po_admin' => __('Purchase Orders', 'meals-db'),
             'updates'  => __('Updates', 'meals-db'),
             'settings' => __('Settings', 'meals-db'),
         ];

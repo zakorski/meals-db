@@ -16,6 +16,21 @@ class MealsDB_Ajax_Settings {
     public static function init(): void {
         add_action( 'wp_ajax_mealsdb_save_settings', [ self::class, 'save_settings' ] );
         add_action( 'wp_ajax_mealsdb_generate_encryption_key', [ self::class, 'generate_key' ] );
+        add_action( 'wp_ajax_mealsdb_backfill_next_dates', [ self::class, 'backfill_next_dates' ] );
+    }
+
+    /**
+     * Run the one-time backfill that populates meals_clients.next_order_date
+     * and next_delivery_date from wp_usermeta + the configured frequencies.
+     */
+    public static function backfill_next_dates(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+
+        $result = MealsDB_Backfill_Next_Dates::run();
+        wp_send_json_success( $result );
     }
 
     public static function save_settings(): void {

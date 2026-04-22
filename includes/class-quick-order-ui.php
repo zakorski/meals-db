@@ -115,6 +115,30 @@ class MealsDB_Quick_Order_UI {
                 </div>
             </div>
 
+            <div id="mealsdb-qo-next-dates" class="mealsdb-quick-order__next-dates" style="display:none; margin:12px 0; padding:12px; background:#f0f6fc; border:1px solid #c5d9ed;">
+                <h3 style="margin:0 0 8px;"><?php esc_html_e('Next Cycle', 'meals-db'); ?></h3>
+                <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:flex-end;">
+                    <div>
+                        <label for="mealsdb-qo-next-order-date"><strong><?php esc_html_e('Next Order Date:', 'meals-db'); ?></strong></label><br>
+                        <input type="date" id="mealsdb-qo-next-order-date" name="next_order_date">
+                        <div><small id="mealsdb-qo-next-order-default" style="color:#555;"></small></div>
+                    </div>
+                    <div>
+                        <label for="mealsdb-qo-next-delivery-date"><strong><?php esc_html_e('Next Delivery Date:', 'meals-db'); ?></strong></label><br>
+                        <input type="date" id="mealsdb-qo-next-delivery-date" name="next_delivery_date">
+                        <div><small id="mealsdb-qo-next-delivery-default" style="color:#555;"></small></div>
+                    </div>
+                    <div>
+                        <button type="button" class="button" id="mealsdb-qo-next-reset">
+                            <?php esc_html_e('Reset to normal', 'meals-db'); ?>
+                        </button>
+                    </div>
+                </div>
+                <p class="description" style="margin:8px 0 0;">
+                    <?php esc_html_e('Editable. These values become the anchor for the client\'s next cycle. "Normally" shows the date implied by the standard frequency.', 'meals-db'); ?>
+                </p>
+            </div>
+
             <div id="mealsdb-qo-categories" class="mealsdb-qo-categories">
                 <p><?php esc_html_e('Loading categories…', 'meals-db'); ?></p>
             </div>

@@ -57,6 +57,37 @@
         });
     });
 
+    // Backfill next_order_date / next_delivery_date
+    $('#mealsdb-backfill-next-dates').on('click', function () {
+        var $btn    = $(this);
+        var $result = $('#mealsdb-backfill-next-dates-result');
+        $btn.prop('disabled', true);
+        $result.text('Running...'); tint($result, '#666');
+
+        $.post(ajaxUrl, {
+            action: 'mealsdb_backfill_next_dates',
+            nonce: nonces.general || ''
+        }, function (resp) {
+            $btn.prop('disabled', false);
+            if (resp && resp.success) {
+                var d = resp.data || {};
+                $result.text(
+                    'Processed ' + (d.processed || 0) +
+                    ' clients: ' + (d.order_updated || 0) + ' order dates, ' +
+                    (d.delivery_updated || 0) + ' delivery dates updated (' +
+                    (d.skipped || 0) + ' skipped).'
+                );
+                tint($result, '#46b450');
+            } else {
+                $result.text((resp && resp.data && resp.data.message) || 'Failed.');
+                tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    });
+
     // Sync product display data
     $('#mealsdb-sync-products').on('click', function () {
         var $btn    = $(this);

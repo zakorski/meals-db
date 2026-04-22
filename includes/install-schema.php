@@ -45,43 +45,98 @@ class MealsDB_Installer {
     }
 
     /**
-     * Seed one sample task rule so the engine has something to run out of the box.
+     * Seed the task-engine rules: POC reminder plus the R2 workflows
+     * (weekly phone-call list, monthly Appetito PO). Idempotent — each
+     * rule is keyed by name so a reinstall won't duplicate them.
      */
     private static function seed_task_engine(): void {
         global $wpdb;
 
+        if (!class_exists('MealsDB_Task_Rules')) {
+            return;
+        }
+
         $rules_table = MealsDB_DB::get_table_name(MealsDB_Tables::SCHEDULE_RULES);
-        $seed_name = 'Weekly overdue task review';
-
-        $existing = $wpdb->get_var($wpdb->prepare(
-            "SELECT rule_id FROM `{$rules_table}` WHERE name = %s LIMIT 1",
-            $seed_name
-        ));
-        if ($existing) {
-            return;
-        }
-
-        if (!class_exists('MealsDB_Task_Rules') || !class_exists('MealsDB_Task_Type_Generic_Reminder')) {
-            return;
-        }
-
         $rules = new MealsDB_Task_Rules();
-        $rules->create_rule([
-            'name'             => $seed_name,
-            'task_type'        => MealsDB_Task_Type_Generic_Reminder::TYPE_ID,
-            'spawn_type'       => MealsDB_Task_Rules::SPAWN_FIXED,
-            'recurrence'       => [
-                'type'         => 'weekly',
-                'interval'     => 1,
-                'days_of_week' => ['monday'],
-                'time'         => '08:00',
-            ],
-            'payload_template' => [
-                'description' => 'Review overdue tasks for the week.',
-            ],
-            'assignee_role' => 'admin',
-            'is_active'     => 1,
-        ]);
+
+        $seeds = [];
+
+        if (class_exists('MealsDB_Task_Type_Generic_Reminder')) {
+            $seeds[] = [
+                'name'             => 'Weekly overdue task review',
+                'task_type'        => MealsDB_Task_Type_Generic_Reminder::TYPE_ID,
+                'spawn_type'       => MealsDB_Task_Rules::SPAWN_FIXED,
+                'recurrence'       => [
+                    'type'         => 'weekly',
+                    'interval'     => 1,
+                    'days_of_week' => ['monday'],
+                    'time'         => '08:00',
+                ],
+                'payload_template' => ['description' => 'Review overdue tasks for the week.'],
+                'assignee_role'    => 'admin',
+                'is_active'        => 1,
+            ];
+        }
+
+        if (class_exists('MealsDB_Task_Type_Call_Client')) {
+            $seeds[] = [
+                'name'             => 'Weekly Phone Call List',
+                'task_type'        => MealsDB_Task_Type_Call_Client::TYPE_ID,
+                'spawn_type'       => MealsDB_Task_Rules::SPAWN_QUERY,
+                'recurrence'       => [
+                    'type'         => 'weekly',
+                    'interval'     => 1,
+                    'days_of_week' => ['wednesday'],
+                    'time'         => '06:00',
+                ],
+                'query_criteria'   => [
+                    'strategy' => 'clients_due_to_reorder',
+                    'params'   => [
+                        'days_window'    => 7,
+                        'contact_method' => 'phone',
+                    ],
+                ],
+                'payload_template' => [
+                    'client_id'       => '{{wp_user_id}}',
+                    'client_name'     => '{{first_name}} {{last_name}}',
+                    'phone'           => '{{client_phone_1}}',
+                    'next_order_date' => '{{next_order_date}}',
+                ],
+                'assignee_role'    => 'phone',
+                'tags'             => ['weekly_calls'],
+                'is_active'        => 1,
+            ];
+        }
+
+        if (class_exists('MealsDB_Task_Type_Place_PO')) {
+            $seeds[] = [
+                'name'             => 'Appetito Purchase Order',
+                'task_type'        => MealsDB_Task_Type_Place_PO::TYPE_ID,
+                'spawn_type'       => MealsDB_Task_Rules::SPAWN_FIXED,
+                'recurrence'       => [
+                    'type'        => 'monthly_weekday',
+                    'interval'    => 1,
+                    'nth'         => 4,
+                    'day_of_week' => 'tuesday',
+                    'time'        => '08:00',
+                ],
+                'payload_template' => ['supplier' => 'Appetito'],
+                'assignee_role'    => 'admin',
+                'tags'             => ['appetito_po'],
+                'is_active'        => 1,
+            ];
+        }
+
+        foreach ($seeds as $seed) {
+            $existing = $wpdb->get_var($wpdb->prepare(
+                "SELECT rule_id FROM `{$rules_table}` WHERE name = %s LIMIT 1",
+                $seed['name']
+            ));
+            if ($existing) {
+                continue;
+            }
+            $rules->create_rule($seed);
+        }
     }
 
     /**

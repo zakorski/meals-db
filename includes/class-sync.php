@@ -72,6 +72,8 @@ class MealsDB_Sync {
             'delivery_frequency',
             'ordering_frequency',
             'ordering_contact_method',
+            'next_order_date',
+            'next_delivery_date',
             'units',
             'client_contribution',
             'vet_health_card',
@@ -135,6 +137,8 @@ class MealsDB_Sync {
             'alternate_contact_phone_1'     => ['type' => 'meta', 'key' => 'mealsdb_alternate_contact_phone_1'],
             'alternate_contact_phone_2'     => ['type' => 'meta', 'key' => 'mealsdb_alternate_contact_phone_2'],
             'alternate_contact_email'       => ['type' => 'meta', 'key' => 'mealsdb_alternate_contact_email'],
+            'next_order_date'               => ['type' => 'meta', 'key' => 'mealsdb_next_order_date'],
+            'next_delivery_date'            => ['type' => 'meta', 'key' => 'mealsdb_next_delivery_date'],
         ];
     }
 

@@ -111,7 +111,9 @@ $form_schema = is_array($definition['form_schema'] ?? null) ? $definition['form_
     var payload = <?php echo wp_json_encode($task['payload']); ?>;
 
     if (window.MealsDBTaskForm) {
-        window.MealsDBTaskForm.render('#mealsdb-task-form', schema, payload);
+        // Values (pre-filled from payload) and the full payload (for
+        // repeat_group items_from resolution) are the same object here.
+        window.MealsDBTaskForm.render('#mealsdb-task-form', schema, payload, payload);
     }
 
     function setStatus(msg, type) {

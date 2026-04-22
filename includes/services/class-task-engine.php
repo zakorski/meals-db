@@ -323,28 +323,39 @@ class MealsDB_Task_Engine {
     /**
      * Defer a task — move the next_run_date forward, increment the deferral
      * count, and set status='deferred'.
+     *
+     * `$allow_from_terminal=true` lets an on_complete callback reverse its
+     * own terminal transition: e.g. confirm_po_arrival deciding post-hoc
+     * that an arrived='no' answer should have been a defer. Keep the door
+     * narrow — outside that one pattern, defer should refuse terminal tasks.
      */
-    public function defer_task(int $task_id, string $new_date, ?string $reason = null): bool {
+    public function defer_task(int $task_id, string $new_date, ?string $reason = null, bool $allow_from_terminal = false): bool {
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $new_date)) {
             error_log('[MealsDB Task Engine] defer_task: invalid date ' . $new_date);
             return false;
         }
 
         $task = $this->get_task($task_id);
-        if ($task === null || in_array($task['status'], self::TERMINAL_STATUSES, true)) {
+        if ($task === null) {
+            return false;
+        }
+        if (in_array($task['status'], self::TERMINAL_STATUSES, true) && !$allow_from_terminal) {
             return false;
         }
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::TASKS);
-        $result = $this->wpdb->update(
-            $table,
-            [
-                'status'         => self::STATUS_DEFERRED,
-                'next_run_date'  => $new_date,
-                'deferral_count' => (int) $task['deferral_count'] + 1,
-            ],
-            ['task_id' => $task_id]
-        );
+        $update_row = [
+            'status'         => self::STATUS_DEFERRED,
+            'next_run_date'  => $new_date,
+            'deferral_count' => (int) $task['deferral_count'] + 1,
+        ];
+        // When reversing a terminal transition, also clear the completion
+        // markers so the task accurately reflects "not yet done".
+        if (in_array($task['status'], self::TERMINAL_STATUSES, true)) {
+            $update_row['completed_at'] = null;
+            $update_row['completed_by'] = null;
+        }
+        $result = $this->wpdb->update($table, $update_row, ['task_id' => $task_id]);
 
         if ($result === false) {
             error_log('[MealsDB Task Engine] defer_task update failed: ' . $this->wpdb->last_error);
