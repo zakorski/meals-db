@@ -42,12 +42,25 @@ if (!class_exists('wpdb')) {
             return null;
         }
         public function get_col($query, $x = 0) {
-            if (stripos($query, 'customer_id') !== false) {
-                return array_map('strval', $this->eligible_users);
+            // The eligible-WC-users query moved to get_results when
+            // recent_order_id was added; get_col now serves only the
+            // existing-meals_clients wp_user_id lookup, which has no
+            // seeded fixtures here.
+            return [];
+        }
+        public function get_results($query, $output = OBJECT) {
+            if (stripos($query, 'customer_id') !== false && stripos($query, 'recent_order_id') !== false) {
+                $rows = [];
+                foreach ($this->eligible_users as $uid) {
+                    $rows[] = [
+                        'customer_id'     => (string) $uid,
+                        'recent_order_id' => (string) ((int) $uid * 100),
+                    ];
+                }
+                return $rows;
             }
             return [];
         }
-        public function get_results($query, $output = OBJECT) { return []; }
         public function query($query) { return 0; }
         public function insert($table, $data) { return 1; }
     }

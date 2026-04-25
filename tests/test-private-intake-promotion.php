@@ -77,9 +77,26 @@ if (!function_exists('get_userdata')) {
 if (!function_exists('get_user_meta')) {
     function get_user_meta($uid, $key, $single = true) {
         $fixtures = [
-            'billing_first_name' => 'Billing',
-            'billing_last_name'  => 'Last',
-            'billing_phone'      => '555-1234',
+            'billing_first_name'      => 'Billing',
+            'billing_last_name'       => 'Last',
+            'billing_phone'           => '555-1234',
+            // Usermeta-only fallbacks for users who have a WP profile
+            // address but aren't placing the triggering order (e.g.
+            // profile-saved addresses). The promotion path still
+            // prefers $order when one is supplied — see the user 88
+            // assertions below.
+            'shipping_city'           => 'Meta-Ship-City',
+            // Service / ordering / notes meta — pulled by the
+            // wp-custom-user-fields-map mapping. These have no order
+            // source; they only flow from usermeta.
+            'payment_method'          => 'Stripe',
+            'ordering_frequency'      => '7',
+            'ordering_contact_method' => 'Email',
+            'delivery_frequency'      => '14',
+            'freeze_capacity'         => 'Medium',
+            'delivery_fee'            => '5.50',
+            'customer_comments'       => 'Likes the front porch',
+            'dietary_needs'           => 'No shellfish',
         ];
         return $fixtures[$key] ?? '';
     }
@@ -115,6 +132,15 @@ if (!class_exists('WC_Order')) {
         public function get_billing_first_name(): string { return 'Order-First'; }
         public function get_billing_last_name(): string { return 'Order-Last'; }
         public function get_billing_phone(): string { return '555-0000'; }
+        public function get_billing_address_1(): string { return '12 Order Lane'; }
+        public function get_billing_city(): string { return 'Order City'; }
+        public function get_billing_state(): string { return 'NB'; }
+        public function get_billing_postcode(): string { return 'E1A 1A1'; }
+        public function get_shipping_address_1(): string { return '34 Ship Way'; }
+        public function get_shipping_address_2(): string { return 'Zone 3'; }
+        public function get_shipping_city(): string { return 'Ship City'; }
+        public function get_shipping_state(): string { return 'NS'; }
+        public function get_shipping_postcode(): string { return 'B2B 2B2'; }
     }
 }
 
@@ -160,6 +186,38 @@ assert_equal('Last', $data['last_name'] ?? null, 'last_name prefers billing_last
 assert_equal('555-1234', $data['client_phone_1'] ?? null, 'phone prefers billing_phone meta');
 assert_equal('promoted@example.com', $data['client_email'] ?? null, 'email from WP user');
 
+// Address fields: $order beats usermeta (the get_user_meta stub
+// returns '' for the billing_/shipping_ address keys, so the order
+// values flow through). For shipping_city the stub returns
+// 'Meta-Ship-City' but the order's 'Ship City' wins per resolve_address
+// priority order.
+assert_equal('12 Order Lane', $data['street_name'] ?? null, 'street_name from order billing_address_1');
+assert_equal('Order City', $data['city'] ?? null, 'city from order billing_city');
+assert_equal('NB', $data['province'] ?? null, 'province from order billing_state');
+assert_equal('E1A 1A1', $data['postal_code'] ?? null, 'postal_code from order billing_postcode');
+assert_equal('34 Ship Way', $data['delivery_street_name'] ?? null, 'delivery_street_name from order shipping_address_1');
+assert_equal('Ship City', $data['delivery_city'] ?? null, 'delivery_city: order beats usermeta when both set');
+assert_equal('NS', $data['delivery_province'] ?? null, 'delivery_province from order shipping_state');
+assert_equal('B2B 2B2', $data['delivery_postal_code'] ?? null, 'delivery_postal_code from order shipping_postcode');
+
+// Delivery zone (shipping_address_2) — order priority again.
+assert_equal('Zone 3', $data['delivery_area_name'] ?? null, 'delivery_area_name from order shipping_address_2');
+
+// Service / ordering / notes — usermeta-only mappings.
+assert_equal('Stripe', $data['payment_method'] ?? null, 'payment_method from usermeta');
+assert_equal(7, $data['ordering_frequency'] ?? null, 'ordering_frequency cast to int');
+assert_equal('Email', $data['ordering_contact_method'] ?? null, 'ordering_contact_method from usermeta');
+assert_equal(14, $data['delivery_frequency'] ?? null, 'delivery_frequency cast to int');
+assert_equal('Medium', $data['freezer_capacity'] ?? null, 'freezer_capacity from freeze_capacity meta');
+assert_equal('5.50', $data['delivery_fee'] ?? null, 'delivery_fee normalized to 2dp string');
+// customer_comments / diet_concerns are encrypted by the repository
+// before insert, so they no longer match the plaintext fixture here.
+// Just check the columns are populated and aren't the plaintext.
+assert_true(isset($data['customer_comments']) && $data['customer_comments'] !== '', 'customer_comments populated');
+assert_true(isset($data['customer_comments']) && $data['customer_comments'] !== 'Likes the front porch', 'customer_comments encrypted on insert');
+assert_true(isset($data['diet_concerns']) && $data['diet_concerns'] !== '', 'diet_concerns populated from dietary_needs meta');
+assert_true(isset($data['diet_concerns']) && $data['diet_concerns'] !== 'No shellfish', 'diet_concerns encrypted on insert');
+
 // ---------------------------------------------------------------------------
 // pending is also an active status — same behaviour
 // ---------------------------------------------------------------------------
@@ -175,6 +233,24 @@ $wpdb->insert_calls = 0;
 $order3 = new WC_Order(503);
 MealsDB_Private_Intake::on_order_status_changed(99, 'failed', 'completed', $order3);
 assert_equal(1, $wpdb->insert_calls, 'failed → completed triggers INSERT');
+
+// ---------------------------------------------------------------------------
+// maybe_promote called without an order falls back to WP usermeta only.
+// shipping_city is the one address field the stub seeds, so it should
+// land in delivery_city; address fields with no usermeta source stay
+// empty. Service / notes meta still flow through unchanged.
+// ---------------------------------------------------------------------------
+$wpdb->insert_calls = 0;
+$wpdb->last_insert_data = [];
+MealsDB_Private_Intake::maybe_promote(404, null);
+assert_equal(1, $wpdb->insert_calls, 'maybe_promote(uid, null) still INSERTs');
+$nodata = $wpdb->last_insert_data;
+assert_equal('', $nodata['street_name'] ?? null, 'no order, no usermeta → street_name blank');
+assert_equal('Meta-Ship-City', $nodata['delivery_city'] ?? null, 'no order → delivery_city falls back to shipping_city usermeta');
+assert_equal('', $nodata['delivery_street_name'] ?? null, 'no order, no usermeta → delivery_street_name blank');
+assert_equal('Stripe', $nodata['payment_method'] ?? null, 'payment_method usermeta still flows without order');
+assert_equal(7, $nodata['ordering_frequency'] ?? null, 'ordering_frequency usermeta still flows without order');
+assert_true(isset($nodata['customer_comments']) && $nodata['customer_comments'] !== '', 'customer_comments still flows without order');
 
 if (!empty($failures)) {
     fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");

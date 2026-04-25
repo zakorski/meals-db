@@ -21,6 +21,7 @@ class MealsDB_Ajax_Settings {
         add_action( 'wp_ajax_mealsdb_run_private_backfill', [ self::class, 'run_private_backfill' ] );
         add_action( 'wp_ajax_mealsdb_preview_private_deactivation', [ self::class, 'preview_private_deactivation' ] );
         add_action( 'wp_ajax_mealsdb_run_private_deactivation', [ self::class, 'run_private_deactivation' ] );
+        add_action( 'wp_ajax_mealsdb_enrich_private_skeletons', [ self::class, 'enrich_private_skeletons' ] );
     }
 
     /**
@@ -84,6 +85,22 @@ class MealsDB_Ajax_Settings {
 
         $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
         $stats = MealsDB_Backfill_Private_Clients::deactivation_sweep_run( $lookback );
+        wp_send_json_success( $stats );
+    }
+
+    /**
+     * Refill blank columns on existing Private skeleton rows from
+     * usermeta + the user's most recent qualifying WC order. Pass
+     * `dry_run=1` in the POST body to count without writing.
+     */
+    public static function enrich_private_skeletons(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+
+        $dry_run = ! empty( $_POST['dry_run'] );
+        $stats = MealsDB_Backfill_Private_Clients::enrich_existing( $dry_run );
         wp_send_json_success( $stats );
     }
 
