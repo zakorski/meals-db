@@ -74,8 +74,15 @@ if (!class_exists('WP_User')) {
 if (!function_exists('get_userdata')) {
     function get_userdata($id) { return $id > 0 ? new WP_User() : null; }
 }
+// Per-uid nickname overrides; falls through to the shared fixtures
+// when not set. Lets each promotion call exercise a different
+// nickname value without redefining get_user_meta.
+$GLOBALS['nickname_override'] = [];
 if (!function_exists('get_user_meta')) {
     function get_user_meta($uid, $key, $single = true) {
+        if ($key === 'nickname' && isset($GLOBALS['nickname_override'][$uid])) {
+            return $GLOBALS['nickname_override'][$uid];
+        }
         $fixtures = [
             'billing_first_name'      => 'Billing',
             'billing_last_name'       => 'Last',
@@ -97,6 +104,7 @@ if (!function_exists('get_user_meta')) {
             'delivery_fee'            => '5.50',
             'customer_comments'       => 'Likes the front porch',
             'dietary_needs'           => 'No shellfish',
+            'nickname'                => 'abc', // lowercased deliberately — should be uppercased
         ];
         return $fixtures[$key] ?? '';
     }
@@ -218,6 +226,9 @@ assert_true(isset($data['customer_comments']) && $data['customer_comments'] !== 
 assert_true(isset($data['diet_concerns']) && $data['diet_concerns'] !== '', 'diet_concerns populated from dietary_needs meta');
 assert_true(isset($data['diet_concerns']) && $data['diet_concerns'] !== 'No shellfish', 'diet_concerns encrypted on insert');
 
+// Bag initials from wp_usermeta.nickname — uppercased, exact-3-letters only.
+assert_equal('ABC', $data['delivery_initials'] ?? null, 'delivery_initials uppercased from nickname meta');
+
 // ---------------------------------------------------------------------------
 // pending is also an active status — same behaviour
 // ---------------------------------------------------------------------------
@@ -251,6 +262,34 @@ assert_equal('', $nodata['delivery_street_name'] ?? null, 'no order, no usermeta
 assert_equal('Stripe', $nodata['payment_method'] ?? null, 'payment_method usermeta still flows without order');
 assert_equal(7, $nodata['ordering_frequency'] ?? null, 'ordering_frequency usermeta still flows without order');
 assert_true(isset($nodata['customer_comments']) && $nodata['customer_comments'] !== '', 'customer_comments still flows without order');
+
+// ---------------------------------------------------------------------------
+// Nickname → delivery_initials format validation. Only exact 3-letter
+// values land in the column; anything else is treated as unfilled.
+// ---------------------------------------------------------------------------
+$cases = [
+    ['nickname' => 'AB',    'expected_present' => false, 'label' => 'too-short nickname dropped'],
+    ['nickname' => 'ABCD',  'expected_present' => false, 'label' => 'too-long nickname dropped'],
+    ['nickname' => 'A1B',   'expected_present' => false, 'label' => 'non-letter nickname dropped'],
+    ['nickname' => 'a b',   'expected_present' => false, 'label' => 'space inside nickname dropped'],
+    ['nickname' => 'Bob',   'expected' => 'BOB',         'label' => 'mixed-case 3-letter nickname uppercased'],
+    ['nickname' => '  jdoe ',  'expected_present' => false, 'label' => 'trim-then-too-long nickname dropped'],
+    ['nickname' => '  abc  ', 'expected' => 'ABC',       'label' => 'trim-then-3-letter nickname accepted'],
+];
+$next_uid = 4040;
+foreach ($cases as $case) {
+    $uid = $next_uid++;
+    $GLOBALS['nickname_override'][$uid] = $case['nickname'];
+    $wpdb->insert_calls = 0;
+    $wpdb->last_insert_data = [];
+    MealsDB_Private_Intake::maybe_promote($uid, null);
+    $row = $wpdb->last_insert_data;
+    if (array_key_exists('expected', $case)) {
+        assert_equal($case['expected'], $row['delivery_initials'] ?? null, $case['label']);
+    } else {
+        assert_true(!array_key_exists('delivery_initials', $row), $case['label']);
+    }
+}
 
 if (!empty($failures)) {
     fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");

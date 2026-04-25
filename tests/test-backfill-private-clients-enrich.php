@@ -122,6 +122,7 @@ $GLOBALS['enrich_meta'] = [
         'customer_comments'       => 'Front porch only',
         'dietary_needs'           => 'No nuts',
         'ordering_contact_method' => 'Phone',
+        'nickname'                => 'abc',
     ],
     // 102 has no usermeta — enrichment should skip the row entirely.
     102 => [],
@@ -190,6 +191,9 @@ $wpdb->clients = [
         'delivery_fee'           => null,
         'customer_comments'      => null,
         'diet_concerns'          => null,
+        // delivery_initials column is NOT NULL DEFAULT '' — empty
+        // string represents an unfilled skeleton.
+        'delivery_initials'      => '',
     ],
     [
         'client_id'              => 2,
@@ -216,6 +220,7 @@ $wpdb->clients = [
         'delivery_fee'           => null,
         'customer_comments'      => null,
         'diet_concerns'          => null,
+        'delivery_initials'      => '',
     ],
     [
         'client_id'              => 3,
@@ -243,6 +248,8 @@ $wpdb->clients = [
         'freezer_capacity'       => null,
         'customer_comments'      => null,
         'diet_concerns'          => null,
+        // Admin already set the bag initials — must not be overwritten.
+        'delivery_initials'      => 'XYZ',
     ],
 ];
 
@@ -296,6 +303,7 @@ assert_equal('5.50', $d1['delivery_fee'] ?? null, 'row1 delivery_fee normalised 
 assert_equal('Phone', $d1['ordering_contact_method'] ?? null, 'row1 ordering_contact_method from usermeta');
 assert_true(isset($d1['customer_comments']) && $d1['customer_comments'] !== 'Front porch only', 'row1 customer_comments encrypted before update');
 assert_true(isset($d1['diet_concerns']) && $d1['diet_concerns'] !== 'No nuts', 'row1 diet_concerns encrypted before update');
+assert_equal('ABC', $d1['delivery_initials'] ?? null, 'row1 delivery_initials uppercased from nickname meta');
 
 // client_phone_1 was '' on the existing row but billing_phone meta is
 // also unset — first_name etc. on row 1 were already populated. None
@@ -315,6 +323,7 @@ assert_true($row3_update !== null, 'row 3 was updated');
 $d3 = $row3_update['data'] ?? [];
 assert_true(!array_key_exists('payment_method', $d3), 'row3 admin-set payment_method preserved');
 assert_true(!array_key_exists('delivery_fee', $d3), 'row3 admin-set delivery_fee preserved');
+assert_true(!array_key_exists('delivery_initials', $d3), 'row3 admin-set delivery_initials preserved');
 // But blank columns ARE filled.
 assert_equal('12 Maple St', $d3['street_name'] ?? null, 'row3 still gets blank street_name filled');
 assert_equal('Zone 3', $d3['delivery_area_name'] ?? null, 'row3 still gets blank delivery_area_name filled');
