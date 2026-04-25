@@ -129,6 +129,14 @@ class MealsDB_Private_Intake {
         $billing_address  = self::resolve_address($wp_user_id, $order, 'billing');
         $shipping_address = self::resolve_address($wp_user_id, $order, 'shipping');
 
+        // shipping_address_2 stores the delivery zone (e.g., "Zone 3")
+        // — see directives/wp-custom-user-fields-map.md. Order takes
+        // priority for the same first-order reason as the address fields.
+        $delivery_area_name = self::first_non_empty([
+            $order ? (string) $order->get_shipping_address_2() : '',
+            (string) get_user_meta($wp_user_id, 'shipping_address_2', true),
+        ]);
+
         $data = [
             'client_type'           => 'Private',
             'active'                => 1,
@@ -145,7 +153,44 @@ class MealsDB_Private_Intake {
             'delivery_city'         => $shipping_address['city'],
             'delivery_province'     => $shipping_address['state'],
             'delivery_postal_code'  => $shipping_address['postcode'],
+            'delivery_area_name'    => $delivery_area_name,
         ];
+
+        // Service / ordering / notes fields are usermeta-only. The
+        // legacy Enzebra "Custom User Fields" plugin populated these on
+        // every WP user; mapping per directives/wp-custom-user-fields-map.md.
+        // Empty meta keys leave the corresponding column at its default.
+        $string_meta_to_column = [
+            'payment_method'           => 'payment_method',
+            'ordering_contact_method'  => 'ordering_contact_method',
+            'freeze_capacity'          => 'freezer_capacity',
+            'customer_comments'        => 'customer_comments',
+            'dietary_needs'            => 'diet_concerns',
+        ];
+        foreach ($string_meta_to_column as $meta_key => $column) {
+            $value = trim((string) get_user_meta($wp_user_id, $meta_key, true));
+            if ($value !== '') {
+                $data[$column] = $value;
+            }
+        }
+
+        // Numeric meta — only insert when the meta value is non-empty
+        // and numeric, so blank rows stay NULL instead of coercing to 0.
+        $int_meta_to_column = [
+            'ordering_frequency' => 'ordering_frequency',
+            'delivery_frequency' => 'delivery_frequency',
+        ];
+        foreach ($int_meta_to_column as $meta_key => $column) {
+            $value = trim((string) get_user_meta($wp_user_id, $meta_key, true));
+            if ($value !== '' && is_numeric($value)) {
+                $data[$column] = (int) $value;
+            }
+        }
+
+        $delivery_fee_raw = trim((string) get_user_meta($wp_user_id, 'delivery_fee', true));
+        if ($delivery_fee_raw !== '' && is_numeric($delivery_fee_raw)) {
+            $data['delivery_fee'] = number_format((float) $delivery_fee_raw, 2, '.', '');
+        }
 
         // created_at is not in the meals_clients schema — the table
         // doesn't track creation timestamps (see class-schema.php).
