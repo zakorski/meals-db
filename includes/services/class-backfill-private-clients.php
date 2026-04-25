@@ -274,6 +274,206 @@ class MealsDB_Backfill_Private_Clients {
         return $stats;
     }
 
+    /**
+     * Refill blank columns on existing Private meals_clients rows from
+     * WP usermeta + the user's most recent qualifying WC order.
+     *
+     * Skeleton rows produced by the original backfill (before the
+     * field map was wired up) are missing address, zone, service /
+     * ordering meta, and notes. This sweep enriches them in-place
+     * without touching any column the admin has already populated.
+     *
+     * Encrypted columns (customer_comments, diet_concerns) are
+     * encrypted before update via MealsDB_Encryption::encrypt_columns,
+     * matching the contract that callers of update_client() must
+     * encrypt themselves.
+     *
+     * @return array{scanned:int, enriched:int, skipped:int, errors:int}
+     */
+    public static function enrich_existing(bool $dry_run = false): array {
+        global $wpdb;
+
+        $stats = ['scanned' => 0, 'enriched' => 0, 'skipped' => 0, 'errors' => 0];
+        if (!($wpdb instanceof wpdb)) {
+            return $stats;
+        }
+
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $escaped_clients = str_replace('`', '``', $clients_table);
+
+        $rows = $wpdb->get_results(
+            "SELECT * FROM `{$escaped_clients}`
+             WHERE client_type = 'Private' AND wp_user_id > 0",
+            ARRAY_A
+        );
+        if (!is_array($rows) || empty($rows)) {
+            return $stats;
+        }
+
+        $stats['scanned'] = count($rows);
+
+        $uids = [];
+        foreach ($rows as $row) {
+            $uid = (int) ($row['wp_user_id'] ?? 0);
+            if ($uid > 0) {
+                $uids[] = $uid;
+            }
+        }
+        $recent_order_by_uid = self::recent_orders_for_users($uids);
+
+        $repo = new MealsDB_Clients_Repository();
+
+        foreach ($rows as $row) {
+            $client_id  = (int) ($row['client_id'] ?? 0);
+            $wp_user_id = (int) ($row['wp_user_id'] ?? 0);
+            if ($client_id <= 0 || $wp_user_id <= 0) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            try {
+                $order = null;
+                $order_id = $recent_order_by_uid[$wp_user_id] ?? 0;
+                if ($order_id > 0 && function_exists('wc_get_order')) {
+                    $maybe = wc_get_order($order_id);
+                    if ($maybe instanceof WC_Order) {
+                        $order = $maybe;
+                    }
+                }
+
+                $payload = MealsDB_Private_Intake::build_field_payload($wp_user_id, $order);
+                if (empty($payload)) {
+                    $stats['skipped']++;
+                    continue;
+                }
+
+                $updates = [];
+                foreach ($payload as $column => $value) {
+                    if (self::is_blank($value)) {
+                        continue;
+                    }
+                    if (!array_key_exists($column, $row) || !self::is_blank($row[$column])) {
+                        continue;
+                    }
+                    $updates[$column] = $value;
+                }
+
+                if (empty($updates)) {
+                    $stats['skipped']++;
+                    continue;
+                }
+
+                if ($dry_run) {
+                    $stats['enriched']++;
+                    error_log(sprintf(
+                        '[MealsDB Backfill] DRY RUN enrich client_id=%d → %s',
+                        $client_id,
+                        implode(',', array_keys($updates))
+                    ));
+                    continue;
+                }
+
+                $encrypted = MealsDB_Encryption::encrypt_columns($updates);
+                if (!$repo->update_client($client_id, $encrypted)) {
+                    $stats['errors']++;
+                    continue;
+                }
+
+                $stats['enriched']++;
+
+                $log_payload = [
+                    'client_id'  => $client_id,
+                    'wp_user_id' => $wp_user_id,
+                    'columns'    => array_keys($updates),
+                ];
+                $encoded = function_exists('wp_json_encode')
+                    ? wp_json_encode($log_payload)
+                    : json_encode($log_payload);
+                MealsDB_Logger::log(
+                    'private_client_enriched',
+                    $client_id,
+                    'intake',
+                    null,
+                    $encoded === false ? null : $encoded,
+                    'mealsdb'
+                );
+            } catch (\Throwable $e) {
+                $stats['errors']++;
+                error_log('[MealsDB Backfill] enrich_existing failed for client ' . $client_id . ': ' . $e->getMessage());
+            }
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Resolve the most recent qualifying WC order id for each given
+     * user. Mirrors the eligibility criteria in preview() so the
+     * address fallback pulls from a real fulfilled order.
+     *
+     * @param int[] $user_ids
+     * @return array<int, int>  wp_user_id => order_id
+     */
+    private static function recent_orders_for_users(array $user_ids): array {
+        global $wpdb;
+        if (!($wpdb instanceof wpdb)) {
+            return [];
+        }
+        $user_ids = array_values(array_unique(array_filter(array_map('intval', $user_ids))));
+        if (empty($user_ids)) {
+            return [];
+        }
+
+        $orders_table    = $wpdb->prefix . 'wc_orders';
+        $addresses_table = $wpdb->prefix . 'wc_order_addresses';
+        if (!self::table_exists($orders_table) || !self::table_exists($addresses_table)) {
+            return [];
+        }
+
+        $active_statuses = ['wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid'];
+        $status_ph = implode(',', array_fill(0, count($active_statuses), '%s'));
+        $user_ph   = implode(',', array_fill(0, count($user_ids), '%d'));
+
+        $sql = "
+            SELECT o.customer_id, MAX(o.id) AS recent_order_id
+            FROM `{$orders_table}` o
+            INNER JOIN `{$addresses_table}` a
+                ON a.order_id = o.id AND a.address_type = 'shipping'
+            WHERE o.customer_id IN ({$user_ph})
+              AND o.status IN ({$status_ph})
+              AND o.type = 'shop_order'
+              AND TRIM(COALESCE(a.address_1, '')) <> ''
+            GROUP BY o.customer_id
+        ";
+
+        $params = array_merge($user_ids, $active_statuses);
+        $prepared = $wpdb->prepare($sql, $params);
+        $results  = $wpdb->get_results($prepared, ARRAY_A);
+
+        $map = [];
+        if (is_array($results)) {
+            foreach ($results as $r) {
+                $map[(int) $r['customer_id']] = (int) $r['recent_order_id'];
+            }
+        }
+        return $map;
+    }
+
+    /**
+     * "Blank" for the purposes of enrichment — null, empty string, or
+     * a string that trims to empty. Numeric zero is NOT considered
+     * blank (an admin-set $0.00 fee is intentional).
+     */
+    private static function is_blank($value): bool {
+        if ($value === null) {
+            return true;
+        }
+        if (is_string($value)) {
+            return trim($value) === '';
+        }
+        return false;
+    }
+
     private static function table_exists(string $table_name): bool {
         global $wpdb;
         if (!($wpdb instanceof wpdb)) {

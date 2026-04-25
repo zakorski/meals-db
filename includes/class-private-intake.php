@@ -99,9 +99,68 @@ class MealsDB_Private_Intake {
             return (int) $existing['client_id'];
         }
 
+        $payload = self::build_field_payload($wp_user_id, $order);
+        if (empty($payload)) {
+            return null;
+        }
+
+        // created_at is not in the meals_clients schema — the table
+        // doesn't track creation timestamps (see class-schema.php).
+        // The audit log entry below carries the timestamp instead.
+
+        $data = array_merge([
+            'client_type' => 'Private',
+            'active'      => 1,
+            'wp_user_id'  => $wp_user_id,
+        ], $payload);
+
+        $client_id = MealsDB_Clients_Repository::create($data);
+        if ($client_id <= 0) {
+            return null;
+        }
+
+        $payload = [
+            'wp_user_id' => $wp_user_id,
+            'client_id'  => $client_id,
+            'trigger'    => $order ? 'first_order' : 'manual',
+            'order_id'   => $order ? (int) $order->get_id() : null,
+        ];
+        $encoded = function_exists('wp_json_encode')
+            ? wp_json_encode($payload)
+            : json_encode($payload);
+
+        MealsDB_Logger::log(
+            'private_client_promoted',
+            $client_id,
+            'intake',
+            null,
+            $encoded === false ? null : $encoded,
+            'mealsdb'
+        );
+
+        return $client_id;
+    }
+
+    /**
+     * Resolve every meals_clients column the promotion path knows how
+     * to populate from WC + WP usermeta + the triggering order.
+     *
+     * Used by maybe_promote() to assemble the create payload, and by
+     * MealsDB_Backfill_Private_Clients::enrich_existing() to refill
+     * blank columns on rows that were created before the field map
+     * was wired up. Returns an empty array when the WP user can't be
+     * loaded (caller treats that as "skip").
+     *
+     * @return array<string, mixed> Column → value map. Always-present
+     *                              keys cover identity + address;
+     *                              service / notes / numeric fields
+     *                              only appear when usermeta supplies
+     *                              a non-empty value.
+     */
+    public static function build_field_payload(int $wp_user_id, ?WC_Order $order = null): array {
         $user = get_userdata($wp_user_id);
         if (!($user instanceof WP_User)) {
-            return null;
+            return [];
         }
 
         // Identity: prefer WC billing fields, fall back to the WP user
@@ -137,10 +196,7 @@ class MealsDB_Private_Intake {
             (string) get_user_meta($wp_user_id, 'shipping_address_2', true),
         ]);
 
-        $data = [
-            'client_type'           => 'Private',
-            'active'                => 1,
-            'wp_user_id'            => $wp_user_id,
+        $payload = [
             'first_name'            => $first_name,
             'last_name'             => $last_name,
             'client_phone_1'        => $phone,
@@ -170,7 +226,7 @@ class MealsDB_Private_Intake {
         foreach ($string_meta_to_column as $meta_key => $column) {
             $value = trim((string) get_user_meta($wp_user_id, $meta_key, true));
             if ($value !== '') {
-                $data[$column] = $value;
+                $payload[$column] = $value;
             }
         }
 
@@ -183,44 +239,16 @@ class MealsDB_Private_Intake {
         foreach ($int_meta_to_column as $meta_key => $column) {
             $value = trim((string) get_user_meta($wp_user_id, $meta_key, true));
             if ($value !== '' && is_numeric($value)) {
-                $data[$column] = (int) $value;
+                $payload[$column] = (int) $value;
             }
         }
 
         $delivery_fee_raw = trim((string) get_user_meta($wp_user_id, 'delivery_fee', true));
         if ($delivery_fee_raw !== '' && is_numeric($delivery_fee_raw)) {
-            $data['delivery_fee'] = number_format((float) $delivery_fee_raw, 2, '.', '');
+            $payload['delivery_fee'] = number_format((float) $delivery_fee_raw, 2, '.', '');
         }
 
-        // created_at is not in the meals_clients schema — the table
-        // doesn't track creation timestamps (see class-schema.php).
-        // The audit log entry below carries the timestamp instead.
-
-        $client_id = MealsDB_Clients_Repository::create($data);
-        if ($client_id <= 0) {
-            return null;
-        }
-
-        $payload = [
-            'wp_user_id' => $wp_user_id,
-            'client_id'  => $client_id,
-            'trigger'    => $order ? 'first_order' : 'manual',
-            'order_id'   => $order ? (int) $order->get_id() : null,
-        ];
-        $encoded = function_exists('wp_json_encode')
-            ? wp_json_encode($payload)
-            : json_encode($payload);
-
-        MealsDB_Logger::log(
-            'private_client_promoted',
-            $client_id,
-            'intake',
-            null,
-            $encoded === false ? null : $encoded,
-            'mealsdb'
-        );
-
-        return $client_id;
+        return $payload;
     }
 
     /**
