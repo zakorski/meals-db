@@ -222,6 +222,20 @@ if ( $has_enc_key ) {
         </p>
         <div id="mealsdb-private-deact-rows" class="mealsdb-private-deact-rows" style="display:none; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #ccd0d4; padding:8px; background:#fff;"></div>
 
+        <h2><?php echo esc_html__( 'Enrich Private Customer Skeletons', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Refill blank columns (address, zone, service / ordering meta, notes) on existing Private meals_clients rows from WordPress usermeta and the user\'s most recent qualifying WC order. Admin-set values are never overwritten. Dry Run reports what would change without writing.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-private-enrich-dry">
+                <?php echo esc_html__( 'Dry Run', 'meals-db' ); ?>
+            </button>
+            <button type="button" class="button button-primary" id="mealsdb-private-enrich-run">
+                <?php echo esc_html__( 'Enrich', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-private-enrich-result" style="margin-left:12px;"></span>
+        </p>
+
         <h2><?php echo esc_html__( 'Sync Product Display Data', 'meals-db' ); ?></h2>
         <p class="description">
             <?php echo esc_html__( 'Rebuild the cached product display data (name, price, image, categories) used by the Quick Order page. This is done automatically when products are saved, but you can run a full sync here.', 'meals-db' ); ?>

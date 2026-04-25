@@ -245,6 +245,56 @@
         });
     });
 
+    // Enrich existing Private skeleton rows. Dry Run and live use the
+    // same endpoint with a dry_run flag — keep them in one helper so
+    // the result formatting stays consistent.
+    function runEnrichSkeletons(dryRun) {
+        var $dry    = $('#mealsdb-private-enrich-dry');
+        var $run    = $('#mealsdb-private-enrich-run');
+        var $result = $('#mealsdb-private-enrich-result');
+
+        if (!dryRun && !window.confirm('Refill blank columns on every Private meals_clients row from usermeta + recent orders? Admin-set values are preserved.')) {
+            return;
+        }
+
+        $dry.prop('disabled', true);
+        $run.prop('disabled', true);
+        $result.text(dryRun ? 'Running dry run...' : 'Enriching skeletons...');
+        tint($result, '#666');
+
+        var data = {
+            action: 'mealsdb_enrich_private_skeletons',
+            nonce: nonces.general || ''
+        };
+        if (dryRun) {
+            data.dry_run = 1;
+        }
+
+        $.post(ajaxUrl, data, function (resp) {
+            $dry.prop('disabled', false);
+            $run.prop('disabled', false);
+            if (resp && resp.success) {
+                var d = resp.data || {};
+                var prefix = dryRun ? 'Dry run: would enrich ' : 'Enriched ';
+                $result.text(
+                    prefix + (d.enriched || 0) + ' of ' + (d.scanned || 0) +
+                    ' (skipped: ' + (d.skipped || 0) + ', errors: ' + (d.errors || 0) + ').'
+                );
+                tint($result, '#46b450');
+            } else {
+                $result.text((resp && resp.data && resp.data.message) || 'Enrich failed.');
+                tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $dry.prop('disabled', false);
+            $run.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    }
+
+    $('#mealsdb-private-enrich-dry').on('click', function () { runEnrichSkeletons(true); });
+    $('#mealsdb-private-enrich-run').on('click', function () { runEnrichSkeletons(false); });
+
     // Sync product display data
     $('#mealsdb-sync-products').on('click', function () {
         var $btn    = $(this);
