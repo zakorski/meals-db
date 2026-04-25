@@ -248,6 +248,20 @@ class MealsDB_Private_Intake {
             $payload['delivery_fee'] = number_format((float) $delivery_fee_raw, 2, '.', '');
         }
 
+        // Bag initials live in WordPress's `nickname` user meta —
+        // labelled "Nickname (required)" in the legacy Enzebra custom
+        // user fields UI. The schema column is VARCHAR(3) and the
+        // canonical validator (MealsDB_Initials::validate_code) accepts
+        // /^[A-Z]{3}$/ after uppercasing, so anything that isn't
+        // exactly three letters is treated as unfilled rather than
+        // truncated. The deterministic-hash shadow column is left
+        // alone — class-client-form.php notes it's only a defensive
+        // shadow; uniqueness lookups read the plaintext column.
+        $nickname = strtoupper(trim((string) get_user_meta($wp_user_id, 'nickname', true)));
+        if (preg_match('/^[A-Z]{3}$/', $nickname) === 1) {
+            $payload['delivery_initials'] = $nickname;
+        }
+
         return $payload;
     }
 
