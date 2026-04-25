@@ -122,14 +122,29 @@ class MealsDB_Private_Intake {
         ]);
         $email = (string) ($user->user_email ?? '');
 
+        // Address: order-on-file wins over usermeta. A first-time
+        // customer may have placed the triggering order before WC ever
+        // wrote billing_/shipping_ usermeta on the WP profile, so the
+        // order itself is the most reliable source.
+        $billing_address  = self::resolve_address($wp_user_id, $order, 'billing');
+        $shipping_address = self::resolve_address($wp_user_id, $order, 'shipping');
+
         $data = [
-            'client_type'    => 'Private',
-            'active'         => 1,
-            'wp_user_id'     => $wp_user_id,
-            'first_name'     => $first_name,
-            'last_name'      => $last_name,
-            'client_phone_1' => $phone,
-            'client_email'   => $email,
+            'client_type'           => 'Private',
+            'active'                => 1,
+            'wp_user_id'            => $wp_user_id,
+            'first_name'            => $first_name,
+            'last_name'             => $last_name,
+            'client_phone_1'        => $phone,
+            'client_email'          => $email,
+            'street_name'           => $billing_address['address_1'],
+            'city'                  => $billing_address['city'],
+            'province'              => $billing_address['state'],
+            'postal_code'           => $billing_address['postcode'],
+            'delivery_street_name'  => $shipping_address['address_1'],
+            'delivery_city'         => $shipping_address['city'],
+            'delivery_province'     => $shipping_address['state'],
+            'delivery_postal_code'  => $shipping_address['postcode'],
         ];
 
         // created_at is not in the meals_clients schema — the table
@@ -161,6 +176,46 @@ class MealsDB_Private_Intake {
         );
 
         return $client_id;
+    }
+
+    /**
+     * Resolve a billing or shipping address for the user, preferring
+     * the triggering order over WP usermeta.
+     *
+     * @param string $type Either 'billing' or 'shipping'.
+     * @return array{address_1:string, city:string, state:string, postcode:string}
+     */
+    private static function resolve_address(int $wp_user_id, ?WC_Order $order, string $type): array {
+        $meta_prefix = $type === 'shipping' ? 'shipping_' : 'billing_';
+
+        $from_order = ['address_1' => '', 'city' => '', 'state' => '', 'postcode' => ''];
+        if ($order instanceof WC_Order) {
+            $getter_prefix = 'get_' . $type . '_';
+            // postcode getter is named *_postcode on WC_Order regardless of type.
+            $from_order['address_1'] = (string) $order->{$getter_prefix . 'address_1'}();
+            $from_order['city']      = (string) $order->{$getter_prefix . 'city'}();
+            $from_order['state']     = (string) $order->{$getter_prefix . 'state'}();
+            $from_order['postcode']  = (string) $order->{$getter_prefix . 'postcode'}();
+        }
+
+        return [
+            'address_1' => self::first_non_empty([
+                $from_order['address_1'],
+                (string) get_user_meta($wp_user_id, $meta_prefix . 'address_1', true),
+            ]),
+            'city' => self::first_non_empty([
+                $from_order['city'],
+                (string) get_user_meta($wp_user_id, $meta_prefix . 'city', true),
+            ]),
+            'state' => self::first_non_empty([
+                $from_order['state'],
+                (string) get_user_meta($wp_user_id, $meta_prefix . 'state', true),
+            ]),
+            'postcode' => self::first_non_empty([
+                $from_order['postcode'],
+                (string) get_user_meta($wp_user_id, $meta_prefix . 'postcode', true),
+            ]),
+        ];
     }
 
     /**

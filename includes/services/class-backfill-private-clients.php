@@ -49,8 +49,11 @@ class MealsDB_Backfill_Private_Clients {
         ];
         $placeholders = implode(',', array_fill(0, count($active_statuses), '%s'));
 
+        // Group by customer so each eligible user maps to their most
+        // recent qualifying order — that order is the address source
+        // we pass into maybe_promote() during run().
         $sql = "
-            SELECT DISTINCT o.customer_id
+            SELECT o.customer_id, MAX(o.id) AS recent_order_id
             FROM `{$orders_table}` o
             INNER JOIN `{$addresses_table}` a
                 ON a.order_id = o.id AND a.address_type = 'shipping'
@@ -59,24 +62,32 @@ class MealsDB_Backfill_Private_Clients {
               AND o.type = 'shop_order'
               AND o.date_created_gmt >= %s
               AND TRIM(COALESCE(a.address_1, '')) <> ''
+            GROUP BY o.customer_id
         ";
 
         $params = $active_statuses;
         $params[] = $cutoff_date;
         $prepared = $wpdb->prepare($sql, $params);
 
-        $qualifying_user_ids = $wpdb->get_col($prepared);
-        if (!is_array($qualifying_user_ids) || empty($qualifying_user_ids)) {
+        $qualifying = $wpdb->get_results($prepared, ARRAY_A);
+        if (!is_array($qualifying) || empty($qualifying)) {
             return [];
         }
-        $qualifying_user_ids = array_map('intval', $qualifying_user_ids);
+
+        $recent_order_by_uid = [];
+        foreach ($qualifying as $row) {
+            $uid = (int) ($row['customer_id'] ?? 0);
+            if ($uid > 0) {
+                $recent_order_by_uid[$uid] = (int) ($row['recent_order_id'] ?? 0);
+            }
+        }
 
         // Exclude users already tracked in meals_clients.
         $existing_user_ids = MealsDB_Clients_Repository::get_all_wp_user_ids();
         $existing_set = array_flip($existing_user_ids);
         $to_promote = [];
-        foreach ($qualifying_user_ids as $uid) {
-            if ($uid > 0 && !isset($existing_set[$uid])) {
+        foreach (array_keys($recent_order_by_uid) as $uid) {
+            if (!isset($existing_set[$uid])) {
                 $to_promote[] = $uid;
             }
         }
@@ -92,12 +103,13 @@ class MealsDB_Backfill_Private_Clients {
                 $display_name = (string) ($u->display_name ?? '');
             }
             $rows[] = [
-                'wp_user_id'  => $uid,
-                'email'       => (string) ($u->user_email ?? ''),
-                'name'        => $display_name,
-                'order_count' => function_exists('wc_get_customer_order_count')
+                'wp_user_id'      => $uid,
+                'email'           => (string) ($u->user_email ?? ''),
+                'name'            => $display_name,
+                'order_count'     => function_exists('wc_get_customer_order_count')
                     ? (int) wc_get_customer_order_count($uid)
                     : 0,
+                'recent_order_id' => $recent_order_by_uid[$uid],
             ];
         }
 
@@ -131,7 +143,19 @@ class MealsDB_Backfill_Private_Clients {
                 continue;
             }
             try {
-                $client_id = MealsDB_Private_Intake::maybe_promote($uid);
+                // Hand maybe_promote() the most recent qualifying order
+                // so it can copy address fields straight off the order
+                // when the WP profile usermeta is empty.
+                $order = null;
+                $order_id = isset($row['recent_order_id']) ? (int) $row['recent_order_id'] : 0;
+                if ($order_id > 0 && function_exists('wc_get_order')) {
+                    $maybe_order = wc_get_order($order_id);
+                    if ($maybe_order instanceof WC_Order) {
+                        $order = $maybe_order;
+                    }
+                }
+
+                $client_id = MealsDB_Private_Intake::maybe_promote($uid, $order);
                 if ($client_id) {
                     $stats['promoted']++;
                 } else {

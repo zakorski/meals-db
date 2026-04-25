@@ -41,16 +41,30 @@ if (!class_exists('wpdb')) {
             return null;
         }
         public function get_col($query, $x = 0) {
-            // Two call sites: (1) eligible WC users, (2) existing meals_clients wp_user_ids.
-            if (stripos($query, 'customer_id') !== false) {
-                return array_map('strval', $this->eligible_users);
-            }
+            // Returns existing meals_clients wp_user_ids only — the
+            // eligible-WC-users query went over to get_results when the
+            // recent_order_id column was added.
             if (stripos($query, 'wp_user_id') !== false) {
                 return array_map('strval', $this->existing_client_user_ids);
             }
             return [];
         }
-        public function get_results($query, $output = OBJECT) { return []; }
+        public function get_results($query, $output = OBJECT) {
+            // Eligible-WC-users query: each user maps to their most
+            // recent qualifying order. Use uid * 100 as a stand-in
+            // order id so assertions can verify the threading.
+            if (stripos($query, 'customer_id') !== false && stripos($query, 'recent_order_id') !== false) {
+                $rows = [];
+                foreach ($this->eligible_users as $uid) {
+                    $rows[] = [
+                        'customer_id'     => (string) $uid,
+                        'recent_order_id' => (string) ((int) $uid * 100),
+                    ];
+                }
+                return $rows;
+            }
+            return [];
+        }
         public function query($query) { return 0; }
         public function insert($table, $data) { return 1; }
     }
@@ -113,12 +127,14 @@ $ids = array_map(function ($r) { return $r['wp_user_id']; }, $preview);
 sort($ids);
 assert_equal([10, 30], $ids, 'remaining users are the two without meals_clients');
 
-// Row shape: wp_user_id, email, name, order_count.
+// Row shape: wp_user_id, email, name, order_count, recent_order_id.
 $first = $preview[0];
 assert_equal(true, isset($first['wp_user_id']), 'row has wp_user_id');
 assert_equal(true, isset($first['email']), 'row has email');
 assert_equal(true, isset($first['name']), 'row has name');
 assert_equal(true, isset($first['order_count']), 'row has order_count');
+assert_equal(true, isset($first['recent_order_id']), 'row has recent_order_id');
+assert_equal((int) $first['wp_user_id'] * 100, $first['recent_order_id'], 'recent_order_id threaded from preview SQL');
 
 // Empty eligible set → empty preview.
 $wpdb->eligible_users = [];

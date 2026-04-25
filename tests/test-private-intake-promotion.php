@@ -80,6 +80,12 @@ if (!function_exists('get_user_meta')) {
             'billing_first_name' => 'Billing',
             'billing_last_name'  => 'Last',
             'billing_phone'      => '555-1234',
+            // Usermeta-only fallbacks for users who have a WP profile
+            // address but aren't placing the triggering order (e.g.
+            // profile-saved addresses). The promotion path still
+            // prefers $order when one is supplied — see the user 88
+            // assertions below.
+            'shipping_city'      => 'Meta-Ship-City',
         ];
         return $fixtures[$key] ?? '';
     }
@@ -115,6 +121,14 @@ if (!class_exists('WC_Order')) {
         public function get_billing_first_name(): string { return 'Order-First'; }
         public function get_billing_last_name(): string { return 'Order-Last'; }
         public function get_billing_phone(): string { return '555-0000'; }
+        public function get_billing_address_1(): string { return '12 Order Lane'; }
+        public function get_billing_city(): string { return 'Order City'; }
+        public function get_billing_state(): string { return 'NB'; }
+        public function get_billing_postcode(): string { return 'E1A 1A1'; }
+        public function get_shipping_address_1(): string { return '34 Ship Way'; }
+        public function get_shipping_city(): string { return 'Ship City'; }
+        public function get_shipping_state(): string { return 'NS'; }
+        public function get_shipping_postcode(): string { return 'B2B 2B2'; }
     }
 }
 
@@ -160,6 +174,20 @@ assert_equal('Last', $data['last_name'] ?? null, 'last_name prefers billing_last
 assert_equal('555-1234', $data['client_phone_1'] ?? null, 'phone prefers billing_phone meta');
 assert_equal('promoted@example.com', $data['client_email'] ?? null, 'email from WP user');
 
+// Address fields: $order beats usermeta (the get_user_meta stub
+// returns '' for the billing_/shipping_ address keys, so the order
+// values flow through). For shipping_city the stub returns
+// 'Meta-Ship-City' but the order's 'Ship City' wins per resolve_address
+// priority order.
+assert_equal('12 Order Lane', $data['street_name'] ?? null, 'street_name from order billing_address_1');
+assert_equal('Order City', $data['city'] ?? null, 'city from order billing_city');
+assert_equal('NB', $data['province'] ?? null, 'province from order billing_state');
+assert_equal('E1A 1A1', $data['postal_code'] ?? null, 'postal_code from order billing_postcode');
+assert_equal('34 Ship Way', $data['delivery_street_name'] ?? null, 'delivery_street_name from order shipping_address_1');
+assert_equal('Ship City', $data['delivery_city'] ?? null, 'delivery_city: order beats usermeta when both set');
+assert_equal('NS', $data['delivery_province'] ?? null, 'delivery_province from order shipping_state');
+assert_equal('B2B 2B2', $data['delivery_postal_code'] ?? null, 'delivery_postal_code from order shipping_postcode');
+
 // ---------------------------------------------------------------------------
 // pending is also an active status — same behaviour
 // ---------------------------------------------------------------------------
@@ -175,6 +203,20 @@ $wpdb->insert_calls = 0;
 $order3 = new WC_Order(503);
 MealsDB_Private_Intake::on_order_status_changed(99, 'failed', 'completed', $order3);
 assert_equal(1, $wpdb->insert_calls, 'failed → completed triggers INSERT');
+
+// ---------------------------------------------------------------------------
+// maybe_promote called without an order falls back to WP usermeta only.
+// shipping_city is the one address field the stub seeds, so it should
+// land in delivery_city; everything else stays empty.
+// ---------------------------------------------------------------------------
+$wpdb->insert_calls = 0;
+$wpdb->last_insert_data = [];
+MealsDB_Private_Intake::maybe_promote(404, null);
+assert_equal(1, $wpdb->insert_calls, 'maybe_promote(uid, null) still INSERTs');
+$nodata = $wpdb->last_insert_data;
+assert_equal('', $nodata['street_name'] ?? null, 'no order, no usermeta → street_name blank');
+assert_equal('Meta-Ship-City', $nodata['delivery_city'] ?? null, 'no order → delivery_city falls back to shipping_city usermeta');
+assert_equal('', $nodata['delivery_street_name'] ?? null, 'no order, no usermeta → delivery_street_name blank');
 
 if (!empty($failures)) {
     fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");
