@@ -1,10 +1,14 @@
 <?php
 /**
- * Delivery Slip Generator
+ * Slip data provider — client + order queries for the Phase T PDF
+ * pipeline.
  *
- * Produces packing, picking, and delivery slips from WC HPOS order data
- * joined with meals_clients delivery information. Uses delivery_initials
- * (3-letter) rather than full names on routing documents for privacy.
+ * Class name retained as MealsDB_Delivery_Slip_Generator for binary
+ * compatibility with the new MealsDB_Slip_PDF_Generator constructor
+ * signature documented in directives/phase-T-pdf-slips.md. The four
+ * screen-rendered slip generators that used to live here (packing,
+ * picking, delivery, driver, plus their _by_zones counterparts) were
+ * retired in Phase T.
  *
  * @package MealsDB
  */
@@ -18,9 +22,6 @@ class MealsDB_Delivery_Slip_Generator {
      */
     private $order_query;
 
-    /**
-     * @param MealsDB_WC_Order_Query $order_query
-     */
     public function __construct(MealsDB_WC_Order_Query $order_query) {
         $this->order_query = $order_query;
     }
@@ -29,8 +30,8 @@ class MealsDB_Delivery_Slip_Generator {
      * Get clients scheduled for delivery on the given date.
      *
      * Matches by day-of-week against the client's delivery_day column.
-     *
-     * @param string $delivery_date Y-m-d.
+     * Returns the lighter-weight columns required by the packer
+     * pipeline (no encrypted PII).
      *
      * @return array<int, array<string, mixed>> Keyed by wp_user_id.
      */
@@ -40,9 +41,7 @@ class MealsDB_Delivery_Slip_Generator {
         // strtotime() falls back to "now" on unparseable input, so a
         // malformed $delivery_date (e.g. "2026-13-01" or a typo) would
         // silently return clients scheduled for today instead of
-        // erroring. Require strict Y-m-d format up front so a caller
-        // that fumbles the parameter gets an empty result rather than
-        // the wrong dataset.
+        // erroring. Require strict Y-m-d format up front.
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery_date)) {
             return [];
         }
@@ -51,8 +50,7 @@ class MealsDB_Delivery_Slip_Generator {
             return [];
         }
 
-        $day_name  = date('l', $ts);
-        $day_lower = strtolower($day_name);
+        $day_lower = strtolower(date('l', $ts));
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $sql   = $wpdb->prepare(
@@ -81,19 +79,24 @@ class MealsDB_Delivery_Slip_Generator {
     /**
      * Get clients with full PII for driver delivery slips.
      *
-     * Unlike get_clients_for_delivery_date() which fetches only initials,
-     * this includes first_name, last_name, phone, delivery_fee, payment_method,
-     * and client_type — all needed for the driver-facing slip.
-     *
-     * @param string $delivery_date Y-m-d.
+     * Includes first_name, last_name, phone, delivery_fee,
+     * payment_method, client_contribution, and client_type — all
+     * needed for the driver-facing slip.
      *
      * @return array<int, array<string, mixed>> Keyed by wp_user_id.
      */
     public function get_clients_for_driver_slips(string $delivery_date): array {
         global $wpdb;
 
-        $day_name  = date('l', strtotime($delivery_date));
-        $day_lower = strtolower($day_name);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery_date)) {
+            return [];
+        }
+        $ts = strtotime($delivery_date);
+        if ($ts === false) {
+            return [];
+        }
+
+        $day_lower = strtolower(date('l', $ts));
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $sql   = $wpdb->prepare(
@@ -115,12 +118,9 @@ class MealsDB_Delivery_Slip_Generator {
         foreach ($rows as $row) {
             $uid = (int) $row['wp_user_id'];
 
-            // first_name and last_name are stored plaintext (see migration
-            // writes). Previous versions of this method called decrypt() on
-            // them unconditionally, which would throw in any install that
-            // never had legacy-encrypted name rows. safe_decrypt keeps the
-            // read path tolerant for any historical row that *was* encrypted,
-            // and returns plaintext unchanged otherwise.
+            // first_name / last_name are stored plaintext on modern
+            // installs but historical rows may still carry the legacy
+            // ciphertext. safe_decrypt is tolerant of either.
             if (!empty($row['first_name'])) {
                 $row['first_name'] = MealsDB_Encryption::safe_decrypt($row['first_name']);
             }
@@ -208,13 +208,11 @@ class MealsDB_Delivery_Slip_Generator {
         foreach ($rows as $row) {
             $uid = (int) $row['wp_user_id'];
 
-            // Decrypt encrypted PII fields. delivery_initials is a 3-char
-            // plaintext value (see schema) so it is not included here even
-            // though earlier versions of this loop tried to decrypt it.
-            foreach (['individual_id', 'requisition_id', 'vet_health_card'] as $field) {
-                if (!empty($row[$field])) {
-                    $row[$field] = MealsDB_Encryption::safe_decrypt($row[$field]);
-                }
+            if (!empty($row['first_name'])) {
+                $row['first_name'] = MealsDB_Encryption::safe_decrypt($row['first_name']);
+            }
+            if (!empty($row['last_name'])) {
+                $row['last_name'] = MealsDB_Encryption::safe_decrypt($row['last_name']);
             }
 
             $clients[$uid] = $row;
@@ -226,10 +224,7 @@ class MealsDB_Delivery_Slip_Generator {
     /**
      * Fetch WC HPOS orders (with items) for a single delivery date.
      *
-     * @param int[]  $wp_user_ids   WordPress user IDs.
-     * @param string $delivery_date Y-m-d.
-     *
-     * @return array
+     * @param int[] $wp_user_ids WordPress user IDs.
      */
     public function get_orders_for_date(array $wp_user_ids, string $delivery_date): array {
         if (empty($wp_user_ids)) {
@@ -246,11 +241,7 @@ class MealsDB_Delivery_Slip_Generator {
     /**
      * Fetch WC HPOS orders (with items) for a date range.
      *
-     * @param int[]  $wp_user_ids WordPress user IDs.
-     * @param string $start_date  Start date (Y-m-d).
-     * @param string $end_date    End date (Y-m-d).
-     *
-     * @return array
+     * @param int[] $wp_user_ids WordPress user IDs.
      */
     public function get_orders_for_range(array $wp_user_ids, string $start_date, string $end_date): array {
         if (empty($wp_user_ids)) {
@@ -265,700 +256,12 @@ class MealsDB_Delivery_Slip_Generator {
     }
 
     /**
-     * Generate a packing slip: one entry per order, sorted by zone then initials.
-     *
-     * Returns structured data with zone summaries, mains/sides subtotals,
-     * freezer-ordered items, and a separate no-zone section.
-     *
-     * @param string $delivery_date Y-m-d.
-     *
-     * @return array {entries: [...], no_zone: [...], zone_summaries: [...]}
-     */
-    public function generate_packing_slip(string $delivery_date): array {
-        $clients = $this->get_clients_for_delivery_date($delivery_date);
-        if (empty($clients)) {
-            return ['entries' => [], 'no_zone' => [], 'zone_summaries' => []];
-        }
-
-        $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
-
-        return $this->build_packing_slip($clients, $orders);
-    }
-
-    /**
-     * Generate a packing slip from zone-based selection.
-     *
-     * @param array  $zone_names Zone names (e.g. ['Zone 1', 'Zone 3']).
-     * @param string $start_date Start date (Y-m-d).
-     * @param string $end_date   End date (Y-m-d).
-     *
-     * @return array {entries: [...], no_zone: [...], zone_summaries: [...]}
-     */
-    public function generate_packing_slip_by_zones(array $zone_names, string $start_date, string $end_date): array {
-        $clients = $this->get_clients_for_zones($zone_names);
-        if (empty($clients)) {
-            return ['entries' => [], 'no_zone' => [], 'zone_summaries' => []];
-        }
-
-        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
-
-        return $this->build_packing_slip($clients, $orders);
-    }
-
-    /**
-     * Build packing slip data from pre-fetched clients and orders.
-     *
-     * @param array $clients Keyed by wp_user_id.
-     * @param array $orders  Orders with items attached.
-     *
-     * @return array {entries: [...], no_zone: [...], zone_summaries: [...]}
-     */
-    private function build_packing_slip(array $clients, array $orders): array {
-        if (empty($orders)) {
-            return ['entries' => [], 'no_zone' => [], 'zone_summaries' => []];
-        }
-
-        $product_types = $this->resolve_product_types($orders);
-
-        // Batch-fetch freezer order meta for all products.
-        $all_product_ids = [];
-        foreach ($orders as $order) {
-            foreach ($order['items'] as $item) {
-                $pid = (int) $item['wc_product_id'];
-                if ($pid > 0) {
-                    $all_product_ids[$pid] = $pid;
-                }
-            }
-        }
-        $freezer_orders = $this->get_freezer_orders(array_values($all_product_ids));
-
-        $entries = [];
-        $no_zone = [];
-
-        // Track per-zone aggregates for zone summaries.
-        $zone_agg = [];
-
-        foreach ($orders as $order) {
-            $uid    = (int) $order['wp_user_id'];
-            $client = isset($clients[$uid]) ? $clients[$uid] : null;
-            if (!$client) {
-                continue;
-            }
-
-            $items = [];
-            foreach ($order['items'] as $item) {
-                $pid  = (int) $item['wc_product_id'];
-                $type = isset($product_types[$pid]) ? $product_types[$pid]['product_type'] : 'meal';
-
-                $items[] = [
-                    'name'          => $item['order_item_name'],
-                    'quantity'      => (int) $item['quantity'],
-                    'product_type'  => $type,
-                    'wc_product_id' => $pid,
-                ];
-            }
-
-            // Sort items by freezer order ASC (items without meta go last).
-            usort($items, function ($a, $b) use ($freezer_orders) {
-                $fa = $freezer_orders[$a['wc_product_id']] ?? 9999;
-                $fb = $freezer_orders[$b['wc_product_id']] ?? 9999;
-                return $fa - $fb;
-            });
-
-            // Calculate mains/sides subtotals.
-            $cats = $this->categorize_items($order['items'], $product_types);
-
-            $zone_code = $client['delivery_area_zone'] ?: '';
-            $zone_name = $client['delivery_area_name'] ?: '';
-
-            $entry = [
-                'initials'    => $client['delivery_initials'] ?: '',
-                'zone'        => $zone_code,
-                'area_name'   => $zone_name,
-                'items'       => $items,
-                'mains_count' => $cats['mains_count'],
-                'sides_count' => $cats['sides_count'],
-                'side_detail' => $cats['side_detail'],
-                'client_type' => (string) ($client['client_type'] ?? ''),
-                'pricing'     => $this->build_pricing_for_entry($order, $client),
-            ];
-
-            // Separate entries with no zone assignment.
-            if (empty(trim($zone_code)) && empty(trim($zone_name))) {
-                $no_zone[] = $entry;
-            } else {
-                $entries[] = $entry;
-
-                // Accumulate zone summary data.
-                $zkey = $zone_code . '|' . $zone_name;
-                if (!isset($zone_agg[$zkey])) {
-                    $zone_agg[$zkey] = [
-                        'zone'          => $zone_name,
-                        'zone_code'     => $zone_code,
-                        'total_orders'  => 0,
-                        'total_mains'   => 0,
-                        'total_sides'   => 0,
-                        'side_breakdown' => ['soup' => 0, 'muffins' => 0, 'cereal' => 0, 'dessert' => 0],
-                        'products'      => [],
-                    ];
-                }
-                $zone_agg[$zkey]['total_orders']++;
-                $zone_agg[$zkey]['total_mains'] += $cats['mains_count'];
-                $zone_agg[$zkey]['total_sides'] += $cats['sides_count'];
-                foreach ($cats['side_detail'] as $sk => $sv) {
-                    $zone_agg[$zkey]['side_breakdown'][$sk] += $sv;
-                }
-
-                // Accumulate per-product quantities for zone.
-                foreach ($items as $item) {
-                    $pid = $item['wc_product_id'];
-                    if (!isset($zone_agg[$zkey]['products'][$pid])) {
-                        $zone_agg[$zkey]['products'][$pid] = [
-                            'name' => $item['name'],
-                            'qty'  => 0,
-                            'type' => $item['product_type'],
-                        ];
-                    }
-                    $zone_agg[$zkey]['products'][$pid]['qty'] += $item['quantity'];
-                }
-            }
-        }
-
-        // Sort entries by zone ASC, then initials ASC.
-        usort($entries, function ($a, $b) {
-            $cmp = strcmp($a['zone'], $b['zone']);
-            return $cmp !== 0 ? $cmp : strcmp($a['initials'], $b['initials']);
-        });
-
-        // Build zone summaries array.
-        $zone_summaries = [];
-        foreach ($zone_agg as $za) {
-            // Convert products map to indexed array.
-            $prods = [];
-            foreach ($za['products'] as $pid => $p) {
-                $prods[] = ['name' => $p['name'], 'qty' => $p['qty'], 'type' => $p['type']];
-            }
-            usort($prods, function ($a, $b) {
-                $cmp = strcmp($a['type'], $b['type']);
-                return $cmp !== 0 ? $cmp : strcmp($a['name'], $b['name']);
-            });
-            $za['products'] = $prods;
-            $zone_summaries[] = $za;
-        }
-
-        usort($zone_summaries, function ($a, $b) {
-            return strcmp($a['zone_code'], $b['zone_code']);
-        });
-
-        return [
-            'entries'        => $entries,
-            'no_zone'        => $no_zone,
-            'zone_summaries' => $zone_summaries,
-        ];
-    }
-
-    /**
-     * Generate a picking slip: product-grouped summary across all orders.
-     *
-     * @param string $delivery_date Y-m-d.
-     *
-     * @return array
-     */
-    public function generate_picking_slip(string $delivery_date): array {
-        $clients = $this->get_clients_for_delivery_date($delivery_date);
-        if (empty($clients)) {
-            return [];
-        }
-
-        $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
-
-        return $this->build_picking_slip($orders);
-    }
-
-    /**
-     * Generate a picking slip from zone-based selection.
-     *
-     * @param array  $zone_names Zone names.
-     * @param string $start_date Start date (Y-m-d).
-     * @param string $end_date   End date (Y-m-d).
-     *
-     * @return array
-     */
-    public function generate_picking_slip_by_zones(array $zone_names, string $start_date, string $end_date): array {
-        $clients = $this->get_clients_for_zones($zone_names);
-        if (empty($clients)) {
-            return [];
-        }
-
-        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
-
-        return $this->build_picking_slip($orders);
-    }
-
-    /**
-     * Build picking slip data from pre-fetched orders.
-     *
-     * @param array $orders Orders with items attached.
-     *
-     * @return array
-     */
-    private function build_picking_slip(array $orders): array {
-        if (empty($orders)) {
-            return [];
-        }
-
-        $product_types = $this->resolve_product_types($orders);
-
-        // Aggregate by wc_product_id.
-        $agg = [];
-        foreach ($orders as $order) {
-            foreach ($order['items'] as $item) {
-                $pid = (int) $item['wc_product_id'];
-                if (!isset($agg[$pid])) {
-                    $type = isset($product_types[$pid]) ? $product_types[$pid]['product_type'] : 'meal';
-                    $agg[$pid] = [
-                        'product_name'   => $item['order_item_name'],
-                        'product_type'   => $type,
-                        'total_quantity' => 0,
-                    ];
-                }
-                $agg[$pid]['total_quantity'] += (int) $item['quantity'];
-            }
-        }
-
-        $result = array_values($agg);
-
-        // Sort by product_type ASC, then product_name ASC.
-        usort($result, function ($a, $b) {
-            $cmp = strcmp($a['product_type'], $b['product_type']);
-            return $cmp !== 0 ? $cmp : strcmp($a['product_name'], $b['product_name']);
-        });
-
-        return $result;
-    }
-
-    /**
-     * Generate a delivery slip: route-grouped list by zone/area with cover sheet.
-     *
-     * @param string $delivery_date Y-m-d.
-     *
-     * @return array {zones: [...], cover: [...]}
-     */
-    public function generate_delivery_slip(string $delivery_date): array {
-        $clients = $this->get_clients_for_delivery_date($delivery_date);
-        if (empty($clients)) {
-            return ['zones' => [], 'cover' => []];
-        }
-
-        $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
-
-        return $this->build_delivery_slip($clients, $orders);
-    }
-
-    /**
-     * Generate a delivery slip from zone-based selection.
-     *
-     * @param array  $zone_names Zone names.
-     * @param string $start_date Start date (Y-m-d).
-     * @param string $end_date   End date (Y-m-d).
-     *
-     * @return array {zones: [...], cover: [...]}
-     */
-    public function generate_delivery_slip_by_zones(array $zone_names, string $start_date, string $end_date): array {
-        $clients = $this->get_clients_for_zones($zone_names);
-        if (empty($clients)) {
-            return ['zones' => [], 'cover' => []];
-        }
-
-        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
-
-        return $this->build_delivery_slip($clients, $orders);
-    }
-
-    /**
-     * Build delivery slip data from pre-fetched clients and orders.
-     *
-     * @param array $clients Keyed by wp_user_id.
-     * @param array $orders  Orders with items attached.
-     *
-     * @return array {zones: [...], cover: [...]}
-     */
-    private function build_delivery_slip(array $clients, array $orders): array {
-        if (empty($orders)) {
-            return ['zones' => [], 'cover' => []];
-        }
-
-        $product_types = $this->resolve_product_types($orders);
-
-        // Group orders by zone → area → stops.
-        $zones = [];
-        foreach ($orders as $order) {
-            $uid    = (int) $order['wp_user_id'];
-            $client = isset($clients[$uid]) ? $clients[$uid] : null;
-            if (!$client) {
-                continue;
-            }
-
-            $zone = $client['delivery_area_zone'] ?: '';
-            $area = $client['delivery_area_name'] ?: '';
-            $key  = $zone . '|' . $area;
-
-            if (!isset($zones[$key])) {
-                $zones[$key] = [
-                    'zone'  => $zone,
-                    'area'  => $area,
-                    'stops' => [],
-                    'order_count' => 0,
-                    'total_items' => 0,
-                ];
-            }
-
-            $address = trim($client['delivery_street_name'] ?? '');
-            if (!empty($client['delivery_city'])) {
-                $address .= ', ' . $client['delivery_city'];
-            }
-
-            // Build item summary (e.g. "2x Meal + 1x Side").
-            $meal_count = 0;
-            $side_count = 0;
-            foreach ($order['items'] as $item) {
-                $pid  = (int) $item['wc_product_id'];
-                $type = isset($product_types[$pid]) ? $product_types[$pid]['product_type'] : 'meal';
-                $qty  = (int) $item['quantity'];
-                if ($type === 'side') {
-                    $side_count += $qty;
-                } else {
-                    $meal_count += $qty;
-                }
-            }
-
-            $summary_parts = [];
-            if ($meal_count > 0) {
-                $summary_parts[] = $meal_count . 'x Meal';
-            }
-            if ($side_count > 0) {
-                $summary_parts[] = $side_count . 'x Side';
-            }
-
-            $zones[$key]['stops'][] = [
-                'initials'      => $client['delivery_initials'] ?: '',
-                'address'       => $address,
-                'item_summary'  => implode(' + ', $summary_parts),
-                'street_name'   => $client['delivery_street_name'] ?: '',
-            ];
-            $zones[$key]['order_count']++;
-            $zones[$key]['total_items'] += $meal_count + $side_count;
-        }
-
-        // Sort stops within each zone by street_name ASC.
-        foreach ($zones as &$group) {
-            usort($group['stops'], function ($a, $b) {
-                return strcmp($a['street_name'], $b['street_name']);
-            });
-
-            // Remove sort helper fields.
-            foreach ($group['stops'] as &$stop) {
-                unset($stop['street_name']);
-            }
-            unset($stop);
-        }
-        unset($group);
-
-        // Sort groups by zone ASC, then area ASC.
-        $result = array_values($zones);
-        usort($result, function ($a, $b) {
-            $cmp = strcmp($a['zone'], $b['zone']);
-            return $cmp !== 0 ? $cmp : strcmp($a['area'], $b['area']);
-        });
-
-        // Build cover sheet from zone data.
-        $cover = [];
-        foreach ($result as $z) {
-            $cover[] = [
-                'zone'        => $z['zone'],
-                'area'        => $z['area'],
-                'order_count' => $z['order_count'],
-                'total_items' => $z['total_items'],
-            ];
-        }
-
-        return [
-            'zones' => $result,
-            'cover' => $cover,
-        ];
-    }
-
-    /**
-     * Generate driver delivery slips for a specific date.
-     *
-     * Unlike packing/picking/delivery slips which use initials for privacy,
-     * these show full customer info for the delivery driver plus cash
-     * collection amounts.
-     *
-     * @param string $delivery_date Y-m-d.
-     *
-     * @return array Array of slip data grouped by zone.
-     */
-    public function generate_driver_slips(string $delivery_date): array {
-        $clients = $this->get_clients_for_driver_slips($delivery_date);
-        if (empty($clients)) {
-            return [];
-        }
-
-        $orders = $this->get_orders_for_date(array_keys($clients), $delivery_date);
-
-        return $this->build_driver_slips($clients, $orders);
-    }
-
-    /**
-     * Generate driver slips from zone-based selection.
-     *
-     * @param array  $zone_names Zone names.
-     * @param string $start_date Start date (Y-m-d).
-     * @param string $end_date   End date (Y-m-d).
-     *
-     * @return array
-     */
-    public function generate_driver_slips_by_zones(array $zone_names, string $start_date, string $end_date): array {
-        $clients = $this->get_clients_for_zones_driver($zone_names);
-        if (empty($clients)) {
-            return [];
-        }
-
-        $orders = $this->get_orders_for_range(array_keys($clients), $start_date, $end_date);
-
-        return $this->build_driver_slips($clients, $orders);
-    }
-
-    /**
-     * Build driver slip data from pre-fetched clients and orders.
-     *
-     * @param array $clients Keyed by wp_user_id (with PII fields).
-     * @param array $orders  Orders with items attached.
-     *
-     * @return array
-     */
-    private function build_driver_slips(array $clients, array $orders): array {
-        if (empty($orders)) {
-            return [];
-        }
-
-        // Group orders by zone, keyed by zone code.
-        $zones = [];
-        foreach ($orders as $order) {
-            $uid    = (int) $order['wp_user_id'];
-            $client = isset($clients[$uid]) ? $clients[$uid] : null;
-            if (!$client) {
-                continue;
-            }
-
-            $zone_name = $client['delivery_area_name'] ?: '';
-            $zone_code = $client['delivery_area_zone'] ?: '';
-            $zone_key  = $zone_code . '|' . $zone_name;
-
-            if (!isset($zones[$zone_key])) {
-                $zones[$zone_key] = [
-                    'zone'      => $zone_name,
-                    'zone_code' => $zone_code,
-                    'orders'    => [],
-                ];
-            }
-
-            // Get financial data from the WC order object (Option B per directive).
-            $order_id = (int) $order['order_id'];
-            $wc_order = wc_get_order($order_id);
-
-            if (!$wc_order) {
-                continue;
-            }
-
-            $subtotal       = (float) $wc_order->get_subtotal();
-            $tax            = (float) $wc_order->get_total_tax();
-            $total          = (float) $wc_order->get_total();
-            $payment_method = $wc_order->get_payment_method();
-
-            // Collection calculation — delegate to the shared helper so
-            // the driver slip and packing slip stay in lockstep.
-            $delivery_fee        = (float) ($client['delivery_fee'] ?? 0);
-            $client_contribution = (float) ($client['client_contribution'] ?? 0);
-            $collect             = null;
-            $contribution_due    = 0;
-            $client_type         = strtolower($client['client_type'] ?? '');
-
-            if (in_array($client_type, ['sdnb', 'veteran'], true)) {
-                $order_with_date = $order;
-                $order_with_date['order_id'] = $order_id;
-                $wc_date = $wc_order->get_date_created();
-                if ($wc_date) {
-                    $order_with_date['date_created_gmt'] = $wc_date->format('Y-m-d H:i:s');
-                }
-                $is_first_delivery = $this->is_first_delivery_of_month($client, $order_with_date);
-
-                $gov = MealsDB_Collection_Calculator::for_government(
-                    $delivery_fee,
-                    $client_contribution,
-                    $is_first_delivery
-                );
-                $collect          = (float) $gov['collect'];
-                $contribution_due = (float) $gov['contribution_due'];
-            } elseif ($client_type === 'private') {
-                $priv = MealsDB_Collection_Calculator::for_private($total, $delivery_fee, $payment_method);
-                $collect = $priv['collect'];
-            }
-
-            $zones[$zone_key]['orders'][] = [
-                'order_id'       => $order_id,
-                'first_name'     => $client['first_name'] ?? '',
-                'last_name'      => $client['last_name'] ?? '',
-                'address'        => trim($client['delivery_street_name'] ?? ''),
-                'city'           => $client['delivery_city'] ?? '',
-                'phone'          => $client['client_phone_1'] ?? '',
-                'subtotal'       => $subtotal,
-                'tax'            => $tax,
-                'total'          => $total,
-                'collect'        => $collect,
-                'delivery_fee'   => $delivery_fee,
-                'client_contribution' => $contribution_due,
-                'payment_method' => $payment_method,
-                'client_type'    => $client_type,
-            ];
-        }
-
-        // Sort zones by zone_code ASC.
-        $result = array_values($zones);
-        usort($result, function ($a, $b) {
-            return strcmp($a['zone_code'], $b['zone_code']);
-        });
-
-        // Sort orders within each zone by last_name ASC, then first_name ASC.
-        foreach ($result as &$zone) {
-            usort($zone['orders'], function ($a, $b) {
-                $cmp = strcmp($a['last_name'], $b['last_name']);
-                return $cmp !== 0 ? $cmp : strcmp($a['first_name'], $b['first_name']);
-            });
-        }
-        unset($zone);
-
-        return $result;
-    }
-
-    /**
-     * Build the pricing/invoice payload for a packing slip entry.
-     *
-     * Returns null for non-private customers — the packing slip only
-     * carries pricing when it doubles as the customer-facing invoice.
-     * SDNB / Veteran entries are intentionally left as null so the
-     * template can branch on presence alone.
-     *
-     * @param array<string, mixed> $order  Order row with items attached.
-     * @param array<string, mixed> $client Client row.
-     *
-     * @return array{items: array<int, array<string, mixed>>, subtotal: float, tax: float, delivery_fee: float, grand_total: float, payment_method: string, collection_amount: float|null, is_prepaid: bool}|null
-     */
-    private function build_pricing_for_entry(array $order, array $client): ?array {
-        $client_type = strtolower((string) ($client['client_type'] ?? ''));
-        if ($client_type !== 'private') {
-            return null;
-        }
-
-        if (!function_exists('wc_get_order')) {
-            return null;
-        }
-
-        $order_id = (int) ($order['order_id'] ?? 0);
-        $wc_order = $order_id > 0 ? wc_get_order($order_id) : null;
-        if (!($wc_order instanceof WC_Order)) {
-            return null;
-        }
-
-        $items = [];
-        foreach ($wc_order->get_items() as $item) {
-            if (!($item instanceof WC_Order_Item_Product)) {
-                continue;
-            }
-            $qty = (int) $item->get_quantity();
-            $subtotal = (float) $item->get_subtotal();
-            $unit = $qty > 0 ? $subtotal / $qty : 0.0;
-
-            $items[] = [
-                'wc_product_id' => (int) $item->get_product_id(),
-                'name'          => (string) $item->get_name(),
-                'quantity'      => $qty,
-                'unit_price'    => round($unit, 2),
-                'line_total'    => round($subtotal, 2),
-            ];
-        }
-
-        // Sort invoice items by SKU-ish order — use product id ascending
-        // as a stable, deterministic tiebreak since we don't fetch SKU here.
-        usort($items, function ($a, $b) {
-            return $a['wc_product_id'] <=> $b['wc_product_id'];
-        });
-
-        $subtotal       = (float) $wc_order->get_subtotal();
-        $tax            = (float) $wc_order->get_total_tax();
-        $grand_total    = (float) $wc_order->get_total();
-        $delivery_fee   = (float) ($client['delivery_fee'] ?? 0);
-        // Prefer the client's configured payment_method so the
-        // collection amount matches what the driver slip reports,
-        // even if the WC order happened to record a different gateway.
-        $payment_method = (string) ($client['payment_method'] ?? $wc_order->get_payment_method());
-
-        $collection = MealsDB_Collection_Calculator::for_private($grand_total, $delivery_fee, $payment_method);
-
-        return [
-            'items'             => $items,
-            'subtotal'          => round($subtotal, 2),
-            'tax'               => round($tax, 2),
-            'delivery_fee'      => round($delivery_fee, 2),
-            'grand_total'       => round($grand_total, 2),
-            'payment_method'    => $payment_method,
-            'collection_amount' => $collection['collect'] === null ? null : round((float) $collection['collect'], 2),
-            'is_prepaid'        => (bool) $collection['is_prepaid'],
-        ];
-    }
-
-    /**
-     * Determine if this order is the first delivery for the client in its billing month.
-     *
-     * @param array $client Client data row.
-     * @param array $order  Order data row (WC order array with date_created_gmt or order_date).
-     * @return bool
-     */
-    private function is_first_delivery_of_month(array $client, array $order): bool {
-        $order_date = $order['date_created_gmt'] ?? $order['order_date'] ?? '';
-        if (empty($order_date)) {
-            return true;
-        }
-
-        $billing_month = substr($order_date, 0, 7);
-        $order_id = (int) ($order['order_id'] ?? 0);
-
-        global $wpdb;
-        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-
-        $contribution_order = $wpdb->get_var($wpdb->prepare(
-            "SELECT contribution_order_id FROM {$alloc_table} WHERE client_id = %d AND billing_month = %s",
-            (int) $client['client_id'],
-            $billing_month
-        ));
-
-        // If no contribution has been applied, this is the first.
-        if (!$contribution_order) {
-            return true;
-        }
-
-        // If this order IS the contribution order, it's the first.
-        return (int) $contribution_order === $order_id;
-    }
-
-    /**
      * Batch-fetch _freezer_order product meta for the given product IDs.
      *
      * @param array $product_ids WC product IDs.
      * @return array<int, int> Keyed by product ID → freezer order value.
      */
-    private function get_freezer_orders(array $product_ids): array {
+    public function get_freezer_orders(array $product_ids): array {
         if (empty($product_ids) || !isset($GLOBALS['wpdb'])) {
             return [];
         }
@@ -984,11 +287,9 @@ class MealsDB_Delivery_Slip_Generator {
      *
      * Side categories: Soup=43, Muffins=37, Cereal=23, Dessert=25.
      *
-     * @param array $items         Order items with wc_product_id and quantity.
-     * @param array $product_types Product type lookup keyed by wc_product_id.
      * @return array {mains_count, sides_count, side_detail: {soup, muffins, cereal, dessert}}
      */
-    private function categorize_items(array $items, array $product_types): array {
+    public function categorize_items(array $items, array $product_types): array {
         $mains   = 0;
         $sides   = 0;
         $soup    = 0;
@@ -996,19 +297,17 @@ class MealsDB_Delivery_Slip_Generator {
         $cereal  = 0;
         $dessert = 0;
 
-        // WC category IDs for side breakdown fallback.
         $side_cat_map = [43 => 'soup', 37 => 'muffins', 23 => 'cereal', 25 => 'dessert'];
 
         foreach ($items as $item) {
-            $pid = (int) $item['wc_product_id'];
-            $qty = (int) $item['quantity'];
+            $pid  = (int) $item['wc_product_id'];
+            $qty  = (int) $item['quantity'];
             $type = isset($product_types[$pid]) ? $product_types[$pid]['product_type'] : 'meal';
 
             if ($type === 'meal') {
                 $mains += $qty;
             } elseif ($type === 'side') {
                 $sides += $qty;
-                // Try to determine side sub-category via WC taxonomy.
                 $categorized = false;
                 if (function_exists('has_term')) {
                     foreach ($side_cat_map as $cat_id => $cat_key) {
@@ -1020,7 +319,6 @@ class MealsDB_Delivery_Slip_Generator {
                     }
                 }
                 if (!$categorized) {
-                    // Default uncategorized sides to dessert bucket.
                     $dessert += $qty;
                 }
             }
@@ -1041,11 +339,9 @@ class MealsDB_Delivery_Slip_Generator {
     /**
      * Collect all product IDs from orders and look up their types.
      *
-     * @param array $orders Orders with items attached.
-     *
      * @return array<int, array<string, mixed>> Keyed by wc_product_id.
      */
-    private function resolve_product_types(array $orders): array {
+    public function resolve_product_types(array $orders): array {
         $ids = [];
         foreach ($orders as $order) {
             foreach ($order['items'] as $item) {

@@ -61,6 +61,16 @@ if (!defined('MEALS_DB_VERSION')) {
 require_once plugin_dir_path(__FILE__) . 'includes/class-autoloader.php';
 MealsDB_Autoloader::register(MEALS_DB_PLUGIN_DIR);
 
+// Composer autoloader for third-party dependencies (e.g. DomPDF).
+// Loaded after the in-house autoloader so plugin classes always
+// resolve first; the file-existence guard keeps the plugin loadable
+// in a checkout that hasn't run `composer install` yet.
+$mealsdb_composer_autoload = MEALS_DB_PLUGIN_DIR . 'vendor/autoload.php';
+if (file_exists($mealsdb_composer_autoload)) {
+    require_once $mealsdb_composer_autoload;
+}
+unset($mealsdb_composer_autoload);
+
 add_action('plugins_loaded', function() {
     if (class_exists('MealsDB_Config')) {
         MealsDB_Config::instance();
