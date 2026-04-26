@@ -89,6 +89,21 @@ pdf_slip_assert_equal(4,  $slip['total_sides'], 'total_sides');
 // Notes pulled from customer_note.
 pdf_slip_assert_equal('TAKE FROM HOLD', $slip['additional_notes'], 'additional_notes from customer_note');
 
+// order_number prefers WC's get_order_number() over the raw post ID.
+$wc_order->display_number = 'INV-2025-042';
+$slips_renumbered = pdf_slip_build_slips($orders, $clients, true);
+pdf_slip_assert_equal('#INV-2025-042', $slips_renumbered[0]['order_number'], 'order_number uses WC get_order_number()');
+$wc_order->display_number = null;
+
+// HTML render: every slip's items table carries the continuation
+// marker row in its <thead> so DomPDF auto-repeats it on overflow.
+$gen = new MealsDB_Slip_PDF_Generator(new PdfSlipFakeClientQuery(), new MealsDB_Collection_Calculator());
+$render_html = new ReflectionMethod(MealsDB_Slip_PDF_Generator::class, 'render_html');
+$render_html->setAccessible(true);
+$html = $render_html->invoke($gen, $slips, true);
+pdf_slip_assert_true(strpos($html, 'continued from previous page') !== false, 'continuation marker present in slip HTML');
+pdf_slip_assert_true(strpos($html, 'class="continued-row"') !== false, 'continued-row thead row rendered');
+
 // Driver block populated for driver slips.
 pdf_slip_assert_true(isset($slip['driver']), 'driver block present');
 pdf_slip_assert_equal('Private', $slip['driver']['client_type'], 'driver.client_type');

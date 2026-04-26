@@ -140,6 +140,7 @@ if (!class_exists('WC_Order')) {
         public string $payment_method = 'cash';
         public string $customer_note = '';
         public array $meta = [];
+        public ?string $display_number = null;
 
         public function add(WC_Order_Item_Product $item): void { $this->items[] = $item; }
         public function get_items(): array { return $this->items; }
@@ -150,6 +151,9 @@ if (!class_exists('WC_Order')) {
         public function get_customer_note(): string { return $this->customer_note; }
         public function get_meta($key, $single = false) { return $this->meta[$key] ?? ''; }
         public function get_date_created() { return null; }
+        public function get_order_number(): string {
+            return $this->display_number !== null ? $this->display_number : (string) $this->id;
+        }
     }
 }
 

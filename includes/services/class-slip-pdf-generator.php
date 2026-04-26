@@ -172,11 +172,12 @@ class MealsDB_Slip_PDF_Generator {
         $delivery_dt = $this->resolve_delivery_date($order, $order_date);
 
         $additional_notes = $this->fetch_customer_note($order_id);
+        $display_number   = $this->resolve_order_display_number($order_id);
 
         $slip = [
             'initials'         => (string) ($client['delivery_initials'] ?? ''),
             'zone'             => (string) ($client['delivery_area_name'] ?? ''),
-            'order_number'     => '#' . ($order_id > 0 ? $order_id : ''),
+            'order_number'     => '#' . $display_number,
             'delivery_date'    => $this->format_long_date($delivery_dt),
             'items'            => $items,
             'total_items'      => $totals['total_items'],
@@ -517,6 +518,29 @@ class MealsDB_Slip_PDF_Generator {
     }
 
     /**
+     * Use the WC order's display number when available so plugins
+     * that renumber orders (sequential numbering, prefix/suffix
+     * schemes) round-trip through the slip header. Falls back to the
+     * raw post ID when WC isn't loaded or the order isn't found.
+     */
+    private function resolve_order_display_number(int $order_id): string {
+        if ($order_id <= 0) {
+            return '';
+        }
+        if (function_exists('wc_get_order')) {
+            $wc_order = wc_get_order($order_id);
+            if ($wc_order instanceof WC_Order
+                && method_exists($wc_order, 'get_order_number')) {
+                $num = (string) $wc_order->get_order_number();
+                if ($num !== '') {
+                    return $num;
+                }
+            }
+        }
+        return (string) $order_id;
+    }
+
+    /**
      * Best-effort delivery date for the slip header. Prefer the WC
      * order's recorded delivery date meta (if present); otherwise the
      * order's creation date.
@@ -617,6 +641,16 @@ class MealsDB_Slip_PDF_Generator {
 
         $slip_class = 'slip' . ($is_last ? ' slip-last' : '');
 
+        // Continuation marker: DomPDF auto-repeats the items-table
+        // <thead> on each page the table spans, so a small italic row
+        // inside the thead is a reliable cue on overflow pages. On
+        // page 1 the giant 24pt initials and order-number block above
+        // dominate visually; the operator learns "no big header at
+        // the top of this page = continuation of the previous order."
+        // DomPDF doesn't expose a stable way to hide an element only
+        // on the first repeat of a thead, so the marker prints on
+        // every page the table appears on rather than only after the
+        // first break.
         return <<<HTML
 <div class="{$slip_class}">
     <div class="slip-left">
@@ -632,6 +666,9 @@ class MealsDB_Slip_PDF_Generator {
                     <th class="qty-col">QTY</th>
                     <th class="name-col">Product</th>
                     <th class="cat-col">Category</th>
+                </tr>
+                <tr class="continued-row">
+                    <th colspan="4" class="continued-cell">Order {$order_number} &mdash; continued from previous page</th>
                 </tr>
             </thead>
             <tbody>
@@ -703,6 +740,17 @@ body { font-family: Helvetica, Arial, sans-serif; color: #111; margin: 0; paddin
 .items-table .qty-col { width: 10%; text-align: center; }
 .items-table .name-col { width: 60%; }
 .items-table .cat-col { width: 15%; }
+.items-table .continued-row .continued-cell {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid #000;
+    font-style: italic;
+    font-weight: normal;
+    font-size: 8pt;
+    text-align: right;
+    color: #555;
+    padding: 1pt 5pt;
+}
 .totals-row { font-size: 11pt; font-weight: bold; margin-top: 0.15in; }
 .notes-block { margin-top: 0.15in; font-size: 10pt; }
 .notes-block .notes-label { font-weight: bold; margin-bottom: 2pt; }
