@@ -1,6 +1,12 @@
 <?php
 /**
- * AJAX handler for delivery slip generation.
+ * AJAX handlers for Phase T per-order PDF slips.
+ *
+ * Two slip types — packer and driver — each with two callers (single
+ * delivery date or zone + date range). The four old screen-rendered
+ * slip endpoints (packing/picking/delivery/driver, plus their
+ * zone-mode counterparts) were retired with this phase; only the
+ * delivery-day backfill helper survives.
  *
  * @package MealsDB
  */
@@ -10,144 +16,92 @@ defined('ABSPATH') || exit;
 class MealsDB_Ajax_Delivery_Slips {
 
     /**
-     * Register AJAX actions.
+     * Upper bound on the number of zone names a single request may
+     * reference. Real deployments ship 6 zones; anything beyond this
+     * is either a misconfiguration or a hostile caller trying to
+     * expand the IN (...) clause downstream.
      */
+    private const MAX_ZONES_PER_REQUEST = 100;
+
     public static function init(): void {
-        add_action('wp_ajax_mealsdb_generate_packing_slip',  [self::class, 'packing_slip']);
-        add_action('wp_ajax_mealsdb_generate_picking_slip',  [self::class, 'picking_slip']);
-        add_action('wp_ajax_mealsdb_generate_delivery_slip', [self::class, 'delivery_slip']);
-        add_action('wp_ajax_mealsdb_generate_driver_slips', [self::class, 'driver_slips']);
+        // Per-order PDF slip endpoints (Phase T).
+        add_action('wp_ajax_mealsdb_packer_pdf',      [self::class, 'packer_pdf']);
+        add_action('wp_ajax_mealsdb_driver_pdf',      [self::class, 'driver_pdf']);
+        add_action('wp_ajax_mealsdb_zone_packer_pdf', [self::class, 'zone_packer_pdf']);
+        add_action('wp_ajax_mealsdb_zone_driver_pdf', [self::class, 'zone_driver_pdf']);
 
-        // Zone-based slip generation (Phase Q).
-        add_action('wp_ajax_mealsdb_zone_packing_slip',  [self::class, 'zone_packing_slip']);
-        add_action('wp_ajax_mealsdb_zone_picking_slip',  [self::class, 'zone_picking_slip']);
-        add_action('wp_ajax_mealsdb_zone_delivery_slip', [self::class, 'zone_delivery_slip']);
-        add_action('wp_ajax_mealsdb_zone_driver_slips',  [self::class, 'zone_driver_slips']);
-
-        // Backfill delivery_day from zone schedule.
+        // Backfill delivery_day from zone schedule (kept from prior phases).
         add_action('wp_ajax_mealsdb_backfill_delivery_day', [self::class, 'backfill_delivery_day']);
     }
 
-    /**
-     * Generate packing slip.
-     */
-    public static function packing_slip(): void {
+    public static function packer_pdf(): void {
         self::verify_request();
-        $date      = self::get_delivery_date();
-        $generator = self::make_generator();
+        $date = self::get_delivery_date();
+        $generator = self::make_pdf_generator();
 
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_packing_slip($date),
-        ]);
+        try {
+            $pdf = $generator->generate_packer_slips_for_date($date);
+        } catch (\Throwable $e) {
+            self::fail_with_message($e->getMessage());
+            return;
+        }
+
+        self::stream_pdf($pdf, "packer-slips-{$date}.pdf");
     }
 
-    /**
-     * Generate picking slip.
-     */
-    public static function picking_slip(): void {
+    public static function driver_pdf(): void {
         self::verify_request();
-        $date      = self::get_delivery_date();
-        $generator = self::make_generator();
+        $date = self::get_delivery_date();
+        $generator = self::make_pdf_generator();
 
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_picking_slip($date),
-        ]);
+        try {
+            $pdf = $generator->generate_driver_slips_for_date($date);
+        } catch (\Throwable $e) {
+            self::fail_with_message($e->getMessage());
+            return;
+        }
+
+        self::stream_pdf($pdf, "driver-slips-{$date}.pdf");
     }
 
-    /**
-     * Generate delivery slip.
-     */
-    public static function delivery_slip(): void {
+    public static function zone_packer_pdf(): void {
         self::verify_request();
-        $date      = self::get_delivery_date();
-        $generator = self::make_generator();
+        $params = self::get_zone_params();
+        $generator = self::make_pdf_generator();
 
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_delivery_slip($date),
-        ]);
+        try {
+            $pdf = $generator->generate_packer_slips_by_zones(
+                $params['zones'],
+                $params['start_date'],
+                $params['end_date']
+            );
+        } catch (\Throwable $e) {
+            self::fail_with_message($e->getMessage());
+            return;
+        }
+
+        $filename = self::zone_filename('packer', $params);
+        self::stream_pdf($pdf, $filename);
     }
 
-    /**
-     * Generate driver delivery slips.
-     */
-    public static function driver_slips(): void {
+    public static function zone_driver_pdf(): void {
         self::verify_request();
-        $date      = self::get_delivery_date();
-        $generator = self::make_generator();
+        $params = self::get_zone_params();
+        $generator = self::make_pdf_generator();
 
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_driver_slips($date),
-        ]);
-    }
+        try {
+            $pdf = $generator->generate_driver_slips_by_zones(
+                $params['zones'],
+                $params['start_date'],
+                $params['end_date']
+            );
+        } catch (\Throwable $e) {
+            self::fail_with_message($e->getMessage());
+            return;
+        }
 
-    // --- Zone-based handlers (Phase Q) ---
-
-    /**
-     * Generate packing slip by zone + date range.
-     */
-    public static function zone_packing_slip(): void {
-        self::verify_request();
-        $params    = self::get_zone_params();
-        $generator = self::make_generator();
-
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_packing_slip_by_zones(
-                $params['zones'], $params['start_date'], $params['end_date']
-            ),
-        ]);
-    }
-
-    /**
-     * Generate picking slip by zone + date range.
-     */
-    public static function zone_picking_slip(): void {
-        self::verify_request();
-        $params    = self::get_zone_params();
-        $generator = self::make_generator();
-
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_picking_slip_by_zones(
-                $params['zones'], $params['start_date'], $params['end_date']
-            ),
-        ]);
-    }
-
-    /**
-     * Generate delivery slip by zone + date range.
-     */
-    public static function zone_delivery_slip(): void {
-        self::verify_request();
-        $params    = self::get_zone_params();
-        $generator = self::make_generator();
-
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_delivery_slip_by_zones(
-                $params['zones'], $params['start_date'], $params['end_date']
-            ),
-        ]);
-    }
-
-    /**
-     * Generate driver slips by zone + date range.
-     */
-    public static function zone_driver_slips(): void {
-        self::verify_request();
-        $params    = self::get_zone_params();
-        $generator = self::make_generator();
-
-        wp_send_json([
-            'success' => true,
-            'data'    => $generator->generate_driver_slips_by_zones(
-                $params['zones'], $params['start_date'], $params['end_date']
-            ),
-        ]);
+        $filename = self::zone_filename('driver', $params);
+        self::stream_pdf($pdf, $filename);
     }
 
     /**
@@ -189,9 +143,37 @@ class MealsDB_Ajax_Delivery_Slips {
         ]);
     }
 
-    /**
-     * Common request verification.
-     */
+    // -----------------------------------------------------------------
+    // Internals
+    // -----------------------------------------------------------------
+
+    private static function stream_pdf(string $pdf, string $filename): void {
+        if ($pdf === '') {
+            self::fail_with_message(__('No PDF was produced.', 'meals-db'));
+            return;
+        }
+
+        // Sanitise filename: only allow safe filesystem characters.
+        $filename = preg_replace('/[^A-Za-z0-9._-]+/', '-', $filename);
+        if ($filename === '' || $filename === null) {
+            $filename = 'slips.pdf';
+        }
+
+        nocache_headers();
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . strlen($pdf));
+        echo $pdf;
+        exit;
+    }
+
+    private static function fail_with_message(string $message): void {
+        wp_send_json([
+            'success' => false,
+            'message' => $message,
+        ], 500);
+    }
+
     private static function verify_request(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
 
@@ -214,15 +196,9 @@ class MealsDB_Ajax_Delivery_Slips {
         }
     }
 
-    /**
-     * Extract and validate delivery_date from the request.
-     *
-     * @return string Y-m-d
-     */
     private static function get_delivery_date(): string {
         $raw = isset($_REQUEST['delivery_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['delivery_date'])) : '';
 
-        // Validate Y-m-d format.
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
             wp_send_json([
                 'success' => false,
@@ -242,16 +218,6 @@ class MealsDB_Ajax_Delivery_Slips {
     }
 
     /**
-     * Upper bound on the number of zone names a single request may
-     * reference. Real deployments ship 6 zones; anything beyond this
-     * is either a misconfiguration or a hostile caller trying to
-     * expand the IN (...) clause downstream.
-     */
-    private const MAX_ZONES_PER_REQUEST = 100;
-
-    /**
-     * Extract and validate zone-mode parameters from the request.
-     *
      * @return array{zones: string[], start_date: string, end_date: string}
      */
     private static function get_zone_params(): array {
@@ -259,8 +225,6 @@ class MealsDB_Ajax_Delivery_Slips {
         $start = isset($_REQUEST['start_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['start_date'])) : '';
         $end   = isset($_REQUEST['end_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['end_date'])) : '';
 
-        // Cap the array before sanitisation so an attacker cannot force
-        // per-entry preg_replace / trim work on a million-element array.
         if (count($zones_raw) > self::MAX_ZONES_PER_REQUEST) {
             wp_send_json([
                 'success' => false,
@@ -270,10 +234,6 @@ class MealsDB_Ajax_Delivery_Slips {
 
         $zones = array_map('sanitize_text_field', $zones_raw);
 
-        // Whitelist against the configured zone delivery schedule. Unknown
-        // zones are silently dropped — the downstream generator would
-        // already return an empty slip set for them, but rejecting early
-        // surfaces typos in the UI.
         $schedule = get_option('mealsdb_zone_delivery_schedule', []);
         if (is_array($schedule) && !empty($schedule)) {
             $allowed_zones = array_keys($schedule);
@@ -289,7 +249,6 @@ class MealsDB_Ajax_Delivery_Slips {
             ]);
         }
 
-        // Validate date formats.
         $date_pattern = '/^\d{4}-\d{2}-\d{2}$/';
         if (!preg_match($date_pattern, $start) || !preg_match($date_pattern, $end)) {
             wp_send_json([
@@ -301,14 +260,25 @@ class MealsDB_Ajax_Delivery_Slips {
         return ['zones' => $zones, 'start_date' => $start, 'end_date' => $end];
     }
 
-    /**
-     * Create a new generator instance.
-     *
-     * @return MealsDB_Delivery_Slip_Generator
-     */
-    private static function make_generator(): MealsDB_Delivery_Slip_Generator {
-        return new MealsDB_Delivery_Slip_Generator(
+    private static function zone_filename(string $kind, array $params): string {
+        $zones_part = implode('-', array_map(static function ($z) {
+            return preg_replace('/[^A-Za-z0-9]+/', '', $z);
+        }, $params['zones']));
+        return sprintf(
+            '%s-slips-%s-to-%s-zones-%s.pdf',
+            $kind,
+            $params['start_date'],
+            $params['end_date'],
+            $zones_part
+        );
+    }
+
+    private static function make_pdf_generator(): MealsDB_Slip_PDF_Generator {
+        $client_query = new MealsDB_Delivery_Slip_Generator(
             new MealsDB_WC_Order_Query($GLOBALS['wpdb'])
         );
+        $calculator = new MealsDB_Collection_Calculator();
+
+        return new MealsDB_Slip_PDF_Generator($client_query, $calculator);
     }
 }

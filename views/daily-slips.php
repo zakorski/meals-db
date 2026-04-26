@@ -1,6 +1,13 @@
 <?php
 /**
- * Daily Slips admin view — packing, picking, and delivery slips.
+ * Daily Slips admin view — Phase T per-order PDF generation.
+ *
+ * Two PDF outputs per generation request:
+ *   - Packer slips (no financial info, right column reserved for notes)
+ *   - Driver slips (packer slip + collection breakdown + customer info)
+ *
+ * Slip-mode toggle (zone + date range vs. single delivery day) is
+ * preserved from Phase Q.
  */
 defined('ABSPATH') || exit;
 
@@ -10,7 +17,7 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
 ?>
 <div id="mealsdb-daily-slips" class="mealsdb-daily-slips">
     <p class="description">
-        <?php echo esc_html__('Generate packing, picking, delivery, and driver slips. Use zone mode for the familiar zone + date range workflow, or delivery day mode to select by day-of-week.', 'meals-db'); ?>
+        <?php echo esc_html__('Generate per-order packer and driver PDF slips. Use zone mode for the familiar zone + date range workflow, or delivery day mode to select by day-of-week.', 'meals-db'); ?>
     </p>
 
     <div class="mealsdb-slip-controls" style="margin-bottom:16px;">
@@ -42,6 +49,9 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
                     </option>
                 <?php endforeach; ?>
             </select>
+            <button type="button" id="mealsdb-select-all-zones" class="button button-small" style="margin-left:6px;">
+                <?php esc_html_e('All Zones', 'meals-db'); ?>
+            </button>
         </div>
 
         <!-- Day mode controls (hidden by default) -->
@@ -50,47 +60,16 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             <input type="date" id="mealsdb-slip-date" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
         </div>
 
-        <button type="button" class="button" id="mealsdb-gen-packing">
-            <?php echo esc_html__('Packing Slip', 'meals-db'); ?>
+        <button type="button" class="button button-primary" id="mealsdb-gen-packer-pdf">
+            <?php echo esc_html__('Generate Packer Slips PDF', 'meals-db'); ?>
         </button>
-        <button type="button" class="button" id="mealsdb-gen-picking">
-            <?php echo esc_html__('Picking Slip', 'meals-db'); ?>
-        </button>
-        <button type="button" class="button" id="mealsdb-gen-delivery">
-            <?php echo esc_html__('Delivery Slip', 'meals-db'); ?>
-        </button>
-        <button type="button" class="button" id="mealsdb-gen-driver">
-            <?php echo esc_html__('Driver Slips', 'meals-db'); ?>
-        </button>
-        <button type="button" class="button" id="mealsdb-slip-print" style="display:none;">
-            <?php echo esc_html__('Print', 'meals-db'); ?>
+        <button type="button" class="button button-primary" id="mealsdb-gen-driver-pdf">
+            <?php echo esc_html__('Generate Driver Slips PDF', 'meals-db'); ?>
         </button>
     </div>
 
     <div id="mealsdb-slip-status" class="notice" style="display:none;"></div>
-
-    <div id="mealsdb-slip-output" class="mealsdb-slip-output" style="display:none;"></div>
 </div>
-
-<style>
-@media print {
-    #wpadminbar, #adminmenumain, #adminmenuback, #adminmenuwrap,
-    #wpfooter, .mealsdb-tab-nav, .mealsdb-slip-controls,
-    #mealsdb-slip-status, .notice, .update-nag,
-    #screen-meta, #screen-meta-links { display: none !important; }
-    #wpcontent, #wpbody, #wpbody-content { margin: 0 !important; padding: 0 !important; }
-    .mealsdb-slip-output { margin: 0; padding: 0; }
-    .mealsdb-slip-output table { border-collapse: collapse; width: 100%; font-size: 11px; }
-    .mealsdb-slip-output th, .mealsdb-slip-output td { border: 1px solid #333; padding: 4px 6px; }
-    .mealsdb-slip-output th { background: #eee; }
-    .mealsdb-slip-output h3 { margin: 12px 0 4px; }
-    .mealsdb-slip-output .mealsdb-driver-zone + .mealsdb-driver-zone { page-break-before: always; }
-}
-.mealsdb-slip-output table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
-.mealsdb-slip-output th, .mealsdb-slip-output td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
-.mealsdb-slip-output th { background: #f1f1f1; }
-.mealsdb-slip-output h3 { margin: 16px 0 6px; }
-</style>
 
 <script>
 (function($) {
@@ -109,12 +88,13 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
         }
     });
 
+    // All Zones quick-select.
+    $('#mealsdb-select-all-zones').on('click', function() {
+        $('#mealsdb-zone-select option').prop('selected', true);
+    });
+
     function getMode() {
         return $('input[name="slip-mode"]:checked').val();
-    }
-
-    function getDate() {
-        return $('#mealsdb-slip-date').val();
     }
 
     function showStatus(msg, type) {
@@ -123,243 +103,71 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             .addClass('notice-' + type).html('<p>' + msg + '</p>');
     }
 
-    function showOutput(html) {
-        $('#mealsdb-slip-output').show().html(html);
-        $('#mealsdb-slip-print').show();
-    }
-
-    function esc(str) {
-        var div = document.createElement('div');
-        div.appendChild(document.createTextNode(str || ''));
-        return div.innerHTML;
-    }
-
-    function intText(v) {
-        return String(parseInt(v, 10) || 0);
-    }
-
-    function money(v) {
-        if (v === null || v === undefined || v === '') return '';
-        var n = parseFloat(v);
-        if (isNaN(n)) return '';
-        return '$' + n.toFixed(2);
-    }
-
-    // Render the customer-facing invoice block that gets appended to
-    // the per-entry items cell for private customers. The .mealsdb-private-pricing
-    // wrapper is the hook the PDF renderer will style against later.
-    function renderPrivatePricing(p) {
-        if (!p) return '';
-        var html = '<div class="mealsdb-private-pricing" style="margin-top:8px; padding-top:6px; border-top:1px dashed #999; font-size:12px;">';
-        html += '<table style="width:100%; border:0; margin:0;">';
-        html += '<thead><tr><th style="border:0; text-align:left;">Item</th>' +
-                '<th style="border:0; text-align:right;">Unit</th>' +
-                '<th style="border:0; text-align:right;">Line</th></tr></thead><tbody>';
-        $.each(p.items || [], function(i, line) {
-            html += '<tr>' +
-                '<td style="border:0;">' + intText(line.quantity) + 'x ' + esc(line.name) + '</td>' +
-                '<td style="border:0; text-align:right;">' + money(line.unit_price) + '</td>' +
-                '<td style="border:0; text-align:right;">' + money(line.line_total) + '</td>' +
-                '</tr>';
+    // Submit a hidden form so the browser handles the binary PDF
+    // download instead of trying to parse it as JSON in-tab.
+    function submitDownloadForm(action, fields) {
+        var $form = $('<form>', {
+            method: 'POST',
+            action: ajaxurl,
+            target: '_self'
         });
-        html += '</tbody></table>';
-        html += '<div style="margin-top:4px;">Subtotal: <strong>' + money(p.subtotal) + '</strong></div>';
-        html += '<div>Tax: <strong>' + money(p.tax) + '</strong></div>';
-        html += '<div>Delivery Fee: <strong>' + money(p.delivery_fee) + '</strong></div>';
-        html += '<div>Total: <strong>' + money(p.grand_total) + '</strong></div>';
-        html += '<div>Payment: <strong>' + esc(p.payment_method || '') + '</strong>';
-        if (p.is_prepaid) {
-            html += ' &middot; <em>Prepaid</em>';
-        } else if (p.collection_amount !== null && p.collection_amount !== undefined) {
-            html += ' &middot; Collect: <strong>' + money(p.collection_amount) + '</strong>';
-        }
-        html += '</div>';
-        html += '</div>';
-        return html;
-    }
-
-    function renderPackingSlip(data) {
-        var entries = data.entries || [];
-        var noZone  = data.no_zone || [];
-        var zoneSummaries = data.zone_summaries || [];
-        if (!entries.length && !noZone.length) return '<p>No orders found.</p>';
-
-        var html = '<h3>Packing Slip</h3>';
-
-        // Zone summaries.
-        if (zoneSummaries.length) {
-            html += '<h3>Zone Summary</h3>';
-            html += '<table><thead><tr><th>Zone</th><th>Orders</th><th>Mains</th><th>Sides</th><th>Soup</th><th>Muffins</th><th>Cereal</th><th>Dessert</th></tr></thead><tbody>';
-            $.each(zoneSummaries, function(i, z) {
-                var sd = z.side_breakdown || {};
-                html += '<tr><td>' + esc(z.zone) + '</td><td>' + intText(z.total_orders) + '</td><td>' + intText(z.total_mains) + '</td><td>' + intText(z.total_sides) + '</td>';
-                html += '<td>' + (sd.soup || 0) + '</td><td>' + (sd.muffins || 0) + '</td><td>' + (sd.cereal || 0) + '</td><td>' + (sd.dessert || 0) + '</td></tr>';
-            });
-            html += '</tbody></table>';
-        }
-
-        // Main entries table.
-        html += '<h3>Orders</h3>';
-        html += '<table><thead><tr><th>Initials</th><th>Zone</th><th>Area</th><th>Mains</th><th>Sides</th><th>Items</th></tr></thead><tbody>';
-        $.each(entries, function(i, entry) {
-            var items = [];
-            $.each(entry.items, function(j, item) {
-                items.push(intText(item.quantity) + 'x ' + esc(item.name) + ' (' + esc(item.product_type) + ')');
-            });
-            var itemsCell = items.join('<br>');
-            if (entry.pricing) {
-                itemsCell += renderPrivatePricing(entry.pricing);
-            }
-            html += '<tr><td>' + esc(entry.initials) + '</td><td>' + esc(entry.zone) + '</td><td>' + esc(entry.area_name) + '</td>';
-            html += '<td>' + intText(entry.mains_count) + '</td><td>' + intText(entry.sides_count) + '</td>';
-            html += '<td>' + itemsCell + '</td></tr>';
-        });
-        html += '</tbody></table>';
-
-        // No-zone warning section.
-        if (noZone.length) {
-            html += '<h3 style="color:#d63638;">Orders With No Zone</h3>';
-            html += '<table style="border-color:#d63638;"><thead><tr><th>Initials</th><th>Mains</th><th>Sides</th><th>Items</th></tr></thead><tbody>';
-            $.each(noZone, function(i, entry) {
-                var items = [];
-                $.each(entry.items, function(j, item) {
-                    items.push(intText(item.quantity) + 'x ' + esc(item.name));
+        $form.append($('<input>', { type: 'hidden', name: 'action', value: action }));
+        $form.append($('<input>', { type: 'hidden', name: 'nonce',  value: nonce }));
+        $.each(fields, function(name, value) {
+            if (Array.isArray(value)) {
+                value.forEach(function(item) {
+                    $form.append($('<input>', { type: 'hidden', name: name + '[]', value: item }));
                 });
-                html += '<tr><td>' + esc(entry.initials) + '</td><td>' + intText(entry.mains_count) + '</td><td>' + intText(entry.sides_count) + '</td><td>' + items.join('<br>') + '</td></tr>';
-            });
-            html += '</tbody></table>';
-        }
-
-        return html;
-    }
-
-    function renderPickingSlip(data) {
-        if (!data.length) return '<p>No orders found.</p>';
-        var html = '<h3>Picking Slip</h3>';
-        html += '<table><thead><tr><th>Product</th><th>Type</th><th>Total Qty</th></tr></thead><tbody>';
-        $.each(data, function(i, item) {
-            html += '<tr><td>' + esc(item.product_name) + '</td><td>' + esc(item.product_type) + '</td><td>' + item.total_quantity + '</td></tr>';
+            } else {
+                $form.append($('<input>', { type: 'hidden', name: name, value: value }));
+            }
         });
-        html += '</tbody></table>';
-        return html;
+        $form.appendTo('body').submit().remove();
     }
 
-    function renderDeliverySlip(data) {
-        var zones = data.zones || data;
-        var cover = data.cover || [];
-        if ((!zones.length && !cover.length)) return '<p>No orders found.</p>';
-        var html = '<h3>Delivery Slip</h3>';
-
-        // Cover sheet / delivery schedule.
-        if (cover.length) {
-            html += '<h3>Delivery Schedule</h3>';
-            html += '<table><thead><tr><th>Zone</th><th>Area</th><th>Orders</th><th>Total Items</th></tr></thead><tbody>';
-            $.each(cover, function(i, c) {
-                html += '<tr><td>' + esc(c.zone) + '</td><td>' + esc(c.area) + '</td><td>' + intText(c.order_count) + '</td><td>' + intText(c.total_items) + '</td></tr>';
-            });
-            html += '</tbody></table>';
-        }
-
-        // Zone detail.
-        $.each(zones, function(i, group) {
-            html += '<h3>' + esc(group.zone) + ' &mdash; ' + esc(group.area) + '</h3>';
-            html += '<table><thead><tr><th>Initials</th><th>Address</th><th>Items</th></tr></thead><tbody>';
-            $.each(group.stops, function(j, stop) {
-                html += '<tr><td>' + esc(stop.initials) + '</td><td>' + esc(stop.address) + '</td><td>' + esc(stop.item_summary) + '</td></tr>';
-            });
-            html += '</tbody></table>';
-        });
-        return html;
-    }
-
-    function fmt(n) {
-        return parseFloat(n).toFixed(2);
-    }
-
-    function renderDriverSlips(data) {
-        if (!data.length) return '<p>No orders found.</p>';
-        var html = '<h3>Driver Delivery Slips</h3>';
-
-        $.each(data, function(i, zone) {
-            html += '<div class="mealsdb-driver-zone">';
-            html += '<h3>' + esc(zone.zone) + '</h3>';
-            html += '<table><thead><tr>';
-            html += '<th>Name</th><th>Address</th><th>City</th><th>Phone</th>';
-            html += '<th style="text-align:right">Subtotal</th>';
-            html += '<th style="text-align:right">Tax</th>';
-            html += '<th style="text-align:right">Total</th>';
-            html += '<th style="text-align:right">Delivery Fee</th>';
-            html += '<th style="text-align:right">Client Contribution</th>';
-            html += '<th style="text-align:right">Collect</th>';
-            html += '</tr></thead><tbody>';
-
-            $.each(zone.orders, function(j, o) {
-                html += '<tr>';
-                html += '<td>' + esc(o.first_name) + ' ' + esc(o.last_name) + '</td>';
-                html += '<td>' + esc(o.address) + '</td>';
-                html += '<td>' + esc(o.city) + '</td>';
-                html += '<td>' + esc(o.phone) + '</td>';
-                html += '<td style="text-align:right">$' + fmt(o.subtotal) + '</td>';
-                html += '<td style="text-align:right">$' + fmt(o.tax) + '</td>';
-                html += '<td style="text-align:right">$' + fmt(o.total) + '</td>';
-                html += '<td style="text-align:right">' + (o.delivery_fee > 0 ? '$' + fmt(o.delivery_fee) : '') + '</td>';
-                html += '<td style="text-align:right">' + (o.client_contribution > 0 ? '$' + fmt(o.client_contribution) : '') + '</td>';
-                html += '<td style="text-align:right">' + (o.collect !== null && o.collect > 0 ? '$' + fmt(o.collect) : '') + '</td>';
-                html += '</tr>';
-            });
-
-            html += '</tbody></table>';
-            html += '</div>';
-        });
-
-        return html;
-    }
-
-    function generate(slipType, renderer) {
+    function buildRequestForMode(kind) {
         var mode = getMode();
-        var data = { nonce: nonce };
+        var fields = {};
+        var action;
 
         if (mode === 'zone') {
-            data.action     = 'mealsdb_zone_' + slipType;
-            data.zones      = $('#mealsdb-zone-select').val();
-            data.start_date = $('#mealsdb-zone-start').val();
-            data.end_date   = $('#mealsdb-zone-end').val();
-
-            if (!data.zones || !data.zones.length) {
+            var zones = $('#mealsdb-zone-select').val();
+            var start = $('#mealsdb-zone-start').val();
+            var end   = $('#mealsdb-zone-end').val();
+            if (!zones || !zones.length) {
                 showStatus('Please select at least one zone.', 'warning');
-                return;
+                return null;
             }
-            if (!data.start_date || !data.end_date) {
+            if (!start || !end) {
                 showStatus('Please select a start and end date.', 'warning');
-                return;
+                return null;
             }
+            action = (kind === 'packer') ? 'mealsdb_zone_packer_pdf' : 'mealsdb_zone_driver_pdf';
+            fields.zones      = zones;
+            fields.start_date = start;
+            fields.end_date   = end;
         } else {
-            data.action        = 'mealsdb_generate_' + slipType;
-            data.delivery_date = getDate();
-
-            if (!data.delivery_date) {
+            var date = $('#mealsdb-slip-date').val();
+            if (!date) {
                 showStatus('Please select a date.', 'warning');
-                return;
+                return null;
             }
+            action = (kind === 'packer') ? 'mealsdb_packer_pdf' : 'mealsdb_driver_pdf';
+            fields.delivery_date = date;
         }
 
-        showStatus('Generating...', 'info');
-        $.post(ajaxurl, data, function(res) {
-            if (!res.success) {
-                showStatus(res.message || 'Error.', 'error');
-                return;
-            }
-            $('#mealsdb-slip-status').hide();
-            showOutput(renderer(res.data));
-        }).fail(function() {
-            showStatus('Request failed.', 'error');
-        });
+        return { action: action, fields: fields };
     }
 
-    $('#mealsdb-gen-packing').on('click', function() { generate('packing_slip', renderPackingSlip); });
-    $('#mealsdb-gen-picking').on('click', function() { generate('picking_slip', renderPickingSlip); });
-    $('#mealsdb-gen-delivery').on('click', function() { generate('delivery_slip', renderDeliverySlip); });
-    $('#mealsdb-gen-driver').on('click', function() { generate('driver_slips', renderDriverSlips); });
-    $('#mealsdb-slip-print').on('click', function() { window.print(); });
+    function generate(kind) {
+        var req = buildRequestForMode(kind);
+        if (!req) return;
+
+        showStatus('Generating PDF — your download will start shortly.', 'info');
+        submitDownloadForm(req.action, req.fields);
+    }
+
+    $('#mealsdb-gen-packer-pdf').on('click', function() { generate('packer'); });
+    $('#mealsdb-gen-driver-pdf').on('click', function() { generate('driver'); });
 })(jQuery);
 </script>
