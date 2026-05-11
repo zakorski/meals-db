@@ -92,7 +92,7 @@ $zones = isset($zones) && is_array($zones) ? $zones : [];
                                 <label for="start_date">Start Date</label>
                             </th>
                             <td>
-                                <input type="text" name="start_date" id="start_date" class="regular-text datepicker" required placeholder="YYYY-MM-DD">
+                                <input type="date" name="start_date" id="start_date" class="regular-text mealsdb-datepicker" required>
                                 <p class="description">First day of the billing period.</p>
                             </td>
                         </tr>
@@ -102,7 +102,7 @@ $zones = isset($zones) && is_array($zones) ? $zones : [];
                                 <label for="end_date">End Date</label>
                             </th>
                             <td>
-                                <input type="text" name="end_date" id="end_date" class="regular-text datepicker" required placeholder="YYYY-MM-DD">
+                                <input type="date" name="end_date" id="end_date" class="regular-text mealsdb-datepicker" required>
                                 <p class="description">Last day of the billing period.</p>
                             </td>
                         </tr>
@@ -217,7 +217,7 @@ $zones = isset($zones) && is_array($zones) ? $zones : [];
                                 <label for="overage_start_date">Start Date</label>
                             </th>
                             <td>
-                                <input type="text" name="overage_start_date" id="overage_start_date" class="regular-text datepicker" required placeholder="YYYY-MM-DD">
+                                <input type="date" name="overage_start_date" id="overage_start_date" class="regular-text mealsdb-datepicker" required>
                             </td>
                         </tr>
                         <tr>
@@ -225,7 +225,7 @@ $zones = isset($zones) && is_array($zones) ? $zones : [];
                                 <label for="overage_end_date">End Date</label>
                             </th>
                             <td>
-                                <input type="text" name="overage_end_date" id="overage_end_date" class="regular-text datepicker" required placeholder="YYYY-MM-DD">
+                                <input type="date" name="overage_end_date" id="overage_end_date" class="regular-text mealsdb-datepicker" required>
                             </td>
                         </tr>
                         <tr>
@@ -233,7 +233,7 @@ $zones = isset($zones) && is_array($zones) ? $zones : [];
                                 <label for="overage_invoice_date">Invoice Date</label>
                             </th>
                             <td>
-                                <input type="text" name="overage_invoice_date" id="overage_invoice_date" class="regular-text datepicker" placeholder="YYYY-MM-DD">
+                                <input type="date" name="overage_invoice_date" id="overage_invoice_date" class="regular-text mealsdb-datepicker">
                                 <p class="description">Date to stamp on created orders. Defaults to today.</p>
                             </td>
                         </tr>
