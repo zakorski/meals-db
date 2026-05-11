@@ -11,14 +11,6 @@
     'use strict';
 
     $(document).ready(function() {
-        // Initialize date pickers
-        $('.datepicker').datepicker({
-            dateFormat: 'yy-mm-dd',
-            changeMonth: true,
-            changeYear: true,
-            maxDate: 0 // Today
-        });
-
         // Set default dates (first and last day of previous month)
         var today = new Date();
         var firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);

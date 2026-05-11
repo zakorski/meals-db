@@ -55,5 +55,5 @@ $mealsdb_posted = [
 </tr>
 <tr>
     <th><label for="birth_date">Date of Birth</label></th>
-    <td><input type="text" name="birth_date" class="mealsdb-datepicker" placeholder="YYYY-MM-DD" value="<?= esc_attr($mealsdb_posted['birth_date']) ?>" /></td>
+    <td><input type="date" name="birth_date" class="mealsdb-datepicker" value="<?= esc_attr($mealsdb_posted['birth_date']) ?>" /></td>
 </tr>
