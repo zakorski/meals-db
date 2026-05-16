@@ -481,6 +481,79 @@ class MealsDB_Schema {
                     ],
                 ],
             ],
+            MealsDB_Tables::JOB_LOG => [
+                'table'   => MealsDB_Tables::JOB_LOG,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'log_id'            => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'job_name'          => 'VARCHAR(100) NOT NULL',
+                    'started_at'        => 'DATETIME NOT NULL',
+                    'completed_at'      => 'DATETIME NULL',
+                    'duration_seconds'  => 'INT UNSIGNED NULL',
+                    'status'            => "ENUM('running','success','failure','timeout') NOT NULL DEFAULT 'running'",
+                    'records_processed' => 'INT UNSIGNED NULL',
+                    'records_updated'   => 'INT UNSIGNED NULL',
+                    'records_skipped'   => 'INT UNSIGNED NULL',
+                    'records_errored'   => 'INT UNSIGNED NULL',
+                    'error_message'     => 'TEXT NULL',
+                    'context'           => 'JSON NULL',
+                ],
+                'primary_key' => ['log_id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_job_name_started',
+                        'type'    => 'INDEX',
+                        'columns' => ['job_name', 'started_at'],
+                    ],
+                    [
+                        'name'    => 'idx_status',
+                        'type'    => 'INDEX',
+                        'columns' => ['status'],
+                    ],
+                    [
+                        'name'    => 'idx_started_at',
+                        'type'    => 'INDEX',
+                        'columns' => ['started_at'],
+                    ],
+                ],
+            ],
+            MealsDB_Tables::HOOK_LOG => [
+                'table'   => MealsDB_Tables::HOOK_LOG,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'log_id'        => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'hook_name'     => 'VARCHAR(100) NOT NULL',
+                    'fired_at'      => 'DATETIME NOT NULL',
+                    'target_type'   => 'VARCHAR(20) NULL',
+                    'target_id'     => 'BIGINT UNSIGNED NULL',
+                    'context'       => 'JSON NULL',
+                    'outcome'       => "ENUM('processed','skipped','errored') NOT NULL DEFAULT 'processed'",
+                    'error_message' => 'TEXT NULL',
+                ],
+                'primary_key' => ['log_id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_hook_fired',
+                        'type'    => 'INDEX',
+                        'columns' => ['hook_name', 'fired_at'],
+                    ],
+                    [
+                        'name'    => 'idx_target',
+                        'type'    => 'INDEX',
+                        'columns' => ['target_type', 'target_id'],
+                    ],
+                    [
+                        'name'    => 'idx_outcome',
+                        'type'    => 'INDEX',
+                        'columns' => ['outcome'],
+                    ],
+                    [
+                        'name'    => 'idx_fired_at',
+                        'type'    => 'INDEX',
+                        'columns' => ['fired_at'],
+                    ],
+                ],
+            ],
         ];
     }
 

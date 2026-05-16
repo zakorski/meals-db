@@ -157,32 +157,83 @@ class MealsDB_Sync {
     }
 
     /**
+     * Record a hook fire if the logger is available. Never throws.
+     */
+    private static function safe_record_hook(
+        string $hook,
+        string $target_type,
+        int $target_id,
+        string $outcome = 'processed',
+        array $context = [],
+        ?string $error = null
+    ): void {
+        if (!class_exists('MealsDB_Hook_Logger')) {
+            return;
+        }
+        try {
+            MealsDB_Hook_Logger::record($hook, $target_type, $target_id, $context, $outcome, $error);
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[Sync] safe_record_hook threw: ' . $e->getMessage());
+        }
+    }
+
+    /**
      * Handle WP user profile updates by pushing WP-authoritative fields to meals_clients.
      *
      * @param int              $user_id       WordPress user ID.
      * @param WP_User|mixed    $old_user_data Previous user data (WP_User on WP 4.3+).
      */
     public static function on_wp_user_updated(int $user_id, $old_user_data): void {
-        if (self::$syncing) {
-            return;
-        }
+        try {
+            if (self::$syncing) {
+                self::safe_record_hook(
+                    'profile_update', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'recursion_guard']
+                );
+                return;
+            }
 
-        $client = self::find_tracked_client_by_wp_user($user_id);
-        if ($client === null) {
-            return;
-        }
+            $client = self::find_tracked_client_by_wp_user($user_id);
+            if ($client === null) {
+                self::safe_record_hook(
+                    'profile_update', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'not_tracked_client']
+                );
+                return;
+            }
 
-        $client_id = (int) ($client['client_id'] ?? 0);
-        if ($client_id <= 0) {
-            return;
-        }
+            $client_id = (int) ($client['client_id'] ?? 0);
+            if ($client_id <= 0) {
+                self::safe_record_hook(
+                    'profile_update', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'invalid_client_id']
+                );
+                return;
+            }
 
-        $user = get_userdata($user_id);
-        if (!$user instanceof WP_User) {
-            return;
-        }
+            $user = get_userdata($user_id);
+            if (!$user instanceof WP_User) {
+                self::safe_record_hook(
+                    'profile_update', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'no_userdata']
+                );
+                return;
+            }
 
-        self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wp_to_mealsdb');
+            self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wp_to_mealsdb');
+            self::safe_record_hook('profile_update', 'user', $user_id);
+        } catch (\Throwable $e) {
+            self::safe_record_hook(
+                'profile_update', 'user', $user_id,
+                MealsDB_Hook_Logger::OUTCOME_ERRORED,
+                ['exception' => get_class($e)],
+                $e->getMessage()
+            );
+        }
     }
 
     /**
@@ -192,30 +243,69 @@ class MealsDB_Sync {
      * @param string $address_type Address type being saved ("billing" or "shipping").
      */
     public static function on_wc_address_saved(int $user_id, string $address_type): void {
-        if (self::$syncing) {
-            return;
-        }
+        try {
+            if (self::$syncing) {
+                self::safe_record_hook(
+                    'woocommerce_customer_save_address', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'recursion_guard', 'address_type' => $address_type]
+                );
+                return;
+            }
 
-        if ($address_type !== 'billing' && $address_type !== 'shipping') {
-            return;
-        }
+            if ($address_type !== 'billing' && $address_type !== 'shipping') {
+                self::safe_record_hook(
+                    'woocommerce_customer_save_address', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'unknown_address_type', 'address_type' => $address_type]
+                );
+                return;
+            }
 
-        $client = self::find_tracked_client_by_wp_user($user_id);
-        if ($client === null) {
-            return;
-        }
+            $client = self::find_tracked_client_by_wp_user($user_id);
+            if ($client === null) {
+                self::safe_record_hook(
+                    'woocommerce_customer_save_address', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'not_tracked_client', 'address_type' => $address_type]
+                );
+                return;
+            }
 
-        $client_id = (int) ($client['client_id'] ?? 0);
-        if ($client_id <= 0) {
-            return;
-        }
+            $client_id = (int) ($client['client_id'] ?? 0);
+            if ($client_id <= 0) {
+                self::safe_record_hook(
+                    'woocommerce_customer_save_address', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'invalid_client_id', 'address_type' => $address_type]
+                );
+                return;
+            }
 
-        $user = get_userdata($user_id);
-        if (!$user instanceof WP_User) {
-            return;
-        }
+            $user = get_userdata($user_id);
+            if (!$user instanceof WP_User) {
+                self::safe_record_hook(
+                    'woocommerce_customer_save_address', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'no_userdata', 'address_type' => $address_type]
+                );
+                return;
+            }
 
-        self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wc_address_to_mealsdb');
+            self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wc_address_to_mealsdb');
+            self::safe_record_hook(
+                'woocommerce_customer_save_address', 'user', $user_id,
+                MealsDB_Hook_Logger::OUTCOME_PROCESSED,
+                ['address_type' => $address_type]
+            );
+        } catch (\Throwable $e) {
+            self::safe_record_hook(
+                'woocommerce_customer_save_address', 'user', $user_id,
+                MealsDB_Hook_Logger::OUTCOME_ERRORED,
+                ['exception' => get_class($e), 'address_type' => $address_type],
+                $e->getMessage()
+            );
+        }
     }
 
     /**
@@ -224,26 +314,56 @@ class MealsDB_Sync {
      * @param int $customer_id WordPress user ID of the new customer.
      */
     public static function on_wc_customer_created(int $customer_id): void {
-        if (self::$syncing) {
-            return;
-        }
+        try {
+            if (self::$syncing) {
+                self::safe_record_hook(
+                    'woocommerce_created_customer', 'user', $customer_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'recursion_guard']
+                );
+                return;
+            }
 
-        $client = self::find_tracked_client_by_wp_user($customer_id);
-        if ($client === null) {
-            return;
-        }
+            $client = self::find_tracked_client_by_wp_user($customer_id);
+            if ($client === null) {
+                self::safe_record_hook(
+                    'woocommerce_created_customer', 'user', $customer_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'not_tracked_client']
+                );
+                return;
+            }
 
-        $client_id = (int) ($client['client_id'] ?? 0);
-        if ($client_id <= 0) {
-            return;
-        }
+            $client_id = (int) ($client['client_id'] ?? 0);
+            if ($client_id <= 0) {
+                self::safe_record_hook(
+                    'woocommerce_created_customer', 'user', $customer_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'invalid_client_id']
+                );
+                return;
+            }
 
-        $user = get_userdata($customer_id);
-        if (!$user instanceof WP_User) {
-            return;
-        }
+            $user = get_userdata($customer_id);
+            if (!$user instanceof WP_User) {
+                self::safe_record_hook(
+                    'woocommerce_created_customer', 'user', $customer_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'no_userdata']
+                );
+                return;
+            }
 
-        self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wc_customer_created');
+            self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wc_customer_created');
+            self::safe_record_hook('woocommerce_created_customer', 'user', $customer_id);
+        } catch (\Throwable $e) {
+            self::safe_record_hook(
+                'woocommerce_created_customer', 'user', $customer_id,
+                MealsDB_Hook_Logger::OUTCOME_ERRORED,
+                ['exception' => get_class($e)],
+                $e->getMessage()
+            );
+        }
     }
 
     /**
@@ -252,23 +372,33 @@ class MealsDB_Sync {
     public static function run_nightly_sync(): void {
         global $wpdb;
 
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $escaped_table = str_replace('`', '``', $clients_table);
-
-        // Pick the canonical wp_user column once via INFORMATION_SCHEMA so
-        // we don't trial-and-error two SELECTs (which would also issue a
-        // second large SELECT * pointlessly when the first returned zero
-        // rows because no clients had wp_user_id set yet).
-        $wp_column = self::resolve_wp_user_column($wpdb, $clients_table);
-        if ($wp_column === null) {
-            error_log('[MealsDB Sync] Nightly sync aborted: no wp_user_id column on clients table.');
-            return;
-        }
+        $log_id = class_exists('MealsDB_Job_Logger')
+            ? MealsDB_Job_Logger::start('wp_to_mealsdb_sync')
+            : 0;
 
         $synced_count  = 0;
         $skipped_count = 0;
         $error_count   = 0;
-        $field_map     = self::get_field_to_wp_meta_map();
+
+        try {
+            $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+            $escaped_table = str_replace('`', '``', $clients_table);
+
+            // Pick the canonical wp_user column once via INFORMATION_SCHEMA so
+            // we don't trial-and-error two SELECTs (which would also issue a
+            // second large SELECT * pointlessly when the first returned zero
+            // rows because no clients had wp_user_id set yet).
+            $wp_column = self::resolve_wp_user_column($wpdb, $clients_table);
+            if ($wp_column === null) {
+                $msg = 'Nightly sync aborted: no wp_user_id column on clients table.';
+                error_log('[MealsDB Sync] ' . $msg);
+                if ($log_id > 0) {
+                    MealsDB_Job_Logger::fail($log_id, $msg);
+                }
+                return;
+            }
+
+            $field_map     = self::get_field_to_wp_meta_map();
         $wp_fields     = self::get_wp_authoritative_fields();
         $batch_size    = 500;
         $offset        = 0;
@@ -373,13 +503,34 @@ class MealsDB_Sync {
             $offset += $batch_size;
         }
 
-        $summary = wp_json_encode([
-            'synced'  => $synced_count,
-            'skipped' => $skipped_count,
-            'errors'  => $error_count,
-        ]);
+            $summary = wp_json_encode([
+                'synced'  => $synced_count,
+                'skipped' => $skipped_count,
+                'errors'  => $error_count,
+            ]);
 
-        MealsDB_Logger::log('sync_nightly_complete', 0, 'summary', null, $summary !== false ? $summary : null);
+            MealsDB_Logger::log('sync_nightly_complete', 0, 'summary', null, $summary !== false ? $summary : null);
+
+            if ($log_id > 0) {
+                MealsDB_Job_Logger::finish($log_id, [
+                    'records_processed' => $synced_count + $skipped_count + $error_count,
+                    'records_updated'   => $synced_count,
+                    'records_skipped'   => $skipped_count,
+                    'records_errored'   => $error_count,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            if ($log_id > 0) {
+                MealsDB_Job_Logger::fail($log_id, $e->getMessage(), [
+                    'records_processed' => $synced_count + $skipped_count + $error_count,
+                    'records_errored'   => $error_count,
+                ]);
+            }
+            // Re-throw so WP-Cron records the failure on its own
+            // event ledger as well — the new logger is additive, not
+            // a replacement for cron's native failure surfacing.
+            throw $e;
+        }
     }
 
     /**
