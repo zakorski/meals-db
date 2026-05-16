@@ -18,6 +18,8 @@ class MealsDB_Tables
     public const SCHEDULE_RULES = 'meals_schedule_rules';
     public const TASKS = 'meals_tasks';
     public const PURCHASE_ORDERS = 'meals_purchase_orders';
+    public const JOB_LOG = 'meals_job_log';
+    public const HOOK_LOG = 'meals_hook_log';
 
     /**
      * Retrieve all canonical table names.
@@ -39,6 +41,8 @@ class MealsDB_Tables
             self::SCHEDULE_RULES,
             self::TASKS,
             self::PURCHASE_ORDERS,
+            self::JOB_LOG,
+            self::HOOK_LOG,
         ];
     }
 }

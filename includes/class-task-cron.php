@@ -29,8 +29,28 @@ class MealsDB_Task_Cron {
      * The daily sync — run the rules-to-tasks spawn pass.
      */
     public static function nightly_sync(): void {
-        $rules = new MealsDB_Task_Rules();
-        $count = $rules->run_cron_pass();
-        error_log(sprintf('[MealsDB Task Engine] Nightly sync created %d tasks.', $count));
+        $log_id = class_exists('MealsDB_Job_Logger')
+            ? MealsDB_Job_Logger::start('task_cron')
+            : 0;
+
+        try {
+            $rules = new MealsDB_Task_Rules();
+            $count = $rules->run_cron_pass();
+            error_log(sprintf('[MealsDB Task Engine] Nightly sync created %d tasks.', $count));
+
+            if ($log_id > 0) {
+                MealsDB_Job_Logger::finish($log_id, [
+                    'records_processed' => $count,
+                    'records_updated'   => $count,
+                    'tasks_created'     => $count,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            if ($log_id > 0) {
+                MealsDB_Job_Logger::fail($log_id, $e->getMessage());
+            }
+            // Re-throw so WP-Cron sees the failure on its native ledger.
+            throw $e;
+        }
     }
 }

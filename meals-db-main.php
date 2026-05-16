@@ -3,7 +3,7 @@
  * Plugin Name: Meals Database
  * Plugin URI: https://github.com/zakorski/meals-db
  * Description: Custom plugin for Meals & More database integration.
- * Version: 1.0.345
+ * Version: 1.0.346
  * Author: Zak Sikorski
  * Author URI: https://zakorski.com
  * GitHub Plugin URI: zakorski/meals-db
@@ -122,6 +122,15 @@ add_action('plugins_loaded', function () {
 
     MealsDB_Ajax_Tasks::init();
     MealsDB_Task_Cron::init();
+
+    // Phase W — cron monitoring & hook observability.
+    // Daily report runs at 04:00 (effective ~04:15 with cPanel cron's
+    // :15/:45 offset); retention cron at 04:30 prunes the log tables
+    // off the customer request path. Cron Status admin page exposes
+    // a live operator view + "Send Test Report Now" button.
+    MealsDB_Daily_Report::register_hooks();
+    MealsDB_Log_Retention::register_hooks();
+    MealsDB_Cron_Status_Page::init();
 });
 
 /**
@@ -513,6 +522,9 @@ function meals_db_check_requirements() {
  *
  *   - mealsdb_nightly_allocation_sync (class-allocation-hooks.php)
  *   - mealsdb_nightly_sync            (class-sync.php)
+ *   - mealsdb_nightly_task_sync       (class-task-cron.php)
+ *   - mealsdb_daily_report            (class-daily-report.php)
+ *   - mealsdb_log_retention           (class-log-retention.php)
  *
  * The original handler only cleared the first one; the second was
  * orphaned and would re-fire daily on a deactivated install.
@@ -521,6 +533,8 @@ register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook('mealsdb_nightly_allocation_sync');
     wp_clear_scheduled_hook('mealsdb_nightly_sync');
     wp_clear_scheduled_hook('mealsdb_nightly_task_sync');
+    wp_clear_scheduled_hook('mealsdb_daily_report');
+    wp_clear_scheduled_hook('mealsdb_log_retention');
 });
 
 // Register the plugin update checker against the GitHub repository.
