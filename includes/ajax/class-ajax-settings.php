@@ -33,6 +33,10 @@ class MealsDB_Ajax_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
         }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
 
         $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
         $rows = MealsDB_Backfill_Private_Clients::preview( $lookback );
@@ -50,6 +54,10 @@ class MealsDB_Ajax_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
         }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
 
         $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
         $stats = MealsDB_Backfill_Private_Clients::run( $lookback, false );
@@ -64,6 +72,10 @@ class MealsDB_Ajax_Settings {
         check_ajax_referer( 'mealsdb_nonce', 'nonce' );
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
         $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
@@ -82,6 +94,10 @@ class MealsDB_Ajax_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
         }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
 
         $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
         $stats = MealsDB_Backfill_Private_Clients::deactivation_sweep_run( $lookback );
@@ -98,6 +114,10 @@ class MealsDB_Ajax_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
         }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
 
         $dry_run = ! empty( $_POST['dry_run'] );
         $stats = MealsDB_Backfill_Private_Clients::enrich_existing( $dry_run );
@@ -113,6 +133,10 @@ class MealsDB_Ajax_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
         }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
 
         $result = MealsDB_Backfill_Next_Dates::run();
         wp_send_json_success( $result );
@@ -123,6 +147,10 @@ class MealsDB_Ajax_Settings {
 
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
+        }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
         // Merge into existing settings so other keys (and an existing
@@ -135,6 +163,7 @@ class MealsDB_Ajax_Settings {
         $submitted_key = sanitize_text_field( wp_unslash( $_POST['encryption_key'] ?? '' ) );
         $settings      = $existing;
 
+        $key_rotated = false;
         if ( $submitted_key !== '' ) {
             if ( strpos( $submitted_key, 'base64:' ) !== 0 ) {
                 wp_send_json_error( [ 'message' => 'Encryption key must start with "base64:" prefix.' ] );
@@ -145,6 +174,8 @@ class MealsDB_Ajax_Settings {
                 wp_send_json_error( [ 'message' => 'Encryption key must decode to exactly 32 bytes (256 bits).' ] );
             }
 
+            $key_rotated = ! isset( $existing['encryption_key'] )
+                || $existing['encryption_key'] !== $submitted_key;
             $settings['encryption_key'] = $submitted_key;
         }
         // Empty input is treated as "no change" — the previous behaviour
@@ -152,6 +183,22 @@ class MealsDB_Ajax_Settings {
         // PII column unrecoverable on the next read.
 
         update_option( 'mealsdb_settings', $settings, false );
+
+        // Audit encryption-key rotation. The key value is NOT logged
+        // (it's the secret); only the fact of rotation and the
+        // operator who triggered it. Key rotation is one of the most
+        // operationally-significant events in the plugin — without
+        // this audit row a rotation would leave no forensic trail
+        // (directive 16 Pass A hardening gap).
+        if ( $key_rotated && class_exists( 'MealsDB_Logger' ) ) {
+            MealsDB_Logger::log(
+                'encryption_key_rotated',
+                get_current_user_id(),
+                'encryption_key',
+                '(redacted)',
+                '(redacted)'
+            );
+        }
 
         // Save overage product IDs if provided. Validate each against
         // wc_get_product() — previously any positive integer was
@@ -216,6 +263,10 @@ class MealsDB_Ajax_Settings {
 
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
+        }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
         $bytes = random_bytes( 32 );

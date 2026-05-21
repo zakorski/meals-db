@@ -393,6 +393,30 @@ class MealsDB_Quick_Order_Ajax {
             self::persist_next_dates($client_id, $wp_user_id, $order_date);
 
             $order_id = $order->get_id();
+
+            // Audit the creation. Quick Order is the operator's primary
+            // order-entry path and was the most significant audit-log
+            // gap from directive 16 Pass A. The new_value carries the
+            // small structured payload an operator would need to
+            // reconstruct what happened: WC order id, target user,
+            // meals_clients PK if any, the date the operator picked,
+            // and the rate applied.
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::log(
+                    'quick_order_created',
+                    $order_id,
+                    'wc_order',
+                    null,
+                    wp_json_encode([
+                        'wp_user_id'   => $wp_user_id,
+                        'client_id'    => $client_id,
+                        'order_date'   => $order_date->format('Y-m-d'),
+                        'rate_id'      => $rate_id > 0 ? $rate_id : null,
+                        'item_count'   => count($items),
+                    ])
+                );
+            }
+
             wp_send_json([
                 'success' => true,
                 'order_id' => $order_id,

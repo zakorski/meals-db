@@ -15,14 +15,17 @@ class MealsDB_Rate_Limiter {
      * Default rate limits per action (requests per hour).
      */
     private const DEFAULT_LIMITS = [
-        'quick_order_create' => 50,      // Creating orders
-        'quick_order_read' => 200,       // Reading products/categories
-        'client_search' => 100,          // Client search operations
-        'client_modify' => 50,           // Creating/updating clients
-        'sync_operations' => 100,        // Sync operations
-        'delivery_slips' => 100,         // Delivery slip generation
-        'schema_rebuild' => 2,           // Catastrophic: drops every plugin table
-        'default' => 100,                // Default for unlisted actions
+        'quick_order_create'     => 50,   // Creating orders
+        'quick_order_read'       => 200,  // Reading products/categories
+        'client_search'          => 100,  // Client search operations
+        'client_modify'          => 50,   // Creating/updating clients
+        'sync_operations'        => 100,  // Sync operations
+        'delivery_slips'         => 100,  // Delivery slip generation
+        'task_modify'            => 100,  // Task / rule mutations
+        'settings_modify'        => 20,   // Settings + bulk client backfills
+        'migration_destructive'  => 5,    // Migration phases, cleanup, reset
+        'schema_rebuild'         => 2,    // Catastrophic: drops every plugin table
+        'default'                => 100,  // Default for unlisted actions
     ];
 
     /**
@@ -33,10 +36,13 @@ class MealsDB_Rate_Limiter {
      * visibly break the admin UI.
      */
     private const MUTATING_ACTIONS = [
-        'quick_order_create' => true,
-        'client_modify'      => true,
-        'sync_operations'    => true,
-        'schema_rebuild'     => true,
+        'quick_order_create'    => true,
+        'client_modify'         => true,
+        'sync_operations'       => true,
+        'task_modify'           => true,
+        'settings_modify'       => true,
+        'migration_destructive' => true,
+        'schema_rebuild'        => true,
     ];
 
     /**

@@ -562,6 +562,29 @@ class MealsDB_Ajax_Invoice {
             $order_count++;
         }
 
+        // Audit the batch. create_overage_orders creates and
+        // auto-completes WC orders at billing scale — without this
+        // entry an erroneous run would have no forensic trail.
+        // SEC-10 / directive 16 Pass A hardening gap.
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log(
+                'overage_orders_created',
+                get_current_user_id(),
+                $client_type . ($zone !== '' ? '/' . $zone : ''),
+                null,
+                wp_json_encode([
+                    'client_type'    => $client_type,
+                    'zone'           => $zone,
+                    'start_date'     => $start_date,
+                    'end_date'       => $end_date,
+                    'weeks_in_month' => $weeks_in_month,
+                    'invoice_date'   => $invoice_date,
+                    'created'        => $order_count,
+                    'skipped'        => count($skipped),
+                ])
+            );
+        }
+
         wp_send_json_success([
             'created'       => $order_count,
             'skipped'       => $skipped,

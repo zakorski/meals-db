@@ -120,6 +120,7 @@ class MealsDB_Ajax_Migration {
      */
     public static function upload_file(): void {
         self::verify();
+        self::verify_destructive();
 
         if ( empty( $_FILES['sql_file'] ) ) {
             wp_send_json_error( [ 'message' => 'No file uploaded.' ] );
@@ -421,6 +422,7 @@ class MealsDB_Ajax_Migration {
      */
     public static function cleanup(): void {
         self::verify();
+        self::verify_destructive();
 
         $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
 
@@ -435,6 +437,7 @@ class MealsDB_Ajax_Migration {
      */
     public static function reset(): void {
         self::verify();
+        self::verify_destructive();
         MealsDB_Migration::reset();
         wp_send_json_success();
     }
@@ -454,6 +457,31 @@ class MealsDB_Ajax_Migration {
 
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
+        }
+
+        // Migration phases are long-running and operators legitimately
+        // fire them dozens of times during a migration; sync_operations
+        // (100/hr) gives plenty of headroom but stops a flood. The
+        // truly catastrophic destructive endpoints (cleanup / reset)
+        // are individually gated below via migration_destructive (5/hr).
+        // Directive 16 Pass A hardening gap.
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'sync_operations' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
+    }
+
+    /**
+     * Stricter rate-limit gate for destructive migration endpoints
+     * (upload_file, cleanup, reset, the three backfill_*). Call AFTER
+     * verify() — the order matters because verify already burned a
+     * sync_operations bucket token, and these endpoints additionally
+     * burn migration_destructive (5/hr).
+     */
+    private static function verify_destructive(): void {
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'This destructive migration step is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
         }
     }
 
@@ -552,6 +580,12 @@ class MealsDB_Ajax_Migration {
             return;
         }
 
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('migration_destructive')) {
+            wp_send_json_error(['message' => __('Backfill is rate-limited. Please wait before retrying.', 'meals-db')], 429);
+            return;
+        }
+
         $dry_run = !empty($_POST['dry_run']);
 
         require_once dirname(dirname(__FILE__)) . '/services/class-backfill-allowances.php';
@@ -610,6 +644,12 @@ class MealsDB_Ajax_Migration {
 
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => 'Insufficient permissions.']);
+            return;
+        }
+
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('migration_destructive')) {
+            wp_send_json_error(['message' => __('Backfill is rate-limited. Please wait before retrying.', 'meals-db')], 429);
             return;
         }
 
