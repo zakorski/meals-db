@@ -97,7 +97,7 @@ if ( $has_enc_key ) {
                         <label for="mealsdb-overage-mains"><?php echo esc_html__( 'Overage Main Product ID', 'meals-db' ); ?></label>
                     </th>
                     <td>
-                        <input type="number" id="mealsdb-overage-mains" name="overage_mains" value="<?php echo esc_attr( $overage_ids['mains'] ?? 5056 ); ?>" class="small-text" min="0" />
+                        <input type="number" id="mealsdb-overage-mains" name="overage_mains" value="<?php echo esc_attr( $overage_ids['mains'] ?? MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_MAIN ); ?>" class="small-text" min="0" />
                     </td>
                 </tr>
                 <tr>
@@ -105,7 +105,7 @@ if ( $has_enc_key ) {
                         <label for="mealsdb-overage-taxable-sides"><?php echo esc_html__( 'Overage Taxable Side Product ID', 'meals-db' ); ?></label>
                     </th>
                     <td>
-                        <input type="number" id="mealsdb-overage-taxable-sides" name="overage_taxable_sides" value="<?php echo esc_attr( $overage_ids['taxable_sides'] ?? 5180 ); ?>" class="small-text" min="0" />
+                        <input type="number" id="mealsdb-overage-taxable-sides" name="overage_taxable_sides" value="<?php echo esc_attr( $overage_ids['taxable_sides'] ?? MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_SIDE_TAX ); ?>" class="small-text" min="0" />
                     </td>
                 </tr>
                 <tr>
@@ -113,7 +113,7 @@ if ( $has_enc_key ) {
                         <label for="mealsdb-overage-nontax-sides"><?php echo esc_html__( 'Overage Non-Taxable Side Product ID', 'meals-db' ); ?></label>
                     </th>
                     <td>
-                        <input type="number" id="mealsdb-overage-nontax-sides" name="overage_nontax_sides" value="<?php echo esc_attr( $overage_ids['nontax_sides'] ?? 5059 ); ?>" class="small-text" min="0" />
+                        <input type="number" id="mealsdb-overage-nontax-sides" name="overage_nontax_sides" value="<?php echo esc_attr( $overage_ids['nontax_sides'] ?? MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_SIDE_NONTAX ); ?>" class="small-text" min="0" />
                     </td>
                 </tr>
             </tbody>
