@@ -89,12 +89,12 @@ add_action('plugins_loaded', function () {
     MealsDB_Admin_UI::init();
     MealsDB_Ajax_Sync::init();
     MealsDB_Ajax_Clients::init();
-    MealsDB_Ajax_Staff::init();
     MealsDB_Ajax_Drafts::init();
     MealsDB_Ajax_Initials::init();
     MealsDB_Ajax_Invoice::init();
     MealsDB_Ajax_Delivery_Slips::init();
     MealsDB_Ajax_Reports::init();
+    MealsDB_Quick_Order_Products::init();
     MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();
     MealsDB_WC_Product_Tab::init();

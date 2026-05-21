@@ -1,11 +1,14 @@
 <?php
 defined('ABSPATH') || exit;
 
-if (!function_exists('__')) {
-    function __(string $text, string $domain = 'default') {
-        return $text;
-    }
-}
+// NOTE: This file is gated by defined('ABSPATH') above and autoloaded
+// after plugins_loaded fires, by which point WP's __() is defined. A
+// previous version had a function_exists('__') fallback here that
+// would have shadowed WP's __() if it ever loaded first — and once
+// declared, that no-op fallback would win permanently (WP's __() is
+// itself function_exists-guarded), silently returning English source
+// strings for the rest of the request. The fallback was unnecessary
+// in WP runtime and was a load-order footgun. Removed.
 
 /**
  * Handles validation and saving of Meals DB client records and drafts.
