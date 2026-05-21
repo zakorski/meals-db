@@ -120,10 +120,9 @@ class MealsDB_Clients {
         // When the transaction cannot be started (DB unreachable, MyISAM
         // storage engine with AUTOCOMMIT, connection in an aborted state),
         // REFUSE the delete rather than proceed with autocommitted
-        // destructive work. delete_client cascades across drafts,
-        // ignored_conflicts, and the clients row itself; without a
-        // rollback available a partial failure mid-loop would corrupt
-        // the data model with no recovery path.
+        // destructive work. The repository's delete_client may issue
+        // multiple statements internally — without a rollback available
+        // a partial failure would leave orphan rows with no recovery.
         $started = $wpdb->query('START TRANSACTION');
         $transaction_started = $started !== false;
 
@@ -138,36 +137,22 @@ class MealsDB_Clients {
 
         $success = true;
 
-        $tables_to_cleanup = [
-            ['table' => MealsDB_Tables::DRAFTS, 'column' => 'client_id'],
-            ['table' => MealsDB_Tables::IGNORED_CONFLICTS, 'column' => 'client_id'],
-        ];
+        // NOTE: No cascade to meals_drafts or meals_ignored_conflicts.
+        //   - meals_drafts is keyed by `created_by` (the WP user_id of
+        //     whoever saved the draft), not client_id. The client
+        //     identity is buried in the encrypted JSON payload, which
+        //     is intentionally opaque to direct queries. Drafts
+        //     auto-prune after 30 days via MealsDB_Drafts.
+        //   - meals_ignored_conflicts is keyed by `field_name` +
+        //     `ignored_by`. Entries are per-conflict, not per-client.
+        // A previous version of this method attempted to DELETE FROM
+        // both tables WHERE client_id = X. Neither has that column,
+        // so table_has_column guarded the DELETE and silently skipped.
+        // The cascade was dead code; orphan drafts and ignored
+        // conflicts are operationally harmless.
 
-        foreach ($tables_to_cleanup as $cleanup) {
-            $table_name = MealsDB_DB::get_table_name($cleanup['table']);
-            $column = $cleanup['column'];
-
-            if (!self::table_has_column($table_name, $column)) {
-                continue;
-            }
-
-            $sql = $wpdb->prepare(
-                sprintf('DELETE FROM `%s` WHERE `%s` = %%d', $table_name, $column),
-                $client_id
-            );
-
-            $result = $wpdb->query($sql);
-            if ($result === false) {
-                error_log(sprintf('[MealsDB] Failed to execute cleanup delete for %s: %s', $cleanup['table'], $wpdb->last_error));
-                $success = false;
-                break;
-            }
-        }
-
-        if ($success) {
-            if (!$repository->delete_client($client_id)) {
-                $success = false;
-            }
+        if (!$repository->delete_client($client_id)) {
+            $success = false;
         }
 
         if ($transaction_started) {

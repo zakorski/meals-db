@@ -80,7 +80,17 @@ class MealsDB_Invoice_Page {
     }
 
     /**
-     * Get available delivery zones from database
+     * Get available delivery zones from database.
+     *
+     * HISTORY: A previous version filtered by use_legacy_billing = 1
+     * to scope to clients still on the legacy billing path. Post-cutover
+     * (when all clients have use_legacy_billing = 0), that filter
+     * returned empty and the fallback to hardcoded ['M', 'S'] kicked
+     * in — those codes did not match the actual operational zones,
+     * producing a misleading dropdown. The filter has been removed;
+     * the query now considers all active SDNB clients regardless of
+     * billing mode. The `active = 1` filter prevents inactive clients
+     * with stale zone codes from polluting the list.
      *
      * @return array Array of zone codes
      */
@@ -92,7 +102,7 @@ class MealsDB_Invoice_Page {
             SELECT DISTINCT delivery_area_zone
             FROM `{$table}`
             WHERE client_type = 'SDNB'
-                AND use_legacy_billing = 1
+                AND active = 1
                 AND delivery_area_zone IS NOT NULL
                 AND delivery_area_zone != ''
             ORDER BY delivery_area_zone
