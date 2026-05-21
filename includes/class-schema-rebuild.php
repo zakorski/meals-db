@@ -58,7 +58,7 @@ class MealsDB_Schema_Rebuild {
         }
 
         $schemas = MealsDB_Schema::get_canonical_schema();
-        $create_order = self::determine_create_order($schemas);
+        $create_order = self::determine_create_order();
         $drop_order   = array_reverse($create_order);
 
         $results = [
@@ -102,7 +102,7 @@ class MealsDB_Schema_Rebuild {
             }
 
             $table_name  = MealsDB_DB::get_table_name($table_key);
-            $create_sql  = MealsDB_Schema::generate_create_table_sql($wpdb, $schemas[$table_key], false);
+            $create_sql  = MealsDB_Schema::generate_create_table_sql($wpdb, $schemas[$table_key]);
 
             try {
                 $query_result = $wpdb->query($create_sql);
@@ -126,54 +126,19 @@ class MealsDB_Schema_Rebuild {
     }
 
     /**
-     * Determine a safe creation order based on foreign key dependencies.
+     * Determine table creation order.
      *
-     * @param array<string, array<string, mixed>> $schemas
+     * HISTORY: A previous version processed `foreign_keys` metadata
+     * via topological sort to ensure child tables created after
+     * parents. The metadata was never used to actually create FK
+     * constraints (see class-schema.php STRUCT-3 cleanup), so the
+     * sort had no input and produced a no-op ordering that happened
+     * to coincide with MealsDB_Tables::all(). After the metadata
+     * removal this method returns the natural order directly.
      *
      * @return string[] Ordered list of table keys for creation.
      */
-    private static function determine_create_order(array $schemas): array {
-        $dependencies = [];
-
-        foreach ($schemas as $table_key => $schema) {
-            $references = [];
-
-            if (!empty($schema['foreign_keys']) && is_array($schema['foreign_keys'])) {
-                foreach ($schema['foreign_keys'] as $foreign_key) {
-                    $referenced_table = $foreign_key['referenced_table'] ?? '';
-                    if (isset($schemas[$referenced_table])) {
-                        $references[] = $referenced_table;
-                    }
-                }
-            }
-
-            $dependencies[$table_key] = array_values(array_unique($references));
-        }
-
-        $ordered   = [];
-        $remaining = $dependencies;
-
-        while (!empty($remaining)) {
-            $progress_made = false;
-
-            foreach ($remaining as $table_key => $requires) {
-                $unmet_dependencies = array_diff($requires, $ordered);
-                if (!empty($unmet_dependencies)) {
-                    continue;
-                }
-
-                $ordered[] = $table_key;
-                unset($remaining[$table_key]);
-                $progress_made = true;
-            }
-
-            if (!$progress_made) {
-                // Fallback: append remaining tables in their current order to avoid infinite loop.
-                $ordered = array_merge($ordered, array_keys($remaining));
-                break;
-            }
-        }
-
-        return $ordered;
+    private static function determine_create_order(): array {
+        return MealsDB_Tables::all();
     }
 }

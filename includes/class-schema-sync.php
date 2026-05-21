@@ -43,7 +43,7 @@ class MealsDB_Schema_Sync {
             }
 
             if (!$exists) {
-                $create_sql = MealsDB_Schema::generate_create_table_sql($wpdb, $schema, false);
+                $create_sql = MealsDB_Schema::generate_create_table_sql($wpdb, $schema);
                 $query_result = $wpdb->query($create_sql);
                 if ($query_result !== false) {
                     $results['tables_created'][] = $table_name;

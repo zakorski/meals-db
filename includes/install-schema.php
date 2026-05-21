@@ -21,7 +21,7 @@ class MealsDB_Installer {
 
         $schemas = MealsDB_Schema::get_canonical_schema();
         foreach ($schemas as $schema) {
-            $sql = MealsDB_Schema::generate_create_table_sql($wpdb, $schema, false);
+            $sql = MealsDB_Schema::generate_create_table_sql($wpdb, $schema);
 
             $wpdb->query($sql);
             if ($wpdb->last_error) {

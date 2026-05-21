@@ -174,15 +174,15 @@ class MealsDB_Schema {
                         'columns' => ['client_id', 'is_default'],
                     ],
                 ],
-                'foreign_keys' => [
-                    [
-                        'name'               => 'fk_client_rates_client',
-                        'columns'            => ['client_id'],
-                        'referenced_table'   => MealsDB_Tables::CLIENTS,
-                        'referenced_columns' => ['client_id'],
-                        'on_delete'          => 'CASCADE',
-                    ],
-                ],
+                // NOTE: Referential integrity for client_id is enforced
+                // at the PHP layer via MealsDB_Clients_Repository and
+                // related services. Database-level FK constraints are
+                // intentionally NOT used — see STRUCT-3 in the v1.0.346
+                // audit. A previous version carried foreign_keys
+                // metadata here but it was never applied at install
+                // time (the generate_create_table_sql flag defaulted to
+                // false everywhere), leaving the schema in a misleading
+                // "documented but not enforced" half-state.
             ],
             MealsDB_Tables::STAFF => [
                 'table'   => MealsDB_Tables::STAFF,
@@ -428,22 +428,11 @@ class MealsDB_Schema {
                         'columns' => ['parent_task_id'],
                     ],
                 ],
-                'foreign_keys' => [
-                    [
-                        'name'               => 'fk_task_source_rule',
-                        'columns'            => ['source_rule_id'],
-                        'referenced_table'   => MealsDB_Tables::SCHEDULE_RULES,
-                        'referenced_columns' => ['rule_id'],
-                        'on_delete'          => 'SET NULL',
-                    ],
-                    [
-                        'name'               => 'fk_task_parent',
-                        'columns'            => ['parent_task_id'],
-                        'referenced_table'   => MealsDB_Tables::TASKS,
-                        'referenced_columns' => ['task_id'],
-                        'on_delete'          => 'SET NULL',
-                    ],
-                ],
+                // NOTE: Referential integrity for source_rule_id and
+                // parent_task_id is enforced at the PHP layer via
+                // MealsDB_Task_Engine / MealsDB_Task_Rules. Database
+                // FK constraints intentionally not used — see STRUCT-3
+                // in the v1.0.346 audit.
             ],
             MealsDB_Tables::PURCHASE_ORDERS => [
                 'table'   => MealsDB_Tables::PURCHASE_ORDERS,
@@ -569,11 +558,16 @@ class MealsDB_Schema {
     /**
      * Generate a CREATE TABLE statement for a canonical schema.
      *
-     * Foreign key definitions are treated as metadata and are excluded by default to keep
-     * schema sync additive-only. Pass $include_foreign_keys=true only for routines that
-     * explicitly manage constraint creation in a separate, safe pass.
+     * HISTORY: A previous signature accepted $include_foreign_keys to
+     * optionally emit ALTER TABLE ADD CONSTRAINT clauses. The flag
+     * defaulted to false everywhere it was called from, so no FK
+     * constraint ever made it into the database — the foreign_keys
+     * metadata was documentation only (STRUCT-3 in the v1.0.346 audit).
+     * The metadata and the parameter have both been removed; referential
+     * integrity is enforced at the PHP layer (see
+     * MealsDB_Clients_Repository and the cascading service methods).
      */
-    public static function generate_create_table_sql($conn, array $schema, bool $include_foreign_keys = false): string {
+    public static function generate_create_table_sql($conn, array $schema): string {
         $table_name = MealsDB_DB::get_table_name($schema['table']);
         $table_name = str_replace('`', '``', $table_name);
 
@@ -593,12 +587,6 @@ class MealsDB_Schema {
         if (!empty($schema['indexes']) && is_array($schema['indexes'])) {
             foreach ($schema['indexes'] as $index) {
                 $parts[] = self::build_index_definition($index);
-            }
-        }
-
-        if ($include_foreign_keys && !empty($schema['foreign_keys']) && is_array($schema['foreign_keys'])) {
-            foreach ($schema['foreign_keys'] as $foreign_key) {
-                $parts[] = self::build_foreign_key_definition($conn, $foreign_key);
             }
         }
 
@@ -679,33 +667,4 @@ class MealsDB_Schema {
         return sprintf('%s `%s` (%s)', $type_sql, $name, implode(',', $cols));
     }
 
-    /**
-     * Build a foreign key definition for CREATE TABLE statements.
-     */
-    private static function build_foreign_key_definition($conn, array $foreign_key): string {
-        global $wpdb;
-
-        $name       = $foreign_key['name'] ?? '';
-        $columns    = array_map(static function ($column) {
-            return sprintf('`%s`', $column);
-        }, $foreign_key['columns'] ?? []);
-        $ref_table  = MealsDB_DB::get_table_name($foreign_key['referenced_table'] ?? '');
-        $ref_table  = str_replace('`', '``', $ref_table);
-        $ref_cols   = array_map(static function ($column) {
-            return sprintf('`%s`', $column);
-        }, $foreign_key['referenced_columns'] ?? []);
-        $on_delete  = !empty($foreign_key['on_delete']) ? ' ON DELETE ' . strtoupper((string) $foreign_key['on_delete']) : '';
-
-        return sprintf(
-            'CONSTRAINT `%s` FOREIGN KEY (%s) REFERENCES `%s`(%s)%s',
-            // _real_escape() escapes string literals, not identifiers; a
-            // backtick in the constraint name would break the DDL. Escape
-            // backticks the identifier-correct way.
-            str_replace('`', '``', $name),
-            implode(',', $columns),
-            $ref_table,
-            implode(',', $ref_cols),
-            $on_delete
-        );
-    }
 }
