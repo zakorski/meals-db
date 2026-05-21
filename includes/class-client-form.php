@@ -1699,11 +1699,6 @@ class MealsDB_Client_Form {
     }
 
     /**
-     * Backfill deterministic hash columns for legacy records lacking values.
-     *
-     * @return bool
-     */
-    /**
      * Populate empty deterministic index columns by hashing existing data.
      *
      * Runs once per request after ensure_index_columns_exist() detects

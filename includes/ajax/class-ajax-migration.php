@@ -610,8 +610,20 @@ class MealsDB_Ajax_Migration {
             wp_send_json( [ 'success' => false, 'message' => 'Invalid request.' ] );
         }
 
-        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+        // Aligned with sibling backfills (backfill_allowances,
+        // backfill_addresses) per directive 16 Pass A. A previous
+        // version gated this endpoint with only manage_woocommerce
+        // and no rate limit while the other two used manage_options
+        // plus migration_destructive (5/hr). On this site only
+        // administrators hold either capability, so the tightening
+        // is safe.
+        if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json( [ 'success' => false, 'message' => 'Insufficient permissions.' ], 403 );
+        }
+
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Backfill is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
         }
 
         $start_month = isset( $_REQUEST['start_month'] ) ? sanitize_text_field( wp_unslash( (string) $_REQUEST['start_month'] ) ) : '';

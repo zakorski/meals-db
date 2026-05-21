@@ -76,12 +76,17 @@ class MealsDB_Invoice_Generator {
 
     /**
      * VAC billing constants (contractual rates).
+     *
+     * Sourced from MealsDB_Operational_Constants so the value lives
+     * in one place (directive 18 Part D wired the four literals here
+     * to the corresponding constants without changing the numeric
+     * values).
      */
     private static $vac_billing = [
-        'per_main_allowance'     => 10.64,  // Monthly allowance = mains_allowed × this
-        'sides_conversion_rate'  => 4.715,  // Remaining allowance ÷ this = sides allowed
-        'sides_cost_rate'        => 4.10,   // Cost per billable side
-        'sides_hst_rate'         => 0.15,   // HST on taxable sides (15%)
+        'per_main_allowance'     => MealsDB_Operational_Constants::VAC_PER_MAIN_ALLOWANCE,
+        'sides_conversion_rate'  => MealsDB_Operational_Constants::VAC_SIDES_CONVERSION_RATE,
+        'sides_cost_rate'        => MealsDB_Operational_Constants::VAC_RATE_SIDE,
+        'sides_hst_rate'         => MealsDB_Operational_Constants::VAC_SIDES_HST_RATE,
     ];
 
     /**
