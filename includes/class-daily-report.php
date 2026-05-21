@@ -296,6 +296,27 @@ class MealsDB_Daily_Report {
     }
 
     /**
+     * HPOS table names. Centralised so the three reconciliation checks
+     * don't repeat the same prefix concatenation.
+     *
+     * This site is HPOS-exclusive: orders live in wc_orders /
+     * wc_orders_meta, not in wp_posts / wp_postmeta. Querying the
+     * classic tables returned zero rows on every run — that was the
+     * bug this helper exists to prevent recurring. See CLAUDE.md
+     * section "Don't query orders via wp_posts on HPOS".
+     *
+     * @return array{orders: string, meta: string} Table names with prefix.
+     */
+    private static function get_hpos_tables(): array {
+        global $wpdb;
+
+        return [
+            'orders' => $wpdb->prefix . 'wc_orders',
+            'meta'   => $wpdb->prefix . 'wc_orders_meta',
+        ];
+    }
+
+    /**
      * Reconciliation checks. We implement checks #1, #3, #4, #5 from
      * the directive. Check #2 ("allocations without orders") was
      * dropped because meals_client_allocations is keyed by
@@ -319,6 +340,16 @@ class MealsDB_Daily_Report {
      * meals_delivery_allocations is the per-order table; client_allocations
      * is per-month and isn't the right place to count from.
      *
+     * HPOS NOTE: This site is HPOS-exclusive. Orders live in wc_orders /
+     * wc_orders_meta, not in wp_posts / wp_postmeta. A previous version
+     * of this method joined the classic tables filtered by
+     * post_type='shop_order' and returned zero rows on every run —
+     * operators received daily false "all clear" reports. See CLAUDE.md
+     * section "Don't query orders via wp_posts on HPOS" for the
+     * canonical translation table. The o.type = 'shop_order' filter
+     * excludes refunds (HPOS uses a `type` column where classic CPT
+     * used distinct post_type values).
+     *
      * @return array{count: int, sample_ids: array<int, int>}
      */
     private static function check_orders_without_allocations(string $start_utc, string $end_utc): array {
@@ -329,21 +360,18 @@ class MealsDB_Daily_Report {
         }
 
         $delivery_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+        $tables = self::get_hpos_tables();
 
-        // wp_postmeta + wp_posts join. Convert UTC bounds to site
-        // timezone for the post_date comparison because wp_posts.post_date
-        // is stored in site timezone, not UTC. Use post_date_gmt to
-        // keep the comparison in UTC and avoid round-trip drift.
         $sql = $wpdb->prepare(
-            "SELECT p.ID FROM {$wpdb->posts} p
-             INNER JOIN {$wpdb->postmeta} pm
-                 ON pm.post_id = p.ID AND pm.meta_key = %s
+            "SELECT o.id FROM `{$tables['orders']}` o
+             INNER JOIN `{$tables['meta']}` m
+                 ON m.order_id = o.id AND m.meta_key = %s
              LEFT JOIN `{$delivery_table}` d
-                 ON d.wc_order_id = p.ID
-             WHERE p.post_type = %s
-               AND p.post_date_gmt >= %s
-               AND p.post_date_gmt < %s
-               AND CAST(pm.meta_value AS UNSIGNED) > 0
+                 ON d.wc_order_id = o.id
+             WHERE o.type = %s
+               AND o.date_created_gmt >= %s
+               AND o.date_created_gmt < %s
+               AND CAST(m.meta_value AS UNSIGNED) > 0
                AND d.id IS NULL
              LIMIT 50",
             'mealsdb_client_user_id',
@@ -365,6 +393,13 @@ class MealsDB_Daily_Report {
      * yesterday whose customer is a tracked SDNB/Veterans/Private
      * client but the order has no mealsdb_client_user_id meta.
      *
+     * HPOS NOTE: This site is HPOS-exclusive. The customer's WP user
+     * id is on wc_orders.customer_id directly — no JOIN through
+     * postmeta._customer_user is needed. A previous version of this
+     * method joined wp_posts / wp_postmeta filtered by post_type and
+     * returned zero rows on every run. See CLAUDE.md "Don't query
+     * orders via wp_posts on HPOS".
+     *
      * @return array{count: int, sample_ids: array<int, int>}
      */
     private static function check_active_orders_missing_meta(string $start_utc, string $end_utc): array {
@@ -375,28 +410,26 @@ class MealsDB_Daily_Report {
         }
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $tables = self::get_hpos_tables();
 
-        // Find shop_order posts in the yesterday window whose
-        // customer (_customer_user postmeta) is a tracked client in
-        // meals_clients, but which lack the mealsdb_client_user_id
-        // meta that the plugin sets when it processes the order.
+        // Find shop_order rows in the yesterday window whose customer
+        // (o.customer_id) is a tracked client in meals_clients, but
+        // which lack the mealsdb_client_user_id meta the plugin sets
+        // when it processes the order.
         $sql = $wpdb->prepare(
-            "SELECT p.ID FROM {$wpdb->posts} p
-             INNER JOIN {$wpdb->postmeta} cm
-                 ON cm.post_id = p.ID AND cm.meta_key = %s
+            "SELECT o.id FROM `{$tables['orders']}` o
              INNER JOIN `{$clients_table}` c
-                 ON c.wp_user_id = CAST(cm.meta_value AS UNSIGNED)
+                 ON c.wp_user_id = o.customer_id
                 AND c.client_type IN ('SDNB','Veteran','Private')
                 AND c.active = 1
-             LEFT JOIN {$wpdb->postmeta} mm
-                 ON mm.post_id = p.ID AND mm.meta_key = %s
-             WHERE p.post_type = %s
-               AND p.post_status IN ('wc-processing','wc-completed')
-               AND p.post_date_gmt >= %s
-               AND p.post_date_gmt < %s
-               AND mm.meta_id IS NULL
+             LEFT JOIN `{$tables['meta']}` mm
+                 ON mm.order_id = o.id AND mm.meta_key = %s
+             WHERE o.type = %s
+               AND o.status IN ('wc-processing','wc-completed')
+               AND o.date_created_gmt >= %s
+               AND o.date_created_gmt < %s
+               AND mm.id IS NULL
              LIMIT 50",
-            '_customer_user',
             'mealsdb_client_user_id',
             'shop_order',
             $start_utc,
@@ -416,6 +449,14 @@ class MealsDB_Daily_Report {
      * meals_clients row at all. Indicates the user→client sync is
      * lagging or missing entirely for those users.
      *
+     * HPOS NOTE: This site is HPOS-exclusive. The customer's WP user
+     * id is on wc_orders.customer_id directly, so the legacy join
+     * through postmeta._customer_user is gone. usermeta is unchanged
+     * by HPOS — the capabilities filter still works the same way.
+     * A previous version of this method joined wp_posts / wp_postmeta
+     * filtered by post_type and returned zero rows on every run. See
+     * CLAUDE.md "Don't query orders via wp_posts on HPOS".
+     *
      * @return array{count: int, sample_ids: array<int, int>}
      */
     private static function check_clients_with_orders_no_record(string $start_utc, string $end_utc): array {
@@ -426,18 +467,17 @@ class MealsDB_Daily_Report {
         }
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $tables = self::get_hpos_tables();
 
         // Customers with an order in the window whose user_id has no
         // matching meals_clients row. Restrict to users whose role is
         // one of the meals-tracked roles (sdnb/veterans/private) so
         // we don't false-positive on every customer.
         $sql = $wpdb->prepare(
-            "SELECT DISTINCT CAST(cm.meta_value AS UNSIGNED) AS user_id
-             FROM {$wpdb->posts} p
-             INNER JOIN {$wpdb->postmeta} cm
-                 ON cm.post_id = p.ID AND cm.meta_key = %s
+            "SELECT DISTINCT o.customer_id AS user_id
+             FROM `{$tables['orders']}` o
              INNER JOIN {$wpdb->usermeta} um
-                 ON um.user_id = CAST(cm.meta_value AS UNSIGNED)
+                 ON um.user_id = o.customer_id
                 AND um.meta_key = %s
                 AND (
                     um.meta_value LIKE %s OR
@@ -445,14 +485,13 @@ class MealsDB_Daily_Report {
                     um.meta_value LIKE %s
                 )
              LEFT JOIN `{$clients_table}` c
-                 ON c.wp_user_id = CAST(cm.meta_value AS UNSIGNED)
-             WHERE p.post_type = %s
-               AND p.post_date_gmt >= %s
-               AND p.post_date_gmt < %s
-               AND CAST(cm.meta_value AS UNSIGNED) > 0
+                 ON c.wp_user_id = o.customer_id
+             WHERE o.type = %s
+               AND o.date_created_gmt >= %s
+               AND o.date_created_gmt < %s
+               AND o.customer_id > 0
                AND c.client_id IS NULL
              LIMIT 50",
-            '_customer_user',
             $wpdb->prefix . 'capabilities',
             '%sdnb%',
             '%veterans%',
