@@ -127,6 +127,18 @@ class MealsDB_Ajax_Initials {
     /**
      * Extract client address data from POST request.
      *
+     * The form posts the postal field as `address_postal` /
+     * `delivery_address_postal` per MealsDB_Client_Form::$db_columns
+     * (and confirmed in class-admin-ui.php and assets/js/client-initials.js).
+     * A previous version of this method read `address_postal_code`
+     * / `delivery_address_postal_code` — those keys are never
+     * present in $_POST, so the postal was silently dropped from
+     * the address data. The validator's is_address_empty then
+     * treated the address as incomplete and silently disabled
+     * address-based initials sharing. Operators saw "duplicate
+     * initials" rejections on shared-address pairs that should
+     * have been allowed.
+     *
      * @return array Client data with address fields.
      */
     private static function get_client_data_from_request(): array {
@@ -138,12 +150,12 @@ class MealsDB_Ajax_Initials {
             'address_street_name',
             'address_unit',
             'address_city',
-            'address_postal_code',
+            'address_postal',
             'delivery_address_street_number',
             'delivery_address_street_name',
             'delivery_address_unit',
             'delivery_address_city',
-            'delivery_address_postal_code',
+            'delivery_address_postal',
         );
 
         foreach ($address_fields as $field) {
