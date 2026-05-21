@@ -60,6 +60,15 @@ class MealsDB_Ajax_Clients {
 
     /**
      * Link a Meals DB client record directly to a WordPress user ID.
+     *
+     * COLUMN NAME NOTE: The DB column on meals_clients is `wp_user_id`,
+     * NOT `wordpress_user_id` (which is the form-side vocabulary, and
+     * also the canonical name on meals_staff — they're different
+     * tables). A previous version used `wordpress_user_id` here; the
+     * repository's filter_to_known_columns silently dropped it, the
+     * read returned null, and the handler reported success while
+     * doing nothing. See CLAUDE.md "Form-side vs DB-side column
+     * names".
      */
     public static function link_client_to_wp_user(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
@@ -91,19 +100,19 @@ class MealsDB_Ajax_Clients {
         }
 
         $existing_wp_user_id = null;
-        $raw_existing = $client_row['wordpress_user_id'] ?? null;
+        $raw_existing = $client_row['wp_user_id'] ?? null;
         if ($raw_existing !== null && $raw_existing !== '') {
             $existing_wp_user_id = (int) $raw_existing;
         }
 
-        if (!$repository->update_client($client_id, ['wordpress_user_id' => $wp_user_id])) {
+        if (!$repository->update_client($client_id, ['wp_user_id' => $wp_user_id])) {
             wp_send_json_error(['message' => __('Failed to update Meals DB.', 'meals-db')]);
         }
 
         MealsDB_Logger::log(
             'link_client_to_wp_user',
             $client_id,
-            'wordpress_user_id',
+            'wp_user_id',
             $existing_wp_user_id !== null ? (string) $existing_wp_user_id : null,
             (string) $wp_user_id
         );

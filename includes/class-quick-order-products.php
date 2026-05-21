@@ -593,4 +593,9 @@ class MealsDB_Quick_Order_Products {
     }
 }
 
-MealsDB_Quick_Order_Products::init();
+// NOTE: Hook registration is triggered explicitly from
+// meals-db-main.php's plugins_loaded action, matching the pattern
+// used by every other class in the plugin. A previous version
+// auto-init'd here at file scope (when the autoloader loaded the
+// class), which worked because init() was idempotent but made
+// load order implicit and inconsistent with the rest of the codebase.

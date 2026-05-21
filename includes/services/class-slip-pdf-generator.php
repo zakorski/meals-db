@@ -425,15 +425,15 @@ class MealsDB_Slip_PDF_Generator {
         if (!is_array($saved)) {
             $saved = [];
         }
+        $defaults = MealsDB_Operational_Constants::default_fee_product_ids();
         return [
-            'client_contribution' => (int) ($saved['client_contribution'] ?? 5675),
-            'delivery_fee'        => (int) ($saved['delivery_fee'] ?? 4122),
+            'client_contribution' => (int) ($saved['client_contribution'] ?? $defaults['client_contribution']),
+            'delivery_fee'        => (int) ($saved['delivery_fee'] ?? $defaults['delivery_fee']),
         ];
     }
 
     /**
-     * Overage products are filtered out of slips entirely. Defaults
-     * 5056/5059/5180 per the directive.
+     * Overage products are filtered out of slips entirely.
      *
      * @return int[]
      */
@@ -443,9 +443,9 @@ class MealsDB_Slip_PDF_Generator {
             $saved = [];
         }
         $defaults = [
-            'overage_main'             => 5056,
-            'overage_sides_taxable'    => 5059,
-            'overage_sides_nontaxable' => 5180,
+            'overage_main'             => MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_MAIN,
+            'overage_sides_taxable'    => MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_SIDE_NONTAX,
+            'overage_sides_nontaxable' => MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_SIDE_TAX,
         ];
         $ids = [];
         foreach ($defaults as $key => $default) {

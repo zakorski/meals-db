@@ -95,10 +95,29 @@ function mealsdb_uninstall_cleanup_current_site(): void {
         set_transient('mealsdb_uninstall_drop_failures', $drop_failures, DAY_IN_SECONDS * 30);
     }
 
-    // Clear scheduled events. Note: the actual hook name registered by the
-    // plugin is mealsdb_nightly_allocation_sync (see meals-db-main.php).
-    wp_clear_scheduled_hook('mealsdb_nightly_allocation_sync');
-    wp_clear_scheduled_hook('mealsdb_nightly_sync'); // legacy name, for safety
+    // Clear ALL plugin-scheduled cron hooks. The deactivation hook in
+    // meals-db-main.php is the canonical list — if you add a new
+    // scheduled hook there, mirror it here. On hosts where WP-Cron is
+    // disabled (DISABLE_WP_CRON=true), these hooks won't fire anyway,
+    // but unscheduling them keeps wp_options.cron clean.
+    //
+    // HISTORY: The original uninstall cleared only 2 of the 5 hooks;
+    // the rest were added in subsequent phases (task engine, Phase W
+    // observability). Direct uninstall without prior deactivation
+    // (e.g. plugin removed during a WP upgrade before the deactivation
+    // hook ran) would leave 3 orphan cron entries that would attempt
+    // to fire against undefined callbacks on the next cron tick.
+    $plugin_cron_hooks = [
+        'mealsdb_nightly_allocation_sync',
+        'mealsdb_nightly_sync',
+        'mealsdb_nightly_task_sync',
+        'mealsdb_daily_report',
+        'mealsdb_log_retention',
+    ];
+
+    foreach ($plugin_cron_hooks as $hook) {
+        wp_clear_scheduled_hook($hook);
+    }
 
     // Remove plugin options so reinstall is a clean slate. The encryption
     // key lives inside mealsdb_settings, so this also wipes that secret.

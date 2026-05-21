@@ -1462,11 +1462,7 @@ class MealsDB_Invoice_Generator {
      * @return array{mains: int, taxable_sides: int, nontax_sides: int}
      */
     public static function get_overage_product_ids(): array {
-        $defaults = [
-            'mains'         => 5056,
-            'taxable_sides' => 5180,
-            'nontax_sides'  => 5059,
-        ];
+        $defaults = MealsDB_Operational_Constants::default_overage_product_ids();
 
         $saved = get_option('mealsdb_overage_product_ids', []);
         if (!is_array($saved)) {
@@ -1486,10 +1482,7 @@ class MealsDB_Invoice_Generator {
      * @return array{client_contribution: int, delivery_fee: int}
      */
     public static function get_fee_product_ids(): array {
-        $defaults = [
-            'client_contribution' => 5675,
-            'delivery_fee'        => 4122,
-        ];
+        $defaults = MealsDB_Operational_Constants::default_fee_product_ids();
 
         $saved = get_option('mealsdb_fee_product_ids', []);
         if (!is_array($saved)) {

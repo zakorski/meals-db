@@ -17,15 +17,29 @@ class MealsDB_Purchase_Orders {
     public const STATUS_PLANNED    = 'planned';
     public const STATUS_PLACED     = 'placed';
     public const STATUS_ARRIVED    = 'arrived';
-    public const STATUS_COUNTED    = 'counted';
     public const STATUS_RECONCILED = 'reconciled';
     public const STATUS_CANCELLED  = 'cancelled';
 
+    /**
+     * Valid PO statuses.
+     *
+     * The lifecycle is: PLANNED → PLACED → ARRIVED → RECONCILED,
+     * with CANCELLED available as a terminal state from any prior
+     * state.
+     *
+     * HISTORY: A `STATUS_COUNTED` constant was previously declared
+     * but never set anywhere. The physical_count task handler does
+     * both the count and the reconcile in one operation, so the
+     * intermediate state had no place in the workflow. Removed for
+     * clarity. The schema ENUM in class-schema.php still tolerates
+     * 'counted' for now — a dev-side `SELECT COUNT(*) ... WHERE
+     * status='counted'` check is required before tightening the
+     * ENUM, since any orphan row would fail the new constraint.
+     */
     public const ALLOWED_STATUSES = [
         self::STATUS_PLANNED,
         self::STATUS_PLACED,
         self::STATUS_ARRIVED,
-        self::STATUS_COUNTED,
         self::STATUS_RECONCILED,
         self::STATUS_CANCELLED,
     ];

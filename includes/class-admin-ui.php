@@ -451,6 +451,48 @@ class MealsDB_Admin_UI {
             'before'
         );
 
+        // Allocation-history widget only renders inside render_client_form()
+        // when editing an existing client. Gate the enqueue to the same
+        // condition so other client-list / add-client views do not pull in
+        // the script needlessly.
+        if ($tab === 'clients' && $action === 'edit') {
+            $allocation_history_client_id = isset($_GET['client_id']) ? absint(wp_unslash($_GET['client_id'])) : 0;
+            if ($allocation_history_client_id > 0) {
+                $allocation_history_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/client-allocation-history.js';
+                $allocation_history_version = file_exists($allocation_history_path) ? filemtime($allocation_history_path) : MEALS_DB_VERSION;
+                wp_register_script(
+                    'mealsdb-client-allocation-history',
+                    MEALS_DB_PLUGIN_URL . 'assets/js/client-allocation-history.js',
+                    ['jquery', 'mealsdb-admin'],
+                    $allocation_history_version,
+                    true
+                );
+                $allocation_history_data = [
+                    'clientId' => $allocation_history_client_id,
+                    'ajaxUrl'  => admin_url('admin-ajax.php'),
+                    'nonce'    => wp_create_nonce('mealsdb_nonce'),
+                    'i18n'     => [
+                        'noHistory'         => __('No allocation history found.', 'meals-db'),
+                        'loadFailed'        => __('Failed to load allocation history.', 'meals-db'),
+                        'loadingDetails'    => __('Loading details...', 'meals-db'),
+                        'noDeliveryDetails' => __('No delivery details available.', 'meals-db'),
+                        'statusFinalized'   => __('Finalized', 'meals-db'),
+                        'statusOpen'        => __('Open', 'meals-db'),
+                        'colDeliveryDate'   => __('Delivery Date', 'meals-db'),
+                        'colOrderNumber'    => __('Order #', 'meals-db'),
+                        'colMains'          => __('Mains', 'meals-db'),
+                        'colSides'          => __('Sides', 'meals-db'),
+                    ],
+                ];
+                wp_add_inline_script(
+                    'mealsdb-client-allocation-history',
+                    'window.mealsdbAllocationHistory = ' . wp_json_encode($allocation_history_data) . ';',
+                    'before'
+                );
+                wp_enqueue_script('mealsdb-client-allocation-history');
+            }
+        }
+
         // Per-tab report-page scripts. Each was previously an inline
         // <script> block inside the matching view; extracting to real
         // files means they can be cached, evaluated under a strict CSP,
@@ -1596,146 +1638,12 @@ class MealsDB_Admin_UI {
                     </tbody>
                 </table>
             </div>
-            <script>
-            (function($) {
-                // Defense-in-depth HTML escape for any value flowing from the
-                // server JSON response into HTML strings below. Even though
-                // most fields are integers / DB-controlled month strings,
-                // future schema additions could let user-controlled text in.
-                function escHtml(value) {
-                    if (value === null || value === undefined) return '';
-                    return String(value)
-                        .replace(/&/g, '&amp;')
-                        .replace(/</g, '&lt;')
-                        .replace(/>/g, '&gt;')
-                        .replace(/"/g, '&quot;')
-                        .replace(/'/g, '&#39;');
-                }
-                function intText(value) {
-                    return String(parseInt(value, 10) || 0);
-                }
-                $(function() {
-                    var clientId = <?php echo (int) $client_id; ?>;
-                    if (clientId <= 0) return;
-
-                    var nonce = '';
-                    if (typeof window.mealsdb !== 'undefined' && window.mealsdb.nonce) {
-                        nonce = window.mealsdb.nonce;
-                    } else {
-                        var $nonceField = $('#mealsdb_nonce_field');
-                        if ($nonceField.length) {
-                            nonce = $nonceField.val();
-                        }
-                    }
-
-                    $.ajax({
-                        url: typeof window.ajaxurl === 'string' ? window.ajaxurl : '',
-                        method: 'GET',
-                        dataType: 'json',
-                        data: {
-                            action: 'mealsdb_get_client_allocation_history',
-                            nonce: nonce,
-                            client_id: clientId
-                        }
-                    }).done(function(response) {
-                        if (!response || !response.success || !response.history) {
-                            $('#mealsdb-allocation-history-table tbody').html(
-                                '<tr><td colspan="8"><?php echo esc_js(__('No allocation history found.', 'meals-db')); ?></td></tr>'
-                            );
-                            return;
-                        }
-
-                        var rows = '';
-                        $.each(response.history, function(i, row) {
-                            var status = row.is_finalized == 1 ? '<?php echo esc_js(__('Finalized', 'meals-db')); ?>' : '<?php echo esc_js(__('Open', 'meals-db')); ?>';
-                            var month = escHtml(row.billing_month || '');
-                            rows += '<tr class="mealsdb-allocation-history-row" data-month="' + month + '" style="cursor: pointer;">' +
-                                '<td>' + month + '</td>' +
-                                '<td>' + intText(row.permitted_mains) + '</td>' +
-                                '<td>' + intText(row.used_mains) + '</td>' +
-                                '<td>' + intText(row.overage_mains) + '</td>' +
-                                '<td>' + intText(row.permitted_sides) + '</td>' +
-                                '<td>' + intText(row.used_sides) + '</td>' +
-                                '<td>' + intText(row.overage_sides) + '</td>' +
-                                '<td>' + escHtml(status) + '</td>' +
-                            '</tr>' +
-                            '<tr class="mealsdb-allocation-detail-row" data-month="' + month + '" style="display: none;">' +
-                                '<td colspan="8"><em><?php echo esc_js(__('Loading details...', 'meals-db')); ?></em></td>' +
-                            '</tr>';
-                        });
-
-                        if (!rows) {
-                            rows = '<tr><td colspan="8"><?php echo esc_js(__('No allocation history found.', 'meals-db')); ?></td></tr>';
-                        }
-
-                        $('#mealsdb-allocation-history-table tbody').html(rows);
-
-                        if (response.current_month_details && response.current_month_details.length) {
-                            var currentMonth = new Date().toISOString().substring(0, 7);
-                            var $detailRow = $('.mealsdb-allocation-detail-row[data-month="' + currentMonth + '"]');
-                            if ($detailRow.length) {
-                                $detailRow.find('td').html(buildDetailTable(response.current_month_details));
-                                $detailRow.data('loaded', true);
-                            }
-                        }
-                    }).fail(function() {
-                        $('#mealsdb-allocation-history-table tbody').html(
-                            '<tr><td colspan="8"><?php echo esc_js(__('Failed to load allocation history.', 'meals-db')); ?></td></tr>'
-                        );
-                    });
-
-                    $(document).on('click', '.mealsdb-allocation-history-row', function() {
-                        var month = $(this).data('month');
-                        var $detail = $('.mealsdb-allocation-detail-row[data-month="' + month + '"]');
-                        if ($detail.is(':visible')) {
-                            $detail.hide();
-                            return;
-                        }
-                        $detail.show();
-                        if ($detail.data('loaded')) return;
-
-                        $.ajax({
-                            url: typeof window.ajaxurl === 'string' ? window.ajaxurl : '',
-                            method: 'GET',
-                            dataType: 'json',
-                            data: {
-                                action: 'mealsdb_get_client_allocation_history',
-                                nonce: nonce,
-                                client_id: clientId,
-                                billing_month: month
-                            }
-                        }).done(function(resp) {
-                            if (resp && resp.success && resp.month_details) {
-                                $detail.find('td').html(buildDetailTable(resp.month_details));
-                            } else {
-                                $detail.find('td').html('<em><?php echo esc_js(__('No delivery details available.', 'meals-db')); ?></em>');
-                            }
-                            $detail.data('loaded', true);
-                        });
-                    });
-
-                    function buildDetailTable(details) {
-                        var html = '<table class="widefat fixed striped" style="margin: 5px 0;">' +
-                            '<thead><tr>' +
-                                '<th><?php echo esc_js(__('Delivery Date', 'meals-db')); ?></th>' +
-                                '<th><?php echo esc_js(__('Order #', 'meals-db')); ?></th>' +
-                                '<th><?php echo esc_js(__('Mains', 'meals-db')); ?></th>' +
-                                '<th><?php echo esc_js(__('Sides', 'meals-db')); ?></th>' +
-                            '</tr></thead><tbody>';
-                        $.each(details, function(i, d) {
-                            html += '<tr>' +
-                                '<td>' + escHtml(d.delivery_date || '') + '</td>' +
-                                '<td>' + intText(d.wc_order_id) + '</td>' +
-                                '<td>' + intText(d.mains_count) + '</td>' +
-                                '<td>' + intText(d.sides_count) + '</td>' +
-                            '</tr>';
-                        });
-                        html += '</tbody></table>';
-                        return html;
-                    }
-                });
-            })(jQuery);
-            </script>
+            <?php
+            // The allocation-history widget JS lives in
+            // assets/js/client-allocation-history.js and is enqueued by
+            // self::enqueue_assets() on the edit-client view. Config and
+            // i18n strings travel via window.mealsdbAllocationHistory.
+            ?>
         <?php endif; ?>
         <?php
     }

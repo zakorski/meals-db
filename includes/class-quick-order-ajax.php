@@ -1,6 +1,25 @@
 <?php
 /**
  * AJAX handlers for Meals DB Quick Order feature.
+ *
+ * NAMING CONVENTION (applied consistently across this class):
+ *   $wp_user_id — WordPress user ID (wp_users.ID).
+ *   $client_id  — meals_clients.client_id (the PK, linked to a WP
+ *                 user via meals_clients.wp_user_id).
+ *
+ * The JS frontend historically posts the WP user ID under the
+ * parameter name 'client_id'. This class accepts both 'client_id'
+ * and 'wp_user_id' as $_POST / $_REQUEST keys (with 'wp_user_id'
+ * taking precedence when both are present) and uses $wp_user_id
+ * internally for clarity. STRUCT-6 in the v1.0.346 audit flagged
+ * the previous mixed use of $client_id, $client_db_id, and
+ * $mealsdb_client_id for the same / different concepts as a
+ * tripwire for future maintainers.
+ *
+ * Order meta keys (mealsdb_client_user_id, mealsdb_client_id) are
+ * persistent on existing orders and intentionally NOT renamed.
+ * Database column references (`c.client_id`, `c.wp_user_id`) use
+ * the actual column names regardless of PHP variable naming.
  */
 
 defined('ABSPATH') || exit;
@@ -260,6 +279,22 @@ class MealsDB_Quick_Order_Ajax {
     /**
      * AJAX endpoint to create a new WooCommerce order for a Meals DB client.
      */
+    /**
+     * Create a WC order via Quick Order.
+     *
+     * NAMING CONVENTION (consistent across this method and the
+     * helpers it calls):
+     *   $wp_user_id — WP user ID (the customer's WordPress account).
+     *   $client_id  — meals_clients.client_id (the PK of the meals
+     *                 client record linked to that WP user).
+     *
+     * The JS frontend posts the WP user ID under the historical
+     * parameter name 'client_id' for backward compatibility. A
+     * 'wp_user_id' POST parameter is also accepted and takes
+     * precedence if both are sent. Internally we use $wp_user_id
+     * to remove the previous ambiguity where $client_id sometimes
+     * meant WP user and sometimes meant meals PK.
+     */
     public static function create_order(): void {
         $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
         if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_quick_order_create_order')) {
@@ -279,18 +314,22 @@ class MealsDB_Quick_Order_Ajax {
             ], 429);
         }
 
-        // WordPress user ID for the client placing the order.
-        $client_id = isset($_POST['client_id']) ? intval($_POST['client_id']) : 0;
+        // Accept either the explicit 'wp_user_id' POST parameter or
+        // the historical 'client_id' name (JS frontend still sends
+        // 'client_id' — the value has always been a WP user ID).
+        $wp_user_id = isset($_POST['wp_user_id'])
+            ? intval($_POST['wp_user_id'])
+            : (isset($_POST['client_id']) ? intval($_POST['client_id']) : 0);
         $date      = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
         $items     = self::normalise_items($_POST['items'] ?? []);
         $rate_id   = isset($_POST['rate_id']) ? intval($_POST['rate_id']) : 0;
         $order_date = self::parse_order_date($date);
 
         if (
-            $client_id <= 0
+            $wp_user_id <= 0
             || !$order_date instanceof DateTimeImmutable
             || empty($items)
-            || !self::user_exists($client_id)
+            || !self::user_exists($wp_user_id)
         ) {
             wp_send_json([
                 'success' => false,
@@ -298,21 +337,22 @@ class MealsDB_Quick_Order_Ajax {
             ]);
         }
 
-        // Meals DB client_id from the external meals_clients table for this WordPress user.
-        $client_db_id = self::get_active_client_id_for_user($client_id);
+        // Resolve the meals_clients PK for this WP user (0 if no
+        // active meals_clients row exists).
+        $client_id = self::get_active_client_id_for_user($wp_user_id);
 
         // A rate_id is meaningless without an active Meals DB client to
         // bind it to. Refuse rather than silently storing an unvalidated
         // rate as order meta — the previous behaviour let any caller stash
         // an arbitrary rate_id against any WP user.
         if ($rate_id > 0) {
-            if ($client_db_id <= 0) {
+            if ($client_id <= 0) {
                 wp_send_json([
                     'success' => false,
                     'message' => __('A rate can only be applied to an active Meals DB client.', 'meals-db'),
                 ]);
             }
-            if (!self::validate_rate_for_client($rate_id, $client_db_id)) {
+            if (!self::validate_rate_for_client($rate_id, $client_id)) {
                 wp_send_json([
                     'success' => false,
                     'message' => __('Invalid rate selection.', 'meals-db'),
@@ -321,15 +361,15 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         try {
-            $order = self::create_wc_order($items, $order_date, $client_id, $client_db_id);
+            $order = self::create_wc_order($items, $order_date, $wp_user_id, $client_id);
             if (is_wp_error($order)) {
                 throw new Exception($order->get_error_message());
             }
 
-            $order->update_meta_data('mealsdb_client_user_id', $client_id);
+            $order->update_meta_data('mealsdb_client_user_id', $wp_user_id);
 
-            if ($client_db_id > 0) {
-                $order->update_meta_data('mealsdb_client_id', $client_db_id);
+            if ($client_id > 0) {
+                $order->update_meta_data('mealsdb_client_id', $client_id);
             }
 
             if ($rate_id > 0) {
@@ -343,16 +383,40 @@ class MealsDB_Quick_Order_Ajax {
             // Use the actual order timestamp so back-dated orders don't
             // overwrite real "last order" tracking with `now`.
             $order_timestamp = $order_date->format('Y-m-d H:i:s');
-            update_user_meta($client_id, 'last_order_date', $order_timestamp);
-            update_user_meta($client_id, 'last_call_date', $order_timestamp);
+            update_user_meta($wp_user_id, 'last_order_date', $order_timestamp);
+            update_user_meta($wp_user_id, 'last_call_date', $order_timestamp);
 
             // R2: persist the next-order / next-delivery dates the operator
             // confirmed on the form. These become the anchor for the
             // following cycle — see phase-R2-task-workflows Part A
             // ("rule resumes from new anchor").
-            self::persist_next_dates($client_db_id, $client_id, $order_date);
+            self::persist_next_dates($client_id, $wp_user_id, $order_date);
 
             $order_id = $order->get_id();
+
+            // Audit the creation. Quick Order is the operator's primary
+            // order-entry path and was the most significant audit-log
+            // gap from directive 16 Pass A. The new_value carries the
+            // small structured payload an operator would need to
+            // reconstruct what happened: WC order id, target user,
+            // meals_clients PK if any, the date the operator picked,
+            // and the rate applied.
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::log(
+                    'quick_order_created',
+                    $order_id,
+                    'wc_order',
+                    null,
+                    wp_json_encode([
+                        'wp_user_id'   => $wp_user_id,
+                        'client_id'    => $client_id,
+                        'order_date'   => $order_date->format('Y-m-d'),
+                        'rate_id'      => $rate_id > 0 ? $rate_id : null,
+                        'item_count'   => count($items),
+                    ])
+                );
+            }
+
             wp_send_json([
                 'success' => true,
                 'order_id' => $order_id,
@@ -553,30 +617,31 @@ class MealsDB_Quick_Order_Ajax {
                 $order_date = $date->format('Y-m-d');
             }
 
-            $client_id    = intval($source_order->get_meta('mealsdb_client_user_id'));
-            $client_db_id = intval($source_order->get_meta('mealsdb_client_id'));
+            // mealsdb_client_user_id = WP user id; mealsdb_client_id =
+            // meals_clients PK. The two meta keys are persistent on
+            // existing orders and intentionally NOT renamed (see
+            // CLAUDE.md and the directive 15 out-of-scope notes). We
+            // only normalize PHP variable names.
+            $wp_user_id = intval($source_order->get_meta('mealsdb_client_user_id'));
+            $client_id  = intval($source_order->get_meta('mealsdb_client_id'));
 
-            if ($client_id <= 0 && $client_db_id > 0) {
-                $client_id = self::get_user_id_for_client($client_db_id);
+            if ($wp_user_id <= 0 && $client_id > 0) {
+                $wp_user_id = self::get_user_id_for_client($client_id);
             }
 
-            if ($client_db_id <= 0 && $client_id > 0) {
-                $client_db_id = self::get_active_client_id_for_user($client_id);
-            }
-
-            if ($client_id <= 0) {
-                $client_id = null;
+            if ($client_id <= 0 && $wp_user_id > 0) {
+                $client_id = self::get_active_client_id_for_user($wp_user_id);
             }
 
             $client_type = '';
-            if ($client_db_id > 0) {
+            if ($client_id > 0) {
                 global $wpdb;
 
                 $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
                 $row = $wpdb->get_row(
                     $wpdb->prepare(
                         "SELECT client_type FROM `{$table_name}` WHERE client_id = %d LIMIT 1",
-                        $client_db_id
+                        $client_id
                     ),
                     ARRAY_A
                 );
@@ -588,9 +653,14 @@ class MealsDB_Quick_Order_Ajax {
 
             $rate_id = intval($source_order->get_meta('mealsdb_rate_id'));
 
+            // The JS frontend sends `client_id` containing a WP user
+            // ID when it later calls create_order, so the response
+            // key here stays `client_id` (=WP user id) to keep the
+            // existing JS contract working. The local variable is
+            // now $wp_user_id for clarity.
             wp_send_json([
                 'success'     => true,
-                'client_id'   => $client_id,
+                'client_id'   => $wp_user_id > 0 ? $wp_user_id : null,
                 'client_type' => $client_type,
                 'order_date'  => $order_date,
                 'items'       => $items,
@@ -789,11 +859,12 @@ class MealsDB_Quick_Order_Ajax {
      *
      * @param array<int, array<string, int>> $items
      * @param DateTimeImmutable|null         $order_date
-     * @param int                            $client_id WordPress user ID to assign as the order customer.
+     * @param int                            $wp_user_id WordPress user ID assigned as the order customer.
+     * @param int                            $client_id  meals_clients.client_id (PK); 0 if the customer has no meals client record.
      *
      * @return WC_Order|WP_Error
      */
-    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $client_id = 0, int $mealsdb_client_id = 0) {
+    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $wp_user_id = 0, int $client_id = 0) {
         if (!function_exists('wc_create_order') || !class_exists('WC_Order')) {
             return new WP_Error('mealsdb_missing_woocommerce', __('WooCommerce is required to create orders.', 'meals-db'));
         }
@@ -803,8 +874,8 @@ class MealsDB_Quick_Order_Ajax {
             return $order;
         }
 
-        if ($client_id > 0) {
-            $order->set_customer_id($client_id);
+        if ($wp_user_id > 0) {
+            $order->set_customer_id($wp_user_id);
         }
 
         $added_count   = 0;
@@ -837,10 +908,10 @@ class MealsDB_Quick_Order_Ajax {
 
         if (!empty($dropped_items)) {
             error_log(sprintf(
-                '[MealsDB QuickOrder] Dropped %d item(s) from order (client_id=%d, mealsdb_client_id=%d) because wc_get_product() returned no product: %s',
+                '[MealsDB QuickOrder] Dropped %d item(s) from order (wp_user_id=%d, client_id=%d) because wc_get_product() returned no product: %s',
                 count($dropped_items),
+                $wp_user_id,
                 $client_id,
-                $mealsdb_client_id,
                 wp_json_encode($dropped_items)
             ));
         }
@@ -851,12 +922,12 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         // Look up client fee data.
-        if ($mealsdb_client_id > 0) {
+        if ($client_id > 0) {
             global $wpdb;
             $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
             $client_data = $wpdb->get_row($wpdb->prepare(
                 "SELECT client_type, delivery_fee, client_contribution FROM {$clients_table} WHERE client_id = %d",
-                $mealsdb_client_id
+                $client_id
             ), ARRAY_A);
 
             if ($client_data && in_array($client_data['client_type'], ['SDNB', 'Veteran'], true)) {
@@ -879,7 +950,7 @@ class MealsDB_Quick_Order_Ajax {
                     $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
                     $already_applied = (int) $wpdb->get_var($wpdb->prepare(
                         "SELECT contribution_applied FROM {$alloc_table} WHERE client_id = %d AND billing_month = %s",
-                        $mealsdb_client_id,
+                        $client_id,
                         $billing_month
                     ));
 
@@ -896,7 +967,7 @@ class MealsDB_Quick_Order_Ajax {
                             "INSERT INTO {$alloc_table} (client_id, billing_month, contribution_applied, contribution_order_id)
                              VALUES (%d, %s, 1, %d)
                              ON DUPLICATE KEY UPDATE contribution_applied = 1, contribution_order_id = %d",
-                            $mealsdb_client_id,
+                            $client_id,
                             $billing_month,
                             $order->get_id(),
                             $order->get_id()
@@ -912,11 +983,11 @@ class MealsDB_Quick_Order_Ajax {
         // or a hook mutating line prices. Reject rather than persist a bad order.
         if ((float) $order->get_total() < 0) {
             error_log(sprintf(
-                '[MealsDB QuickOrder] Refusing to save order %d: computed total is negative (%s) for client_id=%d mealsdb_client_id=%d',
+                '[MealsDB QuickOrder] Refusing to save order %d: computed total is negative (%s) for wp_user_id=%d client_id=%d',
                 $order->get_id(),
                 $order->get_total(),
-                $client_id,
-                $mealsdb_client_id
+                $wp_user_id,
+                $client_id
             ));
             $order->delete(true);
             return new WP_Error('mealsdb_invalid_total', __('Order total calculation failed. Please try again.', 'meals-db'));
@@ -960,8 +1031,8 @@ class MealsDB_Quick_Order_Ajax {
      * placed order date + the client's configured frequency — so the
      * next cycle always has an anchor.
      */
-    private static function persist_next_dates(int $client_db_id, int $wp_user_id, DateTimeImmutable $order_date): void {
-        if ($client_db_id <= 0) {
+    private static function persist_next_dates(int $client_id, int $wp_user_id, DateTimeImmutable $order_date): void {
+        if ($client_id <= 0) {
             return;
         }
 
@@ -975,7 +1046,7 @@ class MealsDB_Quick_Order_Ajax {
         $client = $wpdb->get_row(
             $wpdb->prepare(
                 "SELECT ordering_frequency, delivery_frequency FROM `{$clients_table}` WHERE client_id = %d",
-                $client_db_id
+                $client_id
             ),
             ARRAY_A
         );
@@ -999,7 +1070,7 @@ class MealsDB_Quick_Order_Ajax {
             return;
         }
 
-        $updated = $wpdb->update($clients_table, $patch, ['client_id' => $client_db_id]);
+        $updated = $wpdb->update($clients_table, $patch, ['client_id' => $client_id]);
         if ($updated === false) {
             error_log('[MealsDB QuickOrder] Failed to persist next_order/delivery_date: ' . $wpdb->last_error);
             return;
@@ -1034,15 +1105,20 @@ class MealsDB_Quick_Order_Ajax {
     public static function get_next_dates(): void {
         self::verify_request();
 
-        $client_id = isset($_REQUEST['client_id']) ? (int) $_REQUEST['client_id'] : 0;
+        // JS posts `client_id` containing a WP user ID (historical
+        // contract). Accept `wp_user_id` too for callers that prefer
+        // the explicit name.
+        $wp_user_id = isset($_REQUEST['wp_user_id'])
+            ? (int) $_REQUEST['wp_user_id']
+            : (isset($_REQUEST['client_id']) ? (int) $_REQUEST['client_id'] : 0);
         $order_date_str = isset($_REQUEST['order_date']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['order_date'])) : '';
 
-        if ($client_id <= 0) {
+        if ($wp_user_id <= 0) {
             wp_send_json_error(['message' => __('Client id required.', 'meals-db')]);
         }
 
-        $client_db_id = self::get_active_client_id_for_user($client_id);
-        if ($client_db_id <= 0) {
+        $client_id = self::get_active_client_id_for_user($wp_user_id);
+        if ($client_id <= 0) {
             wp_send_json_success([
                 'has_client'      => false,
                 'next_order_date' => null,
@@ -1058,7 +1134,7 @@ class MealsDB_Quick_Order_Ajax {
             $wpdb->prepare(
                 "SELECT ordering_frequency, delivery_frequency, next_order_date, next_delivery_date
                  FROM `{$clients_table}` WHERE client_id = %d",
-                $client_db_id
+                $client_id
             ),
             ARRAY_A
         );

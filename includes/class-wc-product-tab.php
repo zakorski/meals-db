@@ -49,6 +49,7 @@ class MealsDB_WC_Product_Tab {
         add_action('woocommerce_product_data_panels', [$instance, 'render_product_panel']);
         add_action('woocommerce_admin_process_product_object', [$instance, 'save_product_data']);
         add_action('admin_enqueue_scripts', [$instance, 'enqueue_admin_assets']);
+        add_action('admin_enqueue_scripts', [self::class, 'enqueue_product_tab_assets']);
     }
 
     /**
@@ -91,8 +92,43 @@ class MealsDB_WC_Product_Tab {
             $style_version
         );
 
-        $script = "jQuery(function($){\n            var productType = $('#_mealsdb_product_type');\n            var taxableCheckbox = $('#_mealsdb_taxable');\n            var taxStatus = $('#_tax_status');\n            var taxClass = $('#_tax_class');\n\n            function syncTaxFields(){\n                var isMeal = productType.val() === 'meal';\n                var isTaxable = taxableCheckbox.is(':checked');\n\n                taxableCheckbox.prop('disabled', isMeal);\n\n                if(isMeal){\n                    taxableCheckbox.prop('checked', false);\n                }\n\n                taxStatus.prop('disabled', isMeal);\n                taxClass.prop('disabled', isMeal);\n\n                if(isMeal){\n                    taxStatus.val('none').trigger('change');\n                    taxClass.val('').trigger('change');\n                    return;\n                }\n\n                taxStatus.val(isTaxable ? 'taxable' : 'none').trigger('change');\n            }\n\n            syncTaxFields();\n            productType.on('change', syncTaxFields);\n            taxableCheckbox.on('change', syncTaxFields);\n        });";
-        wp_add_inline_script('wc-admin-product-meta-boxes', $script);
+        // Inline JS for syncing WC tax fields with the Meals DB
+        // product-type / taxable controls was previously appended here via
+        // wp_add_inline_script. It now lives in
+        // assets/js/wc-product-tab-tax-sync.js and is registered by
+        // self::enqueue_product_tab_assets() with a dependency on
+        // wc-admin-product-meta-boxes so the execution order — and thus the
+        // resulting DOM state — matches the previous inline behavior.
+    }
+
+    /**
+     * Register and enqueue the tax-field sync script on the WC product
+     * edit screen. Gated to product post.php / post-new.php so the
+     * script is never loaded on unrelated admin pages.
+     *
+     * The script depends on wc-admin-product-meta-boxes to preserve the
+     * load order that the previous wp_add_inline_script attachment had.
+     */
+    public static function enqueue_product_tab_assets(string $hook): void {
+        if (!in_array($hook, ['post.php', 'post-new.php'], true)) {
+            return;
+        }
+
+        $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+        if (!$screen || $screen->post_type !== 'product') {
+            return;
+        }
+
+        $script_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/wc-product-tab-tax-sync.js';
+        $script_version = file_exists($script_path) ? filemtime($script_path) : MEALS_DB_VERSION;
+
+        wp_enqueue_script(
+            'mealsdb-wc-product-tab-tax-sync',
+            MEALS_DB_PLUGIN_URL . 'assets/js/wc-product-tab-tax-sync.js',
+            ['jquery', 'wc-admin-product-meta-boxes'],
+            $script_version,
+            true
+        );
     }
 
     /**

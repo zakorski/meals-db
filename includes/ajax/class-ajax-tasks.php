@@ -38,6 +38,14 @@ class MealsDB_Ajax_Tasks {
         if (!MealsDB_Permissions::can_access_plugin()) {
             wp_send_json_error(['message' => __('Insufficient permissions.', 'meals-db')], 403);
         }
+        // Bucket covers all 15 task endpoints (reads + mutations) at
+        // 100/hour — enough headroom for operator polling, tight
+        // enough that a buggy loop can't flood. Directive 16 Pass A
+        // flagged this whole file as missing rate-limit coverage.
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('task_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+        }
     }
 
     /**
@@ -47,6 +55,10 @@ class MealsDB_Ajax_Tasks {
         check_ajax_referer('mealsdb_nonce', 'nonce');
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => __('Insufficient permissions.', 'meals-db')], 403);
+        }
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('task_modify')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
         }
     }
 

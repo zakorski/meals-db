@@ -760,9 +760,12 @@ class MealsDB_Reports {
             return ['rows' => [], 'summary' => self::empty_contribution_summary()];
         }
 
-        $fee_ids = MealsDB_Invoice_Generator::get_fee_product_ids();
-        $contribution_product_id = $fee_ids['client_contribution'];
-
+        // get_total_fee_paid_for_user covers both fee mechanisms:
+        // legacy product-ID line items (Enzebra, product 5675) AND
+        // Quick Order's WC_Order_Item_Fee named "Client Contribution".
+        // A previous version only checked the legacy line items, so
+        // Quick Order contributions showed as $0 paid and the report
+        // surfaced false discrepancies. CRIT-3 in the v1.0.346 audit.
         $rows = [];
         $total_expected   = 0.0;
         $total_paid       = 0.0;
@@ -770,8 +773,8 @@ class MealsDB_Reports {
         foreach ($clients as $client) {
             $wp_user_id  = (int) $client['wp_user_id'];
             $expected    = (float) $client['client_contribution'];
-            $actual_paid = $this->order_query->get_total_paid_for_product(
-                $wp_user_id, $contribution_product_id, $start_date, $end_date
+            $actual_paid = $this->order_query->get_total_fee_paid_for_user(
+                $wp_user_id, 'contribution', $start_date, $end_date
             );
             $difference  = round($expected - $actual_paid, 2);
 
@@ -829,9 +832,10 @@ class MealsDB_Reports {
             return ['rows' => [], 'summary' => self::empty_delivery_summary()];
         }
 
-        $fee_ids = MealsDB_Invoice_Generator::get_fee_product_ids();
-        $delivery_product_id = $fee_ids['delivery_fee'];
-
+        // get_total_fee_paid_for_user covers both fee mechanisms:
+        // legacy product-ID line items (product 4122) AND Quick Order's
+        // WC_Order_Item_Fee named "Delivery Fee". See contribution
+        // reconciliation above and CRIT-3 in the v1.0.346 audit.
         $rows = [];
         $total_owed = 0.0;
         $total_paid = 0.0;
@@ -841,8 +845,8 @@ class MealsDB_Reports {
             $delivery_fee = (float) $client['delivery_fee'];
             $num_orders   = $this->order_query->get_order_count_for_user($wp_user_id, $start_date, $end_date);
             $owed         = round($num_orders * $delivery_fee, 2);
-            $actual_paid  = $this->order_query->get_total_paid_for_product(
-                $wp_user_id, $delivery_product_id, $start_date, $end_date
+            $actual_paid  = $this->order_query->get_total_fee_paid_for_user(
+                $wp_user_id, 'delivery_fee', $start_date, $end_date
             );
             $difference   = round($owed - $actual_paid, 2);
 

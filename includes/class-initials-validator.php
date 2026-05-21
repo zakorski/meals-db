@@ -252,14 +252,28 @@ class MealsDB_Initials_Validator {
 					? $client_data['address_city']
 					: ($client_data['city'] ?? '')));
 
-		// Postal code
-		$postal = !empty($client_data['delivery_address_postal_code'])
-			? $client_data['delivery_address_postal_code']
-			: (!empty($client_data['delivery_postal_code'])
-				? $client_data['delivery_postal_code']
-				: (!empty($client_data['address_postal_code'])
-					? $client_data['address_postal_code']
-					: ($client_data['postal_code'] ?? '')));
+		// Postal code. Accept multiple key names because callers use
+		// different vocabularies:
+		//   - 'delivery_address_postal' / 'address_postal' — form-side
+		//     (MealsDB_Client_Form::$db_columns, what the form actually
+		//     posts; the AJAX handler get_client_data_from_request
+		//     now passes these through unchanged).
+		//   - 'delivery_address_postal_code' / 'address_postal_code' —
+		//     legacy AJAX form (kept for backwards compatibility).
+		//   - 'delivery_postal_code' / 'postal_code' — DB-side raw
+		//     column names (when callers pass a $wpdb row directly).
+		// The validator should not care which the caller used.
+		$postal = !empty($client_data['delivery_address_postal'])
+			? $client_data['delivery_address_postal']
+			: (!empty($client_data['delivery_address_postal_code'])
+				? $client_data['delivery_address_postal_code']
+				: (!empty($client_data['delivery_postal_code'])
+					? $client_data['delivery_postal_code']
+					: (!empty($client_data['address_postal'])
+						? $client_data['address_postal']
+						: (!empty($client_data['address_postal_code'])
+							? $client_data['address_postal_code']
+							: ($client_data['postal_code'] ?? '')))));
 
 		return array(
 			'street_name'   => trim(strtolower((string) $street_name)),

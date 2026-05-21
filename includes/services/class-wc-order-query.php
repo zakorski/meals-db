@@ -305,6 +305,92 @@ class MealsDB_WC_Order_Query {
      * @param string $end_date   Y-m-d
      * @return float
      */
+    /**
+     * Sum the total a user has paid for a specific fee category in a
+     * date range, considering BOTH fee mechanisms used by the plugin:
+     *
+     *   Mechanism A (legacy): WC line items keyed to a specific
+     *     product ID (5675 = Client Contribution, 4122 = Delivery Fee).
+     *     This is what the Enzebra system produced.
+     *   Mechanism B (Quick Order): WC_Order_Item_Fee rows whose name
+     *     matches "Client Contribution" or "Delivery Fee".
+     *
+     * Reports that queried only one mechanism showed systematic gaps
+     * after Quick Order entered production (CRIT-3 in the v1.0.346
+     * audit). This helper unifies them so the comparison shadow-mode
+     * trial only flags real discrepancies.
+     *
+     * Both mechanisms restrict to the same paid-status set as
+     * get_total_paid_for_product.
+     *
+     * @param int    $wp_user_id
+     * @param string $fee_kind 'contribution' or 'delivery_fee'
+     * @param string $start_date Y-m-d
+     * @param string $end_date   Y-m-d
+     * @return float Total paid across both mechanisms.
+     */
+    public function get_total_fee_paid_for_user(int $wp_user_id, string $fee_kind, string $start_date, string $end_date): float {
+        $fee_ids = MealsDB_Operational_Constants::default_fee_product_ids();
+        if (class_exists('MealsDB_Invoice_Generator')
+            && method_exists('MealsDB_Invoice_Generator', 'get_fee_product_ids')) {
+            // Honor the operator-tunable override.
+            $fee_ids = MealsDB_Invoice_Generator::get_fee_product_ids();
+        }
+
+        if ($fee_kind === 'contribution') {
+            $product_id = (int) ($fee_ids['client_contribution'] ?? MealsDB_Operational_Constants::PRODUCT_ID_CLIENT_CONTRIBUTION);
+            $fee_name   = 'client contribution';
+        } else {
+            $product_id = (int) ($fee_ids['delivery_fee'] ?? MealsDB_Operational_Constants::PRODUCT_ID_DELIVERY_FEE);
+            $fee_name   = 'delivery fee';
+        }
+
+        // Mechanism A: line item with matching product_id.
+        $mechanism_a = $this->get_total_paid_for_product(
+            $wp_user_id,
+            $product_id,
+            $start_date,
+            $end_date
+        );
+
+        // Mechanism B: WC_Order_Item_Fee with matching name.
+        // Name comparison is case-insensitive to defend against
+        // small typos in legacy data ("delivery fee" vs "Delivery Fee").
+        $orders_table   = $this->orders_table();
+        $items_table    = $this->order_items_table();
+        $itemmeta_table = $this->order_itemmeta_table();
+
+        $end_exclusive = gmdate('Y-m-d', strtotime($end_date . ' +1 day'));
+
+        $sql = "
+            SELECT COALESCE(SUM(CAST(total_meta.meta_value AS DECIMAL(20,6))), 0) AS total_paid
+            FROM {$orders_table} o
+            INNER JOIN {$items_table} oi
+                ON oi.order_id = o.id
+                AND oi.order_item_type = 'fee'
+                AND LOWER(oi.order_item_name) = %s
+            INNER JOIN {$itemmeta_table} total_meta
+                ON total_meta.order_item_id = oi.order_item_id
+                AND total_meta.meta_key = '_line_total'
+            WHERE o.customer_id = %d
+                AND o.type = 'shop_order'
+                AND o.status IN ('wc-processing', 'wc-completed', 'wc-paid',
+                                 'processing', 'completed', 'paid')
+                AND o.date_created_gmt >= %s
+                AND o.date_created_gmt < %s
+        ";
+
+        $mechanism_b = (float) $this->wpdb->get_var($this->wpdb->prepare(
+            $sql,
+            $fee_name,
+            $wp_user_id,
+            $start_date,
+            $end_exclusive
+        ));
+
+        return $mechanism_a + $mechanism_b;
+    }
+
     public function get_total_paid_for_product(int $wp_user_id, int $wc_product_id, string $start_date, string $end_date): float {
         $orders_table   = $this->orders_table();
         $items_table    = $this->order_items_table();
