@@ -1700,6 +1700,34 @@ class MealsDB_Client_Form {
      *
      * @return bool
      */
+    /**
+     * Populate empty deterministic index columns by hashing existing data.
+     *
+     * Runs once per request after ensure_index_columns_exist() detects
+     * a newly added index column. The normal save()/update() paths
+     * populate indexes from plaintext input; this backfill exists for
+     * the edge case where an index column is added to a table that
+     * already has data.
+     *
+     * BUG HISTORY: A previous implementation had two compounding bugs:
+     *   1. Used WHERE id = %d, but the primary key on meals_clients is
+     *      client_id. Every UPDATE failed with "Unknown column 'id'".
+     *   2. Hashed ciphertext for encrypted columns. Future uniqueness
+     *      queries (check_unique_fields) hash the plaintext input from
+     *      the form, so a ciphertext-hash index can never match. The
+     *      backfill was effectively dead — never executed against real
+     *      data because the schema created index columns at install
+     *      time. But any future schema change adding a new index
+     *      column would have hit both bugs simultaneously.
+     *
+     * The fix decrypts encrypted columns before hashing and uses
+     * client_id as the WHERE column. Decrypt failures are skipped and
+     * logged rather than written with a wrong hash.
+     *
+     * @return bool True if all backfills succeeded. False if any row
+     *              failed (corrupted ciphertext, query error, etc.).
+     *              Failed rows are logged via MealsDB_Logger::error.
+     */
     private static function backfill_deterministic_indexes(): bool {
         if (empty(self::$deterministic_index_map)) {
             return true;
@@ -1713,39 +1741,73 @@ class MealsDB_Client_Form {
         $allSuccessful = true;
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
+        $encrypted_columns = class_exists('MealsDB_Encryption')
+            ? MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS
+            : [];
+
         foreach (self::$deterministic_index_map as $field => $indexColumn) {
-            $selectSql = "SELECT id, `{$field}` FROM `{$clients_table}` WHERE (`{$indexColumn}` IS NULL OR `{$indexColumn}` = '') AND `{$field}` IS NOT NULL AND `{$field}` <> ''";
+            $selectSql = "SELECT client_id, `{$field}` FROM `{$clients_table}` WHERE (`{$indexColumn}` IS NULL OR `{$indexColumn}` = '') AND `{$field}` IS NOT NULL AND `{$field}` <> ''";
             $rows = $wpdb->get_results($selectSql, ARRAY_A);
 
             if (!is_array($rows)) {
-                error_log('[MealsDB] Failed to query legacy deterministic values for ' . $field . ': ' . $wpdb->last_error);
+                if (class_exists('MealsDB_Logger')) {
+                    MealsDB_Logger::error('[MealsDB Index Backfill] SELECT failed for ' . $field . ': ' . $wpdb->last_error);
+                }
                 $allSuccessful = false;
                 continue;
             }
 
+            $is_encrypted = in_array($field, $encrypted_columns, true);
+
             foreach ($rows as $row) {
                 $rawValue = $row[$field] ?? '';
+                $client_id = isset($row['client_id']) ? (int) $row['client_id'] : 0;
 
-                if ($rawValue === null || $rawValue === '') {
+                if ($rawValue === null || $rawValue === '' || $client_id <= 0) {
+                    if ($client_id <= 0) {
+                        $allSuccessful = false;
+                    }
                     continue;
                 }
 
-                $hashValue = self::deterministic_hash($rawValue);
-                $idValue = isset($row['id']) ? intval($row['id']) : 0;
-
-                if ($idValue <= 0) {
-                    $allSuccessful = false;
-                    continue;
+                if ($is_encrypted) {
+                    // CRITICAL: SELECT returns ciphertext for encrypted
+                    // columns. We must decrypt before hashing so the
+                    // index aligns with check_unique_fields() which
+                    // hashes the plaintext form input.
+                    if (!class_exists('MealsDB_Encryption')) {
+                        $allSuccessful = false;
+                        continue;
+                    }
+                    $plaintext = MealsDB_Encryption::safe_decrypt((string) $rawValue);
+                    // safe_decrypt returns the input unchanged on
+                    // failure. If we got the source value back the
+                    // decrypt didn't help — better to leave the
+                    // index empty than write a wrong hash.
+                    if ($plaintext === $rawValue) {
+                        if (class_exists('MealsDB_Logger')) {
+                            MealsDB_Logger::error('[MealsDB Index Backfill] Could not decrypt ' . $field . ' for client_id=' . $client_id . '; skipped');
+                        }
+                        $allSuccessful = false;
+                        continue;
+                    }
+                    $hashValue = self::deterministic_hash($plaintext);
+                } else {
+                    $hashValue = self::deterministic_hash((string) $rawValue);
                 }
 
-                $updateSql = $wpdb->prepare(
-                    "UPDATE `{$clients_table}` SET `{$indexColumn}` = %s WHERE id = %d",
-                    $hashValue,
-                    $idValue
+                $updateResult = $wpdb->update(
+                    $clients_table,
+                    [$indexColumn => $hashValue],
+                    ['client_id' => $client_id],
+                    ['%s'],
+                    ['%d']
                 );
 
-                if ($wpdb->query($updateSql) === false) {
-                    error_log('[MealsDB] Failed to backfill deterministic index for client ID ' . $idValue . ': ' . $wpdb->last_error);
+                if ($updateResult === false) {
+                    if (class_exists('MealsDB_Logger')) {
+                        MealsDB_Logger::error('[MealsDB Index Backfill] UPDATE failed for ' . $field . ' / client_id=' . $client_id . ': ' . $wpdb->last_error);
+                    }
                     $allSuccessful = false;
                 }
             }
