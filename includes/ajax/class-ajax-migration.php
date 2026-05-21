@@ -459,24 +459,25 @@ class MealsDB_Ajax_Migration {
             wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
         }
 
-        // Migration phases are long-running and operators legitimately
-        // fire them dozens of times during a migration; sync_operations
-        // (100/hr) gives plenty of headroom but stops a flood. The
-        // truly catastrophic destructive endpoints (cleanup / reset)
-        // are individually gated below via migration_destructive (5/hr).
-        // Directive 16 Pass A hardening gap.
-        if ( class_exists( 'MealsDB_Rate_Limiter' )
-            && ! MealsDB_Rate_Limiter::check_rate_limit( 'sync_operations' ) ) {
-            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
-        }
+        // NOTE: No rate limit at the verify() level. The migration UI
+        // in assets/js/admin-migration.js (runLoadPhase / runLoadFromDb
+        // / runDataPhase) is implemented as self-recursive chunked
+        // calls — a real migration of any size routinely fires
+        // hundreds of requests inside the same hour. A bucket here
+        // would 429 the operator partway through migration and leave
+        // the database in a partial state. The destructive verbs
+        // (cleanup, reset, upload_file, the three backfill_*) carry
+        // their own per-endpoint rate limit via verify_destructive()
+        // / inline gates; manage_options is the gate for everything
+        // else.
     }
 
     /**
-     * Stricter rate-limit gate for destructive migration endpoints
-     * (upload_file, cleanup, reset, the three backfill_*). Call AFTER
-     * verify() — the order matters because verify already burned a
-     * sync_operations bucket token, and these endpoints additionally
-     * burn migration_destructive (5/hr).
+     * Stricter rate-limit gate for one-shot destructive migration
+     * endpoints (upload_file, cleanup, reset, the three backfill_*).
+     * These are NOT called in the recursive chunked path, so
+     * migration_destructive (5/hr) is safe; verify() above is
+     * deliberately unthrottled.
      */
     private static function verify_destructive(): void {
         if ( class_exists( 'MealsDB_Rate_Limiter' )
