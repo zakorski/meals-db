@@ -1,6 +1,21 @@
 <?php
 /**
  * Repository for interacting with Meals DB client records.
+ *
+ * COLUMN NAME CONVENTION: This class uses DB-side column names
+ * exclusively (e.g. `wp_user_id`, NOT `wordpress_user_id`; `client_phone_1`,
+ * NOT `phone_primary`; `postal_code`, NOT `address_postal`). Callers must
+ * convert form-side names to DB-side before calling. MealsDB_Client_Form::
+ * map_form_to_db handles this for the standard form flow; direct callers
+ * (sync, migration, backfill, AJAX handlers outside the form pipeline)
+ * must convert manually.
+ *
+ * filter_to_known_columns detects and logs unknown column names but
+ * cannot fix them — a logged warning indicates a caller bug. See CRIT-2
+ * in the v1.0.346 audit (link_client_to_wp_user wrote 'wordpress_user_id',
+ * got silently dropped, and the handler reported success while doing
+ * nothing). See CLAUDE.md section "Form-side vs DB-side column names"
+ * for the full mapping table.
  */
 
 defined('ABSPATH') || exit;
@@ -10,6 +25,18 @@ class MealsDB_Clients_Repository {
      * @var string|null
      */
     private $table_name;
+
+    /**
+     * Track recent unknown-key warnings to avoid log flooding.
+     *
+     * If a buggy caller invokes update_client in a tight loop with the
+     * wrong column names, naive logging would write thousands of entries
+     * per minute. Dedupe by the unknown-key signature within this request;
+     * each signature logs at most once per PHP process.
+     *
+     * @var array<string, true>
+     */
+    private static $logged_unknown_signatures = [];
 
     /**
      * Create a new repository instance.
@@ -621,6 +648,14 @@ class MealsDB_Clients_Repository {
      * meals_clients schema (or in the small set of related sidecar
      * columns the form pipeline emits, e.g. *_index hashes).
      *
+     * Unknown keys are still dropped (preserving existing behavior),
+     * but their names are logged with a caller-chain breadcrumb so
+     * silent-drop bugs surface in the operational log instead of
+     * hiding as zero-row updates. Values are NOT logged — they may
+     * contain PII. Dedupe by signature within the request via
+     * self::$logged_unknown_signatures so a tight buggy loop logs
+     * once, not thousands.
+     *
      * @param array<string, mixed> $data
      * @return array<string, mixed>
      */
@@ -643,7 +678,60 @@ class MealsDB_Clients_Repository {
             return $data;
         }
 
+        $unknown_keys = array_keys(array_diff_key($data, $allowed));
+        if (!empty($unknown_keys) && class_exists('MealsDB_Logger')) {
+            sort($unknown_keys);
+            $signature = implode(',', $unknown_keys);
+            if (!isset(self::$logged_unknown_signatures[$signature])) {
+                self::$logged_unknown_signatures[$signature] = true;
+                MealsDB_Logger::error(sprintf(
+                    '[MealsDB Repository] filter_to_known_columns dropped unknown column(s): %s. Called from: %s',
+                    $signature,
+                    self::get_caller_info(3)
+                ));
+            }
+        }
+
         return array_intersect_key($data, $allowed);
+    }
+
+    /**
+     * Get a compact caller chain for logging.
+     *
+     * Returns up to $depth frames in the form
+     *   "ClassName::method (file:line) <- ClassName::method (file:line)"
+     * Skips this helper and the filter_to_known_columns frame so the
+     * first segment is the immediate caller of filter_to_known_columns
+     * (typically create_client / update_client).
+     *
+     * @param int $depth Max frames to include.
+     * @return string
+     */
+    private static function get_caller_info(int $depth = 3): string {
+        $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, $depth + 2);
+        // Skip get_caller_info itself and filter_to_known_columns
+        $frames = array_slice($frames, 2);
+
+        $parts = [];
+        foreach ($frames as $f) {
+            $where = '';
+            if (!empty($f['class']) && !empty($f['function'])) {
+                $where = $f['class'] . '::' . $f['function'];
+            } elseif (!empty($f['function'])) {
+                $where = $f['function'];
+            }
+
+            $location = '';
+            if (!empty($f['file']) && !empty($f['line'])) {
+                $location = ' (' . basename($f['file']) . ':' . $f['line'] . ')';
+            }
+
+            if ($where !== '') {
+                $parts[] = $where . $location;
+            }
+        }
+
+        return $parts ? implode(' <- ', $parts) : '(unknown caller)';
     }
 
     /**
