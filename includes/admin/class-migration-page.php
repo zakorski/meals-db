@@ -272,6 +272,63 @@ class MealsDB_Migration_Page {
                 <h3><?php esc_html_e( 'Migration Log', 'meals-db' ); ?></h3>
                 <pre id="mig-log-content"></pre>
             </div>
+
+            <!-- Consolidated post-import pipeline -->
+            <div class="mealsdb-mig-card" id="cons-card">
+                <h2><?php esc_html_e( 'Consolidated Migration (WP &rarr; Meals DB)', 'meals-db' ); ?></h2>
+                <p class="description">
+                    <?php esc_html_e( 'Runs every WP/WooCommerce -> meals_* data-movement step in dependency order: create clients, create rates, backfill allowances, addresses, next dates, promote private clients, and backfill allocations. Run AFTER the import above (or standalone during integration). Dry run is on by default.', 'meals-db' ); ?>
+                </p>
+
+                <p>
+                    <label><input type="checkbox" id="cons-dry-run" checked> <?php esc_html_e( 'Dry run (no writes)', 'meals-db' ); ?></label>
+                </p>
+                <p>
+                    <label><?php esc_html_e( 'Private lookback (months):', 'meals-db' ); ?>
+                        <input type="number" id="cons-lookback" value="24" min="1" style="width:6em;">
+                    </label>
+                    &nbsp;
+                    <label><?php esc_html_e( 'Allocations start (YYYY-MM):', 'meals-db' ); ?>
+                        <input type="text" id="cons-start-month" placeholder="optional" style="width:8em;">
+                    </label>
+                    &nbsp;
+                    <label><?php esc_html_e( 'end (YYYY-MM):', 'meals-db' ); ?>
+                        <input type="text" id="cons-end-month" placeholder="this month" style="width:8em;">
+                    </label>
+                </p>
+
+                <div class="mealsdb-mig-phases">
+                    <?php
+                    $cons_phases = [
+                        1 => __( 'Create Meals Clients', 'meals-db' ),
+                        2 => __( 'Create Client Rates', 'meals-db' ),
+                        3 => __( 'Backfill Allowances', 'meals-db' ),
+                        4 => __( 'Backfill Addresses', 'meals-db' ),
+                        5 => __( 'Backfill Next Dates', 'meals-db' ),
+                        6 => __( 'Promote Private Clients', 'meals-db' ),
+                        7 => __( 'Backfill Allocations', 'meals-db' ),
+                    ];
+                    foreach ( $cons_phases as $num => $label ) :
+                        ?>
+                        <div class="mealsdb-mig-phase" id="cons-phase-<?php echo (int) $num; ?>">
+                            <span class="mealsdb-mig-phase-icon">&#9711;</span>
+                            <span class="mealsdb-mig-phase-label"><?php echo esc_html( $label ); ?></span>
+                            <span class="mealsdb-mig-phase-status"></span>
+                            <div class="mealsdb-mig-phase-bar-wrap">
+                                <div class="mealsdb-mig-phase-bar"></div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+
+                <div id="cons-current-stats" class="mealsdb-mig-stats"></div>
+                <p>
+                    <button type="button" class="button button-primary" id="cons-run-btn">
+                        <?php esc_html_e( 'Run Consolidated Migration', 'meals-db' ); ?>
+                    </button>
+                </p>
+                <div id="cons-results" style="display:none;"></div>
+            </div>
         </div>
         <?php
     }

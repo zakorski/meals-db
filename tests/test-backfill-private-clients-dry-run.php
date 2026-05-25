@@ -1,6 +1,6 @@
 <?php
 /**
- * MealsDB_Backfill_Private_Clients::run($months, true) walks the preview
+ * MealsDB_Migration_Consolidated::private_promote_all($months, true) walks the preview
  * but never calls the promotion code, so no rows are ever created on
  * a dry run. The eligible count must still reflect what a live run
  * would process.
@@ -107,11 +107,11 @@ function assert_equal($expected, $actual, string $label) {
 }
 
 // Preview returns three rows keyed by the stubbed eligible users.
-$preview = MealsDB_Backfill_Private_Clients::preview(24);
+$preview = MealsDB_Migration_Consolidated::private_preview(24);
 assert_equal(3, count($preview), 'preview yields 3 eligible users');
 
 // Dry run: stats reflect eligible count, nothing promoted.
-$stats = MealsDB_Backfill_Private_Clients::run(24, true);
+$stats = MealsDB_Migration_Consolidated::private_promote_all(24, true);
 assert_equal(3, $stats['eligible'], 'dry run: eligible=3');
 assert_equal(0, $stats['promoted'], 'dry run: promoted=0');
 assert_equal(0, $stats['errors'], 'dry run: errors=0');
@@ -119,7 +119,7 @@ assert_equal(0, $stats['skipped'], 'dry run: skipped=0');
 
 // Missing tables → empty preview, not a fatal.
 $wpdb->tables_present = false;
-$preview_empty = MealsDB_Backfill_Private_Clients::preview(24);
+$preview_empty = MealsDB_Migration_Consolidated::private_preview(24);
 assert_equal(0, count($preview_empty), 'missing tables → empty preview');
 
 if (!empty($failures)) {

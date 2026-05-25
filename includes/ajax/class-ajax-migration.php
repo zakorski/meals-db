@@ -24,6 +24,7 @@ class MealsDB_Ajax_Migration {
         add_action( 'wp_ajax_mealsdb_backfill_allowances',   [ self::class, 'backfill_allowances' ] );
         add_action( 'wp_ajax_mealsdb_backfill_addresses',   [ self::class, 'backfill_addresses' ] );
         add_action( 'wp_ajax_mealsdb_backfill_allocation_engine', [ self::class, 'backfill_allocation_engine' ] );
+        add_action( 'wp_ajax_mealsdb_consolidated_phase', [ self::class, 'run_consolidated_phase' ] );
     }
 
     /**
@@ -589,9 +590,11 @@ class MealsDB_Ajax_Migration {
 
         $dry_run = !empty($_POST['dry_run']);
 
-        require_once dirname(dirname(__FILE__)) . '/services/class-backfill-allowances.php';
-
-        $result = MealsDB_Backfill_Allowances::run($dry_run);
+        // Delegated to the consolidated engine (single code path). This
+        // legacy single-shot endpoint loops every chunk server-side so the
+        // existing settings-page button keeps working unchanged; the new
+        // chunked driver uses run_consolidated_phase instead.
+        $result = self::drain_consolidated_phase(3, $dry_run);
 
         if (isset($result['error'])) {
             wp_send_json_error(['message' => $result['error']]);
@@ -634,9 +637,13 @@ class MealsDB_Ajax_Migration {
             wp_send_json( [ 'success' => false, 'message' => 'Invalid month format. Use YYYY-MM.' ] );
         }
 
-        require_once dirname( dirname( __FILE__ ) ) . '/services/class-backfill-allocations-engine.php';
-
-        $result = MealsDB_Backfill_Allocations_Engine::run( $start_month, $end_month, $dry_run );
+        // Delegated to the consolidated engine (single code path; includes
+        // the \Throwable rollback fix). This legacy endpoint drains all
+        // month-chunks server-side so the existing button keeps working.
+        $result = self::drain_consolidated_phase( 7, $dry_run, [
+            'start_month' => $start_month,
+            'end_month'   => $end_month,
+        ] );
 
         if ( isset( $result['error'] ) ) {
             wp_send_json( [ 'success' => false, 'message' => $result['error'] ] );
@@ -668,9 +675,8 @@ class MealsDB_Ajax_Migration {
 
         $dry_run = !empty($_POST['dry_run']);
 
-        require_once dirname(dirname(__FILE__)) . '/services/class-backfill-addresses.php';
-
-        $result = MealsDB_Backfill_Addresses::run($dry_run);
+        // Delegated to the consolidated engine (single code path).
+        $result = self::drain_consolidated_phase(4, $dry_run);
 
         if (isset($result['error'])) {
             wp_send_json_error(['message' => $result['error']]);
@@ -678,5 +684,99 @@ class MealsDB_Ajax_Migration {
         }
 
         wp_send_json_success($result);
+    }
+
+    /**
+     * Unified chunked entry point for the consolidated migration engine.
+     *
+     * The admin migration UI calls this once per chunk with:
+     *   phase   (int)    1..7 — see MealsDB_Migration_Consolidated::phases()
+     *   offset  (int)    cursor from the previous response
+     *   dry_run (0|1)    default 1 (dry run)
+     *   lookback_months  (int, phase 6 only)
+     *   start_month/end_month (YYYY-MM, phase 7 only)
+     *
+     * Returns the standard chunk contract { stats, offset, total, complete }
+     * so the existing JS phase-loop drives it the same way it drives the
+     * Enzebra import phases.
+     */
+    public static function run_consolidated_phase(): void {
+        self::verify();
+        set_time_limit( 300 );
+
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Migration is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
+        }
+
+        $phase   = (int) ( $_POST['phase'] ?? 0 );
+        $offset  = (int) ( $_POST['offset'] ?? 0 );
+        $dry_run = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
+
+        $args = [];
+        if ( isset( $_POST['lookback_months'] ) ) {
+            $args['lookback_months'] = (int) $_POST['lookback_months'];
+        }
+        if ( isset( $_POST['start_month'] ) ) {
+            $args['start_month'] = sanitize_text_field( wp_unslash( (string) $_POST['start_month'] ) );
+        }
+        if ( isset( $_POST['end_month'] ) ) {
+            $args['end_month'] = sanitize_text_field( wp_unslash( (string) $_POST['end_month'] ) );
+        }
+
+        $result = MealsDB_Migration_Consolidated::run_phase( $phase, $offset, $dry_run, $args );
+
+        if ( isset( $result['error'] ) ) {
+            wp_send_json_error( [ 'message' => $result['error'] ] );
+        }
+
+        // Log on phase completion, mirroring run_phase().
+        if ( ! empty( $result['complete'] ) ) {
+            $phases = MealsDB_Migration_Consolidated::phases();
+            $name   = $phases[ $phase ]['label'] ?? ( 'Phase ' . $phase );
+            $mode   = $dry_run ? ' (dry run)' : '';
+            $stats  = isset( $result['stats'] ) ? wp_json_encode( $result['stats'] ) : '{}';
+            MealsDB_Migration::append_log( "{$name}{$mode} complete. Stats: {$stats}" );
+        }
+
+        $result['phase'] = $phase;
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Run a consolidated phase to completion server-side, accumulating
+     * stats across chunks. Used by the legacy single-shot backfill
+     * endpoints (backfill_allowances / backfill_addresses /
+     * backfill_allocation_engine) so those buttons keep their original
+     * "click once, runs the whole thing" behaviour while sharing the new
+     * single implementation. The chunked UI uses run_consolidated_phase.
+     *
+     * @param array<string,mixed> $args
+     * @return array<string,mixed> Accumulated stats, or ['error'=>...].
+     */
+    private static function drain_consolidated_phase( int $phase, bool $dry_run, array $args = [] ): array {
+        $offset    = 0;
+        $totals    = [];
+        $guard     = 0;
+        $max_loops = 100000; // hard stop against an unterminating phase
+
+        do {
+            $result = MealsDB_Migration_Consolidated::run_phase( $phase, $offset, $dry_run, $args );
+
+            if ( isset( $result['error'] ) ) {
+                return $result;
+            }
+
+            if ( isset( $result['stats'] ) && is_array( $result['stats'] ) ) {
+                foreach ( $result['stats'] as $k => $v ) {
+                    $totals[ $k ] = ( $totals[ $k ] ?? 0 ) + (int) $v;
+                }
+            }
+
+            $offset = (int) ( $result['offset'] ?? ( $offset + 1 ) );
+            $guard++;
+        } while ( empty( $result['complete'] ) && $guard < $max_loops );
+
+        return $totals;
     }
 }

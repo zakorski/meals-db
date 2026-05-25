@@ -1,6 +1,6 @@
 <?php
 /**
- * MealsDB_Backfill_Private_Clients::enrich_existing fills blank
+ * MealsDB_Migration_Consolidated::enrich_existing fills blank
  * columns on existing Private rows from usermeta + the user's most
  * recent qualifying WC order, and never overwrites an admin-set
  * value. Encrypted columns (customer_comments, diet_concerns) are
@@ -267,7 +267,7 @@ function assert_true($cond, string $label) {
 }
 
 // Dry run: counts changes but performs no UPDATEs.
-$dry_stats = MealsDB_Backfill_Private_Clients::enrich_existing(true);
+$dry_stats = MealsDB_Migration_Consolidated::enrich_existing(true);
 assert_equal(3, $dry_stats['scanned'], 'dry run scanned = 3');
 assert_equal(2, $dry_stats['enriched'], 'dry run enriched = 2 (rows 1 and 3 have something to fill)');
 assert_equal(1, $dry_stats['skipped'], 'dry run skipped = 1 (row 2 has no usermeta source)');
@@ -275,7 +275,7 @@ assert_equal(0, $dry_stats['errors'], 'dry run errors = 0');
 assert_equal(0, count($wpdb->updates), 'dry run issued no UPDATEs');
 
 // Live run: writes UPDATEs.
-$live_stats = MealsDB_Backfill_Private_Clients::enrich_existing(false);
+$live_stats = MealsDB_Migration_Consolidated::enrich_existing(false);
 assert_equal(3, $live_stats['scanned'], 'live scanned = 3');
 assert_equal(2, $live_stats['enriched'], 'live enriched = 2');
 assert_equal(1, $live_stats['skipped'], 'live skipped = 1');

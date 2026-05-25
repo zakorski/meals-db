@@ -38,8 +38,8 @@ class MealsDB_Ajax_Settings {
             wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
-        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
-        $rows = MealsDB_Backfill_Private_Clients::preview( $lookback );
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Migration_Consolidated::DEFAULT_LOOKBACK_MONTHS;
+        $rows = MealsDB_Migration_Consolidated::private_preview( $lookback );
         wp_send_json_success( [
             'count' => count( $rows ),
             'rows'  => $rows,
@@ -59,8 +59,8 @@ class MealsDB_Ajax_Settings {
             wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
-        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
-        $stats = MealsDB_Backfill_Private_Clients::run( $lookback, false );
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Migration_Consolidated::DEFAULT_LOOKBACK_MONTHS;
+        $stats = MealsDB_Migration_Consolidated::private_promote_all( $lookback, false );
         wp_send_json_success( $stats );
     }
 
@@ -78,8 +78,8 @@ class MealsDB_Ajax_Settings {
             wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
-        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
-        $rows = MealsDB_Backfill_Private_Clients::deactivation_sweep_preview( $lookback );
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Migration_Consolidated::DEFAULT_LOOKBACK_MONTHS;
+        $rows = MealsDB_Migration_Consolidated::deactivation_sweep_preview( $lookback );
         wp_send_json_success( [
             'count' => count( $rows ),
             'rows'  => $rows,
@@ -99,8 +99,8 @@ class MealsDB_Ajax_Settings {
             wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
-        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Backfill_Private_Clients::DEFAULT_LOOKBACK_MONTHS;
-        $stats = MealsDB_Backfill_Private_Clients::deactivation_sweep_run( $lookback );
+        $lookback = isset( $_POST['lookback_months'] ) ? (int) $_POST['lookback_months'] : MealsDB_Migration_Consolidated::DEFAULT_LOOKBACK_MONTHS;
+        $stats = MealsDB_Migration_Consolidated::deactivation_sweep_run( $lookback );
         wp_send_json_success( $stats );
     }
 
@@ -120,7 +120,7 @@ class MealsDB_Ajax_Settings {
         }
 
         $dry_run = ! empty( $_POST['dry_run'] );
-        $stats = MealsDB_Backfill_Private_Clients::enrich_existing( $dry_run );
+        $stats = MealsDB_Migration_Consolidated::enrich_existing( $dry_run );
         wp_send_json_success( $stats );
     }
 
@@ -138,7 +138,7 @@ class MealsDB_Ajax_Settings {
             wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
         }
 
-        $result = MealsDB_Backfill_Next_Dates::run();
+        $result = MealsDB_Migration_Consolidated::drain_phase_next_dates();
         wp_send_json_success( $result );
     }
 
