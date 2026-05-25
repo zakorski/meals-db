@@ -1,6 +1,6 @@
 <?php
 /**
- * MealsDB_Backfill_Private_Clients::preview excludes users who already
+ * MealsDB_Migration_Consolidated::private_preview excludes users who already
  * have a meals_clients record, and returns a row-per-eligible-user
  * shape that the admin preview table can consume.
  *
@@ -119,7 +119,7 @@ function assert_equal($expected, $actual, string $label) {
     $failures[] = sprintf("FAIL: %s\n  expected: %s\n  actual:   %s", $label, var_export($expected, true), var_export($actual, true));
 }
 
-$preview = MealsDB_Backfill_Private_Clients::preview(24);
+$preview = MealsDB_Migration_Consolidated::private_preview(24);
 assert_equal(2, count($preview), 'existing rows excluded — 2 net-new users');
 
 // Verify the exact set.
@@ -138,7 +138,7 @@ assert_equal((int) $first['wp_user_id'] * 100, $first['recent_order_id'], 'recen
 
 // Empty eligible set → empty preview.
 $wpdb->eligible_users = [];
-$empty_preview = MealsDB_Backfill_Private_Clients::preview(24);
+$empty_preview = MealsDB_Migration_Consolidated::private_preview(24);
 assert_equal(0, count($empty_preview), 'no eligible users → empty preview');
 
 if (!empty($failures)) {

@@ -48,6 +48,15 @@ class BackfillWpdb extends wpdb {
     public function __construct(array $clients) {
         $this->clients = $clients;
     }
+    public function get_var($q = null, $x = 0, $y = 0) {
+        // The chunked next-dates phase issues a COUNT(*) for the progress
+        // total. Return the client count so 'total' is sane; control flow
+        // keys off the row count, not this value.
+        if (stripos((string) $q, 'COUNT(') !== false) {
+            return (string) count($this->clients);
+        }
+        return null;
+    }
     public function get_results($q, $o = 'OBJECT') {
         if (stripos((string) $q, 'meals_clients') !== false) {
             return array_values($this->clients);
@@ -105,7 +114,7 @@ $clients = [
 $fake = new BackfillWpdb($clients);
 $GLOBALS['wpdb'] = $fake;
 
-$result = MealsDB_Backfill_Next_Dates::run();
+$result = MealsDB_Migration_Consolidated::drain_phase_next_dates();
 
 assert_equals($result['processed'], 3, 'processed all 3 clients');
 assert_equals($result['order_updated'], 1, 'only 1 order_date updated (client 1; client 2 preserved, client 3 has no meta)');
@@ -123,7 +132,7 @@ assert_equals($fake->clients[2]['next_delivery_date'], '2026-04-21', 'client 2 n
 assert_equals($fake->clients[3]['next_order_date'], null, 'client 3 next_order_date stays null');
 
 // Re-running is a no-op when all dates already present.
-$result2 = MealsDB_Backfill_Next_Dates::run();
+$result2 = MealsDB_Migration_Consolidated::drain_phase_next_dates();
 assert_equals($result2['order_updated'], 0, 'second run does not reupdate');
 assert_equals($result2['delivery_updated'], 0, 'second run does not reupdate delivery');
 

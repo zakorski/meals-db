@@ -146,7 +146,7 @@ class MealsDB_Private_Intake {
      * to populate from WC + WP usermeta + the triggering order.
      *
      * Used by maybe_promote() to assemble the create payload, and by
-     * MealsDB_Backfill_Private_Clients::enrich_existing() to refill
+     * MealsDB_Migration_Consolidated::enrich_existing() to refill
      * blank columns on rows that were created before the field map
      * was wired up. Returns an empty array when the WP user can't be
      * loaded (caller treats that as "skip").
