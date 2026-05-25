@@ -704,14 +704,30 @@ class MealsDB_Ajax_Migration {
         self::verify();
         set_time_limit( 300 );
 
-        if ( class_exists( 'MealsDB_Rate_Limiter' )
-            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
-            wp_send_json_error( [ 'message' => __( 'Migration is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
-        }
-
         $phase   = (int) ( $_POST['phase'] ?? 0 );
         $offset  = (int) ( $_POST['offset'] ?? 0 );
         $dry_run = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
+
+        // Rate-limit the START of a real (writing) run only.
+        //
+        // The consolidated pipeline is chunked at BATCH_SIZE rows per AJAX
+        // call, so one phase legitimately makes dozens of back-to-back
+        // requests (e.g. 5,000 clients = 50+ calls). The migration_destructive
+        // bucket is 5/hour and is meant to throttle *starting* destructive
+        // operations, not the internal pagination of one. Gating every chunk
+        // tripped a 429 on the 6th call mid-walk.
+        //
+        //   - Dry runs write nothing, so they are never rate-limited.
+        //   - Real runs are checked only on the first chunk of a phase
+        //     (offset === 0); subsequent chunks of the same walk pass through.
+        //
+        // This preserves the guardrail (no more than 5 fresh writing-phase
+        // starts per hour) without throttling a single run's pagination.
+        if ( ! $dry_run && $offset === 0
+            && class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Migration is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
+        }
 
         $args = [];
         if ( isset( $_POST['lookback_months'] ) ) {
