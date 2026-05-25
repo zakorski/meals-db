@@ -296,6 +296,16 @@ class MealsDB_Quick_Order_Ajax {
      * meant WP user and sometimes meant meals PK.
      */
     public static function create_order(): void {
+        // Shadow mode: Quick Order is disabled entirely. It creates live
+        // WooCommerce orders (plus order meta and usermeta) the legacy
+        // system would see, so during the parallel trial it must not run.
+        if (MealsDB_Shadow_Mode::is_enabled()) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Quick Order is disabled while the system is running in shadow mode.', 'meals-db'),
+            ]);
+        }
+
         $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
         if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_quick_order_create_order')) {
             wp_send_json([
@@ -435,6 +445,14 @@ class MealsDB_Quick_Order_Ajax {
      * AJAX endpoint to retrieve items from an existing WooCommerce order.
      */
     public static function clone_order(): void {
+        // Shadow mode: cloning also creates a live order. Disabled in shadow.
+        if (MealsDB_Shadow_Mode::is_enabled()) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Quick Order is disabled while the system is running in shadow mode.', 'meals-db'),
+            ]);
+        }
+
         self::verify_request();
 
         // Rate limiting
@@ -921,61 +939,14 @@ class MealsDB_Quick_Order_Ajax {
             return new WP_Error('mealsdb_no_valid_products', __('No valid products could be added to the order.', 'meals-db'));
         }
 
-        // Look up client fee data.
-        if ($client_id > 0) {
-            global $wpdb;
-            $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-            $client_data = $wpdb->get_row($wpdb->prepare(
-                "SELECT client_type, delivery_fee, client_contribution FROM {$clients_table} WHERE client_id = %d",
-                $client_id
-            ), ARRAY_A);
-
-            if ($client_data && in_array($client_data['client_type'], ['SDNB', 'Veteran'], true)) {
-                $delivery_fee = (float) ($client_data['delivery_fee'] ?? 0);
-                $client_contribution = (float) ($client_data['client_contribution'] ?? 0);
-
-                // Always add delivery fee if > 0.
-                if ($delivery_fee > 0) {
-                    $fee = new WC_Order_Item_Fee();
-                    $fee->set_name('Delivery Fee');
-                    $fee->set_amount($delivery_fee);
-                    $fee->set_total($delivery_fee);
-                    $fee->set_tax_status('none');
-                    $order->add_item($fee);
-                }
-
-                // Add client contribution only if it hasn't been applied this month yet.
-                if ($client_contribution > 0) {
-                    $billing_month = gmdate('Y-m');
-                    $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-                    $already_applied = (int) $wpdb->get_var($wpdb->prepare(
-                        "SELECT contribution_applied FROM {$alloc_table} WHERE client_id = %d AND billing_month = %s",
-                        $client_id,
-                        $billing_month
-                    ));
-
-                    if (!$already_applied) {
-                        $fee = new WC_Order_Item_Fee();
-                        $fee->set_name('Client Contribution');
-                        $fee->set_amount($client_contribution);
-                        $fee->set_total($client_contribution);
-                        $fee->set_tax_status('none');
-                        $order->add_item($fee);
-
-                        // Mark contribution as applied for this month.
-                        $wpdb->query($wpdb->prepare(
-                            "INSERT INTO {$alloc_table} (client_id, billing_month, contribution_applied, contribution_order_id)
-                             VALUES (%d, %s, 1, %d)
-                             ON DUPLICATE KEY UPDATE contribution_applied = 1, contribution_order_id = %d",
-                            $client_id,
-                            $billing_month,
-                            $order->get_id(),
-                            $order->get_id()
-                        ));
-                    }
-                }
-            }
-        }
+        // NOTE: Quick Order no longer applies the delivery fee or monthly
+        // client contribution here. Those are applied uniformly by
+        // MealsDB_Order_Fees (driven from the allocation hook on
+        // woocommerce_new_order / status transitions) so that EVERY
+        // qualifying order gets them — not only orders placed through this
+        // interface. Quick Order is now purely a faster data-entry UI and
+        // does nothing WooCommerce-native order creation wouldn't do.
+        // See includes/services/class-order-fees.php.
 
         $order->calculate_totals();
 

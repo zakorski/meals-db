@@ -11,6 +11,12 @@ if ( ! current_user_can( 'manage_options' ) ) {
 
 $opts = get_option( 'mealsdb_settings', [] );
 
+// Shadow mode reflects the central flag's fail-safe interpretation (ON unless
+// explicitly turned off), so the checkbox shows the true effective state.
+$shadow_on = class_exists( 'MealsDB_Shadow_Mode' )
+    ? MealsDB_Shadow_Mode::is_enabled()
+    : true;
+
 $enc_key       = isset( $opts['encryption_key'] ) ? (string) $opts['encryption_key'] : '';
 $has_enc_key   = $enc_key !== '';
 
@@ -35,6 +41,27 @@ if ( $has_enc_key ) {
         // is defence-in-depth for the no-JS / submit-on-Enter path.
         wp_nonce_field( 'mealsdb_settings_nonce', 'mealsdb_settings_nonce_field' );
         ?>
+        <h2><?php echo esc_html__( 'Shadow Mode', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'While shadow mode is ON, the plugin runs alongside the existing system for comparison WITHOUT affecting live operations: Quick Order is disabled, order fees are not written to WooCommerce orders, and field changes are not pushed back to WordPress users. Reports, invoices, and allocations are still generated for comparison. Turn this OFF only at cutover.', 'meals-db' ); ?>
+        </p>
+        <table class="form-table">
+            <tbody>
+                <tr>
+                    <th scope="row"><?php echo esc_html__( 'Shadow mode', 'meals-db' ); ?></th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="shadow_mode" value="1" <?php checked( $shadow_on ); ?> />
+                            <?php echo esc_html__( 'Run in shadow mode (suppress all changes visible to the existing system)', 'meals-db' ); ?>
+                        </label>
+                        <p class="description">
+                            <?php echo esc_html__( 'Fail-safe: if this setting is ever missing or unreadable, the plugin behaves as if shadow mode is ON.', 'meals-db' ); ?>
+                        </p>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
         <h2><?php echo esc_html__( 'Encryption Key', 'meals-db' ); ?></h2>
         <p class="description">
             <?php echo esc_html__( 'AES-256 key used to encrypt client PII in the database. Once data has been encrypted with a key, changing it will make existing encrypted data unreadable.', 'meals-db' ); ?>

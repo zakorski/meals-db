@@ -20,6 +20,17 @@ class MealsDB_Quick_Order_UI {
             wp_die(esc_html__('You do not have permission to access this page.', 'meals-db'));
         }
 
+        // Shadow mode: Quick Order is disabled. Render an explanatory notice
+        // instead of the order form so an operator can't place a live order
+        // that the legacy system would see during the parallel trial.
+        if (MealsDB_Shadow_Mode::is_enabled()) {
+            echo '<div class="wrap"><h1>' . esc_html__('Quick Order', 'meals-db') . '</h1>';
+            echo '<div class="notice notice-warning"><p>'
+                . esc_html__('Quick Order is disabled while the system is running in shadow mode (parallel trial). Place orders through the existing system until cutover.', 'meals-db')
+                . '</p></div></div>';
+            return;
+        }
+
         self::enqueue_scripts();
 
         $clone_order_id = self::get_requested_clone_order_id();

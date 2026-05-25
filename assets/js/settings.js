@@ -340,6 +340,9 @@
             action: 'mealsdb_save_settings',
             nonce: nonces.settings || '',
             encryption_key: $('#mealsdb-enc-key').val(),
+            // Checkbox: send '1' when checked, '0' when not, so the server can
+            // distinguish an explicit "off" from "never set" (fail-safe ON).
+            shadow_mode: $('input[name="shadow_mode"]').is(':checked') ? '1' : '0',
             overage_mains: $('#mealsdb-overage-mains').val(),
             overage_taxable_sides: $('#mealsdb-overage-taxable-sides').val(),
             overage_nontax_sides: $('#mealsdb-overage-nontax-sides').val(),
