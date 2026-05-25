@@ -459,6 +459,7 @@
         phase: CONS_FIRST,
         offset: 0,
         dryRun: true,
+        ignoreRateLimit: false,
         running: false,
         stats: {}
     };
@@ -512,7 +513,8 @@
         var payload = $.extend({
             phase: consState.phase,
             offset: consState.offset,
-            dry_run: consState.dryRun ? 1 : 0
+            dry_run: consState.dryRun ? 1 : 0,
+            ignore_rate_limit: consState.ignoreRateLimit ? 1 : 0
         }, consExtraArgs());
 
         consAjax(payload, function (data) {
@@ -566,6 +568,7 @@
     $('#cons-run-btn').on('click', function () {
         if (consState.running) return;
         consState.dryRun = $('#cons-dry-run').is(':checked');
+        consState.ignoreRateLimit = $('#cons-ignore-rate-limit').is(':checked');
         if (!consState.dryRun && !confirm('Run the consolidated migration for REAL? This writes to meals_* tables.')) {
             return;
         }

@@ -707,6 +707,7 @@ class MealsDB_Ajax_Migration {
         $phase   = (int) ( $_POST['phase'] ?? 0 );
         $offset  = (int) ( $_POST['offset'] ?? 0 );
         $dry_run = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
+        $ignore_rate_limit = MealsDB_Helpers::bool_flag( $_POST['ignore_rate_limit'] ?? null, false );
 
         // Rate-limit the START of a real (writing) run only.
         //
@@ -723,10 +724,23 @@ class MealsDB_Ajax_Migration {
         //
         // This preserves the guardrail (no more than 5 fresh writing-phase
         // starts per hour) without throttling a single run's pagination.
-        if ( ! $dry_run && $offset === 0
-            && class_exists( 'MealsDB_Rate_Limiter' )
-            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
-            wp_send_json_error( [ 'message' => __( 'Migration is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
+        //
+        // A complete real run still walks all 7 phases, and each phase start
+        // consumes one token, so the 5/hour bucket aborts a full run partway
+        // (it died at phase 6, "promote private clients"). The operator can
+        // opt out for the whole run via the "Ignore rate limit" checkbox (off
+        // by default). The override is still behind verify() (nonce +
+        // manage_options); we audit-log each bypassed phase start so the
+        // decision to skip the limiter is traceable.
+        if ( ! $dry_run && $offset === 0 ) {
+            if ( $ignore_rate_limit ) {
+                if ( class_exists( 'MealsDB_Logger' ) ) {
+                    MealsDB_Logger::log( 'migration_rate_limit_bypassed', 0, 'phase', null, (string) $phase );
+                }
+            } elseif ( class_exists( 'MealsDB_Rate_Limiter' )
+                && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+                wp_send_json_error( [ 'message' => __( 'Migration is rate-limited. Please wait before retrying, or check "Ignore rate limit" to override.', 'meals-db' ) ], 429 );
+            }
         }
 
         $args = [];
