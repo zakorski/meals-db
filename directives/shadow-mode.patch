@@ -1,0 +1,358 @@
+diff --git a/assets/js/settings.js b/assets/js/settings.js
+index 01afd34..aef818f 100644
+--- a/assets/js/settings.js
++++ b/assets/js/settings.js
+@@ -340,6 +340,9 @@
+             action: 'mealsdb_save_settings',
+             nonce: nonces.settings || '',
+             encryption_key: $('#mealsdb-enc-key').val(),
++            // Checkbox: send '1' when checked, '0' when not, so the server can
++            // distinguish an explicit "off" from "never set" (fail-safe ON).
++            shadow_mode: $('input[name="shadow_mode"]').is(':checked') ? '1' : '0',
+             overage_mains: $('#mealsdb-overage-mains').val(),
+             overage_taxable_sides: $('#mealsdb-overage-taxable-sides').val(),
+             overage_nontax_sides: $('#mealsdb-overage-nontax-sides').val(),
+diff --git a/includes/ajax/class-ajax-settings.php b/includes/ajax/class-ajax-settings.php
+index 5f59b76..81466b3 100644
+--- a/includes/ajax/class-ajax-settings.php
++++ b/includes/ajax/class-ajax-settings.php
+@@ -182,6 +182,12 @@ class MealsDB_Ajax_Settings {
+         // silently cleared the key, which would render every encrypted
+         // PII column unrecoverable on the next read.
+ 
++        // Shadow mode flag. Stored explicitly so MealsDB_Shadow_Mode can
++        // distinguish "operator turned it off" from "never set" (the latter
++        // fails safe to ON). A present, unchecked checkbox submits '0'.
++        $settings[MealsDB_Shadow_Mode::SETTING_KEY] =
++            empty($_POST['shadow_mode']) ? '0' : '1';
++
+         update_option( 'mealsdb_settings', $settings, false );
+ 
+         // Audit encryption-key rotation. The key value is NOT logged
+diff --git a/includes/class-quick-order-ajax.php b/includes/class-quick-order-ajax.php
+index d618d78..0760126 100644
+--- a/includes/class-quick-order-ajax.php
++++ b/includes/class-quick-order-ajax.php
+@@ -296,6 +296,16 @@ class MealsDB_Quick_Order_Ajax {
+      * meant WP user and sometimes meant meals PK.
+      */
+     public static function create_order(): void {
++        // Shadow mode: Quick Order is disabled entirely. It creates live
++        // WooCommerce orders (plus order meta and usermeta) the legacy
++        // system would see, so during the parallel trial it must not run.
++        if (MealsDB_Shadow_Mode::is_enabled()) {
++            wp_send_json([
++                'success' => false,
++                'message' => __('Quick Order is disabled while the system is running in shadow mode.', 'meals-db'),
++            ]);
++        }
++
+         $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
+         if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_quick_order_create_order')) {
+             wp_send_json([
+@@ -435,6 +445,14 @@ class MealsDB_Quick_Order_Ajax {
+      * AJAX endpoint to retrieve items from an existing WooCommerce order.
+      */
+     public static function clone_order(): void {
++        // Shadow mode: cloning also creates a live order. Disabled in shadow.
++        if (MealsDB_Shadow_Mode::is_enabled()) {
++            wp_send_json([
++                'success' => false,
++                'message' => __('Quick Order is disabled while the system is running in shadow mode.', 'meals-db'),
++            ]);
++        }
++
+         self::verify_request();
+ 
+         // Rate limiting
+diff --git a/includes/class-quick-order-ui.php b/includes/class-quick-order-ui.php
+index a286808..8cf87d5 100644
+--- a/includes/class-quick-order-ui.php
++++ b/includes/class-quick-order-ui.php
+@@ -20,6 +20,17 @@ class MealsDB_Quick_Order_UI {
+             wp_die(esc_html__('You do not have permission to access this page.', 'meals-db'));
+         }
+ 
++        // Shadow mode: Quick Order is disabled. Render an explanatory notice
++        // instead of the order form so an operator can't place a live order
++        // that the legacy system would see during the parallel trial.
++        if (MealsDB_Shadow_Mode::is_enabled()) {
++            echo '<div class="wrap"><h1>' . esc_html__('Quick Order', 'meals-db') . '</h1>';
++            echo '<div class="notice notice-warning"><p>'
++                . esc_html__('Quick Order is disabled while the system is running in shadow mode (parallel trial). Place orders through the existing system until cutover.', 'meals-db')
++                . '</p></div></div>';
++            return;
++        }
++
+         self::enqueue_scripts();
+ 
+         $clone_order_id = self::get_requested_clone_order_id();
+diff --git a/includes/class-shadow-mode.php b/includes/class-shadow-mode.php
+new file mode 100644
+index 0000000..e61dfa1
+--- /dev/null
++++ b/includes/class-shadow-mode.php
+@@ -0,0 +1,77 @@
++<?php
++/**
++ * Shadow Mode flag.
++ *
++ * Shadow mode lets the new MealsDB plugin run alongside the legacy system
++ * it replaces, on the SAME live database, so its computed outputs
++ * (invoices, allocations, reports) can be compared against legacy WITHOUT
++ * the new plugin affecting day-to-day operations or anything the legacy
++ * system can see.
++ *
++ * When shadow mode is ON, the plugin suppresses exactly the side effects
++ * that escape its own meals_* tables and would be visible to legacy:
++ *
++ *   1. Quick Order            — disabled entirely (creates orders/meta/usermeta).
++ *   2. Order fee application   — suppressed (mutates WooCommerce orders).
++ *   3. Sync write-back to WP   — suppressed (wp_update_user / update_user_meta).
++ *
++ * Everything else keeps running so the comparison has data: the allocation
++ * hooks still observe legacy's live orders and populate meals_*, private
++ * intake still records clients, and all invoice/report GENERATION runs
++ * normally (it only reads + writes meals_*). The daily-report email and the
++ * admin product-tax write are intentionally left live per operator decision.
++ *
++ * FAIL-SAFE: if the flag is missing, unset, or unreadable for any reason,
++ * is_enabled() returns TRUE (shadow ON). The dangerous failure is a
++ * misconfiguration silently letting writes through during the trial; the
++ * safe failure is an inert plugin you notice and fix. So uncertainty
++ * defaults to "suppress".
++ *
++ * @package MealsDB
++ */
++
++defined('ABSPATH') || exit;
++
++class MealsDB_Shadow_Mode {
++
++    /** Key within the mealsdb_settings option array. */
++    const SETTING_KEY = 'shadow_mode';
++
++    /**
++     * Whether shadow mode is active. Fail-safe: anything other than an
++     * explicit, readable "off" is treated as ON.
++     */
++    public static function is_enabled(): bool {
++        // An explicit constant override wins (useful for WP-CLI / wp-config
++        // pinning during the trial). Define MEALSDB_SHADOW_MODE=false to
++        // force live writes; anything else (or undefined) stays safe.
++        if (defined('MEALSDB_SHADOW_MODE')) {
++            return (bool) constant('MEALSDB_SHADOW_MODE');
++        }
++
++        $settings = get_option('mealsdb_settings', null);
++
++        // Missing/!array option => cannot confirm "off" => stay safe (ON).
++        if (!is_array($settings)) {
++            return true;
++        }
++
++        // Key absent => never explicitly turned off => stay safe (ON).
++        if (!array_key_exists(self::SETTING_KEY, $settings)) {
++            return true;
++        }
++
++        // Only an explicit, strict false/0/'0'/'' turns shadow OFF.
++        $value = $settings[self::SETTING_KEY];
++        if ($value === false || $value === 0 || $value === '0' || $value === '') {
++            return false;
++        }
++        // Any truthy or unexpected value => ON.
++        return true;
++    }
++
++    /** Convenience inverse for readability at call sites. */
++    public static function writes_allowed(): bool {
++        return !self::is_enabled();
++    }
++}
+diff --git a/includes/services/class-order-fees.php b/includes/services/class-order-fees.php
+index 41be19d..2440069 100644
+--- a/includes/services/class-order-fees.php
++++ b/includes/services/class-order-fees.php
+@@ -72,6 +72,14 @@ class MealsDB_Order_Fees {
+      */
+     public static function apply_to_order(int $wc_order_id): void {
+         try {
++            // Shadow mode: do not mutate WooCommerce orders. The allocation
++            // hook still observes the order and populates meals_*; we just
++            // don't reach back and add fee line items the legacy system
++            // would see.
++            if (MealsDB_Shadow_Mode::is_enabled()) {
++                return;
++            }
++
+             if (!function_exists('wc_get_order') || !class_exists('WC_Order')) {
+                 return;
+             }
+diff --git a/includes/services/sync/class-sync-mutate.php b/includes/services/sync/class-sync-mutate.php
+index ba2a4c9..190958d 100644
+--- a/includes/services/sync/class-sync-mutate.php
++++ b/includes/services/sync/class-sync-mutate.php
+@@ -66,6 +66,18 @@ class MealsDB_Sync_Mutate {
+      * @return true|WP_Error True on success, WP_Error on failure.
+      */
+     public function update_wp_user(int $user_id, array $fields) {
++        // Shadow mode: the WP user record is legacy-visible. Suppress ALL
++        // write-back here — this is the single chokepoint every
++        // wp_update_user / update_user_meta call flows through, so guarding
++        // it covers every caller (push_to_woocommerce, the address/customer
++        // sync hooks, and the nightly sync alike).
++        if (MealsDB_Shadow_Mode::is_enabled()) {
++            return new WP_Error(
++                'mealsdb_shadow_mode',
++                __('Shadow mode is active; write-back to WordPress users is suppressed.', 'meals-db')
++            );
++        }
++
+         $user = get_userdata($user_id);
+ 
+         if (!$user instanceof WP_User) {
+@@ -93,6 +105,8 @@ class MealsDB_Sync_Mutate {
+      * @return true|WP_Error
+      */
+     public function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
++        // (Shadow mode is enforced at the update_wp_user chokepoint below,
++        // which every WP-user write flows through.)
+         // Only WP-authoritative fields may be pushed to WooCommerce.
+         if (!in_array($field, MealsDB_Sync::get_wp_authoritative_fields(), true)) {
+             return new WP_Error(
+diff --git a/tests/test-order-fees.php b/tests/test-order-fees.php
+index 7ca5225..1bed746 100644
+--- a/tests/test-order-fees.php
++++ b/tests/test-order-fees.php
+@@ -16,6 +16,9 @@
+ if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
+ if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
+ if (!defined('OBJECT')) { define('OBJECT', 'OBJECT'); }
++// This test validates LIVE fee writes, so force shadow mode OFF (the
++// fail-safe default is ON, which would suppress everything under test).
++if (!defined('MEALSDB_SHADOW_MODE')) { define('MEALSDB_SHADOW_MODE', false); }
+ 
+ if (!class_exists('WC_Product')) {
+     class WC_Product {
+diff --git a/tests/test-shadow-mode.php b/tests/test-shadow-mode.php
+new file mode 100644
+index 0000000..d94dabf
+--- /dev/null
++++ b/tests/test-shadow-mode.php
+@@ -0,0 +1,70 @@
++<?php
++/**
++ * Tests for MealsDB_Shadow_Mode — the flag that suppresses legacy-visible
++ * side effects during the parallel trial.
++ *
++ * Covers the fail-safe semantics (the load-bearing property): anything
++ * other than an explicit, readable "off" must read as ON.
++ *
++ * Run: php tests/test-shadow-mode.php
++ */
++
++if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
++
++// Mutable option store so we can simulate each settings state.
++$GLOBALS['__opt'] = [];
++if (!function_exists('get_option')) {
++    function get_option($name, $default = false) {
++        return array_key_exists($name, $GLOBALS['__opt']) ? $GLOBALS['__opt'][$name] : $default;
++    }
++}
++
++require_once __DIR__ . '/../includes/class-autoloader.php';
++MealsDB_Autoloader::register(dirname(__DIR__) . '/');
++
++$failures = [];
++$passed = 0;
++function check($cond, $label) {
++    global $failures, $passed;
++    if ($cond) { $passed++; } else { $failures[] = $label; }
++}
++function set_settings($v) { $GLOBALS['__opt']['mealsdb_settings'] = $v; }
++
++// --- Fail-safe cases: must be ON --------------------------------------------
++unset($GLOBALS['__opt']['mealsdb_settings']);                 // option missing
++check(MealsDB_Shadow_Mode::is_enabled() === true, 'missing option => ON');
++
++set_settings('not-an-array');                                  // corrupt
++check(MealsDB_Shadow_Mode::is_enabled() === true, 'non-array option => ON');
++
++set_settings([]);                                              // key absent
++check(MealsDB_Shadow_Mode::is_enabled() === true, 'key absent => ON');
++
++set_settings(['shadow_mode' => '1']);                          // explicit on
++check(MealsDB_Shadow_Mode::is_enabled() === true, "'1' => ON");
++
++set_settings(['shadow_mode' => 'unexpected']);                 // junk value
++check(MealsDB_Shadow_Mode::is_enabled() === true, 'unexpected value => ON');
++
++// --- Explicit OFF cases -----------------------------------------------------
++set_settings(['shadow_mode' => '0']);
++check(MealsDB_Shadow_Mode::is_enabled() === false, "'0' => OFF");
++
++set_settings(['shadow_mode' => 0]);
++check(MealsDB_Shadow_Mode::is_enabled() === false, 'int 0 => OFF');
++
++set_settings(['shadow_mode' => false]);
++check(MealsDB_Shadow_Mode::is_enabled() === false, 'false => OFF');
++
++set_settings(['shadow_mode' => '']);
++check(MealsDB_Shadow_Mode::is_enabled() === false, "empty string => OFF");
++
++// --- writes_allowed is the inverse ------------------------------------------
++set_settings(['shadow_mode' => '0']);
++check(MealsDB_Shadow_Mode::writes_allowed() === true, 'writes_allowed true when OFF');
++set_settings(['shadow_mode' => '1']);
++check(MealsDB_Shadow_Mode::writes_allowed() === false, 'writes_allowed false when ON');
++
++echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
++foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
++exit(empty($failures) ? 0 : 1);
+diff --git a/views/settings.php b/views/settings.php
+index a449821..ad8994a 100644
+--- a/views/settings.php
++++ b/views/settings.php
+@@ -11,6 +11,12 @@ if ( ! current_user_can( 'manage_options' ) ) {
+ 
+ $opts = get_option( 'mealsdb_settings', [] );
+ 
++// Shadow mode reflects the central flag's fail-safe interpretation (ON unless
++// explicitly turned off), so the checkbox shows the true effective state.
++$shadow_on = class_exists( 'MealsDB_Shadow_Mode' )
++    ? MealsDB_Shadow_Mode::is_enabled()
++    : true;
++
+ $enc_key       = isset( $opts['encryption_key'] ) ? (string) $opts['encryption_key'] : '';
+ $has_enc_key   = $enc_key !== '';
+ 
+@@ -35,6 +41,27 @@ if ( $has_enc_key ) {
+         // is defence-in-depth for the no-JS / submit-on-Enter path.
+         wp_nonce_field( 'mealsdb_settings_nonce', 'mealsdb_settings_nonce_field' );
+         ?>
++        <h2><?php echo esc_html__( 'Shadow Mode', 'meals-db' ); ?></h2>
++        <p class="description">
++            <?php echo esc_html__( 'While shadow mode is ON, the plugin runs alongside the existing system for comparison WITHOUT affecting live operations: Quick Order is disabled, order fees are not written to WooCommerce orders, and field changes are not pushed back to WordPress users. Reports, invoices, and allocations are still generated for comparison. Turn this OFF only at cutover.', 'meals-db' ); ?>
++        </p>
++        <table class="form-table">
++            <tbody>
++                <tr>
++                    <th scope="row"><?php echo esc_html__( 'Shadow mode', 'meals-db' ); ?></th>
++                    <td>
++                        <label>
++                            <input type="checkbox" name="shadow_mode" value="1" <?php checked( $shadow_on ); ?> />
++                            <?php echo esc_html__( 'Run in shadow mode (suppress all changes visible to the existing system)', 'meals-db' ); ?>
++                        </label>
++                        <p class="description">
++                            <?php echo esc_html__( 'Fail-safe: if this setting is ever missing or unreadable, the plugin behaves as if shadow mode is ON.', 'meals-db' ); ?>
++                        </p>
++                    </td>
++                </tr>
++            </tbody>
++        </table>
++
+         <h2><?php echo esc_html__( 'Encryption Key', 'meals-db' ); ?></h2>
+         <p class="description">
+             <?php echo esc_html__( 'AES-256 key used to encrypt client PII in the database. Once data has been encrypted with a key, changing it will make existing encrypted data unreadable.', 'meals-db' ); ?>
