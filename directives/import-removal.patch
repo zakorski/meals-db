@@ -1,0 +1,1990 @@
+diff --git a/assets/js/admin-migration.js b/assets/js/admin-migration.js
+index bb9e8ce..2832437 100644
+--- a/assets/js/admin-migration.js
++++ b/assets/js/admin-migration.js
+@@ -2,32 +2,13 @@
+     'use strict';
+ 
+     var state = {
+-        sourceMode: 'db',  // 'db', 'upload', or 'filepath'
+-        filePath: '',
+-        sourcePrefix: '',
+-        // Opaque token returned by the server's test_db endpoint. The
+-        // actual host/name/user/password are held in a per-user transient
+-        // server-side and resolved from this token, so the password never
+-        // lives in JS memory or gets re-transmitted over AJAX.
+-        credsToken: '',
+         dryRun: true,
+         phase: -1,
+         phaseOffset: 0,
+-        byteOffset: 0,
+-        tableIndex: 0,
+         running: false,
+         phaseStats: {},
+     };
+ 
+-    var phaseNames = [
+-        'Load Source Tables',
+-        'Migrate Users',
+-        'Migrate Products',
+-        'Migrate Orders',
+-        'Create Meals Clients',
+-        'Create Client Rates',
+-    ];
+-
+     // ── Helpers ──────────────────────────────────
+ 
+     function ajax(action, data, successCb, errorCb) {
+@@ -46,30 +27,6 @@
+         });
+     }
+ 
+-    function ajaxUpload(formData, successCb, errorCb) {
+-        formData.append('action', 'mealsdb_migration_upload');
+-        formData.append('nonce', mealsdbMigration.nonce);
+-        $.ajax({
+-            url: mealsdbMigration.ajaxUrl,
+-            type: 'POST',
+-            data: formData,
+-            processData: false,
+-            contentType: false,
+-            success: function (resp) {
+-                if (resp.success) {
+-                    successCb(resp.data);
+-                } else {
+-                    var msg = (resp.data && resp.data.message) ? resp.data.message : 'Upload failed';
+-                    if (errorCb) errorCb(msg); else alert('Error: ' + msg);
+-                }
+-            },
+-            error: function (xhr) {
+-                var msg = 'Upload failed (' + xhr.status + ')';
+-                if (errorCb) errorCb(msg); else alert(msg);
+-            },
+-        });
+-    }
+-
+     function setPhaseIcon(phase, icon) {
+         var $el = $('#mig-phase-' + phase + ' .mealsdb-mig-phase-icon');
+         var map = { pending: '&#9711;', running: '&#9881;', done: '&#10003;', error: '&#10007;' };
+@@ -110,313 +67,6 @@
+         return parts.join(' &nbsp;|&nbsp; ');
+     }
+ 
+-    // ── Tab Switching ─────────────────────────────
+-
+-    $('.mig-tab').on('click', function () {
+-        var tab = $(this).data('tab');
+-        $('.mig-tab').removeClass('active');
+-        $(this).addClass('active');
+-        $('.mealsdb-mig-tab-content').hide();
+-        $('#mig-tab-' + tab).show();
+-        state.sourceMode = tab;
+-        $('#mig-prefix-result').hide();
+-    });
+-
+-    // ── Database Connection Test ──────────────────
+-
+-    $('#mig-test-db-btn').on('click', function () {
+-        var host = $('#mig-db-host').val().trim();
+-        var name = $('#mig-db-name').val().trim();
+-        var user = $('#mig-db-user').val().trim();
+-        var pass = $('#mig-db-pass').val();
+-
+-        if (!name || !user) {
+-            alert('Database name and username are required.');
+-            return;
+-        }
+-
+-        var $btn = $(this);
+-        $btn.prop('disabled', true).text('Testing...');
+-
+-        ajax('test_db', {
+-            db_host: host || 'localhost',
+-            db_name: name,
+-            db_user: user,
+-            db_pass: pass,
+-        }, function (data) {
+-            state.sourcePrefix = data.prefix;
+-            state.credsToken   = data.creds_token || '';
+-
+-            // Clear the password field so the value isn't sitting in the
+-            // DOM after a successful test. The server already has it.
+-            $('#mig-db-pass').val('');
+-            pass = '';
+-
+-            $('#mig-prefix-value').text(data.prefix);
+-            $('#mig-source-info').text('(' + data.tables + ' tables in ' + data.db_name + ')');
+-            $('#mig-prefix-result').show();
+-            $btn.prop('disabled', false).text('Test Connection & Detect Prefix');
+-        }, function (msg) {
+-            alert(msg);
+-            $btn.prop('disabled', false).text('Test Connection & Detect Prefix');
+-        });
+-    });
+-
+-    // ── File Upload ───────────────────────────────
+-
+-    $('#mig-upload-btn').on('click', function () {
+-        var fileInput = $('#mig-file-upload')[0];
+-        if (!fileInput.files || !fileInput.files[0]) {
+-            alert('Select a SQL file first.');
+-            return;
+-        }
+-
+-        var $btn = $(this);
+-        $btn.prop('disabled', true);
+-        $('#mig-upload-progress').show();
+-        $('#mig-upload-status').text('Uploading...');
+-
+-        var formData = new FormData();
+-        formData.append('sql_file', fileInput.files[0]);
+-
+-        ajaxUpload(formData, function (data) {
+-            state.sourcePrefix = data.prefix;
+-            state.filePath     = data.file_path;
+-            state.sourceMode   = 'upload';
+-
+-            $('#mig-prefix-value').text(data.prefix);
+-            $('#mig-source-info').text('(' + data.file_mb + ' MB uploaded)');
+-            $('#mig-prefix-result').show();
+-            $('#mig-upload-progress').hide();
+-            $btn.prop('disabled', false);
+-        }, function (msg) {
+-            alert(msg);
+-            $('#mig-upload-progress').hide();
+-            $btn.prop('disabled', false);
+-        });
+-    });
+-
+-    // ── Server File Path ─────────────────────────
+-
+-    $('#mig-detect-btn').on('click', function () {
+-        var path = $('#mig-file-path').val().trim();
+-        if (!path) {
+-            alert('Enter the SQL dump path.');
+-            return;
+-        }
+-
+-        var $btn = $(this);
+-        $btn.prop('disabled', true).text('Detecting...');
+-
+-        ajax('detect', { file_path: path }, function (data) {
+-            state.sourcePrefix = data.prefix;
+-            state.filePath     = path;
+-
+-            $('#mig-prefix-value').text(data.prefix);
+-            $('#mig-source-info').text('(' + data.file_mb + ' MB)');
+-            $('#mig-prefix-result').show();
+-            $btn.prop('disabled', false).text('Detect Prefix');
+-        }, function (msg) {
+-            alert(msg);
+-            $btn.prop('disabled', false).text('Detect Prefix');
+-        });
+-    });
+-
+-    // ── Start Migration ──────────────────────────
+-
+-    $('#mig-start-btn').on('click', function () {
+-        if (state.running) return;
+-        if (!state.sourcePrefix) {
+-            alert('Detect the source prefix first.');
+-            return;
+-        }
+-
+-        state.dryRun      = $('#mig-dry-run').is(':checked');
+-        state.phase       = 0;
+-        state.phaseOffset = 0;
+-        state.byteOffset  = 0;
+-        state.tableIndex  = 0;
+-        state.running     = true;
+-        state.phaseStats  = {};
+-
+-        $('#mig-step-setup').find('input, button').prop('disabled', true);
+-        $('#mig-step-progress').show();
+-        $('#mig-step-results').hide();
+-        $('#mig-log-viewer').hide();
+-
+-        for (var i = 0; i <= 5; i++) {
+-            setPhaseIcon(i, 'pending');
+-            setPhaseStatus(i, '');
+-            setPhaseBar(i, 0);
+-        }
+-
+-        runCurrentPhase();
+-    });
+-
+-    // ── Phase Runner ─────────────────────────────
+-
+-    function runCurrentPhase() {
+-        if (!state.running) return;
+-
+-        setPhaseIcon(state.phase, 'running');
+-
+-        if (state.phase === 0) {
+-            if (state.sourceMode === 'db') {
+-                runLoadFromDb();
+-            } else { // 'upload' or 'filepath' — both use file-based loading
+-                runLoadPhase();
+-            }
+-        } else {
+-            runDataPhase();
+-        }
+-    }
+-
+-    // Phase 0: file mode
+-    function runLoadPhase() {
+-        ajax('load', {
+-            file_path:     state.filePath,
+-            source_prefix: state.sourcePrefix,
+-            byte_offset:   state.byteOffset,
+-            dry_run:       state.dryRun ? 1 : 0,
+-        }, function (data) {
+-            state.byteOffset = data.byte_offset;
+-            setPhaseBar(0, data.percent);
+-            setPhaseStatus(0, data.percent + '% (' + data.statements + ' stmts this chunk)');
+-
+-            if (data.complete) {
+-                setPhaseIcon(0, 'done');
+-                advancePhase();
+-            } else {
+-                runLoadPhase();
+-            }
+-        }, function (msg) {
+-            setPhaseIcon(0, 'error');
+-            setPhaseStatus(0, msg);
+-            state.running = false;
+-            enableSetup();
+-        });
+-    }
+-
+-    // Phase 0: database mode
+-    function runLoadFromDb() {
+-        if (!state.credsToken) {
+-            setPhaseIcon(0, 'error');
+-            setPhaseStatus(0, 'Connection token expired. Re-run "Test Connection".');
+-            state.running = false;
+-            enableSetup();
+-            return;
+-        }
+-        ajax('load_from_db', {
+-            creds_token:   state.credsToken,
+-            source_prefix: state.sourcePrefix,
+-            table_index:   state.tableIndex,
+-            dry_run:       state.dryRun ? 1 : 0,
+-        }, function (data) {
+-            state.tableIndex = data.table_index;
+-            setPhaseBar(0, data.percent);
+-            var status = data.table
+-                ? data.percent + '% — ' + data.table + ' (' + data.rows + ' rows)'
+-                : data.percent + '%';
+-            setPhaseStatus(0, status);
+-
+-            if (data.complete) {
+-                state.phaseStats[0] = { tables_copied: data.tables_copied };
+-                setPhaseIcon(0, 'done');
+-                advancePhase();
+-            } else {
+-                runLoadFromDb();
+-            }
+-        }, function (msg) {
+-            setPhaseIcon(0, 'error');
+-            setPhaseStatus(0, msg);
+-            state.running = false;
+-            enableSetup();
+-        });
+-    }
+-
+-    // Phases 1-5
+-    function runDataPhase() {
+-        ajax('phase', {
+-            phase:         state.phase,
+-            offset:        state.phaseOffset,
+-            dry_run:       state.dryRun ? 1 : 0,
+-            source_prefix: state.sourcePrefix,
+-        }, function (data) {
+-            if (data.stats) {
+-                if (!state.phaseStats[state.phase]) {
+-                    state.phaseStats[state.phase] = {};
+-                }
+-                $.each(data.stats, function (k, v) {
+-                    state.phaseStats[state.phase][k] = (state.phaseStats[state.phase][k] || 0) + v;
+-                });
+-            }
+-
+-            var pct = data.total > 0 ? Math.min(100, Math.round((data.offset / data.total) * 100)) : 100;
+-            setPhaseBar(state.phase, pct);
+-            setPhaseStatus(state.phase, pct + '%');
+-            $('#mig-current-stats').html(
+-                '<strong>' + phaseNames[state.phase] + ':</strong> ' +
+-                statsHtml(state.phaseStats[state.phase])
+-            );
+-
+-            if (data.complete) {
+-                setPhaseIcon(state.phase, 'done');
+-                advancePhase();
+-            } else {
+-                state.phaseOffset = data.offset;
+-                runDataPhase();
+-            }
+-        }, function (msg) {
+-            setPhaseIcon(state.phase, 'error');
+-            setPhaseStatus(state.phase, msg);
+-            state.running = false;
+-            enableSetup();
+-        });
+-    }
+-
+-    function advancePhase() {
+-        if (state.phase >= 5) {
+-            state.running = false;
+-            showResults();
+-            return;
+-        }
+-
+-        state.phase++;
+-        state.phaseOffset = 0;
+-        runCurrentPhase();
+-    }
+-
+-    // ── Results ──────────────────────────────────
+-
+-    function showResults() {
+-        var html = '<table class="widefat striped"><thead><tr><th>Phase</th><th>Stats</th></tr></thead><tbody>';
+-        for (var i = 0; i <= 5; i++) {
+-            html += '<tr><td>' + phaseNames[i] + '</td><td>' +
+-                    (state.phaseStats[i] ? statsHtml(state.phaseStats[i]) : 'OK') +
+-                    '</td></tr>';
+-        }
+-        html += '</tbody></table>';
+-        html += '<p>' + (state.dryRun
+-            ? '<strong>Dry run complete.</strong> No data was written. Uncheck "Dry run" and run again to perform the actual migration.'
+-            : '<strong>Migration complete.</strong> All data has been imported.') + '</p>';
+-
+-        $('#mig-results-summary').html(html);
+-        $('#mig-step-results').show();
+-        enableSetup();
+-    }
+-
+-    function enableSetup() {
+-        $('#mig-step-setup').find('input, button').prop('disabled', false);
+-    }
+-
+-    // ── Cleanup / Log / Reset ────────────────────
+-
+-    $('#mig-cleanup-btn').on('click', function () {
+-        if (!confirm('Drop all source tables (' + state.sourcePrefix + '*)? This cannot be undone.')) return;
+-        ajax('cleanup', { source_prefix: state.sourcePrefix }, function (data) {
+-            alert('Dropped ' + data.dropped + ' source tables.');
+-        });
+-    });
+ 
+     $('#mig-log-btn').on('click', function () {
+         ajax('log', {}, function (data) {
+diff --git a/includes/admin/class-migration-page.php b/includes/admin/class-migration-page.php
+index 1b32aa5..72a4321 100644
+--- a/includes/admin/class-migration-page.php
++++ b/includes/admin/class-migration-page.php
+@@ -97,141 +97,18 @@ class MealsDB_Migration_Page {
+         <div class="wrap mealsdb-migration-page">
+             <h1><?php esc_html_e( 'Site Migration', 'meals-db' ); ?></h1>
+ 
+-            <div class="mealsdb-mig-info notice notice-warning inline">
+-                <p><strong><?php esc_html_e( 'One-time migration tool.', 'meals-db' ); ?></strong>
+-                <?php esc_html_e( 'Imports users, products, and orders from the legacy site into this WordPress site, then creates government client records in the Meals DB external database.', 'meals-db' ); ?></p>
+-            </div>
+-
+-            <!-- Step 1: Source selection -->
+-            <div class="mealsdb-mig-card" id="mig-step-setup">
+-                <h2><?php esc_html_e( 'Step 1: Data Source', 'meals-db' ); ?></h2>
+-
+-                <div class="mealsdb-mig-source-tabs">
+-                    <button type="button" class="button mig-tab active" data-tab="db">
+-                        <?php esc_html_e( 'Database Connection', 'meals-db' ); ?>
+-                    </button>
+-                    <button type="button" class="button mig-tab" data-tab="upload">
+-                        <?php esc_html_e( 'Upload SQL File', 'meals-db' ); ?>
+-                    </button>
+-                    <button type="button" class="button mig-tab" data-tab="filepath">
+-                        <?php esc_html_e( 'Server File Path', 'meals-db' ); ?>
+-                    </button>
+-                </div>
+-
+-                <!-- Database connection tab -->
+-                <div class="mealsdb-mig-tab-content" id="mig-tab-db">
+-                    <p class="description"><?php esc_html_e( 'Connect directly to the legacy database on the same MySQL server. This is the recommended option — no file upload needed.', 'meals-db' ); ?></p>
+-                    <table class="form-table">
+-                        <tr>
+-                            <th><label for="mig-db-host"><?php esc_html_e( 'Host', 'meals-db' ); ?></label></th>
+-                            <td>
+-                                <input type="text" id="mig-db-host" class="regular-text" value="localhost" placeholder="localhost">
+-                            </td>
+-                        </tr>
+-                        <tr>
+-                            <th><label for="mig-db-name"><?php esc_html_e( 'Database Name', 'meals-db' ); ?></label></th>
+-                            <td>
+-                                <input type="text" id="mig-db-name" class="regular-text" placeholder="mealsandmore_wp">
+-                            </td>
+-                        </tr>
+-                        <tr>
+-                            <th><label for="mig-db-user"><?php esc_html_e( 'Username', 'meals-db' ); ?></label></th>
+-                            <td>
+-                                <input type="text" id="mig-db-user" class="regular-text">
+-                            </td>
+-                        </tr>
+-                        <tr>
+-                            <th><label for="mig-db-pass"><?php esc_html_e( 'Password', 'meals-db' ); ?></label></th>
+-                            <td>
+-                                <input type="password" id="mig-db-pass" class="regular-text">
+-                            </td>
+-                        </tr>
+-                    </table>
+-                    <button type="button" class="button" id="mig-test-db-btn">
+-                        <?php esc_html_e( 'Test Connection & Detect Prefix', 'meals-db' ); ?>
+-                    </button>
+-                </div>
+-
+-                <!-- Upload tab -->
+-                <div class="mealsdb-mig-tab-content" id="mig-tab-upload" style="display:none;">
+-                    <p class="description">
+-                        <?php
+-                        printf(
+-                            esc_html__( 'Upload the SQL dump file directly. Current max upload size: %s MB. For larger files, use the Database Connection option instead.', 'meals-db' ),
+-                            esc_html( min( (int) ini_get( 'upload_max_filesize' ), (int) ini_get( 'post_max_size' ) ) )
+-                        );
+-                        ?>
+-                    </p>
+-                    <table class="form-table">
+-                        <tr>
+-                            <th><label for="mig-file-upload"><?php esc_html_e( 'SQL File', 'meals-db' ); ?></label></th>
+-                            <td>
+-                                <input type="file" id="mig-file-upload" accept=".sql,.sql.gz">
+-                                <button type="button" class="button" id="mig-upload-btn">
+-                                    <?php esc_html_e( 'Upload & Detect Prefix', 'meals-db' ); ?>
+-                                </button>
+-                                <div id="mig-upload-progress" style="display:none;">
+-                                    <span id="mig-upload-status"><?php esc_html_e( 'Uploading...', 'meals-db' ); ?></span>
+-                                </div>
+-                            </td>
+-                        </tr>
+-                    </table>
+-                </div>
+-
+-                <!-- Server file path tab -->
+-                <div class="mealsdb-mig-tab-content" id="mig-tab-filepath" style="display:none;">
+-                    <p class="description"><?php esc_html_e( 'Enter the full server path to a SQL dump file already uploaded via FTP or cPanel File Manager.', 'meals-db' ); ?></p>
+-                    <table class="form-table">
+-                        <tr>
+-                            <th><label for="mig-file-path"><?php esc_html_e( 'SQL dump path', 'meals-db' ); ?></label></th>
+-                            <td>
+-                                <input type="text" id="mig-file-path" class="regular-text" placeholder="/home/username/mealsandmore.sql">
+-                                <button type="button" class="button" id="mig-detect-btn">
+-                                    <?php esc_html_e( 'Detect Prefix', 'meals-db' ); ?>
+-                                </button>
+-                                <p class="description"><?php esc_html_e( 'Absolute path to the .sql file on this server.', 'meals-db' ); ?></p>
+-                            </td>
+-                        </tr>
+-                    </table>
+-                </div>
+-
+-                <!-- Prefix result (shared by all tabs) -->
+-                <div id="mig-prefix-result" style="display:none;">
+-                    <table class="form-table">
+-                        <tr>
+-                            <th><?php esc_html_e( 'Detected prefix', 'meals-db' ); ?></th>
+-                            <td>
+-                                <code id="mig-prefix-value"></code>
+-                                <span id="mig-source-info"></span>
+-                            </td>
+-                        </tr>
+-                    </table>
+-
+-                    <div class="mealsdb-mig-options">
+-                        <h3><?php esc_html_e( 'Options', 'meals-db' ); ?></h3>
+-                        <label>
+-                            <input type="checkbox" id="mig-dry-run" checked>
+-                            <?php esc_html_e( 'Dry run (preview only, no writes)', 'meals-db' ); ?>
+-                        </label>
+-                        <br><br>
+-                        <button type="button" class="button button-primary button-hero" id="mig-start-btn">
+-                            <?php esc_html_e( 'Start Migration', 'meals-db' ); ?>
+-                        </button>
+-                    </div>
+-                </div>
++            <div class="mealsdb-mig-info notice notice-info inline">
++                <p><strong><?php esc_html_e( 'Migration tool.', 'meals-db' ); ?></strong>
++                <?php esc_html_e( 'Builds government client records in the Meals DB external database from data already in this WordPress / WooCommerce site. Use the Consolidated Migration below.', 'meals-db' ); ?></p>
+             </div>
+ 
+             <!-- Step 2: Progress -->
+             <div class="mealsdb-mig-card" id="mig-step-progress" style="display:none;">
+-                <h2><?php esc_html_e( 'Step 2: Progress', 'meals-db' ); ?></h2>
++                <h2><?php esc_html_e( 'Progress', 'meals-db' ); ?></h2>
+ 
+                 <div class="mealsdb-mig-phases">
+                     <?php
+                     $phases = [
+-                        0 => __( 'Load Source Tables', 'meals-db' ),
+-                        1 => __( 'Migrate Users', 'meals-db' ),
+-                        2 => __( 'Migrate Products', 'meals-db' ),
+-                        3 => __( 'Migrate Orders', 'meals-db' ),
+                         4 => __( 'Create Meals Clients', 'meals-db' ),
+                         5 => __( 'Create Client Rates', 'meals-db' ),
+                     ];
+@@ -256,9 +133,6 @@ class MealsDB_Migration_Page {
+                 <h2><?php esc_html_e( 'Migration Complete', 'meals-db' ); ?></h2>
+                 <div id="mig-results-summary"></div>
+                 <br>
+-                <button type="button" class="button" id="mig-cleanup-btn">
+-                    <?php esc_html_e( 'Cleanup Source Tables', 'meals-db' ); ?>
+-                </button>
+                 <button type="button" class="button" id="mig-log-btn">
+                     <?php esc_html_e( 'View Log', 'meals-db' ); ?>
+                 </button>
+diff --git a/includes/ajax/class-ajax-migration.php b/includes/ajax/class-ajax-migration.php
+index 5fc7bd6..5988e02 100644
+--- a/includes/ajax/class-ajax-migration.php
++++ b/includes/ajax/class-ajax-migration.php
+@@ -12,13 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
+ class MealsDB_Ajax_Migration {
+ 
+     public static function init(): void {
+-        add_action( 'wp_ajax_mealsdb_migration_detect',      [ self::class, 'detect_prefix' ] );
+-        add_action( 'wp_ajax_mealsdb_migration_test_db',     [ self::class, 'test_db' ] );
+-        add_action( 'wp_ajax_mealsdb_migration_upload',      [ self::class, 'upload_file' ] );
+-        add_action( 'wp_ajax_mealsdb_migration_load',        [ self::class, 'load_source' ] );
+-        add_action( 'wp_ajax_mealsdb_migration_load_from_db', [ self::class, 'load_from_db' ] );
+         add_action( 'wp_ajax_mealsdb_migration_phase',       [ self::class, 'run_phase' ] );
+-        add_action( 'wp_ajax_mealsdb_migration_cleanup',     [ self::class, 'cleanup' ] );
+         add_action( 'wp_ajax_mealsdb_migration_reset',       [ self::class, 'reset' ] );
+         add_action( 'wp_ajax_mealsdb_migration_log',         [ self::class, 'get_log' ] );
+         add_action( 'wp_ajax_mealsdb_backfill_allowances',   [ self::class, 'backfill_allowances' ] );
+@@ -27,364 +21,17 @@ class MealsDB_Ajax_Migration {
+         add_action( 'wp_ajax_mealsdb_consolidated_phase', [ self::class, 'run_consolidated_phase' ] );
+     }
+ 
+-    /**
+-     * Test a direct database connection and detect the table prefix.
+-     *
+-     * On success, the credentials are stashed in a short-lived transient
+-     * keyed to the requesting admin and a random token is returned. The
+-     * client never has to keep the password in JS memory or re-transmit
+-     * it on subsequent AJAX calls — it sends the token instead.
+-     */
+-    public static function test_db(): void {
+-        self::verify();
+-
+-        $host   = sanitize_text_field( wp_unslash( $_POST['db_host'] ?? '' ) );
+-        $name   = sanitize_text_field( wp_unslash( $_POST['db_name'] ?? '' ) );
+-        $user   = sanitize_text_field( wp_unslash( $_POST['db_user'] ?? '' ) );
+-        $pass   = (string) wp_unslash( $_POST['db_pass'] ?? '' );
+-
+-        if ( ! $host || ! $name || ! $user ) {
+-            wp_send_json_error( [ 'message' => 'Host, database name, and username are required.' ] );
+-        }
+-
+-        $result = MealsDB_Migration::test_source_db( $host, $name, $user, $pass );
+-
+-        if ( isset( $result['error'] ) ) {
+-            wp_send_json_error( [ 'message' => $result['error'] ] );
+-        }
+-
+-        $token = self::stash_credentials( [
+-            'host' => $host,
+-            'name' => $name,
+-            'user' => $user,
+-            'pass' => $pass,
+-        ] );
+-
+-        if ( $token !== '' ) {
+-            $result['creds_token'] = $token;
+-        }
+-
+-        wp_send_json_success( $result );
+-    }
+-
+-    /**
+-     * Store source-DB credentials in a per-user transient for ~1 hour and
+-     * return an opaque token the client can use in lieu of resending creds.
+-     *
+-     * The transient is keyed by user_id + random token, so credentials from
+-     * one admin's session can't be reached by another. Returns '' if the
+-     * caller is unauthenticated (shouldn't happen — verify() ran already).
+-     */
+-    private static function stash_credentials( array $creds ): string {
+-        $user_id = get_current_user_id();
+-        if ( $user_id <= 0 ) {
+-            return '';
+-        }
+-        $token = bin2hex( random_bytes( 16 ) );
+-        set_transient(
+-            self::credentials_transient_key( $user_id, $token ),
+-            $creds,
+-            HOUR_IN_SECONDS
+-        );
+-        return $token;
+-    }
+-
+-    /**
+-     * Resolve a previously-stashed credentials token to the original creds.
+-     * Returns null if the token is unknown / expired / belongs to a
+-     * different user.
+-     */
+-    private static function resolve_credentials( string $token ): ?array {
+-        $token = preg_replace( '/[^a-f0-9]/', '', strtolower( $token ) );
+-        if ( $token === '' || strlen( $token ) !== 32 ) {
+-            return null;
+-        }
+-        $user_id = get_current_user_id();
+-        if ( $user_id <= 0 ) {
+-            return null;
+-        }
+-        $value = get_transient( self::credentials_transient_key( $user_id, $token ) );
+-        return is_array( $value ) ? $value : null;
+-    }
+-
+-    private static function credentials_transient_key( int $user_id, string $token ): string {
+-        return 'mealsdb_mig_creds_' . $user_id . '_' . $token;
+-    }
+-
+-    /**
+-     * Maximum migration upload size in bytes (2 GB hard cap).
+-     */
+-    private const MAX_UPLOAD_BYTES = 2147483648;
+-
+-    /**
+-     * Handle SQL file upload.
+-     */
+-    public static function upload_file(): void {
+-        self::verify();
+-        self::verify_destructive();
+-
+-        if ( empty( $_FILES['sql_file'] ) ) {
+-            wp_send_json_error( [ 'message' => 'No file uploaded.' ] );
+-        }
+-
+-        $file = $_FILES['sql_file'];
+-
+-        if ( $file['error'] !== UPLOAD_ERR_OK ) {
+-            $errors = [
+-                UPLOAD_ERR_INI_SIZE   => 'File exceeds server upload_max_filesize limit.',
+-                UPLOAD_ERR_FORM_SIZE  => 'File exceeds form size limit.',
+-                UPLOAD_ERR_PARTIAL    => 'File was only partially uploaded.',
+-                UPLOAD_ERR_NO_FILE    => 'No file was uploaded.',
+-                UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary folder on server.',
+-                UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
+-            ];
+-            $msg = $errors[ $file['error'] ] ?? 'Upload error code: ' . $file['error'];
+-            wp_send_json_error( [ 'message' => $msg ] );
+-        }
+-
+-        if ( ! is_uploaded_file( $file['tmp_name'] ) ) {
+-            wp_send_json_error( [ 'message' => 'Invalid upload.' ] );
+-        }
+-
+-        if ( ! empty( $file['size'] ) && (int) $file['size'] > self::MAX_UPLOAD_BYTES ) {
+-            wp_send_json_error( [ 'message' => 'File exceeds the migration upload size limit.' ] );
+-        }
+-
+-        // Validate extension
+-        $ext = strtolower( pathinfo( $file['name'], PATHINFO_EXTENSION ) );
+-        if ( ! in_array( $ext, [ 'sql', 'gz' ], true ) ) {
+-            wp_send_json_error( [ 'message' => 'Only .sql and .sql.gz files are allowed.' ] );
+-        }
+-
+-        // Sniff content: SQL dumps start with comment / SQL keyword tokens;
+-        // gzip files always start with the magic bytes 1f 8b. This catches
+-        // a renamed PHP file before it hits disk in the upload directory.
+-        $head = (string) file_get_contents( $file['tmp_name'], false, null, 0, 1024 );
+-        if ( ! self::looks_like_sql_or_gzip( $head, $ext ) ) {
+-            wp_send_json_error( [ 'message' => 'File contents do not look like a SQL dump or gzip archive.' ] );
+-        }
+-
+-        // Move to uploads directory
+-        $upload_dir = wp_upload_dir();
+-        $dest_dir   = trailingslashit( $upload_dir['basedir'] ) . 'mealsdb-migration';
+-
+-        if ( ! wp_mkdir_p( $dest_dir ) ) {
+-            wp_send_json_error( [ 'message' => 'Cannot create upload directory.' ] );
+-        }
+-
+-        // Defence-in-depth web blockers. .htaccess only helps Apache; nginx
+-        // and IIS ignore it entirely, which is why we also drop an
+-        // index.php that returns 403 and store with a random filename.
+-        self::ensure_web_block_files( $dest_dir );
+-
+-        // Random destination filename. Defeats both the predictable
+-        // /uploads/mealsdb-migration/migration-source.sql guess and the
+-        // race where two concurrent uploads clobber each other.
+-        $token     = bin2hex( random_bytes( 16 ) );
+-        $dest_path = $dest_dir . '/migration-' . $token . '.' . ( $ext === 'gz' ? 'sql.gz' : 'sql' );
+-
+-        if ( ! move_uploaded_file( $file['tmp_name'], $dest_path ) ) {
+-            wp_send_json_error( [ 'message' => 'Failed to move uploaded file.' ] );
+-        }
+-
+-        // Restrict permissions where the OS lets us.
+-        @chmod( $dest_path, 0600 );
+-
+-        // Detect prefix
+-        $prefix = MealsDB_Migration::detect_prefix( $dest_path );
+-        if ( ! $prefix ) {
+-            @unlink( $dest_path );
+-            wp_send_json_error( [ 'message' => 'File uploaded but could not detect a table prefix in the SQL dump.' ] );
+-        }
+-
+-        $file_size = filesize( $dest_path );
+-
+-        wp_send_json_success( [
+-            'prefix'    => $prefix,
+-            'file_path' => $dest_path,
+-            'file_size' => $file_size,
+-            'file_mb'   => round( $file_size / ( 1024 * 1024 ), 1 ),
+-        ] );
+-    }
+-
+-    /**
+-     * Coarse content sniff for SQL dumps (.sql) and gzip archives (.sql.gz).
+-     */
+-    private static function looks_like_sql_or_gzip( string $head, string $ext ): bool {
+-        if ( $head === '' ) {
+-            return false;
+-        }
+-        if ( $ext === 'gz' ) {
+-            return strncmp( $head, "\x1f\x8b", 2 ) === 0;
+-        }
+-        // SQL: tolerate UTF-8 BOM and leading whitespace, then expect a
+-        // comment marker or one of the common dump keywords.
+-        $trimmed = ltrim( $head, "\xEF\xBB\xBF \t\r\n" );
+-        $upper   = strtoupper( substr( $trimmed, 0, 32 ) );
+-        $prefixes = [ '--', '#', '/*', 'CREATE ', 'DROP ', 'INSERT ', 'SET ', 'USE ', 'LOCK ', 'UNLOCK ', 'ALTER ', 'START TRANSACTION', 'BEGIN' ];
+-        foreach ( $prefixes as $prefix ) {
+-            if ( strncmp( $upper, $prefix, strlen( $prefix ) ) === 0 ) {
+-                return true;
+-            }
+-        }
+-        return false;
+-    }
+-
+-    /**
+-     * Drop web-server blockers in the migration upload dir.
+-     *
+-     * .htaccess covers Apache; index.php covers nginx/IIS by serving a
+-     * 403 if anyone manages to guess a filename inside the directory.
+-     */
+-    private static function ensure_web_block_files( string $dir ): void {
+-        $htaccess = $dir . '/.htaccess';
+-        if ( ! file_exists( $htaccess ) ) {
+-            file_put_contents( $htaccess, "Order allow,deny\nDeny from all\n" );
+-            @chmod( $htaccess, 0600 );
+-        }
+-
+-        $index_php = $dir . '/index.php';
+-        if ( ! file_exists( $index_php ) ) {
+-            file_put_contents(
+-                $index_php,
+-                "<?php\nhttp_response_code(403);\nexit;\n"
+-            );
+-            @chmod( $index_php, 0600 );
+-        }
+-
+-        $index_html = $dir . '/index.html';
+-        if ( ! file_exists( $index_html ) ) {
+-            file_put_contents( $index_html, '' );
+-        }
+-    }
+-
+-    /**
+-     * Detect the table prefix from a SQL dump file path (legacy / fallback).
+-     */
+-    public static function detect_prefix(): void {
+-        self::verify();
+-
+-        $file_path = self::sanitize_path( (string) wp_unslash( $_POST['file_path'] ?? '' ) );
+-        if ( ! $file_path || ! file_exists( $file_path ) ) {
+-            wp_send_json_error( [ 'message' => 'File not found: ' . $file_path ] );
+-        }
+-
+-        $prefix = MealsDB_Migration::detect_prefix( $file_path );
+-        if ( ! $prefix ) {
+-            wp_send_json_error( [ 'message' => 'Could not detect table prefix in the SQL dump.' ] );
+-        }
+-
+-        $file_size = filesize( $file_path );
+-
+-        wp_send_json_success( [
+-            'prefix'    => $prefix,
+-            'file_size' => $file_size,
+-            'file_mb'   => round( $file_size / ( 1024 * 1024 ), 1 ),
+-        ] );
+-    }
+-
+-    /**
+-     * Phase 0 (file mode): Load source tables from the SQL dump (chunked).
+-     */
+-    public static function load_source(): void {
+-        self::verify();
+-        set_time_limit( 300 );
+-
+-        $file_path     = self::sanitize_path( (string) wp_unslash( $_POST['file_path'] ?? '' ) );
+-        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
+-        $byte_offset   = (int) ( $_POST['byte_offset'] ?? 0 );
+-        $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
+-
+-        if ( ! $file_path ) {
+-            wp_send_json_error( [ 'message' => 'Missing file_path.' ] );
+-        }
+-
+-        $result = MealsDB_Migration::load_source( $file_path, $source_prefix, $byte_offset, $dry_run );
+-
+-        if ( isset( $result['error'] ) ) {
+-            wp_send_json_error( [ 'message' => $result['error'] ] );
+-        }
+-
+-        if ( $result['complete'] ) {
+-            MealsDB_Migration::append_log(
+-                "Phase 0 complete: loaded source tables from dump ({$result['statements']} total statements)."
+-            );
+-        }
+-
+-        wp_send_json_success( $result );
+-    }
+-
+-    /**
+-     * Phase 0 (database mode): Copy source tables from the remote DB (batched).
+-     */
+-    public static function load_from_db(): void {
+-        self::verify();
+-        set_time_limit( 300 );
+-
+-        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
+-        $table_index   = (int) ( $_POST['table_index'] ?? 0 );
+-        $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
+-
+-        // Prefer the credentials token issued by test_db. The raw fields
+-        // remain accepted only as a backwards-compat fallback.
+-        $token = sanitize_text_field( wp_unslash( $_POST['creds_token'] ?? '' ) );
+-        $creds = $token !== '' ? self::resolve_credentials( $token ) : null;
+-
+-        if ( $creds !== null ) {
+-            $host = $creds['host'] ?? '';
+-            $name = $creds['name'] ?? '';
+-            $user = $creds['user'] ?? '';
+-            $pass = $creds['pass'] ?? '';
+-        } else {
+-            $host = sanitize_text_field( wp_unslash( $_POST['db_host'] ?? '' ) );
+-            $name = sanitize_text_field( wp_unslash( $_POST['db_name'] ?? '' ) );
+-            $user = sanitize_text_field( wp_unslash( $_POST['db_user'] ?? '' ) );
+-            $pass = (string) wp_unslash( $_POST['db_pass'] ?? '' );
+-        }
+-
+-        if ( ! $host || ! $name || ! $user ) {
+-            wp_send_json_error( [ 'message' => 'Missing database connection parameters. Re-run "Test connection" to refresh credentials.' ] );
+-        }
+-
+-        $result = MealsDB_Migration::copy_table_from_db( $host, $name, $user, $pass, $source_prefix, $table_index, $dry_run );
+-
+-        if ( isset( $result['error'] ) ) {
+-            wp_send_json_error( [ 'message' => $result['error'] ] );
+-        }
+-
+-        if ( $result['complete'] ) {
+-            MealsDB_Migration::append_log(
+-                "Phase 0 complete: copied {$result['tables_copied']} source tables from database '{$name}'."
+-            );
+-        }
+-
+-        wp_send_json_success( $result );
+-    }
+-
+-    /**
+-     * Run a migration phase (1-5).
+-     */
+     public static function run_phase(): void {
+         self::verify();
+         set_time_limit( 300 );
+ 
+-        $phase         = (int) ( $_POST['phase'] ?? 0 );
+-        $offset        = (int) ( $_POST['offset'] ?? 0 );
+-        $dry_run       = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
+-        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
++        $phase   = (int) ( $_POST['phase'] ?? 0 );
++        $offset  = (int) ( $_POST['offset'] ?? 0 );
++        $dry_run = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
+ 
+         $result = [];
+ 
+         switch ( $phase ) {
+-            case 1:
+-                $result = MealsDB_Migration::migrate_users( $source_prefix, $offset, $dry_run );
+-                break;
+-            case 2:
+-                $result = MealsDB_Migration::migrate_products( $source_prefix, $offset, $dry_run );
+-                break;
+-            case 3:
+-                $result = MealsDB_Migration::migrate_orders( $source_prefix, $offset, $dry_run );
+-                break;
+             case 4:
+                 $result = MealsDB_Migration::create_clients( $offset, $dry_run );
+                 break;
+@@ -402,9 +49,6 @@ class MealsDB_Ajax_Migration {
+         // Log phase completion
+         if ( ! empty( $result['complete'] ) ) {
+             $phase_names = [
+-                1 => 'Users',
+-                2 => 'Products',
+-                3 => 'Orders',
+                 4 => 'Meals Clients',
+                 5 => 'Client Rates',
+             ];
+@@ -418,21 +62,6 @@ class MealsDB_Ajax_Migration {
+         wp_send_json_success( $result );
+     }
+ 
+-    /**
+-     * Cleanup: drop source tables.
+-     */
+-    public static function cleanup(): void {
+-        self::verify();
+-        self::verify_destructive();
+-
+-        $source_prefix = self::require_source_prefix( (string) wp_unslash( $_POST['source_prefix'] ?? '' ) );
+-
+-        $result = MealsDB_Migration::cleanup( $source_prefix );
+-        MealsDB_Migration::append_log( "Cleanup: dropped {$result['dropped']} source tables." );
+-
+-        wp_send_json_success( $result );
+-    }
+-
+     /**
+      * Reset progress and log.
+      */
+@@ -487,86 +116,6 @@ class MealsDB_Ajax_Migration {
+         }
+     }
+ 
+-    /**
+-     * Validate a WordPress table prefix supplied by the UI.
+-     *
+-     * WP core requires table prefixes to match /^[a-zA-Z0-9_]+$/ —
+-     * the installer enforces that and every downstream query in
+-     * MealsDB_Migration concatenates the prefix into SQL via
+-     * sprintf(), so any character outside that class would either
+-     * produce a malformed query or widen the attack surface. Reject
+-     * early with a clear message instead of passing through and
+-     * letting the storage layer throw a less helpful error.
+-     *
+-     * Returns the validated prefix, or exits with wp_send_json_error.
+-     */
+-    private static function require_source_prefix( string $raw ): string {
+-        $prefix = sanitize_text_field( $raw );
+-        if ( $prefix === '' ) {
+-            wp_send_json_error( [ 'message' => 'Missing source_prefix.' ] );
+-        }
+-        if ( ! preg_match( '/^[a-zA-Z0-9_]+$/', $prefix ) ) {
+-            wp_send_json_error( [
+-                'message' => 'Invalid source_prefix. Table prefixes must match ^[a-zA-Z0-9_]+$.',
+-            ] );
+-        }
+-        // Guard against absurd lengths — no real WP install uses a
+-        // 200-char prefix and anything beyond that is a probing attempt.
+-        if ( strlen( $prefix ) > 64 ) {
+-            wp_send_json_error( [ 'message' => 'source_prefix too long.' ] );
+-        }
+-        return $prefix;
+-    }
+-
+-    /**
+-     * Sanitize and validate a file-system path.
+-     *
+-     * Returns '' unless the resolved path lives under the plugin's migration
+-     * upload directory. The previous '..'-substring check let absolute paths
+-     * such as /etc/passwd or wp-config.php through; downstream readers would
+-     * then disclose file size or contents back to the admin.
+-     */
+-    private static function sanitize_path( string $raw ): string {
+-        $path = wp_normalize_path( trim( $raw ) );
+-
+-        if ( $path === '' ) {
+-            return '';
+-        }
+-
+-        $base = self::migration_dir_realpath();
+-        if ( $base === '' ) {
+-            return '';
+-        }
+-
+-        $resolved = realpath( $path );
+-        if ( $resolved === false ) {
+-            return '';
+-        }
+-        $resolved = wp_normalize_path( $resolved );
+-
+-        // strict prefix match — the trailing slash prevents
+-        // /uploads/mealsdb-migration-other/ from satisfying a base of
+-        // /uploads/mealsdb-migration.
+-        if ( strpos( $resolved . '/', $base . '/' ) !== 0 ) {
+-            return '';
+-        }
+-
+-        return $resolved;
+-    }
+-
+-    /**
+-     * Resolve the on-disk migration upload directory (canonical path).
+-     */
+-    private static function migration_dir_realpath(): string {
+-        $uploads = wp_upload_dir();
+-        if ( empty( $uploads['basedir'] ) ) {
+-            return '';
+-        }
+-        $dir = trailingslashit( $uploads['basedir'] ) . 'mealsdb-migration';
+-        $resolved = realpath( $dir );
+-        return $resolved === false ? '' : wp_normalize_path( $resolved );
+-    }
+-
+     /**
+      * Backfill allowance_mains, allowance_sides, and requisition_period
+      * from legacy wp_usermeta values.
+diff --git a/includes/services/class-migration.php b/includes/services/class-migration.php
+index cc59b2f..2113782 100644
+--- a/includes/services/class-migration.php
++++ b/includes/services/class-migration.php
+@@ -1,11 +1,16 @@
+ <?php
+ /**
+- * Consolidated site migration service.
++ * Migration phase entry points for client + rate creation.
+  *
+- * Reads source tables (imported from an old-site SQL dump with a foreign prefix)
+- * that coexist in the WordPress database, then migrates users, products, orders
+- * into the live WP/WC tables and creates meals_clients + meals_client_rates
+- * records in the external Meals DB for government clients.
++ * Historically this class also ingested an old-site SQL dump (uploaded by
++ * an operator) and migrated its users/products/orders into the live tables.
++ * That upload-based import path has been removed: the plugin is now
++ * installed directly on the live site, so there is no foreign dump to read.
++ *
++ * What remains are the phase entry points that build meals_clients /
++ * meals_client_rates from data ALREADY in the live WP/WC tables. Their
++ * logic lives in MealsDB_Migration_Consolidated; these methods are thin
++ * delegators kept as stable call sites for the admin UI and AJAX layer.
+  *
+  * @package MealsDB
+  */
+@@ -17,780 +22,19 @@ if ( ! defined( 'ABSPATH' ) ) {
+ class MealsDB_Migration {
+ 
+     const BATCH_SIZE      = 100;
+-    const LOAD_CHUNK_BYTES = 10 * 1024 * 1024; // 10 MB per AJAX chunk
+-    /**
+-     * Max bytes fgets() will read into a single buffer in one call.
+-     * Dumps from mysqldump --extended-insert can produce INSERT lines
+-     * well over 1 MB on large orders tables, so we keep this large,
+-     * but well under the 32 MB we used to allocate unconditionally —
+-     * a malformed or adversarial dump with a single multi-MB line
+-     * would otherwise have no upper bound on per-call memory.
+-     */
+-    const LOAD_FGETS_BYTES = 4 * 1024 * 1024;  // 4 MB line buffer
+-    /**
+-     * Upper bound on the size of an accumulated multi-line statement
+-     * we are willing to execute. A single statement already fits
+-     * comfortably inside max_allowed_packet (default 4 MB, practical
+-     * ceiling 64 MB); anything beyond 16 MB is pathological and
+-     * should be rejected rather than pushed at the server.
+-     */
+-    const MAX_STATEMENT_BYTES = 16 * 1024 * 1024; // 16 MB per statement
+     const PROGRESS_OPTION = 'mealsdb_migration_progress';
+     const LOG_OPTION      = 'mealsdb_migration_log';
+ 
+-    /**
+-     * Table suffixes we need from the source dump.
+-     */
+-    private static $needed_suffixes = [
+-        'users',
+-        'usermeta',
+-        'posts',
+-        'postmeta',
+-        'terms',
+-        'term_taxonomy',
+-        'term_relationships',
+-        'wc_orders',
+-        'wc_orders_meta',
+-        'wc_order_addresses',
+-        'wc_order_operational_data',
+-        'woocommerce_order_items',
+-        'woocommerce_order_itemmeta',
+-    ];
+-
+-    /**
+-     * Customer-group normalization map (lowercase key → meals_clients.client_type).
+-     */
+-    private static $type_map = [
+-        'sdnb'        => 'SDNB',
+-        'sdnb rural'  => 'SDNB',
+-        'extra mural' => 'SDNB',
+-        'veterans'    => 'Veteran',
+-    ];
+-
+-    // ──────────────────────────────────────────────
+-    //  Prefix detection
+-    // ──────────────────────────────────────────────
+-
+-    /**
+-     * Detect the table prefix used in a SQL dump file.
+-     */
+-    public static function detect_prefix( string $file_path ): ?string {
+-        $handle = @fopen( $file_path, 'r' );
+-        if ( ! $handle ) {
+-            return null;
+-        }
+-
+-        $chunk = fread( $handle, 100 * 1024 ); // first 100 KB
+-        fclose( $handle );
+-
+-        // Look for CREATE TABLE `<prefix>users`
+-        if ( preg_match( '/CREATE TABLE.*?`(\w+?)users`/i', $chunk, $m ) ) {
+-            return $m[1];
+-        }
+-
+-        // Fallback: INSERT INTO `<prefix>users`
+-        if ( preg_match( '/INSERT INTO `(\w+?)users`/i', $chunk, $m ) ) {
+-            return $m[1];
+-        }
+-
+-        return null;
+-    }
+-
+-    /**
+-     * Build the full list of source table names for a given prefix.
+-     */
+-    public static function get_source_tables( string $prefix ): array {
+-        return array_map( function ( $suffix ) use ( $prefix ) {
+-            return $prefix . $suffix;
+-        }, self::$needed_suffixes );
+-    }
+-
+-    // ──────────────────────────────────────────────
+-    //  Database source – test connection & detect prefix
+-    // ──────────────────────────────────────────────
+-
+-    /**
+-     * Test a direct MySQL connection to the source database and detect the
+-     * table prefix by looking for a `*_users` table.
+-     *
+-     * @return array{prefix:string, tables:int, db_name:string}|array{error:string}
+-     */
+-    public static function test_source_db( string $host, string $db_name, string $user, string $pass ): array {
+-        $conn = @new \mysqli( $host, $user, $pass, $db_name );
+-
+-        if ( $conn->connect_errno ) {
+-            return [ 'error' => 'Connection failed: ' . $conn->connect_error ];
+-        }
+-
+-        // Find the prefix by looking for a table ending in "users"
+-        $result = $conn->query( 'SHOW TABLES' );
+-        if ( ! $result ) {
+-            $conn->close();
+-            return [ 'error' => 'Cannot list tables in database.' ];
+-        }
+-
+-        $tables = [];
+-        $prefix = null;
+-        while ( $row = $result->fetch_row() ) {
+-            $tables[] = $row[0];
+-            if ( $prefix === null && preg_match( '/^(.+?)users$/', $row[0], $m ) ) {
+-                $prefix = $m[1];
+-            }
+-        }
+-        $conn->close();
+-
+-        if ( ! $prefix ) {
+-            return [ 'error' => 'Could not detect a table prefix (no *users table found).' ];
+-        }
+-
+-        return [
+-            'prefix'  => $prefix,
+-            'tables'  => count( $tables ),
+-            'db_name' => $db_name,
+-        ];
+-    }
+-
+-    /**
+-     * Copy a single source table from the source database into the local
+-     * WordPress database.  Called once per table by the AJAX handler.
+-     *
+-     * Connects to the source DB with the provided credentials, reads the
+-     * CREATE TABLE statement and all rows, then writes them into the local
+-     * WP database via $wpdb.
+-     *
+-     * @return array{table:string, rows:int, table_index:int, total_tables:int, tables_copied:int, complete:bool, percent:float}|array{error:string}
+-     */
+-    public static function copy_table_from_db( string $host, string $db_name, string $user, string $pass, string $source_prefix, int $table_index = 0, bool $dry_run = false ): array {
+-        global $wpdb;
+-
+-        $suffixes     = self::$needed_suffixes;
+-        $total_tables = count( $suffixes );
+-
+-        if ( $table_index >= $total_tables ) {
+-            return [
+-                'table_index'   => $table_index,
+-                'total_tables'  => $total_tables,
+-                'tables_copied' => $table_index,
+-                'complete'      => true,
+-                'percent'       => 100,
+-            ];
+-        }
+-
+-        $suffix       = $suffixes[ $table_index ];
+-        $source_table = $source_prefix . $suffix;
+-        $source_esc   = '`' . str_replace( '`', '``', $source_table ) . '`';
+-
+-        // Safety: never drop or overwrite live WordPress tables.
+-        // If the source prefix matches the local WP prefix, the tables
+-        // already exist in the local database — skip the copy entirely.
+-        if ( $source_prefix === $wpdb->prefix ) {
+-            $src_conn = @new \mysqli( $host, $user, $pass, $db_name );
+-            if ( $src_conn->connect_errno ) {
+-                return [ 'error' => 'Source DB connection failed: ' . $src_conn->connect_error ];
+-            }
+-            $count_result = $src_conn->query( "SELECT COUNT(*) FROM {$source_esc}" );
+-            $total_rows   = $count_result ? (int) $count_result->fetch_row()[0] : 0;
+-            $src_conn->close();
+-
+-            $copied = $table_index + 1;
+-
+-            return [
+-                'table'         => $source_table,
+-                'rows'          => $total_rows,
+-                'table_index'   => $copied,
+-                'total_tables'  => $total_tables,
+-                'tables_copied' => $copied,
+-                'complete'      => $copied >= $total_tables,
+-                'percent'       => round( ( $copied / $total_tables ) * 100, 1 ),
+-                'skipped'       => true,
+-            ];
+-        }
+-
+-        $local_table  = $source_table; // same name in local WP DB
+-        $local_esc    = '`' . str_replace( '`', '``', $local_table ) . '`';
+-
+-        // Prevent dropping any core WordPress table regardless of prefix detection.
+-        $wp_core_suffixes = [
+-            'users', 'usermeta', 'posts', 'postmeta', 'options',
+-            'comments', 'commentmeta', 'terms', 'term_taxonomy',
+-            'term_relationships', 'links',
+-        ];
+-        foreach ( $wp_core_suffixes as $core_suffix ) {
+-            if ( $local_table === $wpdb->prefix . $core_suffix ) {
+-                return [ 'error' => "Refusing to overwrite live WordPress table: {$local_table}" ];
+-            }
+-        }
+-
+-        // Connect to source database with the provided credentials
+-        $src_conn = @new \mysqli( $host, $user, $pass, $db_name );
+-        if ( $src_conn->connect_errno ) {
+-            return [ 'error' => 'Source DB connection failed: ' . $src_conn->connect_error ];
+-        }
+-        $src_conn->set_charset( 'utf8mb4' );
+-
+-        // Get the CREATE TABLE statement from the source
+-        $show = $src_conn->query( "SHOW CREATE TABLE {$source_esc}" );
+-        if ( ! $show || $show->num_rows === 0 ) {
+-            $err = $src_conn->error;
+-            $src_conn->close();
+-            return [ 'error' => "Table {$source_table} not found in source DB: {$err}" ];
+-        }
+-        $create_row = $show->fetch_row();
+-        $create_sql = $create_row[1]; // The full CREATE TABLE statement
+-
+-        // Rewrite the table name to the local name (they're the same, but be safe)
+-        $create_sql = preg_replace(
+-            '/CREATE TABLE\s+`[^`]+`/',
+-            "CREATE TABLE {$local_esc}",
+-            $create_sql,
+-            1
+-        );
+-
+-        // In dry-run mode, just count the rows without touching local tables.
+-        if ( $dry_run ) {
+-            $count_result = $src_conn->query( "SELECT COUNT(*) FROM {$source_esc}" );
+-            $total_rows   = $count_result ? (int) $count_result->fetch_row()[0] : 0;
+-            $src_conn->close();
+-        } else {
+-            // Drop + recreate locally
+-            $wpdb->query( "DROP TABLE IF EXISTS {$local_esc}" );
+-            $wpdb->suppress_errors( true );
+-            $create_result = $wpdb->query( $create_sql );
+-            if ( $create_result === false ) {
+-                $err = $wpdb->last_error;
+-                $wpdb->suppress_errors( false );
+-                $src_conn->close();
+-                return [ 'error' => "Failed to create local table {$local_table}: {$err}" ];
+-            }
+-            $wpdb->suppress_errors( false );
+-
+-            // Read rows from source and insert into local DB in batches
+-            $total_rows  = 0;
+-            $batch_size  = 500;
+-            $offset      = 0;
+-
+-            while ( true ) {
+-                $result = $src_conn->query(
+-                    "SELECT * FROM {$source_esc} LIMIT {$batch_size} OFFSET {$offset}"
+-                );
+-
+-                if ( ! $result || $result->num_rows === 0 ) {
+-                    break;
+-                }
+-
+-                $fields = $result->fetch_fields();
+-                $col_names = [];
+-                foreach ( $fields as $field ) {
+-                    $col_names[] = '`' . str_replace( '`', '``', $field->name ) . '`';
+-                }
+-                $col_sql = implode( ', ', $col_names );
+-
+-                // Build a multi-row INSERT for the batch. Use
+-                // $wpdb->prepare() with %s placeholders rather than
+-                // $wpdb->_real_escape(): prepare() is a public, supported
+-                // API that routes through mysqli_real_escape_string on
+-                // the same DB handle wpdb is connected to, with
+-                // consistent quoting semantics; _real_escape() is a
+-                // leading-underscore private helper that has been subtly
+-                // broken in past WP versions when called with
+-                // non-string input. NULL is still emitted literally
+-                // since wpdb::prepare coerces '%s' binds to strings.
+-                $value_groups = [];
+-                $bind_values  = [];
+-                while ( $row = $result->fetch_row() ) {
+-                    $placeholders = [];
+-                    foreach ( $row as $val ) {
+-                        if ( $val === null ) {
+-                            $placeholders[] = 'NULL';
+-                        } else {
+-                            $placeholders[] = '%s';
+-                            $bind_values[]  = (string) $val;
+-                        }
+-                    }
+-                    $value_groups[] = '(' . implode( ', ', $placeholders ) . ')';
+-                    $total_rows++;
+-                }
+-
+-                if ( ! empty( $value_groups ) ) {
+-                    $insert_sql = "INSERT IGNORE INTO {$local_esc} ({$col_sql}) VALUES " . implode( ', ', $value_groups );
+-                    $prepared   = $wpdb->prepare( $insert_sql, ...$bind_values );
+-                    if ( ! is_string( $prepared ) || $prepared === '' ) {
+-                        $src_conn->close();
+-                        return [ 'error' => "Failed to prepare INSERT batch for {$local_table}" ];
+-                    }
+-                    $wpdb->suppress_errors( true );
+-                    $wpdb->query( $prepared );
+-                    $wpdb->suppress_errors( false );
+-                }
+-
+-                $offset += $batch_size;
+-            }
+-
+-            $src_conn->close();
+-        }
+-        $copied = $table_index + 1;
+-
+-        return [
+-            'table'         => $local_table,
+-            'rows'          => $total_rows,
+-            'table_index'   => $copied,
+-            'total_tables'  => $total_tables,
+-            'tables_copied' => $copied,
+-            'complete'      => $copied >= $total_tables,
+-            'percent'       => round( ( $copied / $total_tables ) * 100, 1 ),
+-        ];
+-    }
+-
+     // ──────────────────────────────────────────────
+-    //  Phase 0 – Load source tables from SQL dump
++    //  Phase 4 – Create meals_clients
+     // ──────────────────────────────────────────────
+ 
+     /**
+-     * Stream the SQL dump and execute CREATE TABLE / INSERT statements
+-     * for the target tables only.  Processes up to LOAD_CHUNK_BYTES per call.
+-     *
+-     * @return array{statements:int, byte_offset:int, file_size:int, complete:bool, percent:float, errors:string[]}
+-     */
+-    public static function load_source( string $file_path, string $source_prefix, int $byte_offset = 0, bool $dry_run = false ): array {
+-        global $wpdb;
+-
+-        // Safety: refuse to load if the source prefix matches the live WP prefix.
+-        if ( $source_prefix === $wpdb->prefix ) {
+-            return [ 'error' => 'Source prefix matches the live WordPress prefix. Tables already exist — Phase 0 load is not needed.' ];
+-        }
+-
+-        $target_tables = self::get_source_tables( $source_prefix );
+-        $handle = @fopen( $file_path, 'r' );
+-        if ( ! $handle ) {
+-            return [ 'error' => 'Cannot open file: ' . $file_path ];
+-        }
+-
+-        $file_size = (int) filesize( $file_path );
+-        if ( $byte_offset > 0 ) {
+-            fseek( $handle, $byte_offset );
+-        }
+-
+-        $statements = 0;
+-        $buffer     = '';
+-        $in_target  = false;
+-        $bytes_read = 0;
+-        $errors     = [];
+-
+-        while ( ! feof( $handle ) && $bytes_read < self::LOAD_CHUNK_BYTES ) {
+-            $line = fgets( $handle, self::LOAD_FGETS_BYTES );
+-            if ( $line === false ) {
+-                break;
+-            }
+-            $bytes_read += strlen( $line );
+-            $trimmed = trim( $line );
+-
+-            // Skip comments, blank lines, SET, UNLOCK
+-            if ( $trimmed === '' || strpos( $trimmed, '--' ) === 0 || strpos( $trimmed, '/*' ) === 0 ) {
+-                if ( ! $in_target ) {
+-                    continue;
+-                }
+-            }
+-
+-            if ( strpos( $trimmed, 'UNLOCK TABLES' ) === 0 ) {
+-                $in_target = false;
+-                $buffer    = '';
+-                continue;
+-            }
+-
+-            if ( strpos( $trimmed, 'LOCK TABLES' ) === 0 ) {
+-                $in_target = false;
+-                $buffer    = '';
+-                continue;
+-            }
+-
+-            // Detect start of a new relevant statement
+-            if ( ! $in_target ) {
+-                $is_target = false;
+-                foreach ( $target_tables as $table ) {
+-                    if ( strpos( $trimmed, '`' . $table . '`' ) !== false ) {
+-                        $is_target = true;
+-                        break;
+-                    }
+-                }
+-
+-                if ( $is_target && preg_match( '/^(CREATE TABLE|INSERT INTO|DROP TABLE)/', $trimmed ) ) {
+-                    $in_target = true;
+-                    $buffer    = $line;
+-                }
+-            } else {
+-                $buffer .= $line;
+-            }
+-
+-            // Reject runaway statements. mysqldump with default settings
+-            // produces INSERTs well under a megabyte, so a buffer that
+-            // has grown past MAX_STATEMENT_BYTES without hitting a
+-            // terminator is either a malformed dump or an attacker
+-            // probing memory limits. Drop the partial statement, log
+-            // the event, and resume scanning for the next top-level
+-            // CREATE / INSERT / DROP.
+-            if ( $in_target && strlen( $buffer ) > self::MAX_STATEMENT_BYTES ) {
+-                $errors[]  = sprintf(
+-                    'Statement exceeded MAX_STATEMENT_BYTES (%d bytes) and was skipped.',
+-                    self::MAX_STATEMENT_BYTES
+-                );
+-                $buffer    = '';
+-                $in_target = false;
+-                continue;
+-            }
+-
+-            // Execute when statement is complete (ends with ;)
+-            if ( $in_target && substr( $trimmed, -1 ) === ';' ) {
+-                if ( ! $dry_run ) {
+-                    // Suppress errors so wpdb doesn't bail
+-                    $wpdb->suppress_errors( true );
+-                    $result = $wpdb->query( $buffer );
+-                    $wpdb->suppress_errors( false );
+-
+-                    if ( $result === false && $wpdb->last_error ) {
+-                        $errors[] = substr( $wpdb->last_error, 0, 200 );
+-                    }
+-                }
+-
+-                $statements++;
+-                $buffer    = '';
+-                $in_target = false;
+-            }
+-        }
+-
+-        $new_offset = $byte_offset + $bytes_read;
+-        $complete   = feof( $handle );
+-        fclose( $handle );
+-
+-        return [
+-            'statements'  => $statements,
+-            'byte_offset' => $new_offset,
+-            'file_size'   => $file_size,
+-            'complete'    => $complete,
+-            'percent'     => $file_size > 0 ? round( ( $new_offset / $file_size ) * 100, 1 ) : 100,
+-            'errors'      => array_slice( $errors, 0, 10 ),
+-        ];
+-    }
+-
+-    // ──────────────────────────────────────────────
+-    //  Phase 1 – Migrate users
+-    // ──────────────────────────────────────────────
+-
+-    /**
+-     * Copy users (excluding ID 1 / admin) from the source tables into the live
+-     * WordPress users / usermeta tables.  Preserves original IDs.
+-     */
+-    public static function migrate_users( string $source_prefix, int $offset = 0, bool $dry_run = false ): array {
+-        global $wpdb;
+-
+-        $src       = $source_prefix . 'users';
+-        $src_meta  = $source_prefix . 'usermeta';
+-        $dst       = $wpdb->users;
+-        $dst_meta  = $wpdb->usermeta;
+-        $total     = max( 0, (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$src}` WHERE ID > 1" ) );
+-
+-        $rows = $wpdb->get_results( $wpdb->prepare(
+-            "SELECT * FROM `{$src}` WHERE ID > 1 ORDER BY ID ASC LIMIT %d OFFSET %d",
+-            self::BATCH_SIZE,
+-            $offset
+-        ), ARRAY_A );
+-
+-        $stats = [ 'imported' => 0, 'skipped' => 0, 'errors' => 0, 'meta' => 0 ];
+-
+-        foreach ( $rows as $user ) {
+-            $uid = (int) $user['ID'];
+-
+-            // Skip if already present
+-            $exists = (int) $wpdb->get_var( $wpdb->prepare(
+-                "SELECT ID FROM {$dst} WHERE ID = %d OR user_email = %s",
+-                $uid,
+-                $user['user_email']
+-            ) );
+-
+-            if ( $exists ) {
+-                $stats['skipped']++;
+-                continue;
+-            }
+-
+-            if ( $dry_run ) {
+-                $stats['imported']++;
+-                continue;
+-            }
+-
+-            // Build column / value pairs
+-            $cols         = array_keys( $user );
+-            $placeholders = implode( ', ', array_fill( 0, count( $cols ), '%s' ) );
+-            $col_sql      = '`' . implode( '`, `', $cols ) . '`';
+-
+-            $result = $wpdb->query( $wpdb->prepare(
+-                "INSERT IGNORE INTO `{$dst}` ({$col_sql}) VALUES ({$placeholders})",
+-                array_values( $user )
+-            ) );
+-
+-            if ( $result === false ) {
+-                $stats['errors']++;
+-                continue;
+-            }
+-
+-            // Copy usermeta (auto-generate umeta_id).
+-            // Use a NOT EXISTS guard so re-runs skip rows that already exist,
+-            // without deleting any live WordPress usermeta.
+-            $meta_count = (int) $wpdb->query( $wpdb->prepare(
+-                "INSERT INTO `{$dst_meta}` (user_id, meta_key, meta_value)
+-                 SELECT s.user_id, s.meta_key, s.meta_value
+-                 FROM `{$src_meta}` s
+-                 WHERE s.user_id = %d
+-                   AND NOT EXISTS (
+-                       SELECT 1 FROM `{$dst_meta}` d
+-                       WHERE d.user_id = s.user_id
+-                         AND d.meta_key = s.meta_key
+-                   )",
+-                $uid
+-            ) );
+-
+-            $stats['meta'] += max( 0, $meta_count );
+-            $stats['imported']++;
+-        }
+-
+-        return [
+-            'stats'    => $stats,
+-            'offset'   => $offset + self::BATCH_SIZE,
+-            'total'    => $total,
+-            'complete' => count( $rows ) < self::BATCH_SIZE,
+-        ];
+-    }
+-
+-    // ──────────────────────────────────────────────
+-    //  Phase 2 – Migrate products
+-    // ──────────────────────────────────────────────
+-
+-    /**
+-     * Copy WooCommerce products (post_type = product | product_variation) plus
+-     * their postmeta, terms, and term relationships.
+-     */
+-    public static function migrate_products( string $source_prefix, int $offset = 0, bool $dry_run = false ): array {
+-        global $wpdb;
+-
+-        $src_posts  = $source_prefix . 'posts';
+-        $src_meta   = $source_prefix . 'postmeta';
+-        $src_terms  = $source_prefix . 'terms';
+-        $src_tt     = $source_prefix . 'term_taxonomy';
+-        $src_tr     = $source_prefix . 'term_relationships';
+-        $dst_posts  = $wpdb->posts;
+-        $dst_meta   = $wpdb->postmeta;
+-        $dst_terms  = $wpdb->terms;
+-        $dst_tt     = $wpdb->term_taxonomy;
+-        $dst_tr     = $wpdb->term_relationships;
+-
+-        $total = (int) $wpdb->get_var(
+-            "SELECT COUNT(*) FROM `{$src_posts}` WHERE post_type IN ('product','product_variation')"
+-        );
+-
+-        $ids = $wpdb->get_col( $wpdb->prepare(
+-            "SELECT ID FROM `{$src_posts}` WHERE post_type IN ('product','product_variation') ORDER BY ID ASC LIMIT %d OFFSET %d",
+-            self::BATCH_SIZE,
+-            $offset
+-        ) );
+-
+-        $stats = [ 'posts' => 0, 'meta' => 0, 'skipped' => 0 ];
+-
+-        if ( empty( $ids ) ) {
+-            return [ 'stats' => $stats, 'offset' => $offset, 'total' => $total, 'complete' => true ];
+-        }
+-
+-        $ids_str = implode( ',', array_map( 'intval', $ids ) );
+-
+-        if ( $dry_run ) {
+-            // Count posts that don't already exist in the destination
+-            $existing = (int) $wpdb->get_var(
+-                "SELECT COUNT(*) FROM `{$dst_posts}` WHERE ID IN ({$ids_str})"
+-            );
+-            $stats['posts']   = count( $ids ) - $existing;
+-            $stats['skipped'] = $existing;
+-
+-            // Count meta rows that would be inserted
+-            $stats['meta'] = (int) $wpdb->get_var(
+-                "SELECT COUNT(*) FROM `{$src_meta}` WHERE post_id IN ({$ids_str})"
+-            );
+-
+-            return [
+-                'stats'    => $stats,
+-                'offset'   => $offset + self::BATCH_SIZE,
+-                'total'    => $total,
+-                'complete' => count( $ids ) < self::BATCH_SIZE,
+-            ];
+-        }
+-
+-        // Import terms (once – idempotent via IGNORE)
+-        if ( $offset === 0 ) {
+-            $wpdb->query( "INSERT IGNORE INTO `{$dst_terms}` SELECT * FROM `{$src_terms}`" );
+-            $wpdb->query( "INSERT IGNORE INTO `{$dst_tt}` SELECT * FROM `{$src_tt}`" );
+-        }
+-
+-        // Posts
+-        $stats['posts'] = max( 0, (int) $wpdb->query(
+-            "INSERT IGNORE INTO `{$dst_posts}` SELECT * FROM `{$src_posts}` WHERE ID IN ({$ids_str})"
+-        ) );
+-
+-        // Postmeta (auto-generate meta_id).
+-        // Use a NOT EXISTS guard so re-runs skip rows that already exist,
+-        // without deleting any live WordPress postmeta (WC prices, images, etc.).
+-        $stats['meta'] = max( 0, (int) $wpdb->query(
+-            "INSERT INTO `{$dst_meta}` (post_id, meta_key, meta_value)
+-             SELECT s.post_id, s.meta_key, s.meta_value
+-             FROM `{$src_meta}` s
+-             WHERE s.post_id IN ({$ids_str})
+-               AND NOT EXISTS (
+-                   SELECT 1 FROM `{$dst_meta}` d
+-                   WHERE d.post_id = s.post_id
+-                     AND d.meta_key = s.meta_key
+-               )"
+-        ) );
+-
+-        // Term relationships
+-        $wpdb->query(
+-            "INSERT IGNORE INTO `{$dst_tr}` SELECT * FROM `{$src_tr}` WHERE object_id IN ({$ids_str})"
+-        );
+-
+-        return [
+-            'stats'    => $stats,
+-            'offset'   => $offset + self::BATCH_SIZE,
+-            'total'    => $total,
+-            'complete' => count( $ids ) < self::BATCH_SIZE,
+-        ];
+-    }
+-
+-    // ──────────────────────────────────────────────
+-    //  Phase 3 – Migrate orders (HPOS)
+-    // ──────────────────────────────────────────────
+-
+-    /**
+-     * Copy WooCommerce HPOS orders plus addresses, meta, line items,
+-     * and line-item meta.  Preserves all original IDs.
+-     */
+-    public static function migrate_orders( string $source_prefix, int $offset = 0, bool $dry_run = false ): array {
+-        global $wpdb;
+-
+-        $src_orders   = $source_prefix . 'wc_orders';
+-        $src_meta     = $source_prefix . 'wc_orders_meta';
+-        $src_addr     = $source_prefix . 'wc_order_addresses';
+-        $src_op       = $source_prefix . 'wc_order_operational_data';
+-        $src_items    = $source_prefix . 'woocommerce_order_items';
+-        $src_itemmeta = $source_prefix . 'woocommerce_order_itemmeta';
+-
+-        $pfx          = $wpdb->prefix;
+-        $dst_orders   = $pfx . 'wc_orders';
+-        $dst_meta     = $pfx . 'wc_orders_meta';
+-        $dst_addr     = $pfx . 'wc_order_addresses';
+-        $dst_op       = $pfx . 'wc_order_operational_data';
+-        $dst_items    = $pfx . 'woocommerce_order_items';
+-        $dst_itemmeta = $pfx . 'woocommerce_order_itemmeta';
+-
+-        $total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$src_orders}`" );
+-
+-        $order_ids = $wpdb->get_col( $wpdb->prepare(
+-            "SELECT id FROM `{$src_orders}` ORDER BY id ASC LIMIT %d OFFSET %d",
+-            self::BATCH_SIZE,
+-            $offset
+-        ) );
+-
+-        $stats = [ 'orders' => 0, 'items' => 0, 'itemmeta' => 0 ];
+-
+-        if ( empty( $order_ids ) ) {
+-            return [ 'stats' => $stats, 'offset' => $offset, 'total' => $total, 'complete' => true ];
+-        }
+-
+-        $oids = implode( ',', array_map( 'intval', $order_ids ) );
+-
+-        if ( $dry_run ) {
+-            // Count orders that don't already exist in the destination
+-            $existing = (int) $wpdb->get_var(
+-                "SELECT COUNT(*) FROM `{$dst_orders}` WHERE id IN ({$oids})"
+-            );
+-            $stats['orders'] = count( $order_ids ) - $existing;
+-
+-            // Count line items for these orders
+-            $stats['items'] = (int) $wpdb->get_var(
+-                "SELECT COUNT(*) FROM `{$src_items}` WHERE order_id IN ({$oids})"
+-            );
+-
+-            // Count line item meta
+-            $item_ids = $wpdb->get_col(
+-                "SELECT order_item_id FROM `{$src_items}` WHERE order_id IN ({$oids})"
+-            );
+-            if ( ! empty( $item_ids ) ) {
+-                $iids = implode( ',', array_map( 'intval', $item_ids ) );
+-                $stats['itemmeta'] = (int) $wpdb->get_var(
+-                    "SELECT COUNT(*) FROM `{$src_itemmeta}` WHERE order_item_id IN ({$iids})"
+-                );
+-            }
+-
+-            return [
+-                'stats'    => $stats,
+-                'offset'   => $offset + self::BATCH_SIZE,
+-                'total'    => $total,
+-                'complete' => count( $order_ids ) < self::BATCH_SIZE,
+-            ];
+-        }
+-
+-        // Order headers
+-        $stats['orders'] = max( 0, (int) $wpdb->query(
+-            "INSERT IGNORE INTO `{$dst_orders}` SELECT * FROM `{$src_orders}` WHERE id IN ({$oids})"
+-        ) );
+-
+-        // Order meta
+-        $wpdb->query(
+-            "INSERT IGNORE INTO `{$dst_meta}` SELECT * FROM `{$src_meta}` WHERE order_id IN ({$oids})"
+-        );
+-
+-        // Addresses
+-        $wpdb->query(
+-            "INSERT IGNORE INTO `{$dst_addr}` SELECT * FROM `{$src_addr}` WHERE order_id IN ({$oids})"
+-        );
+-
+-        // Operational data
+-        $wpdb->query(
+-            "INSERT IGNORE INTO `{$dst_op}` SELECT * FROM `{$src_op}` WHERE order_id IN ({$oids})"
+-        );
+-
+-        // Line items (preserve order_item_id for itemmeta FK)
+-        $stats['items'] = max( 0, (int) $wpdb->query(
+-            "INSERT IGNORE INTO `{$dst_items}` SELECT * FROM `{$src_items}` WHERE order_id IN ({$oids})"
+-        ) );
+-
+-        // Line item meta
+-        $item_ids = $wpdb->get_col(
+-            "SELECT order_item_id FROM `{$src_items}` WHERE order_id IN ({$oids})"
+-        );
+-
+-        if ( ! empty( $item_ids ) ) {
+-            $iids = implode( ',', array_map( 'intval', $item_ids ) );
+-            $stats['itemmeta'] = max( 0, (int) $wpdb->query(
+-                "INSERT IGNORE INTO `{$dst_itemmeta}` SELECT * FROM `{$src_itemmeta}` WHERE order_item_id IN ({$iids})"
+-            ) );
+-        }
+-
+-        return [
+-            'stats'    => $stats,
+-            'offset'   => $offset + self::BATCH_SIZE,
+-            'total'    => $total,
+-            'complete' => count( $order_ids ) < self::BATCH_SIZE,
+-        ];
+-    }
+-
+-    // ──────────────────────────────────────────────
+-    //  Phase 4 – Create meals_clients in external DB
+-    // ──────────────────────────────────────────────
+-
+-    /**
+-     * Read usermeta for SDNB / Veterans / Extra Mural users and create
+-     * corresponding records in the external meals_clients table with
+-     * encrypted sensitive fields and auto-generated initials.
++     * Create meals_clients records for government clients found in the live
++     * WP/WC tables. Delegated to the consolidated engine so client creation
++     * has a single implementation.
+      */
+     public static function create_clients( int $offset = 0, bool $dry_run = false ): array {
+-        // Delegated to the consolidated engine so client creation has a
+-        // single implementation. This method remains as the Phase 4 entry
+-        // point for the existing Enzebra import UI; the logic lives in
+-        // MealsDB_Migration_Consolidated::run_phase_create_clients.
+         return MealsDB_Migration_Consolidated::run_phase_create_clients( $offset, $dry_run );
+     }
+ 
+@@ -799,43 +43,14 @@ class MealsDB_Migration {
+     // ──────────────────────────────────────────────
+ 
+     /**
+-     * For each meals_clients record, create a default rate row from the
+-     * imported basic_cost usermeta value.
++     * For each meals_clients record, create a default rate row. Delegated to
++     * the consolidated engine (single implementation, includes the
++     * OFFSET-drift pagination fix).
+      */
+     public static function create_rates( int $offset = 0, bool $dry_run = false ): array {
+-        // Delegated to the consolidated engine (single implementation,
+-        // includes the OFFSET-drift pagination fix). Phase 5 entry point
+-        // for the existing Enzebra import UI.
+         return MealsDB_Migration_Consolidated::run_phase_create_rates( $offset, $dry_run );
+     }
+ 
+-    // ──────────────────────────────────────────────
+-    //  Cleanup – drop source tables
+-    // ──────────────────────────────────────────────
+-
+-    /**
+-     * Drop all source-prefixed tables that were imported in Phase 0.
+-     */
+-    public static function cleanup( string $source_prefix ): array {
+-        global $wpdb;
+-
+-        // Safety: never drop tables that belong to the live WordPress installation.
+-        if ( $source_prefix === $wpdb->prefix ) {
+-            return [ 'dropped' => 0, 'skipped' => true ];
+-        }
+-
+-        $tables  = self::get_source_tables( $source_prefix );
+-        $dropped = 0;
+-
+-        foreach ( $tables as $table ) {
+-            $escaped = '`' . str_replace( '`', '``', $table ) . '`';
+-            $wpdb->query( "DROP TABLE IF EXISTS {$escaped}" );
+-            $dropped++;
+-        }
+-
+-        return [ 'dropped' => $dropped ];
+-    }
+-
+     // ──────────────────────────────────────────────
+     //  Progress helpers
+     // ──────────────────────────────────────────────
+@@ -844,9 +59,6 @@ class MealsDB_Migration {
+         $default = [
+             'phase'         => 0,
+             'phase_offset'  => 0,
+-            'source_prefix' => '',
+-            'file_path'     => '',
+-            'byte_offset'   => 0,
+             'dry_run'       => true,
+             'complete'      => false,
+         ];
+diff --git a/tests/test-migration-constants.php b/tests/test-migration-constants.php
+deleted file mode 100644
+index 3cd6e58..0000000
+--- a/tests/test-migration-constants.php
++++ /dev/null
+@@ -1,69 +0,0 @@
+-<?php
+-/**
+- * Sanity tests for MealsDB_Migration size-limit constants (J3).
+- *
+- * Guards the numeric ceilings we rely on when reading third-party SQL
+- * dumps — a refactor that silently bumps LOAD_FGETS_BYTES back to
+- * 32 MB or strips MAX_STATEMENT_BYTES should be caught by CI.
+- *
+- * Run with: php tests/test-migration-constants.php
+- */
+-
+-if (!defined('ABSPATH')) {
+-    define('ABSPATH', dirname(__DIR__) . '/');
+-}
+-
+-require_once __DIR__ . '/../includes/class-autoloader.php';
+-MealsDB_Autoloader::register(dirname(__DIR__) . '/');
+-
+-if (!function_exists('__')) { function __(string $t, string $d = 'default') { return $t; } }
+-
+-$failures = [];
+-$passed   = 0;
+-function assert_true($value, string $label) {
+-    global $failures, $passed;
+-    if ((bool) $value) { $passed++; return; }
+-    $failures[] = "FAIL: $label (expected true, got " . var_export($value, true) . ')';
+-}
+-
+-// LOAD_CHUNK_BYTES stays at 10 MB (existing contract).
+-assert_true(
+-    MealsDB_Migration::LOAD_CHUNK_BYTES === 10 * 1024 * 1024,
+-    'LOAD_CHUNK_BYTES is 10 MB (AJAX chunk window)'
+-);
+-
+-// LOAD_FGETS_BYTES <= LOAD_CHUNK_BYTES so one fgets() call cannot
+-// exceed a full chunk, and <= 8 MB so an adversarial dump can't
+-// allocate 32 MB per fgets() the way the original implementation could.
+-assert_true(
+-    MealsDB_Migration::LOAD_FGETS_BYTES > 0,
+-    'LOAD_FGETS_BYTES is positive'
+-);
+-assert_true(
+-    MealsDB_Migration::LOAD_FGETS_BYTES <= MealsDB_Migration::LOAD_CHUNK_BYTES,
+-    'LOAD_FGETS_BYTES does not exceed LOAD_CHUNK_BYTES'
+-);
+-assert_true(
+-    MealsDB_Migration::LOAD_FGETS_BYTES <= 8 * 1024 * 1024,
+-    'LOAD_FGETS_BYTES is capped at 8 MB (down from the original 32 MB)'
+-);
+-
+-// MAX_STATEMENT_BYTES generous enough for real mysqldump output but
+-// low enough to catch runaway / adversarial dumps.
+-assert_true(
+-    MealsDB_Migration::MAX_STATEMENT_BYTES >= MealsDB_Migration::LOAD_FGETS_BYTES,
+-    'MAX_STATEMENT_BYTES accommodates at least one full fgets buffer'
+-);
+-assert_true(
+-    MealsDB_Migration::MAX_STATEMENT_BYTES <= 64 * 1024 * 1024,
+-    'MAX_STATEMENT_BYTES does not exceed 64 MB (practical MySQL ceiling)'
+-);
+-
+-if (!empty($failures)) {
+-    fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");
+-    fwrite(STDERR, sprintf("%d passed, %d failed\n", $passed, count($failures)));
+-    exit(1);
+-}
+-
+-fwrite(STDOUT, sprintf("OK: %d assertions passed\n", $passed));
+-exit(0);
