@@ -66,6 +66,18 @@ class MealsDB_Sync_Mutate {
      * @return true|WP_Error True on success, WP_Error on failure.
      */
     public function update_wp_user(int $user_id, array $fields) {
+        // Shadow mode: the WP user record is legacy-visible. Suppress ALL
+        // write-back here — this is the single chokepoint every
+        // wp_update_user / update_user_meta call flows through, so guarding
+        // it covers every caller (push_to_woocommerce, the address/customer
+        // sync hooks, and the nightly sync alike).
+        if (MealsDB_Shadow_Mode::is_enabled()) {
+            return new WP_Error(
+                'mealsdb_shadow_mode',
+                __('Shadow mode is active; write-back to WordPress users is suppressed.', 'meals-db')
+            );
+        }
+
         $user = get_userdata($user_id);
 
         if (!$user instanceof WP_User) {
@@ -93,6 +105,8 @@ class MealsDB_Sync_Mutate {
      * @return true|WP_Error
      */
     public function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
+        // (Shadow mode is enforced at the update_wp_user chokepoint below,
+        // which every WP-user write flows through.)
         // Only WP-authoritative fields may be pushed to WooCommerce.
         if (!in_array($field, MealsDB_Sync::get_wp_authoritative_fields(), true)) {
             return new WP_Error(

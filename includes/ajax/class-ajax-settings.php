@@ -182,6 +182,12 @@ class MealsDB_Ajax_Settings {
         // silently cleared the key, which would render every encrypted
         // PII column unrecoverable on the next read.
 
+        // Shadow mode flag. Stored explicitly so MealsDB_Shadow_Mode can
+        // distinguish "operator turned it off" from "never set" (the latter
+        // fails safe to ON). A present, unchecked checkbox submits '0'.
+        $settings[MealsDB_Shadow_Mode::SETTING_KEY] =
+            empty($_POST['shadow_mode']) ? '0' : '1';
+
         update_option( 'mealsdb_settings', $settings, false );
 
         // Audit encryption-key rotation. The key value is NOT logged

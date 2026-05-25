@@ -82,16 +82,20 @@ class MealsDB_Allocation_Hooks {
                 return;
             }
 
-            // Only process orders that have a mealsdb client
-            $client_user_id = (int) $order->get_meta('mealsdb_client_user_id');
-            if ($client_user_id <= 0) {
-                self::safe_record_hook(
-                    'woocommerce_new_order', 'order', $order_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'no_mealsdb_client']
-                );
-                return;
-            }
+            // Do NOT pre-filter on mealsdb_client_user_id here. That meta is
+            // set only by Quick Order, so requiring it silently skipped every
+            // order placed through the normal WooCommerce screen — a billing
+            // gap. allocate_order() and the fee applier each resolve the
+            // client themselves (meta, then the order's native customer_id)
+            // and no-op cleanly when the customer isn't a mealsdb client, so
+            // a too-narrow gate here is both redundant and harmful. Let any
+            // shop_order through and resolve downstream.
+
+            // Apply program fees (delivery fee + monthly contribution) for
+            // qualifying government clients. Idempotent and source-agnostic:
+            // runs for QO and normal orders alike. Must run before
+            // allocate_order so the order reflects final line items.
+            MealsDB_Order_Fees::apply_to_order($order_id);
 
             $engine = new MealsDB_Allocation_Engine();
             $engine->allocate_order($order_id);
@@ -137,6 +141,7 @@ class MealsDB_Allocation_Hooks {
 
             // Moving FROM a cancelled state back to active — reallocate
             if (in_array($to, $active_statuses, true) && in_array($from, $cancel_statuses, true)) {
+                MealsDB_Order_Fees::apply_to_order($order_id);
                 $engine->allocate_order($order_id);
                 self::safe_record_hook(
                     'woocommerce_order_status_changed', 'order', $order_id,
@@ -148,6 +153,7 @@ class MealsDB_Allocation_Hooks {
 
             // Any other status change on an active order — re-process in case items changed
             if (in_array($to, $active_statuses, true)) {
+                MealsDB_Order_Fees::apply_to_order($order_id);
                 $engine->allocate_order($order_id);
                 self::safe_record_hook(
                     'woocommerce_order_status_changed', 'order', $order_id,
