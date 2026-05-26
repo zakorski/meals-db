@@ -1748,8 +1748,11 @@
                 const $panel = $('#mealsdb-qo-next-dates');
                 if (!d.has_client) { $panel.hide(); return; }
                 $panel.show();
-                $('#mealsdb-qo-next-order-date').val(d.next_order_date || d.rule_default_order || '');
-                $('#mealsdb-qo-next-delivery-date').val(d.next_delivery_date || d.rule_default_delivery || '');
+                // Prefill with the computed "after this order" date
+                // (rule_default_*) so the operator sees what the dates will
+                // become; fall back to the stored value only if no compute.
+                $('#mealsdb-qo-next-order-date').val(d.rule_default_order || d.next_order_date || '');
+                $('#mealsdb-qo-next-delivery-date').val(d.rule_default_delivery || d.next_delivery_date || '');
                 $('#mealsdb-qo-next-order-default').text(
                     d.rule_default_order ? 'Normally: ' + d.rule_default_order : ''
                 );

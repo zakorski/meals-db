@@ -182,9 +182,11 @@ class MealsDB_Allocation_Engine {
         if ($cursor < $month_start) {
             $diff_days = (int) $cursor->diff($month_start)->days;
             // Jump forward in delivery_frequency steps, leaving a buffer of one period before month_start.
-            $periods_to_skip = max(0, (int) floor($diff_days / $delivery_frequency) - 1);
+            // delivery_frequency is a WEEK count, so a period is (frequency * 7) days.
+            $period_days     = $delivery_frequency * 7;
+            $periods_to_skip = max(0, (int) floor($diff_days / $period_days) - 1);
             if ($periods_to_skip > 0) {
-                $cursor->modify('+' . ($periods_to_skip * $delivery_frequency) . ' days');
+                $cursor->modify('+' . ($periods_to_skip * $period_days) . ' days');
             }
         }
 
@@ -200,7 +202,7 @@ class MealsDB_Allocation_Engine {
             $delivery_date = clone $cursor;
             $coverage_start = clone $delivery_date;
             $coverage_end   = clone $delivery_date;
-            $coverage_end->modify('+' . ($delivery_frequency - 1) . ' days');
+            $coverage_end->modify('+' . (($delivery_frequency * 7) - 1) . ' days');
 
             // If this delivery's coverage_start is past the billing month, stop.
             if ($coverage_start > $month_end) {
@@ -216,7 +218,7 @@ class MealsDB_Allocation_Engine {
                 ];
             }
 
-            $cursor->modify('+' . $delivery_frequency . ' days');
+            $cursor->modify('+' . ($delivery_frequency * 7) . ' days');
         }
 
         return $results;
