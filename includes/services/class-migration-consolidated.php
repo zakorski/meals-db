@@ -105,6 +105,7 @@ class MealsDB_Migration_Consolidated {
             5 => ['method' => 'run_phase_next_dates',     'label' => 'Backfill Next Dates'],
             6 => ['method' => 'run_phase_private_clients','label' => 'Promote Private Clients'],
             7 => ['method' => 'run_phase_allocations',    'label' => 'Backfill Allocations'],
+            8 => ['method' => 'run_phase_delivery_day',   'label' => 'Backfill Delivery Day'],
         ];
     }
 
@@ -1306,6 +1307,84 @@ class MealsDB_Migration_Consolidated {
             'offset'   => $offset + 1,
             'total'    => $total_months,
             'complete' => ($offset + 1) >= $total_months,
+        ];
+    }
+
+    // =====================================================================
+    //  PHASE 8 — Backfill Delivery Day
+    // =====================================================================
+
+    /**
+     * Populate delivery_day on client rows from the zone delivery schedule,
+     * for any active client whose delivery_day is currently blank. This runs
+     * as the final consolidated step so clients just created by phases 1-7
+     * immediately get a delivery day filled in.
+     *
+     * Blank-fill only: clients that already have a delivery_day are never
+     * touched, so it is idempotent and safe to re-run. Logic mirrors
+     * MealsDB_Ajax_Delivery_Slips::backfill_delivery_day (the standalone
+     * Data Ops button), kept identical so both entry points behave the same.
+     *
+     * Single bulk pass — not chunked — so it completes in one call.
+     *
+     * @param array<string,mixed> $args Unused.
+     * @return array<string,mixed>
+     */
+    public static function run_phase_delivery_day(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        global $wpdb;
+
+        $schedule = get_option('mealsdb_zone_delivery_schedule', []);
+        if (empty($schedule) || !is_array($schedule)) {
+            // Nothing to do (no schedule configured) — succeed as a no-op so
+            // the consolidated run still reports phase 8 complete.
+            return [
+                'stats'    => ['updated' => 0, 'note' => 'No zone delivery schedule configured.'],
+                'offset'   => 1,
+                'total'    => 1,
+                'complete' => true,
+            ];
+        }
+
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $updated = 0;
+        $would   = 0;
+
+        foreach ($schedule as $zone_name => $config) {
+            if (empty($config['day'])) {
+                continue;
+            }
+            $day = strtolower((string) $config['day']);
+
+            if ($dry_run) {
+                $would += (int) $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM `{$clients_table}`
+                     WHERE delivery_area_name = %s
+                       AND (delivery_day IS NULL OR delivery_day = '')
+                       AND active = 1",
+                    $zone_name
+                ));
+                continue;
+            }
+
+            $wpdb->query($wpdb->prepare(
+                "UPDATE `{$clients_table}`
+                 SET delivery_day = %s
+                 WHERE delivery_area_name = %s
+                   AND (delivery_day IS NULL OR delivery_day = '')
+                   AND active = 1",
+                $day,
+                $zone_name
+            ));
+            $updated += (int) $wpdb->rows_affected;
+        }
+
+        return [
+            'stats'    => $dry_run
+                ? ['would_update' => $would]
+                : ['updated' => $updated],
+            'offset'   => 1,
+            'total'    => 1,
+            'complete' => true,
         ];
     }
 

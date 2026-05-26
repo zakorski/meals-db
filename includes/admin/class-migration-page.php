@@ -157,7 +157,7 @@ class MealsDB_Migration_Page {
                 <p>
                     <label><input type="checkbox" id="cons-dry-run" checked> <?php esc_html_e( 'Dry run (no writes)', 'meals-db' ); ?></label>
                     &nbsp;
-                    <label><input type="checkbox" id="cons-ignore-rate-limit"> <?php esc_html_e( 'Ignore rate limit (a full real run starts all 7 phases and exceeds the 5/hour cap)', 'meals-db' ); ?></label>
+                    <label><input type="checkbox" id="cons-ignore-rate-limit"> <?php esc_html_e( 'Ignore rate limit (a full real run starts all 8 phases and exceeds the 5/hour cap)', 'meals-db' ); ?></label>
                 </p>
                 <p>
                     <label><?php esc_html_e( 'Private lookback (months):', 'meals-db' ); ?>
@@ -183,6 +183,7 @@ class MealsDB_Migration_Page {
                         5 => __( 'Backfill Next Dates', 'meals-db' ),
                         6 => __( 'Promote Private Clients', 'meals-db' ),
                         7 => __( 'Backfill Allocations', 'meals-db' ),
+                        8 => __( 'Backfill Delivery Day', 'meals-db' ),
                     ];
                     foreach ( $cons_phases as $num => $label ) :
                         ?>

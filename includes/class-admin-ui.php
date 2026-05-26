@@ -90,6 +90,24 @@ class MealsDB_Admin_UI {
             ['MealsDB_Quick_Order_UI', 'render_quick_order_page']
         );
 
+        add_submenu_page(
+            'mealsdb',
+            __('Reports', 'meals-db'),
+            __('Reports', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
+            'mealsdb-reports',
+            ['MealsDB_Admin_UI', 'render_reports_page']
+        );
+
+        add_submenu_page(
+            'mealsdb',
+            __('Data Ops', 'meals-db'),
+            __('Data Ops', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
+            'mealsdb-data-ops',
+            ['MealsDB_Admin_UI', 'render_data_ops_page']
+        );
+
     }
 
     /**
@@ -242,8 +260,10 @@ class MealsDB_Admin_UI {
         $is_main_page        = in_array($hook, ['toplevel_page_mealsdb', 'toplevel_page_meals-db'], true);
         $is_staff_page       = in_array($hook, ['mealsdb_page_meals-db-staff', 'meals-db_page_meals-db-staff'], true);
         $is_quick_order_page = in_array($hook, ['mealsdb_page_mealsdb_quick_order', 'meals-db_page_mealsdb_quick_order', 'meals-db_page_meals-db-quick-order'], true);
+        $is_reports_page     = in_array($hook, ['mealsdb_page_mealsdb-reports', 'meals-db_page_mealsdb-reports'], true);
+        $is_data_ops_page    = in_array($hook, ['mealsdb_page_mealsdb-data-ops', 'meals-db_page_mealsdb-data-ops'], true);
 
-        if (!$is_main_page && !$is_staff_page && !$is_quick_order_page) {
+        if (!$is_main_page && !$is_staff_page && !$is_quick_order_page && !$is_reports_page && !$is_data_ops_page) {
             return;
         }
 
@@ -318,6 +338,21 @@ class MealsDB_Admin_UI {
                 'before'
             );
 
+            return;
+        }
+
+        // Reports page: read-only report scripts (shared report-utils +
+        // each report's JS). Handlers unchanged; only the host page moved.
+        if ($is_reports_page) {
+            $this->enqueue_reports_page_scripts();
+            return;
+        }
+
+        // Data Ops page: the settings JS (private backfills, enrich, product
+        // sync, delivery-day backfill) plus the migration/updates JS (DB sync,
+        // allowance/address/allocation backfills, fetch products).
+        if ($is_data_ops_page) {
+            $this->enqueue_data_ops_page_scripts();
             return;
         }
 
@@ -508,6 +543,107 @@ class MealsDB_Admin_UI {
      * branch stays a self-contained "register utils, enqueue page JS,
      * attach config" unit.
      */
+    /**
+     * Enqueue scripts for the Reports submenu page. Mirrors the per-tab
+     * enqueue the reports used as tabs, just keyed to the new page. Loads
+     * the shared report-utils plus all three report scripts (the page
+     * sub-tabs switch between them client-side / via ?sub=).
+     */
+    private function enqueue_reports_page_scripts(): void {
+        // Private Sales uses inline JS in its view (ajaxurl + own nonce), so
+        // it only needs jQuery present. Fee Reconciliation and Order Errors
+        // have dedicated JS files enqueued below with report-utils.
+        wp_enqueue_script('jquery');
+
+        $report_utils_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/report-utils.js';
+        $report_utils_version = file_exists($report_utils_path) ? filemtime($report_utils_path) : MEALS_DB_VERSION;
+        wp_enqueue_script(
+            'mealsdb-report-utils',
+            MEALS_DB_PLUGIN_URL . 'assets/js/report-utils.js',
+            ['jquery'],
+            $report_utils_version,
+            true
+        );
+
+        $bundles = [
+            'mealsdb-fee-reconciliation' => [
+                'file' => 'assets/js/fee-reconciliation.js',
+                'cfg'  => 'mealsdbFeeReconciliation',
+                'data' => [
+                    'ajaxUrl' => admin_url('admin-ajax.php'),
+                    'nonce'   => wp_create_nonce('mealsdb_nonce'),
+                    'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&id='),
+                ],
+            ],
+            'mealsdb-order-errors' => [
+                'file' => 'assets/js/order-errors.js',
+                'cfg'  => 'mealsdbOrderErrors',
+                'data' => [
+                    'ajaxUrl' => admin_url('admin-ajax.php'),
+                    'nonce'   => wp_create_nonce('mealsdb_nonce'),
+                    'editUrl' => admin_url('post.php?action=edit&post='),
+                ],
+            ],
+        ];
+
+        foreach ($bundles as $handle => $spec) {
+            $path = MEALS_DB_PLUGIN_DIR . $spec['file'];
+            if (!file_exists($path)) {
+                continue;
+            }
+            wp_enqueue_script(
+                $handle,
+                MEALS_DB_PLUGIN_URL . $spec['file'],
+                ['jquery', 'mealsdb-report-utils'],
+                filemtime($path),
+                true
+            );
+            wp_add_inline_script(
+                $handle,
+                'window.' . $spec['cfg'] . ' = ' . wp_json_encode($spec['data']) . ';',
+                'before'
+            );
+        }
+    }
+
+    /**
+     * Enqueue scripts for the Data Ops submenu page.
+     *
+     * The DB-sync / allowance / address / allocation / fetch-products
+     * behaviour is INLINE in views/data-ops.php (relocated from the old
+     * updates view) and self-contained — it uses the global `ajaxurl` and
+     * generates its own nonces, so it only needs jQuery on the page.
+     *
+     * The private-backfill / deactivation / enrich / product-sync /
+     * delivery-day behaviour lives in settings.js and needs its
+     * window.mealsdbSettings config object.
+     */
+    private function enqueue_data_ops_page_scripts(): void {
+        wp_enqueue_script('jquery');
+
+        $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/settings.js';
+        $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
+        wp_enqueue_script(
+            'mealsdb-settings',
+            MEALS_DB_PLUGIN_URL . 'assets/js/settings.js',
+            ['jquery'],
+            $version,
+            true
+        );
+        $data = [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonces'  => [
+                'settings' => wp_create_nonce('mealsdb_settings_nonce'),
+                'general'  => wp_create_nonce('mealsdb_nonce'),
+            ],
+        ];
+        wp_add_inline_script(
+            'mealsdb-settings',
+            'window.mealsdbSettings = ' . wp_json_encode($data) . ';',
+            'before'
+        );
+    }
+
     private function enqueue_report_scripts(string $tab): void {
         if (!in_array($tab, ['settings', 'fees', 'errors'], true)) {
             return;
@@ -602,18 +738,52 @@ class MealsDB_Admin_UI {
     }
 
     /**
-     * Render the main admin page, routing to correct tab.
+     * Render the Reports submenu page. Sub-tabs select among the
+     * read-only reports relocated here from the old tabbed cards.
      */
-    public static function render_main_page() {
+    public static function render_reports_page() {
         MealsDB_Permissions::enforce();
 
+        $sub = isset($_GET['sub']) ? sanitize_key(wp_unslash((string) $_GET['sub'])) : 'fees';
+        $subtabs = [
+            'fees'     => __('Fee Reconciliation', 'meals-db'),
+            'privates' => __('Private Sales', 'meals-db'),
+            'errors'   => __('Order Errors', 'meals-db'),
+        ];
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Reports', 'meals-db') . '</h1>';
+        self::render_subnav('mealsdb-reports', $subtabs, $sub);
+        echo '<div class="mealsdb-tab-content">';
+        switch ($sub) {
+            case 'privates':
+                include MealsDB_Plugin::path('views/private-sales.php');
+                break;
+            case 'errors':
+                include MealsDB_Plugin::path('views/order-errors.php');
+                break;
+            case 'fees':
+            default:
+                include MealsDB_Plugin::path('views/fee-reconciliation.php');
+                break;
+        }
+        echo '</div></div>';
+    }
+
+    /**
+     * Render the Data Ops submenu page. Hosts every data-mutating
+     * operation relocated here from the old Settings and Updates cards.
+     * The handlers are unchanged; only their host page moved.
+     */
+    public static function render_data_ops_page() {
+        MealsDB_Permissions::enforce();
+
+        // POST handlers relocated from render_main_page (schema update,
+        // force rebuild). Delete-non-admin-users was removed entirely.
         if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'update_schema') {
             check_admin_referer('mealsdb_update_schema', 'mealsdb_update_schema_nonce');
-
             require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-sync.php';
-
             $result = MealsDB_Schema_Sync::run_full_sync();
-
             if (is_wp_error($result)) {
                 add_action('admin_notices', function() use ($result) {
                     echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
@@ -627,15 +797,11 @@ class MealsDB_Admin_UI {
 
         if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'force_rebuild') {
             check_admin_referer('mealsdb_force_rebuild', 'mealsdb_force_rebuild_nonce');
-
             require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-rebuild.php';
-
             $confirmation = isset($_POST['mealsdb_rebuild_confirm'])
                 ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_rebuild_confirm']))
                 : '';
-
             $result = MealsDB_Schema_Rebuild::run($confirmation);
-
             if (is_wp_error($result)) {
                 add_action('admin_notices', function() use ($result) {
                     echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
@@ -647,27 +813,34 @@ class MealsDB_Admin_UI {
             }
         }
 
-        if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'delete_nonadmin_users') {
-            check_admin_referer('mealsdb_delete_nonadmin_users', 'mealsdb_delete_nonadmin_users_nonce');
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Data Ops', 'meals-db') . '</h1>';
+        echo '<div class="mealsdb-tab-content">';
+        include MealsDB_Plugin::path('views/data-ops.php');
+        echo '</div></div>';
+    }
 
-            require_once MEALS_DB_PLUGIN_DIR . 'includes/class-user-delete.php';
-
-            $confirmation = isset($_POST['mealsdb_delete_confirm'])
-                ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_delete_confirm']))
-                : '';
-
-            $result = MealsDB_User_Delete::run($confirmation);
-
-            if (is_wp_error($result)) {
-                add_action('admin_notices', function() use ($result) {
-                    echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
-                });
-            } else {
-                add_action('admin_notices', function() use ($result) {
-                    echo MealsDB_Admin_UI::render_user_delete_summary($result);
-                });
-            }
+    /**
+     * Render a simple sub-tab nav bar for the new submenu pages.
+     */
+    private static function render_subnav(string $page, array $subtabs, string $active): void {
+        echo '<h2 class="nav-tab-wrapper">';
+        foreach ($subtabs as $slug => $label) {
+            $url = admin_url('admin.php?page=' . $page . '&sub=' . $slug);
+            $cls = 'nav-tab' . ($slug === $active ? ' nav-tab-active' : '');
+            printf('<a href="%s" class="%s">%s</a>', esc_url($url), esc_attr($cls), esc_html($label));
         }
+        echo '</h2>';
+    }
+
+    /**
+     * Render the main admin page, routing to correct tab.
+     */
+    public static function render_main_page() {
+        MealsDB_Permissions::enforce();
+
+        // NOTE: the update_schema and force_rebuild POST handlers moved to
+        // render_data_ops_page(); delete_nonadmin_users was removed entirely.
 
         $tab = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : 'sync';
 
@@ -718,22 +891,6 @@ class MealsDB_Admin_UI {
 
             case 'po':
                 include MealsDB_Plugin::path('views/purchase-order.php');
-                break;
-
-            case 'fees':
-                include MealsDB_Plugin::path('views/fee-reconciliation.php');
-                break;
-
-            case 'privates':
-                include MealsDB_Plugin::path('views/private-sales.php');
-                break;
-
-            case 'errors':
-                include MealsDB_Plugin::path('views/order-errors.php');
-                break;
-
-            case 'updates':
-                include MealsDB_Plugin::path('views/updates.php');
                 break;
 
             case 'settings':
@@ -808,54 +965,6 @@ class MealsDB_Admin_UI {
         return (string) ob_get_clean();
     }
 
-    /**
-     * Render a structured summary for user deletion results.
-     *
-     * @param array<string, mixed> $result
-     */
-    public static function render_user_delete_summary(array $result): string {
-        $deleted      = $result['deleted'] ?? [];
-        $skipped      = $result['skipped'] ?? [];
-        $errors       = $result['errors'] ?? [];
-        $total_count  = $result['total_count'] ?? 0;
-
-        ob_start();
-        ?>
-        <div class="notice notice-warning">
-            <p><strong><?php echo esc_html__('Non-Admin User Deletion completed.', 'meals-db'); ?></strong></p>
-            <p class="description"><?php echo esc_html__('All non-administrator WordPress users have been processed.', 'meals-db'); ?></p>
-            <ul>
-                <li><strong><?php echo esc_html__('Total users processed:', 'meals-db'); ?></strong> <?php echo esc_html($total_count); ?></li>
-                <li><strong><?php echo esc_html__('Users deleted:', 'meals-db'); ?></strong> <?php echo esc_html(count($deleted)); ?></li>
-                <li><strong><?php echo esc_html__('Users skipped (administrators):', 'meals-db'); ?></strong> <?php echo esc_html(count($skipped)); ?></li>
-                <?php if (!empty($errors)) : ?>
-                    <li>
-                        <strong><?php echo esc_html__('Deletion failures:', 'meals-db'); ?></strong>
-                        <ul>
-                            <?php foreach ($errors as $error) : ?>
-                                <li><?php echo esc_html(($error['login'] ?? 'Unknown user') . ' (' . ($error['email'] ?? 'no email') . ') — ' . ($error['error'] ?? 'Unknown error')); ?></li>
-                            <?php endforeach; ?>
-                        </ul>
-                    </li>
-                <?php endif; ?>
-            </ul>
-            <?php if (!empty($deleted) && count($deleted) <= 10) : ?>
-                <details>
-                    <summary><?php echo esc_html__('View deleted users', 'meals-db'); ?></summary>
-                    <ul>
-                        <?php foreach ($deleted as $user) : ?>
-                            <li><?php echo esc_html(($user['login'] ?? 'Unknown') . ' (' . ($user['email'] ?? 'no email') . ')'); ?></li>
-                        <?php endforeach; ?>
-                    </ul>
-                </details>
-            <?php elseif (!empty($deleted)) : ?>
-                <p class="description"><?php echo esc_html(sprintf(__('%d users were deleted successfully.', 'meals-db'), count($deleted))); ?></p>
-            <?php endif; ?>
-        </div>
-        <?php
-
-        return (string) ob_get_clean();
-    }
 
     /**
      * Renders the tab navigation.
@@ -872,12 +981,8 @@ class MealsDB_Admin_UI {
             'ignored' => __('Ignored Conflicts', 'meals-db'),
             'slips'   => __('Daily Slips', 'meals-db'),
             'po'      => __('Purchase Order', 'meals-db'),
-            'fees'     => __('Fee Reconciliation', 'meals-db'),
-            'privates' => __('Private Sales', 'meals-db'),
-            'errors'   => __('Order Errors', 'meals-db'),
             'tasks'    => __('Tasks', 'meals-db'),
             'po_admin' => __('Purchase Orders', 'meals-db'),
-            'updates'  => __('Updates', 'meals-db'),
             'settings' => __('Settings', 'meals-db'),
         ];
 
