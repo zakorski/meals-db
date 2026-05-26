@@ -1,0 +1,1306 @@
+diff --git a/assets/js/admin-migration.js b/assets/js/admin-migration.js
+index 2832437..48c54b0 100644
+--- a/assets/js/admin-migration.js
++++ b/assets/js/admin-migration.js
+@@ -100,10 +100,11 @@
+         4: 'Backfill Addresses',
+         5: 'Backfill Next Dates',
+         6: 'Promote Private Clients',
+-        7: 'Backfill Allocations'
++        7: 'Backfill Allocations',
++        8: 'Backfill Delivery Day'
+     };
+     var CONS_FIRST = 1;
+-    var CONS_LAST  = 7;
++    var CONS_LAST  = 8;
+ 
+     var consState = {
+         phase: CONS_FIRST,
+diff --git a/includes/admin/class-migration-page.php b/includes/admin/class-migration-page.php
+index 72a4321..fe5bed8 100644
+--- a/includes/admin/class-migration-page.php
++++ b/includes/admin/class-migration-page.php
+@@ -157,7 +157,7 @@ class MealsDB_Migration_Page {
+                 <p>
+                     <label><input type="checkbox" id="cons-dry-run" checked> <?php esc_html_e( 'Dry run (no writes)', 'meals-db' ); ?></label>
+                     &nbsp;
+-                    <label><input type="checkbox" id="cons-ignore-rate-limit"> <?php esc_html_e( 'Ignore rate limit (a full real run starts all 7 phases and exceeds the 5/hour cap)', 'meals-db' ); ?></label>
++                    <label><input type="checkbox" id="cons-ignore-rate-limit"> <?php esc_html_e( 'Ignore rate limit (a full real run starts all 8 phases and exceeds the 5/hour cap)', 'meals-db' ); ?></label>
+                 </p>
+                 <p>
+                     <label><?php esc_html_e( 'Private lookback (months):', 'meals-db' ); ?>
+@@ -183,6 +183,7 @@ class MealsDB_Migration_Page {
+                         5 => __( 'Backfill Next Dates', 'meals-db' ),
+                         6 => __( 'Promote Private Clients', 'meals-db' ),
+                         7 => __( 'Backfill Allocations', 'meals-db' ),
++                        8 => __( 'Backfill Delivery Day', 'meals-db' ),
+                     ];
+                     foreach ( $cons_phases as $num => $label ) :
+                         ?>
+diff --git a/includes/class-admin-ui.php b/includes/class-admin-ui.php
+index 7454031..95b202d 100644
+--- a/includes/class-admin-ui.php
++++ b/includes/class-admin-ui.php
+@@ -90,6 +90,24 @@ class MealsDB_Admin_UI {
+             ['MealsDB_Quick_Order_UI', 'render_quick_order_page']
+         );
+ 
++        add_submenu_page(
++            'mealsdb',
++            __('Reports', 'meals-db'),
++            __('Reports', 'meals-db'),
++            MealsDB_Permissions::required_capability(),
++            'mealsdb-reports',
++            ['MealsDB_Admin_UI', 'render_reports_page']
++        );
++
++        add_submenu_page(
++            'mealsdb',
++            __('Data Ops', 'meals-db'),
++            __('Data Ops', 'meals-db'),
++            MealsDB_Permissions::required_capability(),
++            'mealsdb-data-ops',
++            ['MealsDB_Admin_UI', 'render_data_ops_page']
++        );
++
+     }
+ 
+     /**
+@@ -242,8 +260,10 @@ class MealsDB_Admin_UI {
+         $is_main_page        = in_array($hook, ['toplevel_page_mealsdb', 'toplevel_page_meals-db'], true);
+         $is_staff_page       = in_array($hook, ['mealsdb_page_meals-db-staff', 'meals-db_page_meals-db-staff'], true);
+         $is_quick_order_page = in_array($hook, ['mealsdb_page_mealsdb_quick_order', 'meals-db_page_mealsdb_quick_order', 'meals-db_page_meals-db-quick-order'], true);
++        $is_reports_page     = in_array($hook, ['mealsdb_page_mealsdb-reports', 'meals-db_page_mealsdb-reports'], true);
++        $is_data_ops_page    = in_array($hook, ['mealsdb_page_mealsdb-data-ops', 'meals-db_page_mealsdb-data-ops'], true);
+ 
+-        if (!$is_main_page && !$is_staff_page && !$is_quick_order_page) {
++        if (!$is_main_page && !$is_staff_page && !$is_quick_order_page && !$is_reports_page && !$is_data_ops_page) {
+             return;
+         }
+ 
+@@ -321,6 +341,21 @@ class MealsDB_Admin_UI {
+             return;
+         }
+ 
++        // Reports page: read-only report scripts (shared report-utils +
++        // each report's JS). Handlers unchanged; only the host page moved.
++        if ($is_reports_page) {
++            $this->enqueue_reports_page_scripts();
++            return;
++        }
++
++        // Data Ops page: the settings JS (private backfills, enrich, product
++        // sync, delivery-day backfill) plus the migration/updates JS (DB sync,
++        // allowance/address/allocation backfills, fetch products).
++        if ($is_data_ops_page) {
++            $this->enqueue_data_ops_page_scripts();
++            return;
++        }
++
+         $tab = $_GET['tab'] ?? '';
+         if (function_exists('wp_unslash')) {
+             $tab = wp_unslash($tab);
+@@ -508,6 +543,107 @@ class MealsDB_Admin_UI {
+      * branch stays a self-contained "register utils, enqueue page JS,
+      * attach config" unit.
+      */
++    /**
++     * Enqueue scripts for the Reports submenu page. Mirrors the per-tab
++     * enqueue the reports used as tabs, just keyed to the new page. Loads
++     * the shared report-utils plus all three report scripts (the page
++     * sub-tabs switch between them client-side / via ?sub=).
++     */
++    private function enqueue_reports_page_scripts(): void {
++        // Private Sales uses inline JS in its view (ajaxurl + own nonce), so
++        // it only needs jQuery present. Fee Reconciliation and Order Errors
++        // have dedicated JS files enqueued below with report-utils.
++        wp_enqueue_script('jquery');
++
++        $report_utils_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/report-utils.js';
++        $report_utils_version = file_exists($report_utils_path) ? filemtime($report_utils_path) : MEALS_DB_VERSION;
++        wp_enqueue_script(
++            'mealsdb-report-utils',
++            MEALS_DB_PLUGIN_URL . 'assets/js/report-utils.js',
++            ['jquery'],
++            $report_utils_version,
++            true
++        );
++
++        $bundles = [
++            'mealsdb-fee-reconciliation' => [
++                'file' => 'assets/js/fee-reconciliation.js',
++                'cfg'  => 'mealsdbFeeReconciliation',
++                'data' => [
++                    'ajaxUrl' => admin_url('admin-ajax.php'),
++                    'nonce'   => wp_create_nonce('mealsdb_nonce'),
++                    'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&id='),
++                ],
++            ],
++            'mealsdb-order-errors' => [
++                'file' => 'assets/js/order-errors.js',
++                'cfg'  => 'mealsdbOrderErrors',
++                'data' => [
++                    'ajaxUrl' => admin_url('admin-ajax.php'),
++                    'nonce'   => wp_create_nonce('mealsdb_nonce'),
++                    'editUrl' => admin_url('post.php?action=edit&post='),
++                ],
++            ],
++        ];
++
++        foreach ($bundles as $handle => $spec) {
++            $path = MEALS_DB_PLUGIN_DIR . $spec['file'];
++            if (!file_exists($path)) {
++                continue;
++            }
++            wp_enqueue_script(
++                $handle,
++                MEALS_DB_PLUGIN_URL . $spec['file'],
++                ['jquery', 'mealsdb-report-utils'],
++                filemtime($path),
++                true
++            );
++            wp_add_inline_script(
++                $handle,
++                'window.' . $spec['cfg'] . ' = ' . wp_json_encode($spec['data']) . ';',
++                'before'
++            );
++        }
++    }
++
++    /**
++     * Enqueue scripts for the Data Ops submenu page.
++     *
++     * The DB-sync / allowance / address / allocation / fetch-products
++     * behaviour is INLINE in views/data-ops.php (relocated from the old
++     * updates view) and self-contained — it uses the global `ajaxurl` and
++     * generates its own nonces, so it only needs jQuery on the page.
++     *
++     * The private-backfill / deactivation / enrich / product-sync /
++     * delivery-day behaviour lives in settings.js and needs its
++     * window.mealsdbSettings config object.
++     */
++    private function enqueue_data_ops_page_scripts(): void {
++        wp_enqueue_script('jquery');
++
++        $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/settings.js';
++        $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
++        wp_enqueue_script(
++            'mealsdb-settings',
++            MEALS_DB_PLUGIN_URL . 'assets/js/settings.js',
++            ['jquery'],
++            $version,
++            true
++        );
++        $data = [
++            'ajaxUrl' => admin_url('admin-ajax.php'),
++            'nonces'  => [
++                'settings' => wp_create_nonce('mealsdb_settings_nonce'),
++                'general'  => wp_create_nonce('mealsdb_nonce'),
++            ],
++        ];
++        wp_add_inline_script(
++            'mealsdb-settings',
++            'window.mealsdbSettings = ' . wp_json_encode($data) . ';',
++            'before'
++        );
++    }
++
+     private function enqueue_report_scripts(string $tab): void {
+         if (!in_array($tab, ['settings', 'fees', 'errors'], true)) {
+             return;
+@@ -602,18 +738,52 @@ class MealsDB_Admin_UI {
+     }
+ 
+     /**
+-     * Render the main admin page, routing to correct tab.
++     * Render the Reports submenu page. Sub-tabs select among the
++     * read-only reports relocated here from the old tabbed cards.
+      */
+-    public static function render_main_page() {
++    public static function render_reports_page() {
+         MealsDB_Permissions::enforce();
+ 
++        $sub = isset($_GET['sub']) ? sanitize_key(wp_unslash((string) $_GET['sub'])) : 'fees';
++        $subtabs = [
++            'fees'     => __('Fee Reconciliation', 'meals-db'),
++            'privates' => __('Private Sales', 'meals-db'),
++            'errors'   => __('Order Errors', 'meals-db'),
++        ];
++
++        echo '<div class="wrap">';
++        echo '<h1>' . esc_html__('Reports', 'meals-db') . '</h1>';
++        self::render_subnav('mealsdb-reports', $subtabs, $sub);
++        echo '<div class="mealsdb-tab-content">';
++        switch ($sub) {
++            case 'privates':
++                include MealsDB_Plugin::path('views/private-sales.php');
++                break;
++            case 'errors':
++                include MealsDB_Plugin::path('views/order-errors.php');
++                break;
++            case 'fees':
++            default:
++                include MealsDB_Plugin::path('views/fee-reconciliation.php');
++                break;
++        }
++        echo '</div></div>';
++    }
++
++    /**
++     * Render the Data Ops submenu page. Hosts every data-mutating
++     * operation relocated here from the old Settings and Updates cards.
++     * The handlers are unchanged; only their host page moved.
++     */
++    public static function render_data_ops_page() {
++        MealsDB_Permissions::enforce();
++
++        // POST handlers relocated from render_main_page (schema update,
++        // force rebuild). Delete-non-admin-users was removed entirely.
+         if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'update_schema') {
+             check_admin_referer('mealsdb_update_schema', 'mealsdb_update_schema_nonce');
+-
+             require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-sync.php';
+-
+             $result = MealsDB_Schema_Sync::run_full_sync();
+-
+             if (is_wp_error($result)) {
+                 add_action('admin_notices', function() use ($result) {
+                     echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
+@@ -627,15 +797,11 @@ class MealsDB_Admin_UI {
+ 
+         if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'force_rebuild') {
+             check_admin_referer('mealsdb_force_rebuild', 'mealsdb_force_rebuild_nonce');
+-
+             require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-rebuild.php';
+-
+             $confirmation = isset($_POST['mealsdb_rebuild_confirm'])
+                 ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_rebuild_confirm']))
+                 : '';
+-
+             $result = MealsDB_Schema_Rebuild::run($confirmation);
+-
+             if (is_wp_error($result)) {
+                 add_action('admin_notices', function() use ($result) {
+                     echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
+@@ -647,27 +813,34 @@ class MealsDB_Admin_UI {
+             }
+         }
+ 
+-        if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'delete_nonadmin_users') {
+-            check_admin_referer('mealsdb_delete_nonadmin_users', 'mealsdb_delete_nonadmin_users_nonce');
+-
+-            require_once MEALS_DB_PLUGIN_DIR . 'includes/class-user-delete.php';
++        echo '<div class="wrap">';
++        echo '<h1>' . esc_html__('Data Ops', 'meals-db') . '</h1>';
++        echo '<div class="mealsdb-tab-content">';
++        include MealsDB_Plugin::path('views/data-ops.php');
++        echo '</div></div>';
++    }
+ 
+-            $confirmation = isset($_POST['mealsdb_delete_confirm'])
+-                ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_delete_confirm']))
+-                : '';
++    /**
++     * Render a simple sub-tab nav bar for the new submenu pages.
++     */
++    private static function render_subnav(string $page, array $subtabs, string $active): void {
++        echo '<h2 class="nav-tab-wrapper">';
++        foreach ($subtabs as $slug => $label) {
++            $url = admin_url('admin.php?page=' . $page . '&sub=' . $slug);
++            $cls = 'nav-tab' . ($slug === $active ? ' nav-tab-active' : '');
++            printf('<a href="%s" class="%s">%s</a>', esc_url($url), esc_attr($cls), esc_html($label));
++        }
++        echo '</h2>';
++    }
+ 
+-            $result = MealsDB_User_Delete::run($confirmation);
++    /**
++     * Render the main admin page, routing to correct tab.
++     */
++    public static function render_main_page() {
++        MealsDB_Permissions::enforce();
+ 
+-            if (is_wp_error($result)) {
+-                add_action('admin_notices', function() use ($result) {
+-                    echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
+-                });
+-            } else {
+-                add_action('admin_notices', function() use ($result) {
+-                    echo MealsDB_Admin_UI::render_user_delete_summary($result);
+-                });
+-            }
+-        }
++        // NOTE: the update_schema and force_rebuild POST handlers moved to
++        // render_data_ops_page(); delete_nonadmin_users was removed entirely.
+ 
+         $tab = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : 'sync';
+ 
+@@ -720,22 +893,6 @@ class MealsDB_Admin_UI {
+                 include MealsDB_Plugin::path('views/purchase-order.php');
+                 break;
+ 
+-            case 'fees':
+-                include MealsDB_Plugin::path('views/fee-reconciliation.php');
+-                break;
+-
+-            case 'privates':
+-                include MealsDB_Plugin::path('views/private-sales.php');
+-                break;
+-
+-            case 'errors':
+-                include MealsDB_Plugin::path('views/order-errors.php');
+-                break;
+-
+-            case 'updates':
+-                include MealsDB_Plugin::path('views/updates.php');
+-                break;
+-
+             case 'settings':
+                 include MealsDB_Plugin::path('views/settings.php');
+                 break;
+@@ -808,54 +965,6 @@ class MealsDB_Admin_UI {
+         return (string) ob_get_clean();
+     }
+ 
+-    /**
+-     * Render a structured summary for user deletion results.
+-     *
+-     * @param array<string, mixed> $result
+-     */
+-    public static function render_user_delete_summary(array $result): string {
+-        $deleted      = $result['deleted'] ?? [];
+-        $skipped      = $result['skipped'] ?? [];
+-        $errors       = $result['errors'] ?? [];
+-        $total_count  = $result['total_count'] ?? 0;
+-
+-        ob_start();
+-        ?>
+-        <div class="notice notice-warning">
+-            <p><strong><?php echo esc_html__('Non-Admin User Deletion completed.', 'meals-db'); ?></strong></p>
+-            <p class="description"><?php echo esc_html__('All non-administrator WordPress users have been processed.', 'meals-db'); ?></p>
+-            <ul>
+-                <li><strong><?php echo esc_html__('Total users processed:', 'meals-db'); ?></strong> <?php echo esc_html($total_count); ?></li>
+-                <li><strong><?php echo esc_html__('Users deleted:', 'meals-db'); ?></strong> <?php echo esc_html(count($deleted)); ?></li>
+-                <li><strong><?php echo esc_html__('Users skipped (administrators):', 'meals-db'); ?></strong> <?php echo esc_html(count($skipped)); ?></li>
+-                <?php if (!empty($errors)) : ?>
+-                    <li>
+-                        <strong><?php echo esc_html__('Deletion failures:', 'meals-db'); ?></strong>
+-                        <ul>
+-                            <?php foreach ($errors as $error) : ?>
+-                                <li><?php echo esc_html(($error['login'] ?? 'Unknown user') . ' (' . ($error['email'] ?? 'no email') . ') — ' . ($error['error'] ?? 'Unknown error')); ?></li>
+-                            <?php endforeach; ?>
+-                        </ul>
+-                    </li>
+-                <?php endif; ?>
+-            </ul>
+-            <?php if (!empty($deleted) && count($deleted) <= 10) : ?>
+-                <details>
+-                    <summary><?php echo esc_html__('View deleted users', 'meals-db'); ?></summary>
+-                    <ul>
+-                        <?php foreach ($deleted as $user) : ?>
+-                            <li><?php echo esc_html(($user['login'] ?? 'Unknown') . ' (' . ($user['email'] ?? 'no email') . ')'); ?></li>
+-                        <?php endforeach; ?>
+-                    </ul>
+-                </details>
+-            <?php elseif (!empty($deleted)) : ?>
+-                <p class="description"><?php echo esc_html(sprintf(__('%d users were deleted successfully.', 'meals-db'), count($deleted))); ?></p>
+-            <?php endif; ?>
+-        </div>
+-        <?php
+-
+-        return (string) ob_get_clean();
+-    }
+ 
+     /**
+      * Renders the tab navigation.
+@@ -872,12 +981,8 @@ class MealsDB_Admin_UI {
+             'ignored' => __('Ignored Conflicts', 'meals-db'),
+             'slips'   => __('Daily Slips', 'meals-db'),
+             'po'      => __('Purchase Order', 'meals-db'),
+-            'fees'     => __('Fee Reconciliation', 'meals-db'),
+-            'privates' => __('Private Sales', 'meals-db'),
+-            'errors'   => __('Order Errors', 'meals-db'),
+             'tasks'    => __('Tasks', 'meals-db'),
+             'po_admin' => __('Purchase Orders', 'meals-db'),
+-            'updates'  => __('Updates', 'meals-db'),
+             'settings' => __('Settings', 'meals-db'),
+         ];
+ 
+diff --git a/includes/class-user-delete.php b/includes/class-user-delete.php
+deleted file mode 100644
+index 07612f2..0000000
+--- a/includes/class-user-delete.php
++++ /dev/null
+@@ -1,272 +0,0 @@
+-<?php
+-/**
+- * Delete non-admin WordPress users.
+- */
+-
+-defined('ABSPATH') || exit;
+-
+-class MealsDB_User_Delete {
+-
+-    /**
+-     * Delete all WordPress users who are not administrators.
+-     *
+-     * @param string $confirmation Raw confirmation string from the admin UI.
+-     *
+-     * @return array<string, mixed>|WP_Error Structured result data or WP_Error on precondition failure.
+-     */
+-    public static function run(string $confirmation) {
+-        // Defence-in-depth: enforce capability + login state + multisite
+-        // safety here even if a caller (or a future code path) reaches this
+-        // helper without going through the admin UI gate.
+-        if (!is_user_logged_in() || !current_user_can('delete_users') || !current_user_can('manage_options')) {
+-            return new WP_Error('forbidden', 'You do not have permission to delete users.');
+-        }
+-
+-        $normalized_confirmation = strtoupper(trim($confirmation));
+-        if ($normalized_confirmation !== 'DELETE') {
+-            return new WP_Error('confirmation_required', 'User deletion aborted: confirmation text did not match.');
+-        }
+-
+-        $current_user_id = get_current_user_id();
+-
+-        if (!function_exists('wp_delete_user')) {
+-            require_once ABSPATH . 'wp-admin/includes/user.php';
+-        }
+-        if (is_multisite() && !function_exists('wpmu_delete_user')) {
+-            require_once ABSPATH . 'wp-admin/includes/ms.php';
+-        }
+-
+-        $results = [
+-            'deleted'       => [],
+-            'skipped'       => [],
+-            'errors'        => [],
+-            'total_count'   => 0,
+-        ];
+-
+-        // Iterate paged so we don't materialise every user at once on large
+-        // sites. 'fields' => 'all' is preserved so user_can() / user_login
+-        // remain available for the per-row logic below.
+-        $page     = 1;
+-        $per_page = 200;
+-
+-        while (true) {
+-            $batch = get_users([
+-                'fields' => 'all',
+-                'number' => $per_page,
+-                'paged'  => $page,
+-            ]);
+-
+-            if (empty($batch)) {
+-                break;
+-            }
+-
+-            $results['total_count'] += count($batch);
+-
+-            foreach ($batch as $user) {
+-                // Never delete the calling administrator.
+-                if ((int) $user->ID === (int) $current_user_id) {
+-                    $results['skipped'][] = [
+-                        'id'     => $user->ID,
+-                        'login'  => $user->user_login,
+-                        'email'  => $user->user_email,
+-                        'reason' => 'Current user',
+-                    ];
+-                    continue;
+-                }
+-
+-                // Skip administrators.
+-                if (user_can($user, 'administrator')) {
+-                    $results['skipped'][] = [
+-                        'id'       => $user->ID,
+-                        'login'    => $user->user_login,
+-                        'email'    => $user->user_email,
+-                        'reason'   => 'Administrator',
+-                    ];
+-                    continue;
+-                }
+-
+-                // Strip PII from the linked meals_clients row BEFORE deleting
+-                // the WP user. Without this step a deleted user's name,
+-                // address, phone, diet notes, individual_id, requisition_id
+-                // and vet_health_card all remain indexed in meals_clients
+-                // forever — orphaned, no longer traceable back to a live
+-                // account, and a clear GDPR / PIPEDA violation on a
+-                // right-to-be-forgotten request.
+-                //
+-                // The anonymisation is best-effort: a failure here is
+-                // logged but does not block wp_delete_user — leaving an
+-                // orphaned row with PII is bad, but leaving the WP user
+-                // alive after the admin asked for deletion is worse.
+-                // Anonymisation failures are surfaced in the results for
+-                // the UI to flag.
+-                $anonymised = self::anonymise_meals_client_for_wp_user((int) $user->ID);
+-                if (is_wp_error($anonymised)) {
+-                    $results['errors'][] = [
+-                        'id'    => $user->ID,
+-                        'login' => $user->user_login,
+-                        'email' => $user->user_email,
+-                        'error' => 'meals_clients anonymisation failed: ' . $anonymised->get_error_message(),
+-                    ];
+-                }
+-
+-                // Reassign content to the calling administrator so we never
+-                // silently drop posts/comments authored by the deleted user.
+-                try {
+-                    $deleted = is_multisite()
+-                        ? wpmu_delete_user($user->ID)
+-                        : wp_delete_user($user->ID, $current_user_id);
+-
+-                    if ($deleted) {
+-                        $results['deleted'][] = [
+-                            'id'       => $user->ID,
+-                            'login'    => $user->user_login,
+-                            'email'    => $user->user_email,
+-                        ];
+-                    } else {
+-                        $results['errors'][] = [
+-                            'id'       => $user->ID,
+-                            'login'    => $user->user_login,
+-                            'email'    => $user->user_email,
+-                            'error'    => 'wp_delete_user returned false',
+-                        ];
+-                    }
+-                } catch (Throwable $exception) {
+-                    $results['errors'][] = [
+-                        'id'       => $user->ID,
+-                        'login'    => $user->user_login,
+-                        'email'    => $user->user_email,
+-                        'error'    => $exception->getMessage(),
+-                    ];
+-                }
+-            }
+-
+-            if (count($batch) < $per_page) {
+-                break;
+-            }
+-            $page++;
+-        }
+-
+-        return $results;
+-    }
+-
+-    /**
+-     * Anonymise the meals_clients row linked to a WP user, if one exists.
+-     *
+-     * Blanks every PII column, zeros the wp_user_id link, clears the
+-     * deterministic hash index columns (they would otherwise let an
+-     * attacker with a dump confirm individual_id values by hash-
+-     * matching), and marks the client inactive. The row is kept rather
+-     * than deleted so billing history (meals_client_allocations,
+-     * meals_delivery_allocations) remains intact — those FKs reference
+-     * client_id, not wp_user_id.
+-     *
+-     * Returns the affected client_id (>0) on success, 0 if no row was
+-     * linked to that wp_user_id, or a WP_Error on failure.
+-     *
+-     * @return int|WP_Error
+-     */
+-    public static function anonymise_meals_client_for_wp_user(int $wp_user_id) {
+-        if ($wp_user_id <= 0) {
+-            return 0;
+-        }
+-
+-        global $wpdb;
+-        if (!$wpdb instanceof wpdb) {
+-            return new WP_Error('mealsdb_no_wpdb', 'Database connection unavailable.');
+-        }
+-
+-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+-
+-        $client_id = (int) $wpdb->get_var($wpdb->prepare(
+-            "SELECT client_id FROM `{$clients_table}` WHERE wp_user_id = %d LIMIT 1",
+-            $wp_user_id
+-        ));
+-
+-        if ($client_id <= 0) {
+-            return 0;
+-        }
+-
+-        // Columns to blank. Split by NULL vs NOT-NULL-with-default so we
+-        // can update each group with the right sentinel — set NULL on
+-        // nullable PII, '' on NOT-NULL-but-string, and leave the
+-        // handful of NOT-NULL columns that don't carry PII (client_type,
+-        // use_legacy_billing) alone.
+-        $null_cols = [
+-            'client_email',
+-            'client_phone_1',
+-            'client_phone_2',
+-            'alternate_contact_name',
+-            'alternate_contact_phone_1',
+-            'alternate_contact_phone_2',
+-            'alternate_contact_email',
+-            'individual_id',
+-            'individual_id_index',
+-            'assigned_worker_name',
+-            'assigned_worker_email',
+-            'requisition_id',
+-            'requisition_id_index',
+-            'vet_health_card',
+-            'vet_health_card_index',
+-            'delivery_initials_index',
+-            'diet_concerns',
+-            'customer_comments',
+-            'per_sdnb_req',
+-            'notes_to_service_provider',
+-            'street_name',
+-            'city',
+-            'province',
+-            'postal_code',
+-            'delivery_street_name',
+-            'delivery_city',
+-            'delivery_province',
+-            'delivery_postal_code',
+-            'birth_date',
+-        ];
+-
+-        $empty_string_cols = [
+-            // NOT NULL VARCHARs — blank rather than NULL.
+-            'first_name',
+-            'last_name',
+-            'delivery_initials',
+-        ];
+-
+-        $set_clauses = [];
+-        foreach ($null_cols as $col) {
+-            $set_clauses[] = sprintf('`%s` = NULL', str_replace('`', '``', $col));
+-        }
+-        foreach ($empty_string_cols as $col) {
+-            $set_clauses[] = sprintf("`%s` = ''", str_replace('`', '``', $col));
+-        }
+-        // wp_user_id is NOT NULL; 0 is the canonical "no linked user" value.
+-        $set_clauses[] = '`wp_user_id` = 0';
+-        // Mark inactive so the client drops out of every sync / reporting / slip path.
+-        $set_clauses[] = '`active` = 0';
+-
+-        $sql = sprintf(
+-            'UPDATE `%s` SET %s WHERE `client_id` = %%d LIMIT 1',
+-            str_replace('`', '``', $clients_table),
+-            implode(', ', $set_clauses)
+-        );
+-
+-        $result = $wpdb->query($wpdb->prepare($sql, $client_id));
+-        if ($result === false) {
+-            return new WP_Error(
+-                'mealsdb_anonymise_failed',
+-                $wpdb->last_error !== '' ? $wpdb->last_error : 'Unknown database error.'
+-            );
+-        }
+-
+-        if (class_exists('MealsDB_Logger')) {
+-            MealsDB_Logger::log(
+-                'client_anonymised',
+-                $client_id,
+-                'wp_user_deletion',
+-                (string) $wp_user_id,
+-                null,
+-                'user_delete'
+-            );
+-        }
+-
+-        return $client_id;
+-    }
+-}
+diff --git a/includes/services/class-migration-consolidated.php b/includes/services/class-migration-consolidated.php
+index 1da2cab..af8fa25 100644
+--- a/includes/services/class-migration-consolidated.php
++++ b/includes/services/class-migration-consolidated.php
+@@ -105,6 +105,7 @@ class MealsDB_Migration_Consolidated {
+             5 => ['method' => 'run_phase_next_dates',     'label' => 'Backfill Next Dates'],
+             6 => ['method' => 'run_phase_private_clients','label' => 'Promote Private Clients'],
+             7 => ['method' => 'run_phase_allocations',    'label' => 'Backfill Allocations'],
++            8 => ['method' => 'run_phase_delivery_day',   'label' => 'Backfill Delivery Day'],
+         ];
+     }
+ 
+@@ -1309,6 +1310,84 @@ class MealsDB_Migration_Consolidated {
+         ];
+     }
+ 
++    // =====================================================================
++    //  PHASE 8 — Backfill Delivery Day
++    // =====================================================================
++
++    /**
++     * Populate delivery_day on client rows from the zone delivery schedule,
++     * for any active client whose delivery_day is currently blank. This runs
++     * as the final consolidated step so clients just created by phases 1-7
++     * immediately get a delivery day filled in.
++     *
++     * Blank-fill only: clients that already have a delivery_day are never
++     * touched, so it is idempotent and safe to re-run. Logic mirrors
++     * MealsDB_Ajax_Delivery_Slips::backfill_delivery_day (the standalone
++     * Data Ops button), kept identical so both entry points behave the same.
++     *
++     * Single bulk pass — not chunked — so it completes in one call.
++     *
++     * @param array<string,mixed> $args Unused.
++     * @return array<string,mixed>
++     */
++    public static function run_phase_delivery_day(int $offset = 0, bool $dry_run = true, array $args = []): array {
++        global $wpdb;
++
++        $schedule = get_option('mealsdb_zone_delivery_schedule', []);
++        if (empty($schedule) || !is_array($schedule)) {
++            // Nothing to do (no schedule configured) — succeed as a no-op so
++            // the consolidated run still reports phase 8 complete.
++            return [
++                'stats'    => ['updated' => 0, 'note' => 'No zone delivery schedule configured.'],
++                'offset'   => 1,
++                'total'    => 1,
++                'complete' => true,
++            ];
++        }
++
++        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
++        $updated = 0;
++        $would   = 0;
++
++        foreach ($schedule as $zone_name => $config) {
++            if (empty($config['day'])) {
++                continue;
++            }
++            $day = strtolower((string) $config['day']);
++
++            if ($dry_run) {
++                $would += (int) $wpdb->get_var($wpdb->prepare(
++                    "SELECT COUNT(*) FROM `{$clients_table}`
++                     WHERE delivery_area_name = %s
++                       AND (delivery_day IS NULL OR delivery_day = '')
++                       AND active = 1",
++                    $zone_name
++                ));
++                continue;
++            }
++
++            $wpdb->query($wpdb->prepare(
++                "UPDATE `{$clients_table}`
++                 SET delivery_day = %s
++                 WHERE delivery_area_name = %s
++                   AND (delivery_day IS NULL OR delivery_day = '')
++                   AND active = 1",
++                $day,
++                $zone_name
++            ));
++            $updated += (int) $wpdb->rows_affected;
++        }
++
++        return [
++            'stats'    => $dry_run
++                ? ['would_update' => $would]
++                : ['updated' => $updated],
++            'offset'   => 1,
++            'total'    => 1,
++            'complete' => true,
++        ];
++    }
++
+     // =====================================================================
+     //  Ported private helpers
+     // =====================================================================
+diff --git a/tests/test-consolidated-delivery-day.php b/tests/test-consolidated-delivery-day.php
+new file mode 100644
+index 0000000..55a8ddf
+--- /dev/null
++++ b/tests/test-consolidated-delivery-day.php
+@@ -0,0 +1,82 @@
++<?php
++/**
++ * Test for MealsDB_Migration_Consolidated phase 8 (Backfill Delivery Day).
++ *
++ *   - phase 8 is registered in phases()
++ *   - dry run counts blanks, writes nothing
++ *   - real run UPDATEs blank delivery_day from the zone schedule
++ *   - no schedule => clean no-op complete
++ *
++ * Run: php tests/test-consolidated-delivery-day.php
++ */
++
++if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
++
++$GLOBALS['__opt'] = [];
++if (!function_exists('get_option')) {
++    function get_option($n, $d = false) { return array_key_exists($n, $GLOBALS['__opt']) ? $GLOBALS['__opt'][$n] : $d; }
++}
++if (!function_exists('__')) { function __($t, $d = 'default') { return $t; } }
++
++require_once __DIR__ . '/../includes/class-autoloader.php';
++MealsDB_Autoloader::register(dirname(__DIR__) . '/');
++
++// Fake wpdb capturing UPDATEs and answering blank-counts.
++class DDWpdb {
++    public $prefix = 'wp_';
++    public int $rows_affected = 0;
++    public array $updates = [];
++    public int $blank_count = 3;
++    public function prepare($q, ...$a) {
++        if (count($a) === 1 && is_array($a[0])) { $a = $a[0]; }
++        $i = 0;
++        return preg_replace_callback('/%[ds]/', function ($m) use (&$i, $a) {
++            $v = $a[$i] ?? ''; $i++; return $m[0] === '%s' ? "'".$v."'" : (string)(int)$v;
++        }, $q);
++    }
++    public function get_var($q) {
++        if (stripos($q, 'COUNT(*)') !== false) { return (string) $this->blank_count; }
++        return null;
++    }
++    public function query($q) {
++        if (stripos($q, 'UPDATE') !== false) { $this->updates[] = $q; $this->rows_affected = 2; return 2; }
++        return 0;
++    }
++}
++
++$failures = []; $passed = 0;
++function check($c, $l) { global $failures, $passed; if ($c) { $passed++; } else { $failures[] = $l; } }
++
++// phase registered
++$phases = MealsDB_Migration_Consolidated::phases();
++check(isset($phases[8]) && $phases[8]['method'] === 'run_phase_delivery_day', 'phase 8 registered as delivery_day');
++
++// schedule present
++$GLOBALS['__opt']['mealsdb_zone_delivery_schedule'] = [
++    'Moncton' => ['day' => 'Tuesday'],
++    'Sussex'  => ['day' => 'Thursday'],
++];
++
++// dry run: counts, no UPDATE
++$GLOBALS['wpdb'] = new DDWpdb();
++$r = MealsDB_Migration_Consolidated::run_phase_delivery_day(0, true);
++check(empty($GLOBALS['wpdb']->updates), 'dry run performs no UPDATE');
++check(($r['stats']['would_update'] ?? null) === 6, 'dry run counts blanks across zones (3+3)');
++check($r['complete'] === true, 'dry run completes in one pass');
++
++// real run: UPDATEs each zone
++$GLOBALS['wpdb'] = new DDWpdb();
++$r = MealsDB_Migration_Consolidated::run_phase_delivery_day(0, false);
++check(count($GLOBALS['wpdb']->updates) === 2, 'real run issues one UPDATE per zone');
++check(strpos($GLOBALS['wpdb']->updates[0], "delivery_day IS NULL OR delivery_day = ''") !== false, 'real run only fills blanks');
++check(($r['stats']['updated'] ?? null) === 4, 'real run reports rows updated (2+2)');
++
++// no schedule: clean no-op
++$GLOBALS['__opt']['mealsdb_zone_delivery_schedule'] = [];
++$GLOBALS['wpdb'] = new DDWpdb();
++$r = MealsDB_Migration_Consolidated::run_phase_delivery_day(0, false);
++check($r['complete'] === true && empty($GLOBALS['wpdb']->updates), 'no schedule => no-op complete');
++
++echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
++foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
++exit(empty($failures) ? 0 : 1);
+diff --git a/tests/test-user-delete-anonymise.php b/tests/test-user-delete-anonymise.php
+deleted file mode 100644
+index 9d93506..0000000
+--- a/tests/test-user-delete-anonymise.php
++++ /dev/null
+@@ -1,197 +0,0 @@
+-<?php
+-/**
+- * Tests for MealsDB_User_Delete::anonymise_meals_client_for_wp_user().
+- *
+- * Locks in the GDPR behaviour: when a WP user is deleted, the
+- * meals_clients row linked to them must have every PII column blanked
+- * and the wp_user_id link zeroed before wp_delete_user fires — and the
+- * helper must return 0 (not an error) when no linked client exists.
+- *
+- * Run with: php tests/test-user-delete-anonymise.php
+- */
+-
+-if (!defined('ABSPATH')) {
+-    define('ABSPATH', dirname(__DIR__) . '/');
+-}
+-
+-require_once __DIR__ . '/../includes/class-autoloader.php';
+-MealsDB_Autoloader::register(dirname(__DIR__) . '/');
+-
+-if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
+-if (!defined('OBJECT')) { define('OBJECT', 'OBJECT'); }
+-if (!function_exists('__')) {
+-    function __(string $text, string $domain = 'default') { return $text; }
+-}
+-if (!function_exists('apply_filters')) {
+-    function apply_filters(string $tag, $value, ...$args) { return $value; }
+-}
+-if (!function_exists('get_current_user_id')) {
+-    function get_current_user_id(): int { return 9999; }
+-}
+-if (!class_exists('WP_Error')) {
+-    class WP_Error {
+-        public string $code;
+-        public string $message;
+-        public function __construct(string $code = '', string $message = '') {
+-            $this->code = $code;
+-            $this->message = $message;
+-        }
+-        public function get_error_message(): string { return $this->message; }
+-        public function get_error_code(): string { return $this->code; }
+-    }
+-}
+-if (!function_exists('is_wp_error')) {
+-    function is_wp_error($thing): bool { return $thing instanceof WP_Error; }
+-}
+-
+-if (!class_exists('wpdb')) {
+-    class wpdb {
+-        public string $prefix = 'wp_';
+-        public string $last_error = '';
+-        public function prepare($query, ...$args) { return $query; }
+-        public function get_results($query, $output = 'OBJECT') { return []; }
+-        public function get_row($query, $output = 'OBJECT', $y = 0) { return null; }
+-        public function get_var($query, $x = 0, $y = 0) { return null; }
+-        public function query($query) { return 0; }
+-    }
+-}
+-
+-/**
+- * Records queries and returns configurable results for get_var.
+- * Captures the final UPDATE SQL so tests can assert the column set.
+- */
+-class AnonymiseTest_Wpdb extends wpdb {
+-    public array $query_log = [];
+-    public ?int  $client_id_for_user = 77;
+-    public bool  $update_fails = false;
+-
+-    public function __construct() { /* no parent */ }
+-
+-    public function prepare($query, ...$args) {
+-        if (!empty($args) && is_array($args[0] ?? null)) { $args = $args[0]; }
+-        $out = $query;
+-        foreach ($args as $a) {
+-            $out = preg_replace('/%d|%s/', is_int($a) ? (string) $a : "'" . addslashes((string) $a) . "'", $out, 1);
+-        }
+-        return $out;
+-    }
+-
+-    public function get_var($sql, $x = 0, $y = 0) {
+-        $this->query_log[] = ['m' => 'get_var', 'sql' => $sql];
+-        if (stripos($sql, 'SELECT client_id') !== false) {
+-            return $this->client_id_for_user !== null ? (string) $this->client_id_for_user : null;
+-        }
+-        return null;
+-    }
+-
+-    public function query($sql) {
+-        $this->query_log[] = ['m' => 'query', 'sql' => $sql];
+-        if (stripos($sql, 'UPDATE') !== false && $this->update_fails) {
+-            $this->last_error = 'forced failure';
+-            return false;
+-        }
+-        return 1;
+-    }
+-
+-    public function last_update_sql(): string {
+-        $updates = array_values(array_filter($this->query_log, static function ($row) {
+-            return stripos($row['sql'], 'UPDATE') === 0;
+-        }));
+-        return end($updates)['sql'] ?? '';
+-    }
+-}
+-
+-$failures = [];
+-$passed   = 0;
+-function assert_equal($expected, $actual, string $label) {
+-    global $failures, $passed;
+-    if ($expected === $actual) { $passed++; return; }
+-    $failures[] = sprintf("FAIL: %s\n  expected: %s\n  actual:   %s", $label, var_export($expected, true), var_export($actual, true));
+-}
+-function assert_true($value, string $label) {
+-    global $failures, $passed;
+-    if ((bool) $value) { $passed++; return; }
+-    $failures[] = "FAIL: $label (expected true, got " . var_export($value, true) . ')';
+-}
+-function assert_contains(string $needle, string $haystack, string $label) {
+-    global $failures, $passed;
+-    if (strpos($haystack, $needle) !== false) { $passed++; return; }
+-    $failures[] = "FAIL: $label (expected '$needle' in the UPDATE SQL)";
+-}
+-
+-// ---------------------------------------------------------------------------
+-// Happy path: linked client found, UPDATE issued, returns client_id.
+-// ---------------------------------------------------------------------------
+-$GLOBALS['wpdb'] = new AnonymiseTest_Wpdb();
+-$result = MealsDB_User_Delete::anonymise_meals_client_for_wp_user(42);
+-assert_equal(77, $result, 'returns client_id when a linked client is anonymised');
+-
+-$sql = $GLOBALS['wpdb']->last_update_sql();
+-assert_contains('`wp_user_id` = 0',  $sql, 'UPDATE zeros wp_user_id');
+-assert_contains('`active` = 0',      $sql, 'UPDATE marks client inactive');
+-assert_contains("`first_name` = ''", $sql, 'first_name blanked (NOT NULL)');
+-assert_contains("`last_name` = ''",  $sql, 'last_name blanked (NOT NULL)');
+-assert_contains("`delivery_initials` = ''", $sql, 'delivery_initials blanked (NOT NULL)');
+-assert_contains('`individual_id` = NULL',         $sql, 'individual_id nulled');
+-assert_contains('`individual_id_index` = NULL',   $sql, 'individual_id hash-index nulled (prevents rainbow match)');
+-assert_contains('`requisition_id` = NULL',        $sql, 'requisition_id nulled');
+-assert_contains('`requisition_id_index` = NULL',  $sql, 'requisition_id hash-index nulled');
+-assert_contains('`vet_health_card` = NULL',       $sql, 'vet_health_card nulled');
+-assert_contains('`vet_health_card_index` = NULL', $sql, 'vet_health_card hash-index nulled');
+-assert_contains('`delivery_initials_index` = NULL', $sql, 'delivery_initials hash-index nulled');
+-assert_contains('`client_email` = NULL',          $sql, 'email nulled');
+-assert_contains('`client_phone_1` = NULL',        $sql, 'primary phone nulled');
+-assert_contains('`client_phone_2` = NULL',        $sql, 'secondary phone nulled');
+-assert_contains('`diet_concerns` = NULL',         $sql, 'diet_concerns nulled');
+-assert_contains('`customer_comments` = NULL',     $sql, 'customer_comments nulled');
+-assert_contains('`street_name` = NULL',           $sql, 'home address nulled');
+-assert_contains('`delivery_street_name` = NULL',  $sql, 'delivery address nulled');
+-assert_contains('`birth_date` = NULL',            $sql, 'DOB nulled');
+-assert_contains('WHERE `client_id` = 77',         $sql, 'WHERE pins the exact client_id');
+-
+-// NOT anonymised columns — client_type is a required ENUM, use_legacy_billing
+-// is a billing flag; neither is PII, and nulling them would break the row.
+-assert_true(strpos($sql, '`client_type`') === false, 'client_type is NOT modified');
+-assert_true(strpos($sql, '`use_legacy_billing`') === false, 'use_legacy_billing is NOT modified');
+-
+-// ---------------------------------------------------------------------------
+-// No linked client: returns 0, no UPDATE issued.
+-// ---------------------------------------------------------------------------
+-$GLOBALS['wpdb'] = new AnonymiseTest_Wpdb();
+-$GLOBALS['wpdb']->client_id_for_user = null;
+-$result = MealsDB_User_Delete::anonymise_meals_client_for_wp_user(42);
+-assert_equal(0, $result, 'returns 0 when no linked client exists');
+-
+-$any_updates = array_filter($GLOBALS['wpdb']->query_log, static function ($row) {
+-    return stripos($row['sql'], 'UPDATE') !== false;
+-});
+-assert_equal([], array_values($any_updates), 'no UPDATE fires when there is nothing to anonymise');
+-
+-// ---------------------------------------------------------------------------
+-// Non-positive wp_user_id: fast-path returns 0 without touching wpdb.
+-// ---------------------------------------------------------------------------
+-$GLOBALS['wpdb'] = new AnonymiseTest_Wpdb();
+-assert_equal(0, MealsDB_User_Delete::anonymise_meals_client_for_wp_user(0), 'wp_user_id=0 returns 0');
+-assert_equal(0, MealsDB_User_Delete::anonymise_meals_client_for_wp_user(-1), 'wp_user_id<0 returns 0');
+-assert_equal([], $GLOBALS['wpdb']->query_log, 'non-positive wp_user_id never queries');
+-
+-// ---------------------------------------------------------------------------
+-// UPDATE failure: WP_Error with the wpdb error message.
+-// ---------------------------------------------------------------------------
+-$GLOBALS['wpdb'] = new AnonymiseTest_Wpdb();
+-$GLOBALS['wpdb']->update_fails = true;
+-$result = MealsDB_User_Delete::anonymise_meals_client_for_wp_user(42);
+-assert_true(is_wp_error($result), 'returns WP_Error when UPDATE fails');
+-assert_equal('mealsdb_anonymise_failed', $result->get_error_code(), 'error code is mealsdb_anonymise_failed');
+-
+-// ---------------------------------------------------------------------------
+-// Output
+-// ---------------------------------------------------------------------------
+-if (!empty($failures)) {
+-    fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");
+-    fwrite(STDERR, sprintf("%d passed, %d failed\n", $passed, count($failures)));
+-    exit(1);
+-}
+-
+-fwrite(STDOUT, sprintf("OK: %d assertions passed\n", $passed));
+-exit(0);
+diff --git a/views/updates.php b/views/data-ops.php
+similarity index 81%
+rename from views/updates.php
+rename to views/data-ops.php
+index 2bb1d61..8a812bc 100644
+--- a/views/updates.php
++++ b/views/data-ops.php
+@@ -54,25 +54,6 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
+         </form>
+     </div>
+ 
+-    <div class="mealsdb-delete-nonadmin-users">
+-        <h2><?php echo esc_html__('Delete Non-Admin Users', 'meals-db'); ?></h2>
+-        <p class="description">
+-            <?php echo esc_html__('Permanently deletes all WordPress users who are not administrators, along with their metadata. This action is destructive and cannot be undone.', 'meals-db'); ?>
+-        </p>
+-        <form method="post" class="mealsdb-delete-nonadmin-users-form">
+-            <?php wp_nonce_field('mealsdb_delete_nonadmin_users', 'mealsdb_delete_nonadmin_users_nonce'); ?>
+-            <input type="hidden" name="mealsdb_action" value="delete_nonadmin_users">
+-            <p>
+-                <label for="mealsdb_delete_confirm">
+-                    <?php echo esc_html__('Type DELETE to confirm:', 'meals-db'); ?>
+-                </label>
+-                <input type="text" id="mealsdb_delete_confirm" name="mealsdb_delete_confirm" pattern="DELETE" required placeholder="DELETE" autocomplete="off" />
+-            </p>
+-            <p>
+-                <button class="button button-secondary" type="submit"><?php echo esc_html__('Delete Non-Admin Users', 'meals-db'); ?></button>
+-            </p>
+-        </form>
+-    </div>
+ 
+     <div class="mealsdb-db-sync">
+         <h2><?php echo esc_html__('Complete DB Sync', 'meals-db'); ?></h2>
+@@ -164,6 +145,87 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
+ 
+     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
+     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
++    <hr style="margin:24px 0;">
++        <h2><?php echo esc_html__( 'Backfill Delivery Day', 'meals-db' ); ?></h2>
++        <p class="description">
++            <?php echo esc_html__( 'Populate the delivery_day field on client records based on their zone assignment and the schedule above. Only updates clients where delivery_day is currently empty.', 'meals-db' ); ?>
++        </p>
++        <p>
++            <button type="button" class="button" id="mealsdb-backfill-delivery-day">
++                <?php echo esc_html__( 'Populate delivery_day from Zone Schedule', 'meals-db' ); ?>
++            </button>
++            <span id="mealsdb-backfill-result" style="margin-left:12px;"></span>
++        </p>
++
++        <h2><?php echo esc_html__( 'Backfill Next-Order / Next-Delivery Dates', 'meals-db' ); ?></h2>
++        <p class="description">
++            <?php echo esc_html__( "Populate next_order_date / next_delivery_date on each client using their last-order/last-delivery user meta plus the configured ordering / delivery frequencies. Only fills empty columns so existing values are preserved. Safe to re-run.", 'meals-db' ); ?>
++        </p>
++        <p>
++            <button type="button" class="button" id="mealsdb-backfill-next-dates">
++                <?php echo esc_html__( 'Backfill Next Dates', 'meals-db' ); ?>
++            </button>
++            <span id="mealsdb-backfill-next-dates-result" style="margin-left:12px;"></span>
++        </p>
++
++        <h2><?php echo esc_html__( 'Private Customer Backfill', 'meals-db' ); ?></h2>
++        <p class="description">
++            <?php echo esc_html__( 'Promote existing WC users who placed active-status orders in the lookback window into meals_clients as Private customers. Preview first — the preview is read-only and shows exactly which users would be created.', 'meals-db' ); ?>
++        </p>
++        <p>
++            <label for="mealsdb-private-backfill-lookback"><?php echo esc_html__( 'Lookback (months):', 'meals-db' ); ?></label>
++            <input type="number" id="mealsdb-private-backfill-lookback" class="small-text" min="1" max="120" value="24" />
++            <button type="button" class="button" id="mealsdb-private-backfill-preview">
++                <?php echo esc_html__( 'Preview', 'meals-db' ); ?>
++            </button>
++            <button type="button" class="button button-primary" id="mealsdb-private-backfill-run" disabled>
++                <?php echo esc_html__( 'Run Backfill', 'meals-db' ); ?>
++            </button>
++            <span id="mealsdb-private-backfill-result" style="margin-left:12px;"></span>
++        </p>
++        <div id="mealsdb-private-backfill-rows" class="mealsdb-private-backfill-rows" style="display:none; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #ccd0d4; padding:8px; background:#fff;"></div>
++
++        <h2><?php echo esc_html__( 'Private Customer Deactivation Sweep', 'meals-db' ); ?></h2>
++        <p class="description">
++            <?php echo esc_html__( 'One-time cleanup: deactivates existing Private meals_clients records whose WC user has no active-status orders in the lookback window. Sets active=0; does not delete.', 'meals-db' ); ?>
++        </p>
++        <p>
++            <label for="mealsdb-private-deact-lookback"><?php echo esc_html__( 'Lookback (months):', 'meals-db' ); ?></label>
++            <input type="number" id="mealsdb-private-deact-lookback" class="small-text" min="1" max="120" value="24" />
++            <button type="button" class="button" id="mealsdb-private-deact-preview">
++                <?php echo esc_html__( 'Preview', 'meals-db' ); ?>
++            </button>
++            <button type="button" class="button" id="mealsdb-private-deact-run" disabled>
++                <?php echo esc_html__( 'Deactivate Stale', 'meals-db' ); ?>
++            </button>
++            <span id="mealsdb-private-deact-result" style="margin-left:12px;"></span>
++        </p>
++        <div id="mealsdb-private-deact-rows" class="mealsdb-private-deact-rows" style="display:none; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #ccd0d4; padding:8px; background:#fff;"></div>
++
++        <h2><?php echo esc_html__( 'Enrich Private Customer Skeletons', 'meals-db' ); ?></h2>
++        <p class="description">
++            <?php echo esc_html__( 'Refill blank columns (address, zone, service / ordering meta, notes) on existing Private meals_clients rows from WordPress usermeta and the user\'s most recent qualifying WC order. Admin-set values are never overwritten. Dry Run reports what would change without writing.', 'meals-db' ); ?>
++        </p>
++        <p>
++            <button type="button" class="button" id="mealsdb-private-enrich-dry">
++                <?php echo esc_html__( 'Dry Run', 'meals-db' ); ?>
++            </button>
++            <button type="button" class="button button-primary" id="mealsdb-private-enrich-run">
++                <?php echo esc_html__( 'Enrich', 'meals-db' ); ?>
++            </button>
++            <span id="mealsdb-private-enrich-result" style="margin-left:12px;"></span>
++        </p>
++
++        <h2><?php echo esc_html__( 'Sync Product Display Data', 'meals-db' ); ?></h2>
++        <p class="description">
++            <?php echo esc_html__( 'Rebuild the cached product display data (name, price, image, categories) used by the Quick Order page. This is done automatically when products are saved, but you can run a full sync here.', 'meals-db' ); ?>
++        </p>
++        <p>
++            <button type="button" class="button" id="mealsdb-sync-products">
++                <?php echo esc_html__( 'Sync Products', 'meals-db' ); ?>
++            </button>
++            <span id="mealsdb-sync-products-result" style="margin-left:12px;"></span>
++        </p>
+ </div>
+ 
+ <style>
+diff --git a/views/settings.php b/views/settings.php
+index ad8994a..bb66ea9 100644
+--- a/views/settings.php
++++ b/views/settings.php
+@@ -193,86 +193,6 @@ if ( $has_enc_key ) {
+             </tbody>
+         </table>
+ 
+-        <h2><?php echo esc_html__( 'Backfill Delivery Day', 'meals-db' ); ?></h2>
+-        <p class="description">
+-            <?php echo esc_html__( 'Populate the delivery_day field on client records based on their zone assignment and the schedule above. Only updates clients where delivery_day is currently empty.', 'meals-db' ); ?>
+-        </p>
+-        <p>
+-            <button type="button" class="button" id="mealsdb-backfill-delivery-day">
+-                <?php echo esc_html__( 'Populate delivery_day from Zone Schedule', 'meals-db' ); ?>
+-            </button>
+-            <span id="mealsdb-backfill-result" style="margin-left:12px;"></span>
+-        </p>
+-
+-        <h2><?php echo esc_html__( 'Backfill Next-Order / Next-Delivery Dates', 'meals-db' ); ?></h2>
+-        <p class="description">
+-            <?php echo esc_html__( "Populate next_order_date / next_delivery_date on each client using their last-order/last-delivery user meta plus the configured ordering / delivery frequencies. Only fills empty columns so existing values are preserved. Safe to re-run.", 'meals-db' ); ?>
+-        </p>
+-        <p>
+-            <button type="button" class="button" id="mealsdb-backfill-next-dates">
+-                <?php echo esc_html__( 'Backfill Next Dates', 'meals-db' ); ?>
+-            </button>
+-            <span id="mealsdb-backfill-next-dates-result" style="margin-left:12px;"></span>
+-        </p>
+-
+-        <h2><?php echo esc_html__( 'Private Customer Backfill', 'meals-db' ); ?></h2>
+-        <p class="description">
+-            <?php echo esc_html__( 'Promote existing WC users who placed active-status orders in the lookback window into meals_clients as Private customers. Preview first — the preview is read-only and shows exactly which users would be created.', 'meals-db' ); ?>
+-        </p>
+-        <p>
+-            <label for="mealsdb-private-backfill-lookback"><?php echo esc_html__( 'Lookback (months):', 'meals-db' ); ?></label>
+-            <input type="number" id="mealsdb-private-backfill-lookback" class="small-text" min="1" max="120" value="24" />
+-            <button type="button" class="button" id="mealsdb-private-backfill-preview">
+-                <?php echo esc_html__( 'Preview', 'meals-db' ); ?>
+-            </button>
+-            <button type="button" class="button button-primary" id="mealsdb-private-backfill-run" disabled>
+-                <?php echo esc_html__( 'Run Backfill', 'meals-db' ); ?>
+-            </button>
+-            <span id="mealsdb-private-backfill-result" style="margin-left:12px;"></span>
+-        </p>
+-        <div id="mealsdb-private-backfill-rows" class="mealsdb-private-backfill-rows" style="display:none; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #ccd0d4; padding:8px; background:#fff;"></div>
+-
+-        <h2><?php echo esc_html__( 'Private Customer Deactivation Sweep', 'meals-db' ); ?></h2>
+-        <p class="description">
+-            <?php echo esc_html__( 'One-time cleanup: deactivates existing Private meals_clients records whose WC user has no active-status orders in the lookback window. Sets active=0; does not delete.', 'meals-db' ); ?>
+-        </p>
+-        <p>
+-            <label for="mealsdb-private-deact-lookback"><?php echo esc_html__( 'Lookback (months):', 'meals-db' ); ?></label>
+-            <input type="number" id="mealsdb-private-deact-lookback" class="small-text" min="1" max="120" value="24" />
+-            <button type="button" class="button" id="mealsdb-private-deact-preview">
+-                <?php echo esc_html__( 'Preview', 'meals-db' ); ?>
+-            </button>
+-            <button type="button" class="button" id="mealsdb-private-deact-run" disabled>
+-                <?php echo esc_html__( 'Deactivate Stale', 'meals-db' ); ?>
+-            </button>
+-            <span id="mealsdb-private-deact-result" style="margin-left:12px;"></span>
+-        </p>
+-        <div id="mealsdb-private-deact-rows" class="mealsdb-private-deact-rows" style="display:none; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #ccd0d4; padding:8px; background:#fff;"></div>
+-
+-        <h2><?php echo esc_html__( 'Enrich Private Customer Skeletons', 'meals-db' ); ?></h2>
+-        <p class="description">
+-            <?php echo esc_html__( 'Refill blank columns (address, zone, service / ordering meta, notes) on existing Private meals_clients rows from WordPress usermeta and the user\'s most recent qualifying WC order. Admin-set values are never overwritten. Dry Run reports what would change without writing.', 'meals-db' ); ?>
+-        </p>
+-        <p>
+-            <button type="button" class="button" id="mealsdb-private-enrich-dry">
+-                <?php echo esc_html__( 'Dry Run', 'meals-db' ); ?>
+-            </button>
+-            <button type="button" class="button button-primary" id="mealsdb-private-enrich-run">
+-                <?php echo esc_html__( 'Enrich', 'meals-db' ); ?>
+-            </button>
+-            <span id="mealsdb-private-enrich-result" style="margin-left:12px;"></span>
+-        </p>
+-
+-        <h2><?php echo esc_html__( 'Sync Product Display Data', 'meals-db' ); ?></h2>
+-        <p class="description">
+-            <?php echo esc_html__( 'Rebuild the cached product display data (name, price, image, categories) used by the Quick Order page. This is done automatically when products are saved, but you can run a full sync here.', 'meals-db' ); ?>
+-        </p>
+-        <p>
+-            <button type="button" class="button" id="mealsdb-sync-products">
+-                <?php echo esc_html__( 'Sync Products', 'meals-db' ); ?>
+-            </button>
+-            <span id="mealsdb-sync-products-result" style="margin-left:12px;"></span>
+-        </p>
+ 
+         <p class="submit">
+             <button type="submit" class="button button-primary" id="mealsdb-save-settings">
