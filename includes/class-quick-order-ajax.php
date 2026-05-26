@@ -392,8 +392,10 @@ class MealsDB_Quick_Order_Ajax {
             // These are read by the call-log-manager to schedule follow-up calls.
             // Use the actual order timestamp so back-dated orders don't
             // overwrite real "last order" tracking with `now`.
+            // last_call_date stays here; last_order_date is written by the
+            // allocation hook (MealsDB_Client_Dates::advance_on_order) as
+            // Y-m-d, which is the format the next-dates reader expects.
             $order_timestamp = $order_date->format('Y-m-d H:i:s');
-            update_user_meta($wp_user_id, 'last_order_date', $order_timestamp);
             update_user_meta($wp_user_id, 'last_call_date', $order_timestamp);
 
             // R2: persist the next-order / next-delivery dates the operator
@@ -1016,25 +1018,37 @@ class MealsDB_Quick_Order_Ajax {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $client = $wpdb->get_row(
             $wpdb->prepare(
-                "SELECT ordering_frequency, delivery_frequency FROM `{$clients_table}` WHERE client_id = %d",
+                "SELECT ordering_frequency, delivery_frequency, delivery_day FROM `{$clients_table}` WHERE client_id = %d",
                 $client_id
             ),
             ARRAY_A
         );
 
-        $ordering_days = isset($client['ordering_frequency']) ? (int) $client['ordering_frequency'] : 0;
-        $delivery_days = isset($client['delivery_frequency']) ? (int) $client['delivery_frequency'] : 0;
+        $ordering_freq = isset($client['ordering_frequency']) ? (int) $client['ordering_frequency'] : 0;
+        $delivery_freq = isset($client['delivery_frequency']) ? (int) $client['delivery_frequency'] : 0;
+        $delivery_day  = $client['delivery_day'] ?? null;
+        $order_date_ymd = $order_date->format('Y-m-d');
 
+        // The form auto-fills next_order/next_delivery with the computed
+        // dates and the operator may edit them; whatever is submitted wins.
+        // Only fall back to computing (via the shared calculator — weeks,
+        // snapped to delivery day) when the form supplied nothing.
         $patch = [];
         if ($submitted_order !== null) {
             $patch['next_order_date'] = $submitted_order;
-        } elseif ($ordering_days > 0) {
-            $patch['next_order_date'] = $order_date->modify('+' . $ordering_days . ' days')->format('Y-m-d');
+        } else {
+            $computed = MealsDB_Date_Calculator::next_date($order_date_ymd, $ordering_freq, $delivery_day);
+            if ($computed !== null) {
+                $patch['next_order_date'] = $computed;
+            }
         }
         if ($submitted_delivery !== null) {
             $patch['next_delivery_date'] = $submitted_delivery;
-        } elseif ($delivery_days > 0) {
-            $patch['next_delivery_date'] = $order_date->modify('+' . $delivery_days . ' days')->format('Y-m-d');
+        } else {
+            $computed = MealsDB_Date_Calculator::next_date($order_date_ymd, $delivery_freq, $delivery_day);
+            if ($computed !== null) {
+                $patch['next_delivery_date'] = $computed;
+            }
         }
 
         if (empty($patch)) {
@@ -1103,7 +1117,7 @@ class MealsDB_Quick_Order_Ajax {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $client = $wpdb->get_row(
             $wpdb->prepare(
-                "SELECT ordering_frequency, delivery_frequency, next_order_date, next_delivery_date
+                "SELECT ordering_frequency, delivery_frequency, delivery_day, next_order_date, next_delivery_date
                  FROM `{$clients_table}` WHERE client_id = %d",
                 $client_id
             ),
@@ -1122,11 +1136,13 @@ class MealsDB_Quick_Order_Ajax {
             $order_date = new DateTimeImmutable('now');
         }
 
-        $ordering_days = (int) ($client['ordering_frequency'] ?? 0);
-        $delivery_days = (int) ($client['delivery_frequency'] ?? 0);
+        $ordering_freq = (int) ($client['ordering_frequency'] ?? 0);
+        $delivery_freq = (int) ($client['delivery_frequency'] ?? 0);
+        $delivery_day  = $client['delivery_day'] ?? null;
+        $order_date_ymd = $order_date->format('Y-m-d');
 
-        $rule_order    = $ordering_days > 0 ? $order_date->modify('+' . $ordering_days . ' days')->format('Y-m-d') : null;
-        $rule_delivery = $delivery_days > 0 ? $order_date->modify('+' . $delivery_days . ' days')->format('Y-m-d') : null;
+        $rule_order    = MealsDB_Date_Calculator::next_date($order_date_ymd, $ordering_freq, $delivery_day);
+        $rule_delivery = MealsDB_Date_Calculator::next_date($order_date_ymd, $delivery_freq, $delivery_day);
 
         wp_send_json_success([
             'has_client'            => true,
