@@ -78,6 +78,35 @@ class MealsDB_Installer {
             ];
         }
 
+        if (class_exists('MealsDB_Task_Type_Client_Delivery')) {
+            $seeds[] = [
+                'name'             => 'Weekly Delivery List',
+                'task_type'        => MealsDB_Task_Type_Client_Delivery::TYPE_ID,
+                'spawn_type'       => MealsDB_Task_Rules::SPAWN_QUERY,
+                'recurrence'       => [
+                    'type'         => 'weekly',
+                    'interval'     => 1,
+                    'days_of_week' => ['sunday'],
+                    'time'         => '06:00',
+                ],
+                'query_criteria'   => [
+                    'strategy' => 'clients_due_for_delivery',
+                    'params'   => [
+                        'days_window' => 7,
+                    ],
+                ],
+                'payload_template' => [
+                    'client_id'          => '{{wp_user_id}}',
+                    'client_name'        => '{{first_name}} {{last_name}}',
+                    'delivery_day'       => '{{delivery_day}}',
+                    'next_delivery_date' => '{{next_delivery_date}}',
+                ],
+                'assignee_role'    => 'warehouse',
+                'tags'             => ['weekly_deliveries'],
+                'is_active'        => 1,
+            ];
+        }
+
         if (class_exists('MealsDB_Task_Type_Call_Client')) {
             $seeds[] = [
                 'name'             => 'Weekly Phone Call List',

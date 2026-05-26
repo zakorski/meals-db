@@ -97,6 +97,18 @@ class MealsDB_Allocation_Hooks {
             // allocate_order so the order reflects final line items.
             MealsDB_Order_Fees::apply_to_order($order_id);
 
+            // Advance ordering dates (last_order_date + next_order_date) for
+            // the client, for ANY order regardless of source. Uses the order's
+            // own date so back-dated orders don't anchor to "now".
+            $order = wc_get_order($order_id);
+            if ($order instanceof WC_Order) {
+                $cust = (int) $order->get_customer_id();
+                $odate = $order->get_date_created();
+                if ($cust > 0 && $odate) {
+                    MealsDB_Client_Dates::advance_on_order($cust, $odate->date('Y-m-d'));
+                }
+            }
+
             $engine = new MealsDB_Allocation_Engine();
             $engine->allocate_order($order_id);
 
