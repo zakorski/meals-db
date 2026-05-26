@@ -1,0 +1,679 @@
+diff --git a/includes/class-allocation-hooks.php b/includes/class-allocation-hooks.php
+index c58c0ae..1ce1748 100644
+--- a/includes/class-allocation-hooks.php
++++ b/includes/class-allocation-hooks.php
+@@ -97,6 +97,18 @@ class MealsDB_Allocation_Hooks {
+             // allocate_order so the order reflects final line items.
+             MealsDB_Order_Fees::apply_to_order($order_id);
+ 
++            // Advance ordering dates (last_order_date + next_order_date) for
++            // the client, for ANY order regardless of source. Uses the order's
++            // own date so back-dated orders don't anchor to "now".
++            $order = wc_get_order($order_id);
++            if ($order instanceof WC_Order) {
++                $cust = (int) $order->get_customer_id();
++                $odate = $order->get_date_created();
++                if ($cust > 0 && $odate) {
++                    MealsDB_Client_Dates::advance_on_order($cust, $odate->date('Y-m-d'));
++                }
++            }
++
+             $engine = new MealsDB_Allocation_Engine();
+             $engine->allocate_order($order_id);
+ 
+diff --git a/includes/class-schema.php b/includes/class-schema.php
+index da760bb..a83fa52 100644
+--- a/includes/class-schema.php
++++ b/includes/class-schema.php
+@@ -88,6 +88,7 @@ class MealsDB_Schema {
+                     'delivery_postal_code'         => 'VARCHAR(10) NULL',
+                     'next_order_date'              => 'DATE NULL',
+                     'next_delivery_date'           => 'DATE NULL',
++                    'last_delivery_date'           => 'DATE NULL',
+                 ],
+                 'primary_key' => ['client_id'],
+                 'indexes'     => [
+diff --git a/includes/install-schema.php b/includes/install-schema.php
+index 6fd4dd7..02166b8 100644
+--- a/includes/install-schema.php
++++ b/includes/install-schema.php
+@@ -78,6 +78,35 @@ class MealsDB_Installer {
+             ];
+         }
+ 
++        if (class_exists('MealsDB_Task_Type_Client_Delivery')) {
++            $seeds[] = [
++                'name'             => 'Weekly Delivery List',
++                'task_type'        => MealsDB_Task_Type_Client_Delivery::TYPE_ID,
++                'spawn_type'       => MealsDB_Task_Rules::SPAWN_QUERY,
++                'recurrence'       => [
++                    'type'         => 'weekly',
++                    'interval'     => 1,
++                    'days_of_week' => ['sunday'],
++                    'time'         => '06:00',
++                ],
++                'query_criteria'   => [
++                    'strategy' => 'clients_due_for_delivery',
++                    'params'   => [
++                        'days_window' => 7,
++                    ],
++                ],
++                'payload_template' => [
++                    'client_id'          => '{{wp_user_id}}',
++                    'client_name'        => '{{first_name}} {{last_name}}',
++                    'delivery_day'       => '{{delivery_day}}',
++                    'next_delivery_date' => '{{next_delivery_date}}',
++                ],
++                'assignee_role'    => 'warehouse',
++                'tags'             => ['weekly_deliveries'],
++                'is_active'        => 1,
++            ];
++        }
++
+         if (class_exists('MealsDB_Task_Type_Call_Client')) {
+             $seeds[] = [
+                 'name'             => 'Weekly Phone Call List',
+diff --git a/includes/services/class-client-dates.php b/includes/services/class-client-dates.php
+new file mode 100644
+index 0000000..4878856
+--- /dev/null
++++ b/includes/services/class-client-dates.php
+@@ -0,0 +1,119 @@
++<?php
++/**
++ * Advances a client's ordering dates when an order is placed.
++ *
++ * On order placement:
++ *   - last_order_date (WP usermeta) <- the order's date
++ *   - next_order_date (meals_clients column) <- recomputed via the canonical
++ *     calculator: last_order_date + ordering_frequency weeks, snapped to the
++ *     client's delivery day within that Sunday..Saturday week.
++ *
++ * WHY A HOOK (not just Quick Order):
++ * last_order_date was previously written ONLY by Quick Order, so an order
++ * placed through the normal WooCommerce screen never advanced it and the
++ * client's next_order_date went stale — the same QO-only gap the fee applier
++ * had. This runs from the allocation lifecycle hook so EVERY order advances
++ * the dates, regardless of how it was placed.
++ *
++ * Delivery dates are NOT advanced here — a delivery is recorded by the
++ * explicit "Mark as Delivered" action on the client_delivery task, which
++ * advances last_delivery_date / next_delivery_date separately.
++ *
++ * @package MealsDB
++ */
++
++defined('ABSPATH') || exit;
++
++class MealsDB_Client_Dates {
++
++    /**
++     * Advance ordering dates for the client behind a WooCommerce order.
++     *
++     * @param int    $wp_user_id  The order's customer (WP user) id.
++     * @param string $order_date  Y-m-d the order was placed.
++     * @return bool True if next_order_date was recomputed and written.
++     */
++    public static function advance_on_order(int $wp_user_id, string $order_date): bool {
++        if ($wp_user_id <= 0) {
++            return false;
++        }
++        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $order_date)) {
++            return false;
++        }
++
++        global $wpdb;
++        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
++
++        $client = $wpdb->get_row($wpdb->prepare(
++            "SELECT client_id, ordering_frequency, delivery_day
++             FROM `{$clients_table}` WHERE wp_user_id = %d AND active = 1 LIMIT 1",
++            $wp_user_id
++        ), ARRAY_A);
++
++        if (!is_array($client)) {
++            return false; // not a tracked client
++        }
++
++        // Record the last order date (usermeta, matching existing convention).
++        if (function_exists('update_user_meta')) {
++            update_user_meta($wp_user_id, 'last_order_date', $order_date);
++        }
++
++        $next = MealsDB_Date_Calculator::next_date(
++            $order_date,
++            (int) ($client['ordering_frequency'] ?? 0),
++            $client['delivery_day'] ?? null
++        );
++        if ($next === null) {
++            return false; // no frequency configured — nothing to recompute
++        }
++
++        $wpdb->update(
++            $clients_table,
++            ['next_order_date' => $next],
++            ['client_id' => (int) $client['client_id']]
++        );
++        return true;
++    }
++
++    /**
++     * Record a delivery as completed (the "Mark as Delivered" action):
++     *   - last_delivery_date <- delivered date
++     *   - next_delivery_date <- recomputed via the calculator (delivery
++     *     frequency, snapped to delivery day).
++     *
++     * @param int    $client_id      meals_clients id.
++     * @param string $delivered_date Y-m-d.
++     * @return bool True if next_delivery_date was recomputed and written.
++     */
++    public static function mark_delivered(int $client_id, string $delivered_date): bool {
++        if ($client_id <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivered_date)) {
++            return false;
++        }
++
++        global $wpdb;
++        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
++
++        $client = $wpdb->get_row($wpdb->prepare(
++            "SELECT client_id, delivery_frequency, delivery_day
++             FROM `{$clients_table}` WHERE client_id = %d LIMIT 1",
++            $client_id
++        ), ARRAY_A);
++        if (!is_array($client)) {
++            return false;
++        }
++
++        $next = MealsDB_Date_Calculator::next_date(
++            $delivered_date,
++            (int) ($client['delivery_frequency'] ?? 0),
++            $client['delivery_day'] ?? null
++        );
++
++        $update = ['last_delivery_date' => $delivered_date];
++        if ($next !== null) {
++            $update['next_delivery_date'] = $next;
++        }
++        $wpdb->update($clients_table, $update, ['client_id' => (int) $client['client_id']]);
++        return $next !== null;
++    }
++}
+diff --git a/includes/services/class-date-calculator.php b/includes/services/class-date-calculator.php
+new file mode 100644
+index 0000000..406cf5a
+--- /dev/null
++++ b/includes/services/class-date-calculator.php
+@@ -0,0 +1,103 @@
++<?php
++/**
++ * Canonical next-date calculator for client ordering / delivery cadence.
++ *
++ * One implementation, used everywhere a "next" date is computed so the
++ * backfill, the live order-placement hook, and the delivery task all agree:
++ *
++ *   - MealsDB_Migration_Consolidated::run_phase_next_dates   (backfill)
++ *   - the order-placement lifecycle hook                     (next_order_date)
++ *   - the client_delivery task on_complete                   (next_delivery_date)
++ *
++ * CADENCE MODEL
++ * -------------
++ * ordering_frequency / delivery_frequency are stored as a WEEK MULTIPLIER,
++ * not a day count: 1 = weekly, 2 = biweekly, 3 = every three weeks, etc.
++ * So the interval in days is (frequency * 7). (Historic code treated the
++ * value as a raw day count — that was wrong and is corrected here.)
++ *
++ * SNAP-TO-DELIVERY-DAY
++ * --------------------
++ * The frequency picks the WEEK; the client's delivery_day picks the DAY
++ * within that week. Weeks are Sunday-anchored (Sunday 00:00 .. Saturday).
++ * Algorithm:
++ *   1. projected = last_date + (frequency * 7) days
++ *   2. find the Sunday that starts projected's week
++ *   3. result = that Sunday + offset(delivery_day)   (Sun=0 .. Sat=6)
++ * Because (frequency * 7) preserves weekday, the projected date sits on the
++ * same weekday as last_date; snapping within its fixed Sun..Sat week moves
++ * to the delivery day in that same week — backward (Fri->Thu) or forward
++ * (Tue->Thu) as needed, never spilling into an adjacent week. With
++ * frequency >= 1 the result is always strictly in a later week than
++ * last_date, so it cannot land on or before last_date.
++ *
++ * If delivery_day is blank/unknown, no snap is applied and the projected
++ * date is returned as-is.
++ *
++ * @package MealsDB
++ */
++
++defined('ABSPATH') || exit;
++
++class MealsDB_Date_Calculator {
++
++    /** Day-of-week => offset from Sunday. */
++    private const DAY_OFFSET = [
++        'sunday'    => 0,
++        'monday'    => 1,
++        'tuesday'   => 2,
++        'wednesday' => 3,
++        'thursday'  => 4,
++        'friday'    => 5,
++        'saturday'  => 6,
++    ];
++
++    /**
++     * Compute the next date from a last date, a week-multiplier frequency,
++     * and an optional delivery day-of-week to snap to.
++     *
++     * @param string      $last_date    Y-m-d.
++     * @param int         $frequency    Week multiplier (1 = weekly).
++     * @param string|null $delivery_day Day name (any case) or null/'' to skip snap.
++     * @return string|null Y-m-d, or null if inputs are unusable.
++     */
++    public static function next_date(string $last_date, int $frequency, ?string $delivery_day = null): ?string {
++        if ($frequency <= 0) {
++            return null;
++        }
++        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $last_date)) {
++            return null;
++        }
++        try {
++            $base = new DateTimeImmutable($last_date, new DateTimeZone('UTC'));
++        } catch (\Throwable $e) {
++            return null;
++        }
++
++        // 1. Project forward by whole weeks.
++        $projected = $base->modify('+' . ($frequency * 7) . ' days');
++
++        // 2/3. Snap to the delivery day within projected's Sun..Sat week.
++        $offset = self::day_offset($delivery_day);
++        if ($offset === null) {
++            return $projected->format('Y-m-d'); // no/unknown delivery day: no snap
++        }
++
++        // Sunday that starts projected's week. PHP 'w': Sun=0 .. Sat=6.
++        $projected_dow = (int) $projected->format('w');
++        $week_sunday   = $projected->modify('-' . $projected_dow . ' days');
++
++        return $week_sunday->modify('+' . $offset . ' days')->format('Y-m-d');
++    }
++
++    /**
++     * Normalise a day name to its Sunday-offset, or null if unrecognised.
++     */
++    private static function day_offset(?string $delivery_day): ?int {
++        if ($delivery_day === null) {
++            return null;
++        }
++        $key = strtolower(trim($delivery_day));
++        return self::DAY_OFFSET[$key] ?? null;
++    }
++}
+diff --git a/includes/services/class-migration-consolidated.php b/includes/services/class-migration-consolidated.php
+index af8fa25..e36d93b 100644
+--- a/includes/services/class-migration-consolidated.php
++++ b/includes/services/class-migration-consolidated.php
+@@ -972,7 +972,7 @@ class MealsDB_Migration_Consolidated {
+ 
+         $rows = $wpdb->get_results($wpdb->prepare(
+             "SELECT client_id, wp_user_id, ordering_frequency, delivery_frequency,
+-                    next_order_date, next_delivery_date
++                    delivery_day, next_order_date, next_delivery_date
+              FROM `{$clients_table}`
+              WHERE wp_user_id > 0 AND active = 1
+              ORDER BY client_id ASC
+@@ -994,17 +994,30 @@ class MealsDB_Migration_Consolidated {
+ 
+             $patch = [];
+ 
++            $delivery_day = $row['delivery_day'] ?? null;
++
+             if (empty($row['next_order_date'])) {
+-                $next_order = self::compute_next_from_meta($wp_user_id, 'last_order_date', (int) ($row['ordering_frequency'] ?? 0));
+-                if ($next_order !== null) {
+-                    $patch['next_order_date'] = $next_order;
++                $last_order = self::read_meta_date($wp_user_id, 'last_order_date');
++                if ($last_order !== null) {
++                    // ordering_frequency is a WEEK multiplier; snap to delivery day.
++                    $next_order = MealsDB_Date_Calculator::next_date(
++                        $last_order, (int) ($row['ordering_frequency'] ?? 0), $delivery_day
++                    );
++                    if ($next_order !== null) {
++                        $patch['next_order_date'] = $next_order;
++                    }
+                 }
+             }
+ 
+             if (empty($row['next_delivery_date'])) {
+-                $next_delivery = self::compute_next_from_meta($wp_user_id, 'last_delivery_date', (int) ($row['delivery_frequency'] ?? 0));
+-                if ($next_delivery !== null) {
+-                    $patch['next_delivery_date'] = $next_delivery;
++                $last_delivery = self::read_meta_date($wp_user_id, 'last_delivery_date');
++                if ($last_delivery !== null) {
++                    $next_delivery = MealsDB_Date_Calculator::next_date(
++                        $last_delivery, (int) ($row['delivery_frequency'] ?? 0), $delivery_day
++                    );
++                    if ($next_delivery !== null) {
++                        $patch['next_delivery_date'] = $next_delivery;
++                    }
+                 }
+             }
+ 
+@@ -1393,26 +1406,18 @@ class MealsDB_Migration_Consolidated {
+     // =====================================================================
+ 
+     /**
+-     * Read a YYYY-MM-DD usermeta date and project forward N days.
+-     * Ported from MealsDB_Backfill_Next_Dates.
++     * Read a YYYY-MM-DD usermeta date and return it validated, or null.
++     * Computation of the next date is delegated to MealsDB_Date_Calculator.
+      */
+-    private static function compute_next_from_meta(int $wp_user_id, string $meta_key, int $frequency_days): ?string {
+-        if ($wp_user_id <= 0 || $frequency_days <= 0 || !function_exists('get_user_meta')) {
++    private static function read_meta_date(int $wp_user_id, string $meta_key): ?string {
++        if ($wp_user_id <= 0 || !function_exists('get_user_meta')) {
+             return null;
+         }
+         $raw = get_user_meta($wp_user_id, $meta_key, true);
+-        if (!is_string($raw) || $raw === '') {
+-            return null;
+-        }
+-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
+-            return null;
+-        }
+-        try {
+-            $date = new DateTimeImmutable($raw);
+-        } catch (\Throwable $e) {
++        if (!is_string($raw) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
+             return null;
+         }
+-        return $date->modify('+' . $frequency_days . ' days')->format('Y-m-d');
++        return $raw;
+     }
+ 
+     /**
+diff --git a/includes/task-types/class-task-type-client-delivery.php b/includes/task-types/class-task-type-client-delivery.php
+new file mode 100644
+index 0000000..59fb2cd
+--- /dev/null
++++ b/includes/task-types/class-task-type-client-delivery.php
+@@ -0,0 +1,104 @@
++<?php
++/**
++ * Task type: client_delivery — "Deliver to <client>" for a due delivery.
++ *
++ * Spawned for each client whose next_delivery_date falls in the spawn
++ * window (see the clients_due_for_delivery strategy). The single completion
++ * action is "Mark as Delivered", which records the delivery and advances the
++ * client's delivery cadence:
++ *
++ *   last_delivery_date <- the delivered date
++ *   next_delivery_date <- recomputed (delivery_frequency weeks, snapped to
++ *                         the client's delivery day) via the shared calculator
++ *
++ * This is the explicit delivery-completion signal the system otherwise
++ * lacks — WooCommerce knows about orders, not about deliveries happening.
++ *
++ * @package MealsDB
++ */
++
++defined('ABSPATH') || exit;
++
++class MealsDB_Task_Type_Client_Delivery {
++
++    public const TYPE_ID = 'client_delivery';
++
++    public static function register(): void {
++        if (!class_exists('MealsDB_Task_Registry')) {
++            return;
++        }
++
++        MealsDB_Task_Registry::register(self::TYPE_ID, [
++            'label'         => __('Client Delivery', 'meals-db'),
++            'description'   => __('Deliver to the client and mark the delivery complete.', 'meals-db'),
++            'assignee_role' => 'warehouse',
++            'urgency'       => MealsDB_Task_Engine::URGENCY_ROUTINE,
++            'form_schema'   => [
++                ['name' => 'client_name',        'type' => 'text', 'label' => __('Client', 'meals-db'), 'readonly' => true],
++                ['name' => 'delivery_day',       'type' => 'text', 'label' => __('Delivery day', 'meals-db'), 'readonly' => true],
++                ['name' => 'next_delivery_date', 'type' => 'date', 'label' => __('Scheduled delivery date', 'meals-db'), 'readonly' => true],
++                ['name' => 'delivered_date',     'type' => 'date', 'label' => __('Delivered on', 'meals-db'), 'required' => true],
++                ['name' => 'notes',              'type' => 'textarea', 'label' => __('Notes', 'meals-db')],
++            ],
++            'on_complete'   => [self::class, 'handle_complete'],
++        ]);
++    }
++
++    /**
++     * "Mark as Delivered": advance the client's delivery dates from the
++     * delivered date entered on the form (falls back to today).
++     */
++    public static function handle_complete(array $task, array $form_data, int $completed_by): void {
++        $client_id = isset($task['related_entity_id']) ? (int) $task['related_entity_id'] : 0;
++        if ($client_id <= 0) {
++            return;
++        }
++
++        $delivered = isset($form_data['delivered_date']) ? (string) $form_data['delivered_date'] : '';
++        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivered)) {
++            $delivered = gmdate('Y-m-d');
++        }
++
++        if (class_exists('MealsDB_Client_Dates')) {
++            MealsDB_Client_Dates::mark_delivered($client_id, $delivered);
++        }
++    }
++
++    /**
++     * Spawn strategy: clients whose next_delivery_date falls within the
++     * window (default 7 days). Mirrors clients_due_to_reorder but keys on
++     * next_delivery_date. One spawn row per due client.
++     *
++     * @param array<string,mixed> $rule
++     * @param array<string,mixed> $params
++     * @return array<int,array<string,mixed>>
++     */
++    public static function clients_due_for_delivery_strategy(array $rule, array $params): array {
++        global $wpdb;
++
++        $days_window = isset($params['days_window']) ? max(1, (int) $params['days_window']) : 7;
++
++        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
++
++        $sql = "SELECT client_id, wp_user_id, first_name, last_name,
++                       delivery_day, next_delivery_date
++                FROM `{$clients_table}`
++                WHERE active = 1
++                  AND wp_user_id > 0
++                  AND next_delivery_date IS NOT NULL
++                  AND next_delivery_date >= CURDATE()
++                  AND next_delivery_date <= DATE_ADD(CURDATE(), INTERVAL %d DAY)
++                ORDER BY next_delivery_date ASC, last_name ASC";
++
++        $rows = $wpdb->get_results($wpdb->prepare($sql, $days_window), ARRAY_A);
++        if (!is_array($rows)) {
++            return [];
++        }
++
++        return array_map(static function($row) {
++            $row['__related_entity_type'] = 'client';
++            $row['__related_entity_id']   = (int) ($row['client_id'] ?? 0);
++            return $row;
++        }, $rows);
++    }
++}
+diff --git a/meals-db-main.php b/meals-db-main.php
+index 717da96..7453b2a 100644
+--- a/meals-db-main.php
++++ b/meals-db-main.php
+@@ -114,12 +114,18 @@ add_action('plugins_loaded', function () {
+     MealsDB_Task_Type_Place_PO::register();
+     MealsDB_Task_Type_Confirm_PO_Arrival::register();
+     MealsDB_Task_Type_Physical_Count::register();
++    MealsDB_Task_Type_Client_Delivery::register();
+ 
+     MealsDB_Task_Rules::register_strategy(
+         'clients_due_to_reorder',
+         [MealsDB_Task_Type_Call_Client::class, 'clients_due_to_reorder_strategy']
+     );
+ 
++    MealsDB_Task_Rules::register_strategy(
++        'clients_due_for_delivery',
++        [MealsDB_Task_Type_Client_Delivery::class, 'clients_due_for_delivery_strategy']
++    );
++
+     MealsDB_Ajax_Tasks::init();
+     MealsDB_Task_Cron::init();
+ 
+diff --git a/tests/test-allocation-hooks-swallow.php b/tests/test-allocation-hooks-swallow.php
+index 3284864..65b350e 100644
+--- a/tests/test-allocation-hooks-swallow.php
++++ b/tests/test-allocation-hooks-swallow.php
+@@ -86,6 +86,8 @@ class WC_Order {
+     private $meta;
+     public function __construct(array $meta = []) { $this->meta = $meta; }
+     public function get_meta($key) { return $this->meta[$key] ?? null; }
++    public function get_customer_id() { return 0; }
++    public function get_date_created() { return null; }
+ }
+ if (!function_exists('wc_get_order')) {
+     function wc_get_order($id) {
+diff --git a/tests/test-client-dates.php b/tests/test-client-dates.php
+new file mode 100644
+index 0000000..01e3944
+--- /dev/null
++++ b/tests/test-client-dates.php
+@@ -0,0 +1,55 @@
++<?php
++/**
++ * Tests for MealsDB_Client_Dates (advance_on_order, mark_delivered).
++ * Run: php tests/test-client-dates.php
++ */
++if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
++if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
++
++$GLOBALS['__usermeta'] = [];
++if (!function_exists('update_user_meta')) {
++    function update_user_meta($uid, $k, $v) { $GLOBALS['__usermeta'][$uid][$k] = $v; return true; }
++}
++
++require_once __DIR__ . '/../includes/class-autoloader.php';
++MealsDB_Autoloader::register(dirname(__DIR__) . '/');
++
++class CDWpdb {
++    public $prefix = 'wp_';
++    public $client;
++    public array $updated = [];
++    public function __construct(array $c) { $this->client = $c; }
++    public function prepare($q, ...$a) { if (count($a)===1 && is_array($a[0])) $a=$a[0]; $i=0; return preg_replace_callback('/%[ds]/', function($m) use (&$i,$a){ $v=$a[$i]??''; $i++; return $m[0]==='%s'?"'".$v."'":(string)(int)$v; }, $q); }
++    public function get_row($q, $o = null) { return $this->client; }
++    public function update($t, $data, $where) { $this->updated = $data; return 1; }
++}
++
++$failures = []; $passed = 0;
++function ok($c, $l) { global $failures, $passed; if ($c) { $passed++; } else { $failures[] = $l; } }
++
++// advance_on_order: weekly Thursday client orders Tuesday 2026-05-19
++$GLOBALS['wpdb'] = new CDWpdb(['client_id' => 5, 'ordering_frequency' => 1, 'delivery_day' => 'Thursday']);
++$r = MealsDB_Client_Dates::advance_on_order(700, '2026-05-19');
++ok($r === true, 'advance_on_order returns true');
++ok(($GLOBALS['__usermeta'][700]['last_order_date'] ?? '') === '2026-05-19', 'last_order_date usermeta set');
++ok(($GLOBALS['wpdb']->updated['next_order_date'] ?? '') === '2026-05-28', 'next_order_date snapped to Thu of order week');
++
++// advance_on_order: no frequency => no recompute
++$GLOBALS['wpdb'] = new CDWpdb(['client_id' => 6, 'ordering_frequency' => 0, 'delivery_day' => 'Thursday']);
++$r = MealsDB_Client_Dates::advance_on_order(701, '2026-05-19');
++ok($r === false, 'no frequency => false');
++
++// advance_on_order: not a tracked client
++$GLOBALS["wpdb"] = new CDWpdb([]); $GLOBALS["wpdb"]->client = null;
++ok(MealsDB_Client_Dates::advance_on_order(702, '2026-05-19') === false, 'untracked client => false');
++
++// mark_delivered: biweekly Thursday, delivered Thursday 2026-05-21
++$GLOBALS['wpdb'] = new CDWpdb(['client_id' => 8, 'delivery_frequency' => 2, 'delivery_day' => 'Thursday']);
++$r = MealsDB_Client_Dates::mark_delivered(8, '2026-05-21');
++ok($r === true, 'mark_delivered returns true');
++ok(($GLOBALS['wpdb']->updated['last_delivery_date'] ?? '') === '2026-05-21', 'last_delivery_date set');
++ok(($GLOBALS['wpdb']->updated['next_delivery_date'] ?? '') === '2026-06-04', 'next_delivery_date = +2wk Thu');
++
++echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
++foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
++exit(empty($failures) ? 0 : 1);
+diff --git a/tests/test-date-calculator.php b/tests/test-date-calculator.php
+new file mode 100644
+index 0000000..7b1a837
+--- /dev/null
++++ b/tests/test-date-calculator.php
+@@ -0,0 +1,32 @@
++<?php
++/**
++ * Tests for MealsDB_Date_Calculator — week-multiplier + Sunday-week snap.
++ * Run: php tests/test-date-calculator.php
++ */
++if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
++require_once __DIR__ . '/../includes/class-autoloader.php';
++MealsDB_Autoloader::register(dirname(__DIR__) . '/');
++
++$failures = []; $passed = 0;
++function eq($a, $e, $l) { global $failures, $passed; if ($a === $e) { $passed++; } else { $failures[] = "$l: expected ".var_export($e,true)." got ".var_export($a,true); } }
++
++// weekly, no snap
++eq(MealsDB_Date_Calculator::next_date('2026-05-21', 1, null), '2026-05-28', 'weekly no-snap +7');
++// biweekly Thursday, last on Thursday => +14 lands on Thursday
++eq(MealsDB_Date_Calculator::next_date('2026-05-21', 2, 'Thursday'), '2026-06-04', 'biweekly Thu aligned');
++// weekly Thursday, last delivered Friday => snap back to Thu of that week
++eq(MealsDB_Date_Calculator::next_date('2026-05-22', 1, 'Thursday'), '2026-05-28', 'weekly Fri->Thu snap-back');
++// weekly Thursday, last on Tuesday => snap forward to Thu same week
++eq(MealsDB_Date_Calculator::next_date('2026-05-19', 1, 'Thursday'), '2026-05-28', 'weekly Tue->Thu snap-forward');
++// every 3 weeks, Monday
++eq(MealsDB_Date_Calculator::next_date('2026-05-04', 3, 'Monday'), '2026-05-25', 'triweekly Mon');
++// invalid frequency
++eq(MealsDB_Date_Calculator::next_date('2026-05-21', 0, 'Thursday'), null, 'zero freq => null');
++// invalid date
++eq(MealsDB_Date_Calculator::next_date('not-a-date', 1, 'Thursday'), null, 'bad date => null');
++// unknown day => no snap, just +7
++eq(MealsDB_Date_Calculator::next_date('2026-05-21', 1, 'Funday'), '2026-05-28', 'unknown day => no snap');
++
++echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
++foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
++exit(empty($failures) ? 0 : 1);
+diff --git a/tests/test-task-workflow-next-order-date-anchoring.php b/tests/test-task-workflow-next-order-date-anchoring.php
+index b437684..4ac94fc 100644
+--- a/tests/test-task-workflow-next-order-date-anchoring.php
++++ b/tests/test-task-workflow-next-order-date-anchoring.php
+@@ -95,18 +95,18 @@ $GLOBALS['test_user_meta'] = [
+ $clients = [
+     1 => [
+         'client_id' => 1, 'wp_user_id' => 101, 'active' => 1,
+-        'ordering_frequency' => 7, 'delivery_frequency' => 7,
++        'ordering_frequency' => 1, 'delivery_frequency' => 1,
+         'next_order_date' => null, 'next_delivery_date' => null,
+     ],
+     2 => [
+         'client_id' => 2, 'wp_user_id' => 102, 'active' => 1,
+-        'ordering_frequency' => 14, 'delivery_frequency' => 14,
++        'ordering_frequency' => 2, 'delivery_frequency' => 2,
+         'next_order_date' => '2026-05-01',  // Already set — should stay.
+         'next_delivery_date' => null,
+     ],
+     3 => [
+         'client_id' => 3, 'wp_user_id' => 103, 'active' => 1,
+-        'ordering_frequency' => 7, 'delivery_frequency' => 7,
++        'ordering_frequency' => 1, 'delivery_frequency' => 1,
+         'next_order_date' => null, 'next_delivery_date' => null,
+     ],
+ ];
+@@ -120,13 +120,13 @@ assert_equals($result['processed'], 3, 'processed all 3 clients');
+ assert_equals($result['order_updated'], 1, 'only 1 order_date updated (client 1; client 2 preserved, client 3 has no meta)');
+ assert_equals($result['delivery_updated'], 2, 'both eligible delivery_dates updated');
+ 
+-// Client 1: next_order_date = 2026-04-01 + 7d = 2026-04-08.
++// Client 1: next_order_date = 2026-04-01 + 1wk = 2026-04-08.
+ assert_equals($fake->clients[1]['next_order_date'], '2026-04-08', 'client 1 next_order_date computed');
+ assert_equals($fake->clients[1]['next_delivery_date'], '2026-04-10', 'client 1 next_delivery_date computed');
+ 
+ // Client 2: next_order_date preserved (already set).
+ assert_equals($fake->clients[2]['next_order_date'], '2026-05-01', 'client 2 next_order_date preserved');
+-assert_equals($fake->clients[2]['next_delivery_date'], '2026-04-21', 'client 2 next_delivery_date computed from last_delivery + 14d');
++assert_equals($fake->clients[2]['next_delivery_date'], '2026-04-21', 'client 2 next_delivery_date computed from last_delivery + 2wk');
+ 
+ // Client 3: nothing to backfill, no meta available.
+ assert_equals($fake->clients[3]['next_order_date'], null, 'client 3 next_order_date stays null');
