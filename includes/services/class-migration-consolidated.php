@@ -972,7 +972,7 @@ class MealsDB_Migration_Consolidated {
 
         $rows = $wpdb->get_results($wpdb->prepare(
             "SELECT client_id, wp_user_id, ordering_frequency, delivery_frequency,
-                    next_order_date, next_delivery_date
+                    delivery_day, next_order_date, next_delivery_date
              FROM `{$clients_table}`
              WHERE wp_user_id > 0 AND active = 1
              ORDER BY client_id ASC
@@ -994,17 +994,30 @@ class MealsDB_Migration_Consolidated {
 
             $patch = [];
 
+            $delivery_day = $row['delivery_day'] ?? null;
+
             if (empty($row['next_order_date'])) {
-                $next_order = self::compute_next_from_meta($wp_user_id, 'last_order_date', (int) ($row['ordering_frequency'] ?? 0));
-                if ($next_order !== null) {
-                    $patch['next_order_date'] = $next_order;
+                $last_order = self::read_meta_date($wp_user_id, 'last_order_date');
+                if ($last_order !== null) {
+                    // ordering_frequency is a WEEK multiplier; snap to delivery day.
+                    $next_order = MealsDB_Date_Calculator::next_date(
+                        $last_order, (int) ($row['ordering_frequency'] ?? 0), $delivery_day
+                    );
+                    if ($next_order !== null) {
+                        $patch['next_order_date'] = $next_order;
+                    }
                 }
             }
 
             if (empty($row['next_delivery_date'])) {
-                $next_delivery = self::compute_next_from_meta($wp_user_id, 'last_delivery_date', (int) ($row['delivery_frequency'] ?? 0));
-                if ($next_delivery !== null) {
-                    $patch['next_delivery_date'] = $next_delivery;
+                $last_delivery = self::read_meta_date($wp_user_id, 'last_delivery_date');
+                if ($last_delivery !== null) {
+                    $next_delivery = MealsDB_Date_Calculator::next_date(
+                        $last_delivery, (int) ($row['delivery_frequency'] ?? 0), $delivery_day
+                    );
+                    if ($next_delivery !== null) {
+                        $patch['next_delivery_date'] = $next_delivery;
+                    }
                 }
             }
 
@@ -1393,26 +1406,18 @@ class MealsDB_Migration_Consolidated {
     // =====================================================================
 
     /**
-     * Read a YYYY-MM-DD usermeta date and project forward N days.
-     * Ported from MealsDB_Backfill_Next_Dates.
+     * Read a YYYY-MM-DD usermeta date and return it validated, or null.
+     * Computation of the next date is delegated to MealsDB_Date_Calculator.
      */
-    private static function compute_next_from_meta(int $wp_user_id, string $meta_key, int $frequency_days): ?string {
-        if ($wp_user_id <= 0 || $frequency_days <= 0 || !function_exists('get_user_meta')) {
+    private static function read_meta_date(int $wp_user_id, string $meta_key): ?string {
+        if ($wp_user_id <= 0 || !function_exists('get_user_meta')) {
             return null;
         }
         $raw = get_user_meta($wp_user_id, $meta_key, true);
-        if (!is_string($raw) || $raw === '') {
+        if (!is_string($raw) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
             return null;
         }
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $raw)) {
-            return null;
-        }
-        try {
-            $date = new DateTimeImmutable($raw);
-        } catch (\Throwable $e) {
-            return null;
-        }
-        return $date->modify('+' . $frequency_days . ' days')->format('Y-m-d');
+        return $raw;
     }
 
     /**

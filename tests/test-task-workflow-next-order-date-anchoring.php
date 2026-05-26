@@ -95,18 +95,18 @@ $GLOBALS['test_user_meta'] = [
 $clients = [
     1 => [
         'client_id' => 1, 'wp_user_id' => 101, 'active' => 1,
-        'ordering_frequency' => 7, 'delivery_frequency' => 7,
+        'ordering_frequency' => 1, 'delivery_frequency' => 1,
         'next_order_date' => null, 'next_delivery_date' => null,
     ],
     2 => [
         'client_id' => 2, 'wp_user_id' => 102, 'active' => 1,
-        'ordering_frequency' => 14, 'delivery_frequency' => 14,
+        'ordering_frequency' => 2, 'delivery_frequency' => 2,
         'next_order_date' => '2026-05-01',  // Already set — should stay.
         'next_delivery_date' => null,
     ],
     3 => [
         'client_id' => 3, 'wp_user_id' => 103, 'active' => 1,
-        'ordering_frequency' => 7, 'delivery_frequency' => 7,
+        'ordering_frequency' => 1, 'delivery_frequency' => 1,
         'next_order_date' => null, 'next_delivery_date' => null,
     ],
 ];
@@ -120,13 +120,13 @@ assert_equals($result['processed'], 3, 'processed all 3 clients');
 assert_equals($result['order_updated'], 1, 'only 1 order_date updated (client 1; client 2 preserved, client 3 has no meta)');
 assert_equals($result['delivery_updated'], 2, 'both eligible delivery_dates updated');
 
-// Client 1: next_order_date = 2026-04-01 + 7d = 2026-04-08.
+// Client 1: next_order_date = 2026-04-01 + 1wk = 2026-04-08.
 assert_equals($fake->clients[1]['next_order_date'], '2026-04-08', 'client 1 next_order_date computed');
 assert_equals($fake->clients[1]['next_delivery_date'], '2026-04-10', 'client 1 next_delivery_date computed');
 
 // Client 2: next_order_date preserved (already set).
 assert_equals($fake->clients[2]['next_order_date'], '2026-05-01', 'client 2 next_order_date preserved');
-assert_equals($fake->clients[2]['next_delivery_date'], '2026-04-21', 'client 2 next_delivery_date computed from last_delivery + 14d');
+assert_equals($fake->clients[2]['next_delivery_date'], '2026-04-21', 'client 2 next_delivery_date computed from last_delivery + 2wk');
 
 // Client 3: nothing to backfill, no meta available.
 assert_equals($fake->clients[3]['next_order_date'], null, 'client 3 next_order_date stays null');

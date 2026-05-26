@@ -86,6 +86,8 @@ class WC_Order {
     private $meta;
     public function __construct(array $meta = []) { $this->meta = $meta; }
     public function get_meta($key) { return $this->meta[$key] ?? null; }
+    public function get_customer_id() { return 0; }
+    public function get_date_created() { return null; }
 }
 if (!function_exists('wc_get_order')) {
     function wc_get_order($id) {

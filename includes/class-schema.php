@@ -88,6 +88,7 @@ class MealsDB_Schema {
                     'delivery_postal_code'         => 'VARCHAR(10) NULL',
                     'next_order_date'              => 'DATE NULL',
                     'next_delivery_date'           => 'DATE NULL',
+                    'last_delivery_date'           => 'DATE NULL',
                 ],
                 'primary_key' => ['client_id'],
                 'indexes'     => [
