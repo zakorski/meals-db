@@ -54,25 +54,6 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
         </form>
     </div>
 
-    <div class="mealsdb-delete-nonadmin-users">
-        <h2><?php echo esc_html__('Delete Non-Admin Users', 'meals-db'); ?></h2>
-        <p class="description">
-            <?php echo esc_html__('Permanently deletes all WordPress users who are not administrators, along with their metadata. This action is destructive and cannot be undone.', 'meals-db'); ?>
-        </p>
-        <form method="post" class="mealsdb-delete-nonadmin-users-form">
-            <?php wp_nonce_field('mealsdb_delete_nonadmin_users', 'mealsdb_delete_nonadmin_users_nonce'); ?>
-            <input type="hidden" name="mealsdb_action" value="delete_nonadmin_users">
-            <p>
-                <label for="mealsdb_delete_confirm">
-                    <?php echo esc_html__('Type DELETE to confirm:', 'meals-db'); ?>
-                </label>
-                <input type="text" id="mealsdb_delete_confirm" name="mealsdb_delete_confirm" pattern="DELETE" required placeholder="DELETE" autocomplete="off" />
-            </p>
-            <p>
-                <button class="button button-secondary" type="submit"><?php echo esc_html__('Delete Non-Admin Users', 'meals-db'); ?></button>
-            </p>
-        </form>
-    </div>
 
     <div class="mealsdb-db-sync">
         <h2><?php echo esc_html__('Complete DB Sync', 'meals-db'); ?></h2>
@@ -164,6 +145,87 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
+    <hr style="margin:24px 0;">
+        <h2><?php echo esc_html__( 'Backfill Delivery Day', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Populate the delivery_day field on client records based on their zone assignment and the schedule above. Only updates clients where delivery_day is currently empty.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-backfill-delivery-day">
+                <?php echo esc_html__( 'Populate delivery_day from Zone Schedule', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-backfill-result" style="margin-left:12px;"></span>
+        </p>
+
+        <h2><?php echo esc_html__( 'Backfill Next-Order / Next-Delivery Dates', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( "Populate next_order_date / next_delivery_date on each client using their last-order/last-delivery user meta plus the configured ordering / delivery frequencies. Only fills empty columns so existing values are preserved. Safe to re-run.", 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-backfill-next-dates">
+                <?php echo esc_html__( 'Backfill Next Dates', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-backfill-next-dates-result" style="margin-left:12px;"></span>
+        </p>
+
+        <h2><?php echo esc_html__( 'Private Customer Backfill', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Promote existing WC users who placed active-status orders in the lookback window into meals_clients as Private customers. Preview first — the preview is read-only and shows exactly which users would be created.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <label for="mealsdb-private-backfill-lookback"><?php echo esc_html__( 'Lookback (months):', 'meals-db' ); ?></label>
+            <input type="number" id="mealsdb-private-backfill-lookback" class="small-text" min="1" max="120" value="24" />
+            <button type="button" class="button" id="mealsdb-private-backfill-preview">
+                <?php echo esc_html__( 'Preview', 'meals-db' ); ?>
+            </button>
+            <button type="button" class="button button-primary" id="mealsdb-private-backfill-run" disabled>
+                <?php echo esc_html__( 'Run Backfill', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-private-backfill-result" style="margin-left:12px;"></span>
+        </p>
+        <div id="mealsdb-private-backfill-rows" class="mealsdb-private-backfill-rows" style="display:none; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #ccd0d4; padding:8px; background:#fff;"></div>
+
+        <h2><?php echo esc_html__( 'Private Customer Deactivation Sweep', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'One-time cleanup: deactivates existing Private meals_clients records whose WC user has no active-status orders in the lookback window. Sets active=0; does not delete.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <label for="mealsdb-private-deact-lookback"><?php echo esc_html__( 'Lookback (months):', 'meals-db' ); ?></label>
+            <input type="number" id="mealsdb-private-deact-lookback" class="small-text" min="1" max="120" value="24" />
+            <button type="button" class="button" id="mealsdb-private-deact-preview">
+                <?php echo esc_html__( 'Preview', 'meals-db' ); ?>
+            </button>
+            <button type="button" class="button" id="mealsdb-private-deact-run" disabled>
+                <?php echo esc_html__( 'Deactivate Stale', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-private-deact-result" style="margin-left:12px;"></span>
+        </p>
+        <div id="mealsdb-private-deact-rows" class="mealsdb-private-deact-rows" style="display:none; margin-top:8px; max-height:240px; overflow:auto; border:1px solid #ccd0d4; padding:8px; background:#fff;"></div>
+
+        <h2><?php echo esc_html__( 'Enrich Private Customer Skeletons', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Refill blank columns (address, zone, service / ordering meta, notes) on existing Private meals_clients rows from WordPress usermeta and the user\'s most recent qualifying WC order. Admin-set values are never overwritten. Dry Run reports what would change without writing.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-private-enrich-dry">
+                <?php echo esc_html__( 'Dry Run', 'meals-db' ); ?>
+            </button>
+            <button type="button" class="button button-primary" id="mealsdb-private-enrich-run">
+                <?php echo esc_html__( 'Enrich', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-private-enrich-result" style="margin-left:12px;"></span>
+        </p>
+
+        <h2><?php echo esc_html__( 'Sync Product Display Data', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Rebuild the cached product display data (name, price, image, categories) used by the Quick Order page. This is done automatically when products are saved, but you can run a full sync here.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-sync-products">
+                <?php echo esc_html__( 'Sync Products', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-sync-products-result" style="margin-left:12px;"></span>
+        </p>
 </div>
 
 <style>

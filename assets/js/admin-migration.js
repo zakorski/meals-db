@@ -100,10 +100,11 @@
         4: 'Backfill Addresses',
         5: 'Backfill Next Dates',
         6: 'Promote Private Clients',
-        7: 'Backfill Allocations'
+        7: 'Backfill Allocations',
+        8: 'Backfill Delivery Day'
     };
     var CONS_FIRST = 1;
-    var CONS_LAST  = 7;
+    var CONS_LAST  = 8;
 
     var consState = {
         phase: CONS_FIRST,
