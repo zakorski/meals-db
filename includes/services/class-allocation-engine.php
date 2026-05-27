@@ -89,44 +89,26 @@ class MealsDB_Allocation_Engine {
         $end_dt   = new DateTime($effective_end);
         $effective_days = (int) $start_dt->diff($end_dt)->days + 1;
 
-        // Calculate permitted based on requisition_period.
-        $mains = 0;
-        $sides = 0;
+        // Normalize any "X meals per period" requisition into a monthly
+        // permitted count via a daily rate, scaled to the effective days:
+        //
+        //   permitted = floor( (meals_per_period / days_in_period) * effective_days )
+        //
+        // days_in_period: 1 (day), 7 (week), or the full days in this month
+        // (month). This replaces the old hardcoded == 7 / == 14 / == 31
+        // branches — those were a crude attempt to cope with the legacy
+        // non-standardized requisitions (1/day, 7/week, 30/month, 2/week, ...).
+        // The formula handles every X-per-Y uniformly. Mains and sides are
+        // floored independently. floor() applies only to the final figure.
+        $days_in_period = self::days_in_period($requisition_period, $days_in_month);
 
-        switch ($requisition_period) {
-            case 'month':
-                $mains = ($allowance_mains == 31) ? $effective_days : $allowance_mains;
-                $sides = ($allowance_sides == 31) ? $effective_days : $allowance_sides;
-                break;
-
-            case 'week':
-                if ($allowance_mains == 7) {
-                    $mains = $effective_days;
-                } elseif ($allowance_mains == 14) {
-                    $mains = 2 * $effective_days;
-                } else {
-                    $weeks = $effective_days / 7;
-                    $mains = (int) round($allowance_mains * $weeks);
-                }
-
-                if ($allowance_sides == 7) {
-                    $sides = $effective_days;
-                } elseif ($allowance_sides == 14) {
-                    $sides = 2 * $effective_days;
-                } else {
-                    $weeks = $effective_days / 7;
-                    $sides = (int) round($allowance_sides * $weeks);
-                }
-                break;
-
-            case 'day':
-                $mains = $allowance_mains * $effective_days;
-                $sides = $allowance_sides * $effective_days;
-                break;
-
-            default:
-                $mains = 0;
-                $sides = 0;
+        if ($days_in_period <= 0) {
+            // Unknown requisition_period — no permitted allowance.
+            $mains = 0;
+            $sides = 0;
+        } else {
+            $mains = (int) floor(($allowance_mains / $days_in_period) * $effective_days);
+            $sides = (int) floor(($allowance_sides / $days_in_period) * $effective_days);
         }
 
         return [
@@ -134,6 +116,22 @@ class MealsDB_Allocation_Engine {
             'permitted_sides' => $sides,
             'effective_days'  => $effective_days,
         ];
+    }
+
+    /**
+     * Days in the requisition period, used to convert an "X per period"
+     * allowance into a daily rate. Returns 0 for an unrecognised period.
+     *
+     * @param string $requisition_period day | week | month (any case).
+     * @param int    $days_in_month      Calendar days in the billing month.
+     */
+    private static function days_in_period(string $requisition_period, int $days_in_month): int {
+        switch ($requisition_period) {
+            case 'day':   return 1;
+            case 'week':  return 7;
+            case 'month': return $days_in_month;
+            default:      return 0;
+        }
     }
 
     /**
