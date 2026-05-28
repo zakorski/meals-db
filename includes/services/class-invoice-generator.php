@@ -1466,176 +1466,214 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
-     * Generate VAC PDF Invoice
+     * Generate the VAC reimbursement PDF — one form per veteran, merged into
+     * a single multi-page Legal-size PDF for submission to Blue Cross /
+     * Veterans Affairs.
      *
-     * Uses TCPDF library to generate multi-page PDF (one page per veteran)
+     * STAGE 2 of the VAC pipeline: generate_vac_csv (phase 2) produces the
+     * data CSV; this method stamps each row onto a pre-printed Blue Cross
+     * "Provider Reimbursement Form / Access to Nutrition" template.
      *
-     * @param string $start_date Start date (Y-m-d format)
-     * @param string $end_date End date (Y-m-d format)
-     * @return string PDF file path (temporary file)
+     * Approach: HTML + CSS absolute positioning rendered by dompdf, with the
+     * blank Blue Cross form as a full-page background image. Field
+     * coordinates are ported from the legacy print.php (FPDF) generator —
+     * the background image is the same 2550x4200 px (Legal ratio) scan it
+     * was calibrated against, so positions transfer 1:1 in Legal points.
+     *
+     * Column mapping into the phase-2 VAC CSV (one row per veteran):
+     *   data[0]  K# (Health Identification Card no)
+     *   data[1]  Client Last Name
+     *   data[2]  Client First Name
+     *   data[3]  Billing Address 1
+     *   data[4]  Billing City
+     *   data[5]  Billing Postcode
+     *   data[6]  Billing Phone
+     *   data[11] Bill Mains (Number of Meals)
+     *   data[32] Bill HST
+     *   data[33] New Total
+     *
+     * @param string $start_date YYYY-MM-DD (first day of billing month).
+     * @param string $end_date   YYYY-MM-DD (last day of billing month —
+     *                           also stamped as the date of service / signature date).
+     * @return string PDF bytes (caller writes to disk or streams).
      */
     public static function generate_vac_pdf($start_date, $end_date) {
-        // Check if TCPDF is available
-        if (!class_exists('TCPDF')) {
-            // Try to load WordPress bundled TCPDF if available
-            $tcpdf_path = ABSPATH . 'wp-includes/class-tcpdf.php';
-            if (file_exists($tcpdf_path)) {
-                require_once($tcpdf_path);
-            } else {
-                throw new Exception('TCPDF library not found. Please install TCPDF to generate PDF invoices.');
-            }
+        if (!class_exists('Dompdf\\Dompdf')) {
+            throw new RuntimeException(
+                'DomPDF is not available — run `composer install` in the meals-db plugin directory.'
+            );
         }
 
-        // Get CSV data and parse it
+        // Date-of-service / signature date in DD/MM/YY format (same as the
+        // pre-printed form expects).
+        $site_tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone(date_default_timezone_get());
+        try {
+            $end_date_obj = new DateTime($end_date, $site_tz);
+        } catch (Exception $e) {
+            $end_date_obj = new DateTime('now', $site_tz);
+        }
+        $formatted_date = $end_date_obj->format('d/m/y');
+
+        // Pull the phase-2 VAC CSV as our data source. Parsing it back into
+        // rows keeps stage-2 a pure renderer — the same CSV the operator can
+        // download is what feeds the PDF.
         $csv_content = self::generate_vac_csv($start_date, $end_date);
-        $lines = explode("\n", $csv_content);
-        $headers = str_getcsv(array_shift($lines)); // Remove header row
-
-        // Create PDF
-        $pdf = new TCPDF('P', 'mm', 'LETTER', true, 'UTF-8', false);
-
-        // Set document information
-        $pdf->SetCreator('Meals DB');
-        $pdf->SetAuthor(self::VENDOR_NAME);
-        $pdf->SetTitle('VAC Invoice - ' . date('Y-m-d'));
-        $pdf->SetSubject('Veterans Affairs Canada Invoice');
-
-        // Remove default header/footer
-        $pdf->setPrintHeader(false);
-        $pdf->setPrintFooter(false);
-
-        // Set margins
-        $pdf->SetMargins(15, 15, 15);
-        $pdf->SetAutoPageBreak(true, 15);
-
-        // Set font
-        $pdf->SetFont('helvetica', '', 10);
-
-        // Process each veteran (one page per veteran)
-        foreach ($lines as $line) {
-            if (empty(trim($line))) continue;
-
-            $data = str_getcsv($line);
-
-            // Add a page for this veteran
-            $pdf->AddPage();
-
-            // Title
-            $pdf->SetFont('helvetica', 'B', 16);
-            $pdf->Cell(0, 10, 'Veterans Affairs Canada - Meal Invoice', 0, 1, 'C');
-            $pdf->Ln(5);
-
-            // Veteran Information
-            $pdf->SetFont('helvetica', 'B', 12);
-            $pdf->Cell(0, 8, 'Veteran Information', 0, 1, 'L');
-            $pdf->SetFont('helvetica', '', 10);
-
-            $pdf->Cell(50, 6, 'Health Card #:', 0, 0);
-            $pdf->Cell(0, 6, $data[0], 0, 1);
-
-            $pdf->Cell(50, 6, 'Name:', 0, 0);
-            $pdf->Cell(0, 6, $data[2] . ' ' . $data[1], 0, 1);
-
-            $pdf->Cell(50, 6, 'Address:', 0, 0);
-            $pdf->Cell(0, 6, $data[3], 0, 1);
-
-            $pdf->Cell(50, 6, 'City:', 0, 0);
-            $pdf->Cell(0, 6, $data[4] . ', ' . $data[5], 0, 1);
-
-            $pdf->Cell(50, 6, 'Phone:', 0, 0);
-            $pdf->Cell(0, 6, $data[6], 0, 1);
-
-            $pdf->Ln(5);
-
-            // Billing Period
-            $pdf->SetFont('helvetica', 'B', 12);
-            $pdf->Cell(0, 8, 'Billing Period', 0, 1, 'L');
-            $pdf->SetFont('helvetica', '', 10);
-            $pdf->Cell(0, 6, $start_date . ' to ' . $end_date, 0, 1);
-            $pdf->Ln(5);
-
-            // Meal Details
-            $pdf->SetFont('helvetica', 'B', 12);
-            $pdf->Cell(0, 8, 'Meal Details', 0, 1, 'L');
-
-            // Table header
-            $pdf->SetFont('helvetica', 'B', 9);
-            $pdf->SetFillColor(220, 220, 220);
-            $pdf->Cell(60, 6, 'Description', 1, 0, 'L', true);
-            $pdf->Cell(30, 6, 'Ordered', 1, 0, 'C', true);
-            $pdf->Cell(30, 6, 'Allowance', 1, 0, 'C', true);
-            $pdf->Cell(30, 6, 'Billed', 1, 0, 'C', true);
-            $pdf->Cell(30, 6, 'Amount', 1, 1, 'R', true);
-
-            // Mains row
-            $pdf->SetFont('helvetica', '', 9);
-            $pdf->Cell(60, 6, 'Main Meals', 1, 0);
-            $pdf->Cell(30, 6, $data[9], 1, 0, 'C');
-            $pdf->Cell(30, 6, $data[10], 1, 0, 'C');
-            $pdf->Cell(30, 6, $data[11], 1, 0, 'C');
-            $pdf->Cell(30, 6, '$' . $data[29], 1, 1, 'R');
-
-            // Sides row
-            $pdf->Cell(60, 6, 'Side Items (Taxable)', 1, 0);
-            $pdf->Cell(30, 6, $data[13], 1, 0, 'C');
-            $pdf->Cell(30, 6, $data[14], 1, 0, 'C');
-            $pdf->Cell(30, 6, $data[26], 1, 0, 'C');
-            $pdf->Cell(30, 6, '$' . $data[31], 1, 1, 'R');
-
-            // Non-tax sides row
-            $pdf->Cell(60, 6, 'Side Items (Non-Taxable)', 1, 0);
-            $pdf->Cell(30, 6, $data[23], 1, 0, 'C');
-            $pdf->Cell(30, 6, '-', 1, 0, 'C');
-            $pdf->Cell(30, 6, $data[24], 1, 0, 'C');
-            $pdf->Cell(30, 6, '-', 1, 1, 'R');
-
-            $pdf->Ln(3);
-
-            // Summary
-            $pdf->SetFont('helvetica', 'B', 12);
-            $pdf->Cell(0, 8, 'Summary', 0, 1, 'L');
-            $pdf->SetFont('helvetica', '', 10);
-
-            $pdf->Cell(120, 6, 'Service Frequency:', 0, 0);
-            $pdf->Cell(0, 6, ucfirst($data[27]), 0, 1);
-
-            $pdf->Cell(120, 6, 'Monthly Allowance:', 0, 0);
-            $pdf->Cell(0, 6, '$' . $data[28], 0, 1);
-
-            $pdf->Cell(120, 6, 'Mains Cost:', 0, 0);
-            $pdf->Cell(0, 6, '$' . $data[29], 0, 1);
-
-            $pdf->Cell(120, 6, 'Sides Cost:', 0, 0);
-            $pdf->Cell(0, 6, '$' . $data[31], 0, 1);
-
-            $pdf->Cell(120, 6, 'HST:', 0, 0);
-            $pdf->Cell(0, 6, '$' . $data[32], 0, 1);
-
-            $pdf->Ln(2);
-            $pdf->SetFont('helvetica', 'B', 12);
-            $pdf->Cell(120, 8, 'Total Amount:', 0, 0);
-            $pdf->Cell(0, 8, '$' . $data[33], 0, 1);
-
-            $pdf->SetFont('helvetica', '', 10);
-            $pdf->Cell(120, 6, 'Allowance Remaining:', 0, 0);
-            $pdf->Cell(0, 6, '$' . $data[30], 0, 1);
-
-            // Errors/Notes
-            if (!empty($data[34])) {
-                $pdf->Ln(5);
-                $pdf->SetFont('helvetica', 'B', 10);
-                $pdf->SetTextColor(255, 0, 0);
-                $pdf->Cell(0, 6, 'Notes: ' . $data[34], 0, 1);
-                $pdf->SetTextColor(0, 0, 0);
-            }
+        $lines       = explode("\n", $csv_content);
+        if (!empty($lines)) {
+            array_shift($lines); // drop header
         }
 
-        // Save to temporary file
-        $temp_file = tempnam(sys_get_temp_dir(), 'vac_invoice_') . '.pdf';
-        $pdf->Output($temp_file, 'F');
+        // Background-image path. dompdf chroot constrains where the renderer
+        // can read files from; the image MUST live under MEALS_DB_PLUGIN_DIR.
+        $plugin_dir = defined('MEALS_DB_PLUGIN_DIR') ? MEALS_DB_PLUGIN_DIR : (dirname(__DIR__, 2) . '/');
+        $bg_path    = $plugin_dir . 'assets/images/vac-blue-cross-form.jpg';
+        if (!file_exists($bg_path)) {
+            throw new RuntimeException(
+                'VAC form background image not found at ' . $bg_path
+            );
+        }
 
-        return $temp_file;
+        // Parse the CSV lines into structured rows; the HTML builder is
+        // testable independently of dompdf and the database.
+        $data_rows = [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') { continue; }
+            $data = str_getcsv($line);
+            if (count($data) < 34) { continue; }
+            $data_rows[] = $data;
+        }
+        if (empty($data_rows)) {
+            return ''; // nothing to render
+        }
+
+        $bg_url = 'file://' . $bg_path;
+        $html   = self::build_vac_pdf_html($data_rows, $formatted_date, $bg_url);
+
+        $options = new \Dompdf\Options();
+        $options->set('isHtml5ParserEnabled', true);
+        // The background-image url uses file:// — dompdf requires either
+        // isRemoteEnabled or a chroot that includes the file path. The
+        // image lives under MEALS_DB_PLUGIN_DIR; chroot to that dir lets
+        // dompdf read it without permitting arbitrary remote fetches.
+        $options->set('isRemoteEnabled', false);
+        $options->set('chroot', $plugin_dir);
+
+        $dompdf = new \Dompdf\Dompdf($options);
+        $dompdf->loadHtml($html, 'UTF-8');
+        $dompdf->setPaper([0, 0, 612, 1008], 'portrait'); // Legal: 8.5" x 14"
+        $dompdf->render();
+
+        $output = $dompdf->output();
+        return is_string($output) ? $output : '';
     }
+
+    /**
+     * Build the multi-page HTML document that dompdf renders into the VAC
+     * PDF. Extracted from generate_vac_pdf() so it can be tested without
+     * touching the DB or dompdf.
+     *
+     * Field coordinates are in Legal points (612 wide x 1008 tall), sourced
+     * verbatim from the legacy print.php positions array — the background
+     * image is the same 2550x4200 px scan it was calibrated against.
+     *
+     * FPDF::Text(x, y) anchors text at the BASELINE. dompdf positions an
+     * absolutely-positioned element by its TOP edge. We translate by
+     * subtracting ~font_pt * 0.85 (approximate Helvetica ascent) so the
+     * visible glyphs land in the same place the legacy generator placed
+     * them.
+     *
+     * @param array<int, array<int, string>> $data_rows Parsed CSV rows.
+     * @param string                          $formatted_date DD/MM/YY.
+     * @param string                          $bg_url file:// URL of the
+     *                                                Blue Cross form image.
+     */
+    public static function build_vac_pdf_html(array $data_rows, string $formatted_date, string $bg_url): string {
+        $coords = [
+            'fullname'   => ['x' => 90,  'y' => 743, 'font_pt' => 12],
+            'knumber'    => ['x' => 270, 'y' => 761, 'font_pt' => 12],
+            'address'    => ['x' => 110, 'y' => 785, 'font_pt' => 12],
+            'city'       => ['x' => 380, 'y' => 785, 'font_pt' => 12],
+            'province'   => ['x' => 75,  'y' => 809, 'font_pt' => 12],
+            'postal'     => ['x' => 275, 'y' => 808, 'font_pt' => 12],
+            'telephone'  => ['x' => 463, 'y' => 809, 'font_pt' => 12],
+            'meals'      => ['x' => 320, 'y' => 450, 'font_pt' => 14],
+            'hst'        => ['x' => 360, 'y' => 490, 'font_pt' => 12],
+            'report_dt'  => ['x' => 130, 'y' => 429, 'font_pt' => 14],
+            'total'      => ['x' => 508, 'y' => 697, 'font_pt' => 12],
+            'second_dt'  => ['x' => 483, 'y' => 909, 'font_pt' => 12],
+        ];
+
+        $html  = '<!DOCTYPE html><html><head><meta charset="UTF-8">';
+        $html .= '<style>
+            @page { size: 612pt 1008pt; margin: 0; }
+            body  { margin: 0; padding: 0; font-family: Helvetica, Arial, sans-serif; }
+            .vac-page {
+                position: relative;
+                width: 612pt;
+                height: 1008pt;
+                page-break-after: always;
+                background-image: url("' . self::h($bg_url) . '");
+                background-size: 612pt 1008pt;
+                background-repeat: no-repeat;
+                background-position: 0 0;
+            }
+            .vac-page:last-child { page-break-after: auto; }
+            .vac-field { position: absolute; line-height: 1; }
+        </style></head><body>';
+
+        foreach ($data_rows as $data) {
+            // Column mapping (phase-2 VAC CSV, same indices as legacy print.php):
+            $full_name = trim(($data[2] ?? '') . ' ' . ($data[1] ?? '')); // First Last
+            $knumber   = $data[0]  ?? '';
+            $address   = $data[3]  ?? '';
+            $city      = $data[4]  ?? '';
+            $postal    = $data[5]  ?? '';
+            $phone     = $data[6]  ?? '';
+            $meals     = $data[11] ?? '0';
+            $hst_amt   = number_format((float) ($data[32] ?? 0), 2, '.', '');
+            $total_amt = '$' . number_format((float) ($data[33] ?? 0), 2, '.', '');
+
+            $fields = [
+                ['key' => 'fullname',  'text' => $full_name],
+                ['key' => 'knumber',   'text' => $knumber],
+                ['key' => 'address',   'text' => $address],
+                ['key' => 'city',      'text' => $city],
+                ['key' => 'province',  'text' => 'NB'],
+                ['key' => 'postal',    'text' => $postal],
+                ['key' => 'telephone', 'text' => $phone],
+                ['key' => 'meals',     'text' => (string) $meals],
+                ['key' => 'hst',       'text' => $hst_amt],
+                ['key' => 'report_dt', 'text' => $formatted_date],
+                ['key' => 'total',     'text' => $total_amt],
+                ['key' => 'second_dt', 'text' => $formatted_date],
+            ];
+
+            $html .= '<div class="vac-page">';
+            foreach ($fields as $f) {
+                $c    = $coords[$f['key']];
+                $top  = $c['y'] - ($c['font_pt'] * 0.85);
+                $html .= sprintf(
+                    '<span class="vac-field" style="left:%spt;top:%spt;font-size:%spt;">%s</span>',
+                    self::h((string) $c['x']),
+                    self::h((string) $top),
+                    self::h((string) $c['font_pt']),
+                    self::h((string) $f['text'])
+                );
+            }
+            $html .= '</div>';
+        }
+        $html .= '</body></html>';
+        return $html;
+    }
+
+    /**
+     * HTML-escape helper for the dompdf templating.
+     */
+    private static function h(string $s): string {
+        return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
 
     /**
      * Get WooCommerce product IDs for overage order items.

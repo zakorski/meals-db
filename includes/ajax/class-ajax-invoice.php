@@ -284,42 +284,30 @@ class MealsDB_Ajax_Invoice {
     }
 
     /**
-     * Generate and download VAC PDF invoice
+     * Generate and download VAC PDF invoice. The generator returns PDF
+     * bytes (phase 4: dompdf rendering, no temp file on disk).
      */
     private static function download_vac_pdf($start_date, $end_date) {
-        $pdf_path = MealsDB_Invoice_Generator::generate_vac_pdf($start_date, $end_date);
+        $pdf_bytes = MealsDB_Invoice_Generator::generate_vac_pdf($start_date, $end_date);
 
-        // Confine the served path to the WP uploads dir. Defends against the
-        // generator ever being misconfigured to return an attacker-influenced
-        // path (e.g. wp-config.php) — readfile would happily oblige.
-        $resolved = is_string($pdf_path) ? realpath($pdf_path) : false;
-        $uploads  = wp_upload_dir();
-        $base     = isset($uploads['basedir']) ? realpath($uploads['basedir']) : false;
-
-        if (!$resolved || !$base || strpos($resolved, $base . DIRECTORY_SEPARATOR) !== 0 || !is_file($resolved)) {
-            wp_send_json_error(['message' => 'Error generating PDF file.']);
+        if (!is_string($pdf_bytes) || $pdf_bytes === '') {
+            wp_send_json_error(['message' => 'Error generating PDF (no veterans in range or render failed).']);
             return;
         }
 
-        // Generate filename
         $filename = sprintf(
             'VAC_Invoice_%s_to_%s.pdf',
             str_replace('-', '', $start_date),
             str_replace('-', '', $end_date)
         );
 
-        // Set headers and output
         header('Content-Type: application/pdf');
         self::emit_attachment_header($filename);
-        header('Content-Length: ' . filesize($resolved));
+        header('Content-Length: ' . strlen($pdf_bytes));
         header('Cache-Control: no-cache, must-revalidate');
         header('Pragma: no-cache');
 
-        readfile($resolved);
-
-        // Clean up temp file
-        @unlink($resolved);
-
+        echo $pdf_bytes;
         exit;
     }
 
