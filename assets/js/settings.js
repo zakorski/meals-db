@@ -88,6 +88,35 @@
         });
     });
 
+    // Recalculate Allocations — manual phase-1 rebuild of all dirty client-months.
+    $('#mealsdb-recalculate-allocations').on('click', function () {
+        var $btn    = $(this);
+        var $result = $('#mealsdb-recalculate-allocations-result');
+        $btn.prop('disabled', true);
+        $result.text('Running...'); tint($result, '#666');
+
+        $.post(ajaxUrl, {
+            action: 'mealsdb_recalculate_allocations',
+            nonce: nonces.general || ''
+        }, function (resp) {
+            $btn.prop('disabled', false);
+            if (resp && resp.success) {
+                var d = resp.data || {};
+                $result.text(
+                    'Rebuilt ' + (d.rebuilt || 0) + ' client-months' +
+                    ((d.errors || 0) > 0 ? ' (' + d.errors + ' with spillover errors)' : '') + '.'
+                );
+                tint($result, (d.errors || 0) > 0 ? '#dba617' : '#46b450');
+            } else {
+                $result.text((resp && resp.data && resp.data.message) || 'Failed.');
+                tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    });
+
     // Private customer backfill — preview (read-only).
     $('#mealsdb-private-backfill-preview').on('click', function () {
         var $btn    = $(this);

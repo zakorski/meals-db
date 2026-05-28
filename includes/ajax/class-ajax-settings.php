@@ -22,6 +22,7 @@ class MealsDB_Ajax_Settings {
         add_action( 'wp_ajax_mealsdb_preview_private_deactivation', [ self::class, 'preview_private_deactivation' ] );
         add_action( 'wp_ajax_mealsdb_run_private_deactivation', [ self::class, 'run_private_deactivation' ] );
         add_action( 'wp_ajax_mealsdb_enrich_private_skeletons', [ self::class, 'enrich_private_skeletons' ] );
+        add_action( 'wp_ajax_mealsdb_recalculate_allocations',  [ self::class, 'recalculate_allocations' ] );
     }
 
     /**
@@ -279,5 +280,24 @@ class MealsDB_Ajax_Settings {
         $key   = 'base64:' . base64_encode( $bytes );
 
         wp_send_json_success( [ 'key' => $key ] );
+    }
+
+    /**
+     * Data Ops "Recalculate Allocations": rebuild every dirty client-month
+     * via MealsDB_Allocation_Rebuilder. Used when an operator wants to force
+     * a recalculation without waiting for an invoice to do it scoped.
+     */
+    public static function recalculate_allocations(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
+
+        $stats = ( new MealsDB_Allocation_Rebuilder() )->rebuild_all_dirty();
+        wp_send_json_success( $stats );
     }
 }
