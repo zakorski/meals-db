@@ -65,12 +65,36 @@ class MealsDB_Allocation_Rebuilder {
 
     /**
      * Rebuild a single client-month. Reads ALL the client's orders that could
-     * affect this month (the month itself + the prior month, since a prior
-     * month's spill lands here), recomputes delivery_allocations from
-     * scratch, then refreshes the summary.
+     * affect this month and recomputes delivery_allocations from scratch, then
+     * refreshes the summaries.
+     *
+     * The fill window is THREE months — {prior, current, next} — because spill
+     * crosses month boundaries in both directions relative to the month we are
+     * rebuilding:
+     *   - a PRIOR-month delivery's overflow spills INTO the current month, so
+     *     prior must be present to consume the right amount of current's
+     *     headroom; and
+     *   - a CURRENT-month delivery's overflow spills INTO the next month, so
+     *     next must be present or that overflow has nowhere to land and would
+     *     be (wrongly) logged as a multi-month spillover.
+     *
+     * Earlier this window was only {prior, current}. That dropped every
+     * current-month delivery's legitimate single-month spill on the floor: the
+     * spill target (next) was absent from the headroom map, so fill_months
+     * logged it as an unplaced multi_month_spillover instead of writing the
+     * next-month row. The result was silent under-billing of the overflow for
+     * the normal invoice/Data-Ops path (which only marks the order's own month
+     * dirty). Including next fixes that.
+     *
+     * Spillover ERRORS are attributed only to the current (center) month — see
+     * fill_months $error_month — so the prior and next months, which each earn
+     * their own center rebuild, are neither double-logged nor spuriously
+     * errored at the trailing edge (next's own overflow targets next+1, which
+     * is intentionally outside this window).
      *
      * Returns ['mains_unplaced' => int, 'sides_unplaced' => int] if a
-     * multi-month spillover occurred (error already logged); zeros otherwise.
+     * multi-month spillover occurred for the current month (error already
+     * logged); zeros otherwise.
      */
     public function rebuild_client_month(int $client_id, string $billing_month): array {
         if ($client_id <= 0 || !self::is_billing_month($billing_month)) {
@@ -88,34 +112,41 @@ class MealsDB_Allocation_Rebuilder {
         }
 
         $prior_month = self::prior_month($billing_month);
+        $next_month  = self::next_month($billing_month);
 
-        // Allowances for the two months involved.
-        $cap_curr  = $this->engine->calculate_permitted_for_month($client_id, $billing_month);
+        // Allowances for the three months involved.
         $cap_prior = $this->engine->calculate_permitted_for_month($client_id, $prior_month);
+        $cap_curr  = $this->engine->calculate_permitted_for_month($client_id, $billing_month);
+        $cap_next  = $this->engine->calculate_permitted_for_month($client_id, $next_month);
 
-        // Gather this client's deliveries whose delivery-month is in {prior, current}.
-        // A prior-month delivery can spill INTO the current month; a
-        // current-month delivery may not spill (its spill target is the
-        // NEXT month, which is a separate client-month rebuild).
-        $deliveries = $this->load_deliveries_for_months($client_id, [$prior_month, $billing_month]);
-
-        // Run the fill scoped to the two months. The fill writes
-        // delivery_allocations rows for this client across those months and
-        // returns any unplaceable overflow.
-        $unplaced = $this->fill_months(
+        // Gather this client's deliveries whose delivery-month is in
+        // {prior, current, next}.
+        $deliveries = $this->load_deliveries_for_months(
             $client_id,
-            [$prior_month => $cap_prior, $billing_month => $cap_curr],
-            $deliveries
+            [$prior_month, $billing_month, $next_month]
         );
 
-        // Refresh summaries for both affected months.
+        // Run the fill across the three months. The fill writes
+        // delivery_allocations rows for this client and returns the current
+        // month's unplaceable overflow (errors attributed to the center).
+        $unplaced = $this->fill_months(
+            $client_id,
+            [$prior_month => $cap_prior, $billing_month => $cap_curr, $next_month => $cap_next],
+            $deliveries,
+            $billing_month
+        );
+
+        // Refresh summaries for all three affected months.
         $this->engine->recalculate_month_totals($client_id, $prior_month);
         $this->engine->recalculate_month_totals($client_id, $billing_month);
+        $this->engine->recalculate_month_totals($client_id, $next_month);
 
-        // Clear the dirty marker (and any sibling marker for the prior month
-        // we just rebuilt as a side effect).
+        // Clear ONLY the month we were asked to rebuild. The prior and next
+        // months are recomputed here as context, but their own spillover
+        // errors are NOT logged in this pass — so if either is independently
+        // dirty it keeps its marker and earns its own center rebuild (which
+        // logs its errors). Clearing them here would drop those errors.
         $this->clear_dirty($client_id, $billing_month);
-        $this->clear_dirty($client_id, $prior_month);
 
         return $unplaced;
     }
@@ -200,9 +231,17 @@ class MealsDB_Allocation_Rebuilder {
      * @param int                                       $client_id
      * @param array<string, array{permitted_mains:int, permitted_sides:int, effective_days:int}> $caps  keyed by YYYY-MM
      * @param array<int, array<string, mixed>>          $deliveries Sorted ASC by delivery_date
+     * @param string|null                               $error_month When set, a multi-month
+     *        spillover error is logged (and counted in the return value) ONLY
+     *        for deliveries whose delivery-month equals this month. This lets a
+     *        three-month rebuild window attribute errors to its center month
+     *        and leave the prior/next months for their own center rebuild —
+     *        avoiding double-logging and trailing-edge false positives. When
+     *        null (the test seam / legacy behaviour) errors are logged for any
+     *        delivery whose overflow cannot be placed within $caps.
      * @return array{mains_unplaced:int, sides_unplaced:int}
      */
-    private function fill_months(int $client_id, array $caps, array $deliveries): array {
+    private function fill_months(int $client_id, array $caps, array $deliveries, ?string $error_month = null): array {
         $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
         $months      = array_keys($caps);
 
@@ -285,8 +324,12 @@ class MealsDB_Allocation_Rebuilder {
             }
 
             // Still left after the single-month spill? Multi-month spillover
-            // error — log and stop placing those meals (do NOT cascade).
-            if ($remaining_mains > 0 || $remaining_tax_sides + $remaining_nontax_sides > 0) {
+            // error — log and stop placing those meals (do NOT cascade). When
+            // an $error_month is set, only the center month "owns" the error;
+            // prior/next deliveries are recomputed here for context but their
+            // errors belong to their own center rebuild.
+            if (($remaining_mains > 0 || $remaining_tax_sides + $remaining_nontax_sides > 0)
+                && ($error_month === null || $delivery_month === $error_month)) {
                 $remaining_sides = $remaining_tax_sides + $remaining_nontax_sides;
                 $this->log_spillover_error(
                     $client_id,
@@ -323,7 +366,7 @@ class MealsDB_Allocation_Rebuilder {
      * @param string[] $months   YYYY-MM strings
      * @return list<array{wc_order_id:int, order_date:string, delivery_date:string, mains:int, tax_sides:int, nontax_sides:int, coverage_end:string}>
      */
-    private function load_deliveries_for_months(int $client_id, array $months): array {
+    protected function load_deliveries_for_months(int $client_id, array $months): array {
         if (empty($months)) {
             return [];
         }

@@ -325,8 +325,9 @@ class MealsDB_Allocation_Engine {
         }
         // Delivery month = the month the order's delivery falls in. For
         // mark-dirty purposes the order-date month is sufficient: the
-        // rebuilder rebuilds (month, prior month) together, and any
-        // month-boundary delivery still lands in one of those.
+        // rebuilder rebuilds (prior, month, next) together, so this order's
+        // overflow spill into the next month is materialised by the same
+        // rebuild, and any month-boundary delivery still lands in one of those.
         return substr($order_date, 0, 7);
     }
 
