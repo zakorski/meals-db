@@ -707,6 +707,35 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * Phase 1 integration: rebuild any dirty (client_id, billing_month)
+     * entries for the clients on this invoice for this billing month.
+     * Scope A — only the clients matching the generator's own filter, only
+     * this month — so other invoices' clients are not touched.
+     *
+     * @param string                          $start_date  YYYY-MM-DD (first day of the billing month).
+     * @param array<int, array<string,mixed>> $client_rows Already-filtered client rows.
+     */
+    private static function rebuild_dirty_for_invoice(string $start_date, array $client_rows): void {
+        if (empty($client_rows) || !preg_match('/^(\d{4}-\d{2})/', $start_date, $m)) {
+            return;
+        }
+        $billing_month = $m[1];
+
+        $client_ids = [];
+        foreach ($client_rows as $c) {
+            $cid = (int) ($c['client_id'] ?? 0);
+            if ($cid > 0) {
+                $client_ids[$cid] = true;
+            }
+        }
+        if (empty($client_ids)) {
+            return;
+        }
+
+        (new MealsDB_Allocation_Rebuilder())->rebuild_for_invoice($billing_month, array_keys($client_ids));
+    }
+
+    /**
      * Query meals_clients from the DB with a prepared statement.
      *
      * @param string $sql    SQL with %s/%d placeholders (wpdb format).
@@ -763,6 +792,11 @@ class MealsDB_Invoice_Generator {
 
         $client_type = 'SDNB';
         $client_rows = self::query_clients($sql, [$client_type, $zone]);
+
+        // Phase 1: before computing this invoice, rebuild any dirty
+        // client-months for the clients in this filter (scope A: only the
+        // clients on THIS invoice for THIS month).
+        self::rebuild_dirty_for_invoice($start_date, $client_rows);
 
         // Decrypt encrypted PII fields.
         foreach ($client_rows as &$c) {
@@ -983,6 +1017,9 @@ class MealsDB_Invoice_Generator {
         $client_type = 'SDNB';
         $client_rows = self::query_clients($sql, [$client_type]);
 
+        // Phase 1: pre-rebuild dirty client-months in this filter (scope A).
+        self::rebuild_dirty_for_invoice($start_date, $client_rows);
+
         // Fetch invoice data via WC HPOS.
         $invoice_rows = self::get_invoice_data_for_clients($client_rows, $start_date, $end_date);
 
@@ -1061,6 +1098,9 @@ class MealsDB_Invoice_Generator {
 
         $client_type = 'Veteran';
         $client_rows = self::query_clients($sql, [$client_type]);
+
+        // Phase 1: pre-rebuild dirty client-months in this filter (scope A).
+        self::rebuild_dirty_for_invoice($start_date, $client_rows);
 
         // Decrypt encrypted PII fields.
         foreach ($client_rows as &$c) {

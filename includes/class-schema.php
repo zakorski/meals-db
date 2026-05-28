@@ -544,6 +544,54 @@ class MealsDB_Schema {
                     ],
                 ],
             ],
+
+            MealsDB_Tables::CLIENT_MONTH_DIRTY => [
+                'table'   => MealsDB_Tables::CLIENT_MONTH_DIRTY,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'id'             => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'client_id'      => 'BIGINT UNSIGNED NOT NULL',
+                    'billing_month'  => 'CHAR(7) NOT NULL',
+                    'marked_at'      => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
+                ],
+                'primary_key' => ['id'],
+                'indexes' => [
+                    [
+                        'name'    => 'uq_client_month',
+                        'type'    => 'UNIQUE',
+                        'columns' => ['client_id', 'billing_month'],
+                    ],
+                ],
+            ],
+
+            MealsDB_Tables::ALLOCATION_ERRORS => [
+                'table'   => MealsDB_Tables::ALLOCATION_ERRORS,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'id'             => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'client_id'      => 'BIGINT UNSIGNED NOT NULL',
+                    'billing_month'  => 'CHAR(7) NOT NULL',
+                    'wc_order_id'    => 'BIGINT UNSIGNED NULL',
+                    'error_type'     => "VARCHAR(64) NOT NULL DEFAULT 'multi_month_spillover'",
+                    'mains_unplaced' => 'INT NOT NULL DEFAULT 0',
+                    'sides_unplaced' => 'INT NOT NULL DEFAULT 0',
+                    'message'        => 'TEXT NULL',
+                    'created_at'     => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
+                ],
+                'primary_key' => ['id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_client_month',
+                        'type'    => 'INDEX',
+                        'columns' => ['client_id', 'billing_month'],
+                    ],
+                    [
+                        'name'    => 'idx_created_at',
+                        'type'    => 'INDEX',
+                        'columns' => ['created_at'],
+                    ],
+                ],
+            ],
         ];
     }
 

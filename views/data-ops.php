@@ -168,6 +168,17 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
             <span id="mealsdb-backfill-next-dates-result" style="margin-left:12px;"></span>
         </p>
 
+        <h2><?php echo esc_html__( 'Recalculate Allocations', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( "Rebuild every dirty client-month using the delivery-month allowance fill. Invoices trigger this automatically scoped to their own clients/month; this manual run processes all pending dirty entries. Safe to re-run.", 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-recalculate-allocations">
+                <?php echo esc_html__( 'Recalculate Allocations', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-recalculate-allocations-result" style="margin-left:12px;"></span>
+        </p>
+
         <h2><?php echo esc_html__( 'Private Customer Backfill', 'meals-db' ); ?></h2>
         <p class="description">
             <?php echo esc_html__( 'Promote existing WC users who placed active-status orders in the lookback window into meals_clients as Private customers. Preview first — the preview is read-only and shows exactly which users would be created.', 'meals-db' ); ?>

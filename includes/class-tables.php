@@ -20,6 +20,8 @@ class MealsDB_Tables
     public const PURCHASE_ORDERS = 'meals_purchase_orders';
     public const JOB_LOG = 'meals_job_log';
     public const HOOK_LOG = 'meals_hook_log';
+    public const CLIENT_MONTH_DIRTY = 'meals_client_month_dirty';
+    public const ALLOCATION_ERRORS = 'meals_allocation_errors';
 
     /**
      * Retrieve all canonical table names.
@@ -43,6 +45,8 @@ class MealsDB_Tables
             self::PURCHASE_ORDERS,
             self::JOB_LOG,
             self::HOOK_LOG,
+            self::CLIENT_MONTH_DIRTY,
+            self::ALLOCATION_ERRORS,
         ];
     }
 }
