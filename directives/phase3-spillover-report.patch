@@ -1,0 +1,590 @@
+diff --git a/assets/js/spillover-report.js b/assets/js/spillover-report.js
+new file mode 100644
+index 0000000..36fb874
+--- /dev/null
++++ b/assets/js/spillover-report.js
+@@ -0,0 +1,119 @@
++/**
++ * Over-Allowance Spillover Report — phase 3.
++ *
++ * Month picker -> AJAX -> table. Multi-month-error rows are highlighted.
++ * CSV export uses the server-built csv string.
++ *
++ * Config injected via window.mealsdbSpilloverReport.
++ */
++(function ($, Report) {
++    'use strict';
++
++    if (!Report) {
++        return;
++    }
++
++    var cfg     = window.mealsdbSpilloverReport || {};
++    var ajaxUrl = cfg.ajaxUrl || window.ajaxurl || '';
++    var nonce   = cfg.nonce   || '';
++
++    var csvData = '';
++
++    function esc(s) {
++        if (s === null || s === undefined) { return ''; }
++        return String(s)
++            .replace(/&/g, '&amp;')
++            .replace(/</g, '&lt;')
++            .replace(/>/g, '&gt;')
++            .replace(/"/g, '&quot;')
++            .replace(/'/g, '&#39;');
++    }
++
++    function buildTable(rows) {
++        if (!rows || !rows.length) {
++            return '<p>' + 'No over-allowance spillover for the selected month.' + '</p>';
++        }
++
++        var html = '<table class="widefat striped">';
++        html += '<thead><tr>';
++        html += '<th>Delivery Date</th>';
++        html += '<th>Client</th>';
++        html += '<th>Order</th>';
++        html += '<th>Mains in Month</th>';
++        html += '<th>Sides in Month</th>';
++        html += '<th>Mains Spilled</th>';
++        html += '<th>Sides Spilled</th>';
++        html += '<th>Status</th>';
++        html += '</tr></thead><tbody>';
++
++        rows.forEach(function (r) {
++            var rowClass = r.is_multi_month_error ? ' class="mealsdb-row-tint-error"' : '';
++            var status   = r.is_multi_month_error
++                ? '<strong>Multi-Month Error</strong><br><span style="font-size:11px;">' + esc(r.error_message || '') + '</span>'
++                : 'Spilled to next month';
++
++            html += '<tr' + rowClass + '>';
++            html += '<td>' + esc(r.delivery_date || '') + '</td>';
++            html += '<td>' + esc(r.client_name || '') + '</td>';
++            html += '<td>' + esc(String(r.wc_order_id || '')) + '</td>';
++            html += '<td>' + Number(r.mains_in_month || 0) + '</td>';
++            html += '<td>' + Number(r.sides_in_month || 0) + '</td>';
++            html += '<td>' + Number(r.mains_spilled || 0) + '</td>';
++            html += '<td>' + Number(r.sides_spilled || 0) + '</td>';
++            html += '<td>' + status + '</td>';
++            html += '</tr>';
++        });
++
++        html += '</tbody></table>';
++        return html;
++    }
++
++    $('#spill-run').on('click', function () {
++        var month = $('#spill-month').val();
++        if (!month) {
++            Report.showStatus($('#spill-status'), 'Please pick a billing month.', 'error');
++            return;
++        }
++        Report.showStatus($('#spill-status'), 'Running report...', 'info');
++        $('#spill-output').hide().empty();
++        $('#spill-export').hide();
++        csvData = '';
++
++        $.post(ajaxUrl, {
++            action: 'mealsdb_spillover_report',
++            nonce: nonce,
++            billing_month: month
++        }, function (resp) {
++            if (resp && resp.success) {
++                var data = resp.data || {};
++                var rows = data.rows || [];
++                csvData  = data.csv  || '';
++                $('#spill-status').hide();
++                $('#spill-output').show().html(buildTable(rows));
++                if (csvData) {
++                    $('#spill-export').show();
++                }
++            } else {
++                var msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Report failed.';
++                Report.showStatus($('#spill-status'), msg, 'error');
++            }
++        }).fail(function () {
++            Report.showStatus($('#spill-status'), 'Request failed.', 'error');
++        });
++    });
++
++    $('#spill-export').on('click', function () {
++        if (!csvData) { return; }
++        var month = $('#spill-month').val() || 'spillover';
++        var blob  = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
++        var url   = URL.createObjectURL(blob);
++        var a     = document.createElement('a');
++        a.href = url;
++        a.download = 'spillover-report-' + month + '.csv';
++        document.body.appendChild(a);
++        a.click();
++        document.body.removeChild(a);
++        URL.revokeObjectURL(url);
++    });
++
++})(jQuery, window.MealsDBReport);
+diff --git a/includes/ajax/class-ajax-reports.php b/includes/ajax/class-ajax-reports.php
+index ce4a253..9996a95 100644
+--- a/includes/ajax/class-ajax-reports.php
++++ b/includes/ajax/class-ajax-reports.php
+@@ -18,6 +18,7 @@ class MealsDB_Ajax_Reports {
+         add_action('wp_ajax_mealsdb_delivery_fee_reconciliation', [self::class, 'delivery_fee_reconciliation']);
+         add_action('wp_ajax_mealsdb_private_customer_report', [self::class, 'private_customer_report']);
+         add_action('wp_ajax_mealsdb_order_error_report', [self::class, 'order_error_report']);
++        add_action('wp_ajax_mealsdb_spillover_report', [self::class, 'spillover_report']);
+     }
+ 
+     /**
+@@ -204,4 +205,42 @@ class MealsDB_Ajax_Reports {
+ 
+         wp_send_json_success($result);
+     }
++
++    /**
++     * Over-allowance spillover report — phase 3.
++     * Lists meals delivered in the selected month that spilled into the
++     * next month (engine's allowance fill behavior), plus any
++     * multi-month-spillover errors logged by the rebuilder.
++     */
++    public static function spillover_report(): void {
++        check_ajax_referer('mealsdb_nonce', 'nonce');
++
++        $capability = MealsDB_Permissions::required_capability();
++        if (!is_string($capability) || $capability === '') {
++            $capability = 'manage_woocommerce';
++        }
++        if (!current_user_can($capability)) {
++            wp_send_json_error(['message' => __('You are not allowed to perform this action.', 'meals-db')], 403);
++            return;
++        }
++
++        self::enforce_rate_limit();
++
++        $billing_month = isset($_REQUEST['billing_month'])
++            ? sanitize_text_field(wp_unslash((string) $_REQUEST['billing_month']))
++            : '';
++        if (!preg_match('/^\d{4}-\d{2}$/', $billing_month)) {
++            wp_send_json_error(['message' => __('Month must be in YYYY-MM format.', 'meals-db')]);
++            return;
++        }
++
++        $reports = new MealsDB_Reports($GLOBALS['wpdb']);
++        $rows    = $reports->spillover_report($billing_month);
++        $csv     = $reports->export_spillover_csv($rows);
++
++        wp_send_json_success([
++            'rows' => $rows,
++            'csv'  => $csv,
++        ]);
++    }
+ }
+diff --git a/includes/class-admin-ui.php b/includes/class-admin-ui.php
+index 95b202d..0d32ae3 100644
+--- a/includes/class-admin-ui.php
++++ b/includes/class-admin-ui.php
+@@ -584,6 +584,14 @@ class MealsDB_Admin_UI {
+                     'editUrl' => admin_url('post.php?action=edit&post='),
+                 ],
+             ],
++            'mealsdb-spillover-report' => [
++                'file' => 'assets/js/spillover-report.js',
++                'cfg'  => 'mealsdbSpilloverReport',
++                'data' => [
++                    'ajaxUrl' => admin_url('admin-ajax.php'),
++                    'nonce'   => wp_create_nonce('mealsdb_nonce'),
++                ],
++            ],
+         ];
+ 
+         foreach ($bundles as $handle => $spec) {
+@@ -746,9 +754,10 @@ class MealsDB_Admin_UI {
+ 
+         $sub = isset($_GET['sub']) ? sanitize_key(wp_unslash((string) $_GET['sub'])) : 'fees';
+         $subtabs = [
+-            'fees'     => __('Fee Reconciliation', 'meals-db'),
+-            'privates' => __('Private Sales', 'meals-db'),
+-            'errors'   => __('Order Errors', 'meals-db'),
++            'fees'      => __('Fee Reconciliation', 'meals-db'),
++            'privates'  => __('Private Sales', 'meals-db'),
++            'errors'    => __('Order Errors', 'meals-db'),
++            'spillover' => __('Over-Allowance Spill', 'meals-db'),
+         ];
+ 
+         echo '<div class="wrap">';
+@@ -762,6 +771,9 @@ class MealsDB_Admin_UI {
+             case 'errors':
+                 include MealsDB_Plugin::path('views/order-errors.php');
+                 break;
++            case 'spillover':
++                include MealsDB_Plugin::path('views/spillover-report.php');
++                break;
+             case 'fees':
+             default:
+                 include MealsDB_Plugin::path('views/fee-reconciliation.php');
+diff --git a/includes/services/class-reports.php b/includes/services/class-reports.php
+index aef5cf0..f40f183 100644
+--- a/includes/services/class-reports.php
++++ b/includes/services/class-reports.php
+@@ -1443,4 +1443,152 @@ class MealsDB_Reports {
+ 
+         return [];
+     }
++
++    /**
++     * Over-allowance spillover report.
++     *
++     * Lists deliveries where an order's meals could not fit entirely within
++     * the delivery month's allowance and spilled into the next month, OR
++     * where the spill could not fit there either (multi-month-spillover
++     * error, logged by MealsDB_Allocation_Rebuilder).
++     *
++     * Source: rows in meals_allocation_errors (the rebuilder logs there on
++     * multi-month overflow) PLUS deliveries with rows in delivery_allocations
++     * for both the delivery month and the next month referencing the same
++     * order (the "normal" single-month spill case — not an error, just
++     * visibility).
++     *
++     * @param string $billing_month YYYY-MM (the delivery month being reported).
++     * @return array<int, array<string,mixed>> One row per (client, order) that spilled,
++     *   with: client_id, client_name, wc_order_id, delivery_date,
++     *   mains_in_month, sides_in_month, mains_spilled, sides_spilled,
++     *   is_multi_month_error (bool), error_message (string|null).
++     */
++    public function spillover_report(string $billing_month): array {
++        if (!preg_match('/^\d{4}-\d{2}$/', $billing_month)) {
++            return [];
++        }
++
++        $next_month_obj  = new DateTime($billing_month . '-01');
++        $next_month_obj->modify('+1 month');
++        $next_month      = $next_month_obj->format('Y-m');
++
++        $alloc_table    = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
++        $errors_table   = MealsDB_DB::get_table_name(MealsDB_Tables::ALLOCATION_ERRORS);
++        $clients_table  = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
++
++        // 1. Single-month spills: orders whose delivery date is in the
++        //    selected month but which have rows in BOTH this month and
++        //    next month (the rebuilder's spill behaviour). DATE_FORMAT
++        //    handles the delivery_date -> YYYY-MM extraction inline.
++        $spill_rows = $this->wpdb->get_results($this->wpdb->prepare(
++            "SELECT
++                a1.client_id,
++                a1.wc_order_id,
++                a1.delivery_date,
++                a1.mains_count    AS mains_in_month,
++                a1.sides_count    AS sides_in_month,
++                a2.mains_count    AS mains_spilled,
++                a2.sides_count    AS sides_spilled,
++                c.first_name,
++                c.last_name
++             FROM `{$alloc_table}` a1
++             INNER JOIN `{$alloc_table}` a2
++                     ON a2.wc_order_id   = a1.wc_order_id
++                    AND a2.client_id     = a1.client_id
++                    AND a2.billing_month = %s
++             LEFT JOIN `{$clients_table}` c ON c.client_id = a1.client_id
++             WHERE a1.billing_month = %s
++               AND DATE_FORMAT(a1.delivery_date, '%%Y-%%m') = %s
++               AND (a2.mains_count > 0 OR a2.sides_count > 0)
++             ORDER BY a1.delivery_date ASC, c.last_name ASC, c.first_name ASC",
++            $next_month,
++            $billing_month,
++            $billing_month
++        ), ARRAY_A);
++
++        $out = [];
++        foreach ((array) $spill_rows as $r) {
++            $out[] = [
++                'client_id'            => (int) $r['client_id'],
++                'client_name'          => trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')),
++                'wc_order_id'          => (int) $r['wc_order_id'],
++                'delivery_date'        => (string) $r['delivery_date'],
++                'mains_in_month'       => (int) $r['mains_in_month'],
++                'sides_in_month'       => (int) $r['sides_in_month'],
++                'mains_spilled'        => (int) $r['mains_spilled'],
++                'sides_spilled'        => (int) $r['sides_spilled'],
++                'is_multi_month_error' => false,
++                'error_message'        => null,
++            ];
++        }
++
++        // 2. Multi-month-spillover errors: rebuilder logs to allocation_errors
++        //    when even the next month can't absorb the overflow. These are
++        //    real problems that need attention.
++        $err_rows = $this->wpdb->get_results($this->wpdb->prepare(
++            "SELECT
++                e.client_id,
++                e.wc_order_id,
++                e.mains_unplaced,
++                e.sides_unplaced,
++                e.message,
++                a.delivery_date,
++                a.mains_count AS mains_in_month,
++                a.sides_count AS sides_in_month,
++                c.first_name,
++                c.last_name
++             FROM `{$errors_table}` e
++             LEFT JOIN `{$alloc_table}` a
++                    ON a.client_id     = e.client_id
++                   AND a.wc_order_id   = e.wc_order_id
++                   AND a.billing_month = e.billing_month
++             LEFT JOIN `{$clients_table}` c ON c.client_id = e.client_id
++             WHERE e.billing_month = %s
++               AND e.error_type = 'multi_month_spillover'
++             ORDER BY a.delivery_date ASC, c.last_name ASC",
++            $billing_month
++        ), ARRAY_A);
++
++        foreach ((array) $err_rows as $r) {
++            $out[] = [
++                'client_id'            => (int) $r['client_id'],
++                'client_name'          => trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')),
++                'wc_order_id'          => (int) $r['wc_order_id'],
++                'delivery_date'        => (string) ($r['delivery_date'] ?? ''),
++                'mains_in_month'       => (int) ($r['mains_in_month'] ?? 0),
++                'sides_in_month'       => (int) ($r['sides_in_month'] ?? 0),
++                'mains_spilled'        => (int) $r['mains_unplaced'],
++                'sides_spilled'        => (int) $r['sides_unplaced'],
++                'is_multi_month_error' => true,
++                'error_message'        => (string) ($r['message'] ?? ''),
++            ];
++        }
++
++        return $out;
++    }
++
++    /**
++     * CSV export for the over-allowance spillover report.
++     *
++     * @param array<int, array<string,mixed>> $rows from spillover_report().
++     */
++    public function export_spillover_csv(array $rows): string {
++        $out = [];
++        $out[] = 'Delivery Date,Client,Order ID,Mains in Month,Sides in Month,Mains Spilled,Sides Spilled,Multi-Month Error,Error Detail';
++        foreach ($rows as $r) {
++            $out[] = MealsDB_CSV::row([
++                $r['delivery_date'] ?? '',
++                $r['client_name'] ?? '',
++                $r['wc_order_id'] ?? 0,
++                $r['mains_in_month'] ?? 0,
++                $r['sides_in_month'] ?? 0,
++                $r['mains_spilled'] ?? 0,
++                $r['sides_spilled'] ?? 0,
++                !empty($r['is_multi_month_error']) ? 'Yes' : 'No',
++                $r['error_message'] ?? '',
++            ]);
++        }
++        return implode("\n", $out);
++    }
+ }
+diff --git a/tests/test-spillover-report.php b/tests/test-spillover-report.php
+new file mode 100644
+index 0000000..44f010f
+--- /dev/null
++++ b/tests/test-spillover-report.php
+@@ -0,0 +1,157 @@
++<?php
++/**
++ * Tests for MealsDB_Reports::spillover_report — phase 3.
++ *
++ * Exercises:
++ *   - A single-month spill (order delivered in month, with rows in both
++ *     this month and next month) is listed.
++ *   - A multi-month-spillover error (logged by rebuilder) is listed and
++ *     flagged is_multi_month_error=true.
++ *   - Empty month returns empty list.
++ *   - CSV export contains expected headers + rows.
++ *
++ * Run: php tests/test-spillover-report.php
++ */
++if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
++if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
++require_once __DIR__ . '/../includes/class-autoloader.php';
++MealsDB_Autoloader::register(dirname(__DIR__) . '/');
++if (!class_exists('wpdb')) { class wpdb {} }
++
++class SpillWpdb extends wpdb {
++    public $prefix = 'wp_';
++    public array $scripted = []; // pattern => result for get_results
++    public function prepare($q, ...$a) {
++        if (count($a) === 1 && is_array($a[0])) { $a = $a[0]; }
++        $i = 0;
++        return preg_replace_callback('/%[ds]/', function ($m) use (&$i, $a) {
++            $v = $a[$i] ?? ''; $i++;
++            return $m[0] === '%s' ? "'" . addslashes((string) $v) . "'" : (string) (int) $v;
++        }, $q);
++    }
++    public function get_results($q, $o = null) {
++        foreach ($this->scripted as $pat => $res) {
++            if (stripos($q, $pat) !== false) { return $res; }
++        }
++        return [];
++    }
++    public function get_var($q)            { return null; }
++    public function get_row($q, $o = null) { return null; }
++    public function get_col($q)            { return []; }
++}
++
++$failures = []; $passed = 0;
++function chk($got, $exp, $label) {
++    global $failures, $passed;
++    if ($got === $exp) { $passed++; } else {
++        $failures[] = "$label: expected " . var_export($exp, true) . " got " . var_export($got, true);
++    }
++}
++
++// ----- Test 1: a single-month spill is listed (no error) -----
++$wpdb = new SpillWpdb();
++$wpdb->scripted = [
++    // The single-month spill query joins delivery_allocations to itself.
++    "INNER JOIN `wp_meals_delivery_allocations` a2" => [
++        [
++            'client_id'      => 42,
++            'wc_order_id'    => 999,
++            'delivery_date'  => '2025-01-28',
++            'mains_in_month' => 4,
++            'sides_in_month' => 0,
++            'mains_spilled'  => 10,
++            'sides_spilled'  => 0,
++            'first_name'     => 'Heavy',
++            'last_name'      => 'Orderer',
++        ],
++    ],
++    // No errors in this test.
++    "FROM `wp_meals_allocation_errors` e" => [],
++];
++$reports = new MealsDB_Reports($wpdb);
++$rows = $reports->spillover_report('2025-01');
++chk(count($rows), 1, 'single-spill: one row');
++chk($rows[0]['client_id'], 42, 'single-spill: client_id');
++chk((bool) $rows[0]['is_multi_month_error'], false, 'single-spill: not flagged as error');
++chk($rows[0]['mains_in_month'], 4, 'single-spill: 4 mains in Jan');
++chk($rows[0]['mains_spilled'], 10, 'single-spill: 10 mains spilled');
++chk($rows[0]['client_name'], 'Heavy Orderer', 'single-spill: client name assembled');
++
++// ----- Test 2: a multi-month-spillover error is listed and flagged -----
++$wpdb = new SpillWpdb();
++$wpdb->scripted = [
++    "INNER JOIN `wp_meals_delivery_allocations` a2" => [],
++    "FROM `wp_meals_allocation_errors` e" => [
++        [
++            'client_id'      => 99,
++            'wc_order_id'    => 1500,
++            'mains_unplaced' => 6,
++            'sides_unplaced' => 0,
++            'message'        => 'Delivery 2025-01-15 could not fit in 2025-01 or 2025-02. Mains short 6, sides short 0.',
++            'delivery_date'  => '2025-01-15',
++            'mains_in_month' => 5,
++            'sides_in_month' => 0,
++            'first_name'     => 'Misconfigured',
++            'last_name'      => 'Client',
++        ],
++    ],
++];
++$reports = new MealsDB_Reports($wpdb);
++$rows = $reports->spillover_report('2025-01');
++chk(count($rows), 1, 'multi-month-error: one row');
++chk((bool) $rows[0]['is_multi_month_error'], true, 'multi-month-error: flagged');
++chk($rows[0]['mains_spilled'], 6, 'multi-month-error: 6 mains unplaced');
++chk(strpos($rows[0]['error_message'], 'could not fit') !== false, true, 'multi-month-error: message carried');
++
++// ----- Test 3: both kinds together (spill + error) -----
++$wpdb = new SpillWpdb();
++$wpdb->scripted = [
++    "INNER JOIN `wp_meals_delivery_allocations` a2" => [
++        ['client_id' => 1, 'wc_order_id' => 11, 'delivery_date' => '2025-01-05',
++         'mains_in_month' => 8, 'sides_in_month' => 0, 'mains_spilled' => 2, 'sides_spilled' => 0,
++         'first_name' => 'A', 'last_name' => 'B'],
++    ],
++    "FROM `wp_meals_allocation_errors` e" => [
++        ['client_id' => 2, 'wc_order_id' => 22, 'mains_unplaced' => 3, 'sides_unplaced' => 0,
++         'message' => 'err', 'delivery_date' => '2025-01-20',
++         'mains_in_month' => 5, 'sides_in_month' => 0, 'first_name' => 'C', 'last_name' => 'D'],
++    ],
++];
++$reports = new MealsDB_Reports($wpdb);
++$rows = $reports->spillover_report('2025-01');
++chk(count($rows), 2, 'mixed: 2 rows total');
++$errors = array_filter($rows, function ($r) { return $r['is_multi_month_error']; });
++chk(count($errors), 1, 'mixed: exactly one error row');
++
++// ----- Test 4: empty month returns empty list -----
++$wpdb = new SpillWpdb();
++$wpdb->scripted = [];
++$reports = new MealsDB_Reports($wpdb);
++$rows = $reports->spillover_report('2025-06');
++chk(count($rows), 0, 'empty month: no rows');
++
++// ----- Test 5: invalid month returns empty -----
++$reports = new MealsDB_Reports(new SpillWpdb());
++chk(count($reports->spillover_report('not-a-month')), 0, 'invalid month: rejected');
++chk(count($reports->spillover_report('2025')), 0, 'invalid month: short string rejected');
++
++// ----- Test 6: CSV export header + content -----
++$rows = [
++    [
++        'client_id' => 42, 'client_name' => 'Heavy Orderer', 'wc_order_id' => 999,
++        'delivery_date' => '2025-01-28', 'mains_in_month' => 4, 'sides_in_month' => 0,
++        'mains_spilled' => 10, 'sides_spilled' => 0,
++        'is_multi_month_error' => false, 'error_message' => null,
++    ],
++];
++$csv = (new MealsDB_Reports(new SpillWpdb()))->export_spillover_csv($rows);
++$lines = explode("\n", $csv);
++chk(count($lines), 2, 'csv: header + 1 data row');
++chk(strpos($lines[0], 'Delivery Date') !== false, true, 'csv: header has Delivery Date');
++chk(strpos($lines[0], 'Multi-Month Error') !== false, true, 'csv: header has Multi-Month Error column');
++chk(strpos($lines[1], 'Heavy Orderer') !== false, true, 'csv: data row has client name');
++chk(strpos($lines[1], 'No') !== false, true, 'csv: error flag rendered as No for non-error');
++
++echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
++foreach ($failures as $f) echo "FAIL: $f\n";
++exit(empty($failures) ? 0 : 1);
+diff --git a/views/spillover-report.php b/views/spillover-report.php
+new file mode 100644
+index 0000000..56b1464
+--- /dev/null
++++ b/views/spillover-report.php
+@@ -0,0 +1,41 @@
++<?php
++/**
++ * Over-Allowance Spillover Report — phase 3.
++ *
++ * Lists meals delivered in the selected month that spilled into the next
++ * month under the allocation engine's allowance fill (phase 1), plus any
++ * multi-month-spillover errors the rebuilder logged.
++ *
++ * @package MealsDB
++ */
++defined('ABSPATH') || exit;
++MealsDB_Permissions::enforce();
++
++// Default the picker to the current month.
++$default_month = date('Y-m');
++?>
++<div id="mealsdb-spillover-report">
++
++    <h2><?php esc_html_e('Over-Allowance Spillover', 'meals-db'); ?></h2>
++    <p class="description">
++        <?php esc_html_e(
++            "Meals delivered in the selected month that exceeded the client's monthly allowance and spilled into the next month. Multi-month-spillover errors (where the next month also could not absorb the overflow) are flagged separately and need attention.",
++            'meals-db'
++        ); ?>
++    </p>
++
++    <div class="mealsdb-spill-controls" style="margin-bottom:16px; display:flex; gap:10px; align-items:flex-end;">
++        <div>
++            <label for="spill-month"><?php esc_html_e('Billing Month', 'meals-db'); ?></label><br>
++            <input type="month" id="spill-month" class="regular-text" value="<?php echo esc_attr($default_month); ?>" />
++        </div>
++        <div>
++            <button type="button" class="button button-primary" id="spill-run"><?php esc_html_e('Run Report', 'meals-db'); ?></button>
++            <button type="button" class="button" id="spill-export" style="display:none;"><?php esc_html_e('Export CSV', 'meals-db'); ?></button>
++        </div>
++    </div>
++
++    <div id="spill-status" class="notice" style="display:none;"></div>
++    <div id="spill-output" style="display:none;"></div>
++
++</div>
