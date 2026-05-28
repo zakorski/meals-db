@@ -1,0 +1,1780 @@
+diff --git a/assets/js/invoice.js b/assets/js/invoice.js
+index 3226391..1503a9e 100644
+--- a/assets/js/invoice.js
++++ b/assets/js/invoice.js
+@@ -162,139 +162,6 @@
+ 
+         // --- Overages section ---
+ 
+-        // Set default dates for overages fields too.
+-        $('#overage_start_date').val(formatDate(firstDay));
+-        $('#overage_end_date').val(formatDate(lastDay));
+-
+-        // Show/hide SDNB-specific fields.
+-        $('#overage_client_type').on('change', function() {
+-            if ($(this).val() === 'SDNB') {
+-                $('#overage_zone_row').show();
+-                $('#overage_weeks_row').show();
+-            } else {
+-                $('#overage_zone_row').hide();
+-                $('#overage_weeks_row').hide();
+-            }
+-        });
+-
+-        var currentOverages = [];
+-
+-        // Preview overages.
+-        $('#preview_overages_btn').on('click', function() {
+-            var clientType = $('#overage_client_type').val();
+-            var startDate  = $('#overage_start_date').val();
+-            var endDate    = $('#overage_end_date').val();
+-
+-            if (!clientType) {
+-                showOveragesMessage('error', 'Please select a client type.');
+-                return;
+-            }
+-            if (!startDate || !endDate) {
+-                showOveragesMessage('error', 'Please select start and end dates.');
+-                return;
+-            }
+-
+-            var $btn = $(this);
+-            $btn.prop('disabled', true).text('Loading...');
+-
+-            $.post(mealsdbInvoice.ajaxUrl, {
+-                action: 'mealsdb_preview_overages',
+-                nonce: mealsdbInvoice.nonce,
+-                client_type: clientType,
+-                start_date: startDate,
+-                end_date: endDate,
+-                zone: $('#overage_zone').val() || '',
+-                weeks_in_month: $('#overage_weeks_in_month').val() || '4'
+-            }, function(resp) {
+-                $btn.prop('disabled', false).html('<span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span> Preview Overages');
+-
+-                if (resp.success) {
+-                    currentOverages = resp.data.overages;
+-                    $('#overages_count').text(resp.data.count);
+-
+-                    var $tbody = $('#overages_table tbody');
+-                    $tbody.empty();
+-
+-                    if (resp.data.count === 0) {
+-                        $tbody.append('<tr><td colspan="4">No clients with overages found.</td></tr>');
+-                        $('#create_overage_orders_btn').hide();
+-                    } else {
+-                        $.each(resp.data.overages, function(i, row) {
+-                            var name = row.name || ((row.last_name || '') + ', ' + (row.first_name || ''));
+-                            $tbody.append(
+-                                '<tr>' +
+-                                '<td>' + $('<span>').text(name).html() + '</td>' +
+-                                '<td>' + row.bnm_mains + '</td>' +
+-                                '<td>' + row.overage_tax_sides + '</td>' +
+-                                '<td>' + row.overage_nontax_sides + '</td>' +
+-                                '</tr>'
+-                            );
+-                        });
+-                        $('#create_overage_orders_btn').show();
+-                    }
+-
+-                    $('#overages_preview').show();
+-                } else {
+-                    showOveragesMessage('error', resp.data.message || 'Failed to load overages.');
+-                }
+-            }).fail(function() {
+-                $btn.prop('disabled', false).html('<span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span> Preview Overages');
+-                showOveragesMessage('error', 'Request failed.');
+-            });
+-        });
+-
+-        // Create overage orders.
+-        $('#create_overage_orders_btn').on('click', function() {
+-            if (currentOverages.length === 0) {
+-                showOveragesMessage('error', 'No overages to process.');
+-                return;
+-            }
+-
+-            if (!confirm('Create overage orders for ' + currentOverages.length + ' client(s)?')) {
+-                return;
+-            }
+-
+-            var $btn = $(this);
+-            $btn.prop('disabled', true).text('Creating orders...');
+-
+-            $.post(mealsdbInvoice.ajaxUrl, {
+-                action: 'mealsdb_create_overage_orders',
+-                nonce: mealsdbInvoice.nonce,
+-                invoice_date: $('#overage_invoice_date').val() || '',
+-                overages: JSON.stringify(currentOverages)
+-            }, function(resp) {
+-                $btn.prop('disabled', false).html('<span class="dashicons dashicons-cart" style="vertical-align: middle;"></span> Create Overage Orders');
+-
+-                if (resp.success) {
+-                    var msg = resp.data.created + ' order(s) created.';
+-                    if (resp.data.skipped_count > 0) {
+-                        msg += ' ' + resp.data.skipped_count + ' skipped: ' + resp.data.skipped.join(', ');
+-                    }
+-                    showOveragesMessage('success', msg);
+-                } else {
+-                    showOveragesMessage('error', resp.data.message || 'Failed to create orders.');
+-                }
+-            }).fail(function() {
+-                $btn.prop('disabled', false).html('<span class="dashicons dashicons-cart" style="vertical-align: middle;"></span> Create Overage Orders');
+-                showOveragesMessage('error', 'Request failed.');
+-            });
+-        });
+-
+-        function showOveragesMessage(type, message) {
+-            // Callers include paths that concatenate server-supplied
+-            // error text (resp.data.message) and user-controlled client
+-            // names (resp.data.skipped.join(', ')) into the message.
+-            // Render through jQuery's text setter so none of that can
+-            // execute as HTML.
+-            var $msg = $('#overages_message');
+-            $msg.removeClass('notice-success notice-error notice-warning')
+-                .addClass('notice notice-' + type)
+-                .empty()
+-                .append($('<p>').text(message == null ? '' : String(message)))
+-                .slideDown();
+-
+-            setTimeout(function() { $msg.slideUp(); }, 8000);
+-        }
+     });
+ 
+ })(jQuery);
+diff --git a/includes/ajax/class-ajax-invoice.php b/includes/ajax/class-ajax-invoice.php
+index 00fb54a..2e08380 100644
+--- a/includes/ajax/class-ajax-invoice.php
++++ b/includes/ajax/class-ajax-invoice.php
+@@ -19,8 +19,6 @@ class MealsDB_Ajax_Invoice {
+      */
+     public static function init() {
+         add_action('wp_ajax_mealsdb_generate_invoice', [__CLASS__, 'generate_invoice']);
+-        add_action('wp_ajax_mealsdb_preview_overages', [__CLASS__, 'preview_overages']);
+-        add_action('wp_ajax_mealsdb_create_overage_orders', [__CLASS__, 'create_overage_orders']);
+     }
+ 
+     /**
+@@ -311,272 +309,4 @@ class MealsDB_Ajax_Invoice {
+         exit;
+     }
+ 
+-    /**
+-     * Preview overages for a billing period.
+-     */
+-    public static function preview_overages() {
+-        if (!check_ajax_referer('mealsdb_invoice_nonce', 'nonce', false)) {
+-            wp_send_json_error(['message' => 'Invalid security token.']);
+-            return;
+-        }
+-        if (!MealsDB_Permissions::can_access_plugin()) {
+-            wp_send_json_error(['message' => 'Insufficient permissions.']);
+-            return;
+-        }
+-
+-        if (class_exists('MealsDB_Rate_Limiter')
+-            && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+-            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+-            return;
+-        }
+-
+-        $client_type    = sanitize_text_field(wp_unslash($_POST['client_type'] ?? ''));
+-        $start_date     = sanitize_text_field(wp_unslash($_POST['start_date'] ?? ''));
+-        $end_date       = sanitize_text_field(wp_unslash($_POST['end_date'] ?? ''));
+-        $zone           = sanitize_text_field(wp_unslash($_POST['zone'] ?? ''));
+-        $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
+-
+-        if (empty($start_date) || empty($end_date)) {
+-            wp_send_json_error(['message' => 'Start and end dates are required.']);
+-            return;
+-        }
+-
+-        try {
+-            if ($client_type === 'SDNB') {
+-                $overages = MealsDB_Invoice_Generator::get_sdnb_overages($zone, $start_date, $end_date, $weeks_in_month);
+-                // Only fields actually consumed by the preview UI + create_overage_orders.
+-                // individual_id (encrypted PII) is intentionally not returned here —
+-                // the UI keys off wp_user_id and displays last/first name only.
+-                $rows = array_map(function ($row) {
+-                    return [
+-                        'name'                => ($row['client']['last_name'] ?? '') . ', ' . ($row['client']['first_name'] ?? ''),
+-                        'wp_user_id'          => (int) ($row['client']['wp_user_id'] ?? 0),
+-                        'bnm_mains'           => $row['bnm_mains'],
+-                        'overage_tax_sides'   => $row['overage_tax_sides'],
+-                        'overage_nontax_sides'=> $row['overage_nontax_sides'],
+-                    ];
+-                }, $overages);
+-            } elseif ($client_type === 'Veteran') {
+-                $vac_rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+-                // Strip encrypted PII (K# / health_card) from the JSON surface.
+-                $rows = array_map(function ($row) {
+-                    return [
+-                        'name'                => (($row['last_name'] ?? '') . ', ' . ($row['first_name'] ?? '')),
+-                        'wp_user_id'          => (int) ($row['wp_user_id'] ?? 0),
+-                        'bnm_mains'           => (int) ($row['bnm_mains'] ?? 0),
+-                        'overage_tax_sides'   => (int) ($row['overage_tax_sides'] ?? 0),
+-                        'overage_nontax_sides'=> (int) ($row['overage_nontax_sides'] ?? 0),
+-                    ];
+-                }, $vac_rows);
+-            } else {
+-                wp_send_json_error(['message' => 'Invalid client type.']);
+-                return;
+-            }
+-
+-            wp_send_json_success(['overages' => array_values($rows), 'count' => count($rows)]);
+-        } catch (Exception $e) {
+-            error_log('[MealsDB Invoice] preview_overages failed: ' . $e->getMessage());
+-            wp_send_json_error(['message' => __('Unable to preview overages. Please contact an administrator.', 'meals-db')]);
+-        }
+-    }
+-
+-    /**
+-     * Create WooCommerce orders for overages.
+-     *
+-     * Quantities are recomputed server-side from the same period/zone the
+-     * preview was built from — never trust the round-tripped JSON. Clients
+-     * may pass `wp_user_ids` to limit the run to a subset of the previewed
+-     * rows (e.g. when the operator unchecks a row in the UI).
+-     */
+-    public static function create_overage_orders() {
+-        if (!check_ajax_referer('mealsdb_invoice_nonce', 'nonce', false)) {
+-            wp_send_json_error(['message' => 'Invalid security token.']);
+-            return;
+-        }
+-        if (!MealsDB_Permissions::can_access_plugin()) {
+-            wp_send_json_error(['message' => 'Insufficient permissions.']);
+-            return;
+-        }
+-
+-        if (class_exists('MealsDB_Rate_Limiter')
+-            && !MealsDB_Rate_Limiter::check_rate_limit('client_modify')) {
+-            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+-            return;
+-        }
+-
+-        $client_type    = sanitize_text_field(wp_unslash($_POST['client_type'] ?? ''));
+-        $start_date     = sanitize_text_field(wp_unslash($_POST['start_date'] ?? ''));
+-        $end_date       = sanitize_text_field(wp_unslash($_POST['end_date'] ?? ''));
+-        $zone           = sanitize_text_field(wp_unslash($_POST['zone'] ?? ''));
+-        $weeks_in_month = intval($_POST['weeks_in_month'] ?? 4);
+-        $invoice_date   = sanitize_text_field(wp_unslash($_POST['invoice_date'] ?? ''));
+-
+-        if (!in_array($client_type, ['SDNB', 'Veteran'], true)) {
+-            wp_send_json_error(['message' => 'Invalid client type.']);
+-            return;
+-        }
+-
+-        // SDNB overage orders require a service-zone code; VAC does not.
+-        // Whitelist against the same set the legacy invoice accepts so
+-        // a typo fails fast rather than silently processing zero clients.
+-        if ($client_type === 'SDNB') {
+-            $zone = strtoupper(trim($zone));
+-            if ($zone === '' || !in_array($zone, self::allowed_sdnb_zones(), true)) {
+-                wp_send_json_error(['message' => 'Unknown SDNB zone.']);
+-                return;
+-            }
+-        }
+-
+-        if (!self::validate_date($start_date) || !self::validate_date($end_date)) {
+-            wp_send_json_error(['message' => 'Start and end dates must be in YYYY-MM-DD format.']);
+-            return;
+-        }
+-
+-        if ($weeks_in_month < 1 || $weeks_in_month > 6) {
+-            $weeks_in_month = 4;
+-        }
+-
+-        if (!self::validate_date($invoice_date)) {
+-            $invoice_date = current_time('Y-m-d');
+-        }
+-
+-        // Optional subset filter: a client may submit a list of wp_user_ids
+-        // to restrict the run, but the per-user quantities are still
+-        // recomputed from the server-side overage report.
+-        $allowed_user_ids = null;
+-        if (isset($_POST['wp_user_ids'])) {
+-            $raw_ids = (array) wp_unslash($_POST['wp_user_ids']);
+-            $allowed_user_ids = [];
+-            foreach ($raw_ids as $raw_id) {
+-                $id = (int) $raw_id;
+-                if ($id > 0) {
+-                    $allowed_user_ids[$id] = true;
+-                }
+-            }
+-        }
+-
+-        try {
+-            if ($client_type === 'SDNB') {
+-                $rows = MealsDB_Invoice_Generator::get_sdnb_overages($zone, $start_date, $end_date, $weeks_in_month);
+-                $rows = array_map(function ($row) {
+-                    return [
+-                        'wp_user_id'           => (int) ($row['client']['wp_user_id'] ?? 0),
+-                        'name'                 => ($row['client']['last_name'] ?? '') . ', ' . ($row['client']['first_name'] ?? ''),
+-                        'bnm_mains'            => (int) ($row['bnm_mains'] ?? 0),
+-                        'overage_tax_sides'    => (int) ($row['overage_tax_sides'] ?? 0),
+-                        'overage_nontax_sides' => (int) ($row['overage_nontax_sides'] ?? 0),
+-                    ];
+-                }, $rows);
+-            } else {
+-                $rows = MealsDB_Invoice_Generator::get_vac_overages($start_date, $end_date);
+-                $rows = array_map(function ($row) {
+-                    return [
+-                        'wp_user_id'           => (int) ($row['wp_user_id'] ?? 0),
+-                        'name'                 => (($row['last_name'] ?? '') . ', ' . ($row['first_name'] ?? '')),
+-                        'bnm_mains'            => (int) ($row['bnm_mains'] ?? 0),
+-                        'overage_tax_sides'    => (int) ($row['overage_tax_sides'] ?? 0),
+-                        'overage_nontax_sides' => (int) ($row['overage_nontax_sides'] ?? 0),
+-                    ];
+-                }, $rows);
+-            }
+-        } catch (Exception $e) {
+-            error_log('[MealsDB Invoice] create_overage_orders: failed to recompute overages: ' . $e->getMessage());
+-            wp_send_json_error(['message' => __('Unable to compute overages. Please contact an administrator.', 'meals-db')]);
+-            return;
+-        }
+-
+-        if (empty($rows)) {
+-            wp_send_json_error(['message' => 'No overages found for the selected period.']);
+-            return;
+-        }
+-
+-        $product_ids = MealsDB_Invoice_Generator::get_overage_product_ids();
+-        $order_count = 0;
+-        $skipped     = [];
+-
+-        foreach ($rows as $item) {
+-            $wp_user_id  = (int) $item['wp_user_id'];
+-            $bnm_mains   = (int) $item['bnm_mains'];
+-            $overage_tax = (int) $item['overage_tax_sides'];
+-            $overage_nt  = (int) $item['overage_nontax_sides'];
+-
+-            if ($wp_user_id <= 0 || !get_userdata($wp_user_id)) {
+-                $skipped[] = $item['name'] ?: 'Unknown';
+-                continue;
+-            }
+-
+-            if ($allowed_user_ids !== null && !isset($allowed_user_ids[$wp_user_id])) {
+-                continue;
+-            }
+-
+-            if ($bnm_mains <= 0 && $overage_tax <= 0 && $overage_nt <= 0) {
+-                continue;
+-            }
+-
+-            $order = wc_create_order(['customer_id' => $wp_user_id]);
+-            if (is_wp_error($order)) {
+-                $skipped[] = $item['name'] ?: 'Unknown';
+-                continue;
+-            }
+-
+-            // Configure the order BEFORE updating status so date_created
+-            // and items are persisted in a single save and the status
+-            // transition fires with a complete order.
+-            $order->set_date_created($invoice_date . ' 00:00:00');
+-            $order->set_date_paid($invoice_date . ' 00:00:00');
+-
+-            if ($bnm_mains > 0 && $product_ids['mains'] > 0) {
+-                $product = wc_get_product($product_ids['mains']);
+-                if ($product) {
+-                    $order->add_product($product, $bnm_mains);
+-                }
+-            }
+-            if ($overage_nt > 0 && $product_ids['nontax_sides'] > 0) {
+-                $product = wc_get_product($product_ids['nontax_sides']);
+-                if ($product) {
+-                    $order->add_product($product, $overage_nt);
+-                }
+-            }
+-            if ($overage_tax > 0 && $product_ids['taxable_sides'] > 0) {
+-                $product = wc_get_product($product_ids['taxable_sides']);
+-                if ($product) {
+-                    $order->add_product($product, $overage_tax);
+-                }
+-            }
+-
+-            $order->calculate_totals();
+-            $order->update_status('completed');
+-            $order->save();
+-            $order_count++;
+-        }
+-
+-        // Audit the batch. create_overage_orders creates and
+-        // auto-completes WC orders at billing scale — without this
+-        // entry an erroneous run would have no forensic trail.
+-        // SEC-10 / directive 16 Pass A hardening gap.
+-        if (class_exists('MealsDB_Logger')) {
+-            MealsDB_Logger::log(
+-                'overage_orders_created',
+-                get_current_user_id(),
+-                $client_type . ($zone !== '' ? '/' . $zone : ''),
+-                null,
+-                wp_json_encode([
+-                    'client_type'    => $client_type,
+-                    'zone'           => $zone,
+-                    'start_date'     => $start_date,
+-                    'end_date'       => $end_date,
+-                    'weeks_in_month' => $weeks_in_month,
+-                    'invoice_date'   => $invoice_date,
+-                    'created'        => $order_count,
+-                    'skipped'        => count($skipped),
+-                ])
+-            );
+-        }
+-
+-        wp_send_json_success([
+-            'created'       => $order_count,
+-            'skipped'       => $skipped,
+-            'skipped_count' => count($skipped),
+-        ]);
+-    }
+ }
+diff --git a/includes/ajax/class-ajax-reports.php b/includes/ajax/class-ajax-reports.php
+index 9996a95..203b02f 100644
+--- a/includes/ajax/class-ajax-reports.php
++++ b/includes/ajax/class-ajax-reports.php
+@@ -229,7 +229,10 @@ class MealsDB_Ajax_Reports {
+         $billing_month = isset($_REQUEST['billing_month'])
+             ? sanitize_text_field(wp_unslash((string) $_REQUEST['billing_month']))
+             : '';
+-        if (!preg_match('/^\d{4}-\d{2}$/', $billing_month)) {
++        // Constrain the month to 01-12: a bare \d{2} would let 2025-13 or
++        // 2025-00 through to the service layer, where DateTime either throws
++        // (500) or silently normalises to the wrong month.
++        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
+             wp_send_json_error(['message' => __('Month must be in YYYY-MM format.', 'meals-db')]);
+             return;
+         }
+diff --git a/includes/services/class-allocation-engine.php b/includes/services/class-allocation-engine.php
+index 5a03966..52cd809 100644
+--- a/includes/services/class-allocation-engine.php
++++ b/includes/services/class-allocation-engine.php
+@@ -230,12 +230,6 @@ class MealsDB_Allocation_Engine {
+      * triggered either by invoice generation (scoped to that month + clients)
+      * or by the manual "Recalculate Allocations" Data Ops action.
+      *
+-     * The previous synchronous per-order, date-prorated write path lived
+-     * here; private helpers below (build_desired_allocation_rows,
+-     * lock_allocation_month) are remnants of that path and are now unused.
+-     * They are left in place to keep the public surface stable; a later
+-     * cleanup phase can remove them.
+-     *
+      * @param int $wc_order_id
+      */
+     public function allocate_order(int $wc_order_id): void {
+@@ -331,206 +325,6 @@ class MealsDB_Allocation_Engine {
+     }
+ 
+ 
+-    /**
+-     * Build the desired delivery_allocations rows for an order.
+-     *
+-     * Factored out so allocate_order can fingerprint the intended state
+-     * without duplicating the single/double-month branch — the same
+-     * array produced here is compared against the existing rows for the
+-     * idempotency check and, if the fingerprints differ, fed into the
+-     * INSERT loop.
+-     *
+-     * @return array<int, array<string, mixed>> One row for a single-month
+-     *         delivery, two rows for a month-straddling delivery (pro-rated).
+-     */
+-    private function build_desired_allocation_rows(
+-        int $client_id,
+-        int $wc_order_id,
+-        string $order_date_str,
+-        string $delivery_date,
+-        string $coverage_start,
+-        string $coverage_end,
+-        string $month1,
+-        string $month2,
+-        int $mains,
+-        int $sides,
+-        int $tax_sides,
+-        int $nontax_sides,
+-        DateTime $cov_start_dt,
+-        DateTime $cov_end_dt
+-    ): array {
+-        if ($month1 === $month2) {
+-            return [
+-                [
+-                    'client_id'          => $client_id,
+-                    'wc_order_id'        => $wc_order_id,
+-                    'order_date'         => $order_date_str,
+-                    'delivery_date'      => $delivery_date,
+-                    'coverage_start'     => $coverage_start,
+-                    'coverage_end'       => $coverage_end,
+-                    'billing_month'      => $month1,
+-                    'mains_count'        => $mains,
+-                    'sides_count'        => $sides,
+-                    'tax_sides_count'    => $tax_sides,
+-                    'nontax_sides_count' => $nontax_sides,
+-                ],
+-            ];
+-        }
+-
+-        $end_of_month1       = new DateTime($cov_start_dt->format('Y-m-t'));
+-        $start_of_month2     = new DateTime($cov_end_dt->format('Y-m-01'));
+-        $days_in_month_1     = (int) $cov_start_dt->diff($end_of_month1)->days + 1;
+-        $days_in_month_2     = (int) $start_of_month2->diff($cov_end_dt)->days + 1;
+-        $total_coverage_days = $days_in_month_1 + $days_in_month_2;
+-
+-        if ($total_coverage_days <= 0) {
+-            return [];
+-        }
+-
+-        // Proportional split with residual conservation.
+-        //
+-        // One side gets round(total * days_in_month_1 / total_days);
+-        // the other side gets (total - that_rounded), NOT a second
+-        // round() call. That guarantees the two month values always
+-        // sum back to the original, so a month-straddling order never
+-        // inflates or deflates the client's overall consumption by
+-        // a rounding penny.
+-        //
+-        // This is the allocation equivalent of the M1/M2 money-cents
+-        // pattern: accumulate in one direction, absorb the residual
+-        // at the boundary.
+-        $m1_mains        = (int) round($mains * $days_in_month_1 / $total_coverage_days);
+-        $m2_mains        = $mains - $m1_mains;
+-        $m1_sides        = (int) round($sides * $days_in_month_1 / $total_coverage_days);
+-        $m2_sides        = $sides - $m1_sides;
+-        $m1_tax_sides    = (int) round($tax_sides * $days_in_month_1 / $total_coverage_days);
+-        $m2_tax_sides    = $tax_sides - $m1_tax_sides;
+-        $m1_nontax_sides = (int) round($nontax_sides * $days_in_month_1 / $total_coverage_days);
+-        $m2_nontax_sides = $nontax_sides - $m1_nontax_sides;
+-
+-        return [
+-            [
+-                'client_id'          => $client_id,
+-                'wc_order_id'        => $wc_order_id,
+-                'order_date'         => $order_date_str,
+-                'delivery_date'      => $delivery_date,
+-                'coverage_start'     => $coverage_start,
+-                'coverage_end'       => $end_of_month1->format('Y-m-d'),
+-                'billing_month'      => $month1,
+-                'mains_count'        => $m1_mains,
+-                'sides_count'        => $m1_sides,
+-                'tax_sides_count'    => $m1_tax_sides,
+-                'nontax_sides_count' => $m1_nontax_sides,
+-            ],
+-            [
+-                'client_id'          => $client_id,
+-                'wc_order_id'        => $wc_order_id,
+-                'order_date'         => $order_date_str,
+-                'delivery_date'      => $delivery_date,
+-                'coverage_start'     => $start_of_month2->format('Y-m-d'),
+-                'coverage_end'       => $coverage_end,
+-                'billing_month'      => $month2,
+-                'mains_count'        => $m2_mains,
+-                'sides_count'        => $m2_sides,
+-                'tax_sides_count'    => $m2_tax_sides,
+-                'nontax_sides_count' => $m2_nontax_sides,
+-            ],
+-        ];
+-    }
+-
+-    /**
+-     * Compute a stable fingerprint for a set of delivery_allocations
+-     * rows. Used for the idempotency check in allocate_order so a
+-     * webhook retry that would land on byte-identical state can skip
+-     * the DELETE+INSERT+recalculate cycle.
+-     *
+-     * The returned hash is order-independent (rows are sorted by
+-     * billing_month + coverage_start before hashing) and type-
+-     * independent (wpdb returns numeric columns as strings while the
+-     * desired rows hold PHP ints, so we normalise before comparison).
+-     * Returns '' for an empty input — which the caller treats as
+-     * "no fingerprint match" so an empty existing set never falsely
+-     * matches a non-empty desired set.
+-     */
+-    private static function fingerprint_allocation_rows(array $rows): string {
+-        if (empty($rows)) {
+-            return '';
+-        }
+-
+-        $normalised = array_map(static function ($row) {
+-            return [
+-                (int)    ($row['client_id']          ?? 0),
+-                (int)    ($row['wc_order_id']        ?? 0),
+-                (string) ($row['order_date']         ?? ''),
+-                (string) ($row['delivery_date']      ?? ''),
+-                (string) ($row['coverage_start']     ?? ''),
+-                (string) ($row['coverage_end']       ?? ''),
+-                (string) ($row['billing_month']      ?? ''),
+-                (int)    ($row['mains_count']        ?? 0),
+-                (int)    ($row['sides_count']        ?? 0),
+-                (int)    ($row['tax_sides_count']    ?? 0),
+-                (int)    ($row['nontax_sides_count'] ?? 0),
+-            ];
+-        }, $rows);
+-
+-        usort($normalised, static function ($a, $b) {
+-            // Sort by billing_month (index 6) then coverage_start (index 4).
+-            return [$a[6], $a[4]] <=> [$b[6], $b[4]];
+-        });
+-
+-        return hash('sha256', serialize($normalised));
+-    }
+-
+-    /**
+-     * Acquire an exclusive row lock on the summary row for a
+-     * (client_id, billing_month) pair so concurrent allocate/deallocate
+-     * calls for the same pair serialise. Creates a zeroed stub row if
+-     * one does not already exist — recalculate_month_totals() will
+-     * overwrite those zeros with the correct values before the
+-     * transaction commits, so peer transactions never see the stub.
+-     *
+-     * MUST be called inside an open transaction. The returned lock is
+-     * released on COMMIT / ROLLBACK.
+-     */
+-    private function lock_allocation_month(int $client_id, string $billing_month): bool {
+-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+-
+-        // INSERT IGNORE creates the lock target when missing and is a
+-        // no-op when the unique (client_id, billing_month) index hits.
+-        // All other columns in client_allocations have DEFAULT 0 or
+-        // nullable, so supplying just the two key columns is sufficient.
+-        $insert_result = $this->wpdb->query($this->wpdb->prepare(
+-            "INSERT IGNORE INTO {$table} (client_id, billing_month) VALUES (%d, %s)",
+-            $client_id,
+-            $billing_month
+-        ));
+-        if ($insert_result === false) {
+-            error_log(sprintf(
+-                '[MealsDB Allocation Engine] lock_allocation_month failed to ensure row for client %d month %s: %s',
+-                $client_id,
+-                $billing_month,
+-                $this->wpdb->last_error
+-            ));
+-            return false;
+-        }
+-
+-        $locked = $this->wpdb->get_var($this->wpdb->prepare(
+-            "SELECT id FROM {$table} WHERE client_id = %d AND billing_month = %s FOR UPDATE",
+-            $client_id,
+-            $billing_month
+-        ));
+-        if ($locked === null) {
+-            error_log(sprintf(
+-                '[MealsDB Allocation Engine] lock_allocation_month SELECT FOR UPDATE returned null for client %d month %s: %s',
+-                $client_id,
+-                $billing_month,
+-                $this->wpdb->last_error
+-            ));
+-            return false;
+-        }
+-
+-        return true;
+-    }
+ 
+     /**
+      * Rebuild the summary row in meals_client_allocations from delivery allocation details.
+diff --git a/includes/services/class-invoice-generator.php b/includes/services/class-invoice-generator.php
+index 8292eca..50df425 100644
+--- a/includes/services/class-invoice-generator.php
++++ b/includes/services/class-invoice-generator.php
+@@ -90,15 +90,13 @@ class MealsDB_Invoice_Generator {
+     ];
+ 
+     /**
+-     * Phase 2 canonical billing data fetcher.
++     * Canonical billing data fetcher.
+      *
+-     * Replaces the per-order (get_invoice_data_for_clients) and the
+-     * allowance-cap (get_allocation_based_billing) data sources with a
+-     * single source of truth: ONE ROW PER CLIENT, holding what the
+-     * allocation engine assigned to this billing month plus the contribution
+-     * line-item sum for the same scope. The engine already enforced the
+-     * monthly allowance (phase 1 fill with single-month spill), so the
+-     * generators never need to cap or compare to allowance anymore.
++     * Returns ONE ROW PER CLIENT for the billing month, holding what the
++     * allocation engine assigned plus the contribution line-item sum for
++     * the same scope. The engine already enforced the monthly allowance
++     * (phase 1 fill with single-month spill), so the generators never need
++     * to cap or compare to allowance anymore.
+      *
+      * Tax follows the allocated taxable-side count via the per-rate HST
+      * multiplier (sdnb_rate_tiers[rate].hst_multiplier_line1). For VAC, tax
+@@ -246,445 +244,16 @@ class MealsDB_Invoice_Generator {
+         return MealsDB_Money::to_cents($sum_decimal);
+     }
+ 
+-    /**
+-     * Shared data-fetch: resolves orders, rates, and product types for a set of clients.
+-     *
+-     * Returns one row per order, enriched with client fields, resolved rate,
+-     * unit totals, basic cost, tax, and total cost.
+-     *
+-     * @deprecated Use get_allocation_based_billing() for allowance-based generators.
+-     *             Retained as fallback for historical months before the allocation engine.
+-     *
+-     * @param array  $client_rows Rows from meals_clients (must include client_id, wp_user_id, default_rate_id).
+-     * @param string $start_date  Y-m-d.
+-     * @param string $end_date    Y-m-d.
+-     *
+-     * @return array Enriched invoice rows.
+-     */
+-    private static function get_invoice_data_for_clients(array $client_rows, string $start_date, string $end_date): array {
+-        if (empty($client_rows)) {
+-            return [];
+-        }
+-
+-        // Index clients by wp_user_id.
+-        $clients_by_user_id = [];
+-        $wp_user_ids        = [];
+-        foreach ($client_rows as $c) {
+-            $uid = (int) $c['wp_user_id'];
+-            if ($uid > 0) {
+-                $clients_by_user_id[$uid] = $c;
+-                $wp_user_ids[]            = $uid;
+-            }
+-        }
+-
+-        if (empty($wp_user_ids)) {
+-            return [];
+-        }
+-
+-        $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
+-        $orders      = $order_query->get_orders_with_items_for_users($wp_user_ids, $start_date, $end_date);
+-
+-        if (empty($orders)) {
+-            return [];
+-        }
+-
+-        // Collect all wc_product_ids across every item for a single product-type lookup.
+-        $all_product_ids = [];
+-        foreach ($orders as $order) {
+-            foreach ($order['items'] as $item) {
+-                $pid = (int) $item['wc_product_id'];
+-                if ($pid > 0) {
+-                    $all_product_ids[$pid] = $pid;
+-                }
+-            }
+-        }
+-
+-        $product_types = $order_query->get_product_types_for_ids(array_values($all_product_ids));
+-
+-        // Build invoice rows — one per order.
+-        $rows = [];
+-        foreach ($orders as $order) {
+-            $uid    = (int) $order['wp_user_id'];
+-            $client = isset($clients_by_user_id[$uid]) ? $clients_by_user_id[$uid] : null;
+-            if (!$client) {
+-                continue;
+-            }
+-
+-            $rate_id       = isset($order['mealsdb_rate_id']) ? (int) $order['mealsdb_rate_id'] : 0;
+-            $resolved_rate = $order_query->resolve_rate_for_order($rate_id, (int) $client['client_id']);
+-
+-            // Accumulate in integer cents. Summing float line taxes across
+-            // a month of orders drifts pennies on rounding; the header
+-            // total must match the sum of every line exactly.
+-            $total_units = 0;
+-            $tax_cents   = 0;
+-
+-            foreach ($order['items'] as $item) {
+-                $qty = (float) $item['quantity'];
+-                $total_units += $qty;
+-
+-                $pid    = (int) $item['wc_product_id'];
+-                $is_tax = isset($product_types[$pid]) && !empty($product_types[$pid]['taxable']);
+-                if ($is_tax) {
+-                    $tax_cents += MealsDB_Money::to_cents($item['line_tax']);
+-                }
+-            }
+-
+-            $basic_cents        = MealsDB_Money::multiply($total_units, $resolved_rate);
+-            $contribution_cents = MealsDB_Money::to_cents($client['client_contribution'] ?? 0);
+-            $total_cents        = $basic_cents + $tax_cents - $contribution_cents;
+-
+-            $rows[] = array_merge($client, [
+-                'order_id'        => (int) $order['order_id'],
+-                'order_date'      => $order['date_created_gmt'],
+-                'resolved_rate'   => $resolved_rate,
+-                'total_units'     => $total_units,
+-                // Canonical integer-cents amounts — prefer these for new callers.
+-                'basic_cost_cents'          => $basic_cents,
+-                'tax_amount_cents'          => $tax_cents,
+-                'total_cost_cents'          => $total_cents,
+-                'client_contribution_cents' => $contribution_cents,
+-                // Back-compat float keys, derived from cents so they round
+-                // identically to MealsDB_Money::format() downstream.
+-                'basic_cost'      => $basic_cents / 100,
+-                'tax_amount'      => $tax_cents / 100,
+-                'total_cost'      => $total_cents / 100,
+-                'items'           => $order['items'],
+-            ]);
+-        }
+-
+-        return $rows;
+-    }
+-
+-    /**
+-     * Aggregate orders per client and compute allowance-based billing splits.
+-     *
+-     * Returns one row per client (not per order) with mains/sides broken into
+-     * billable and overage quantities, with sides further split by taxable status.
+-     *
+-     * @deprecated Use get_allocation_based_billing() which reads from the
+-     *             allocation engine tables instead of recalculating from raw orders.
+-     *             Retained as fallback for historical months before the allocation engine.
+-     *
+-     * @param array  $client_rows     Rows from meals_clients.
+-     * @param string $start_date      Y-m-d.
+-     * @param string $end_date        Y-m-d.
+-     * @param int    $weeks_in_month  Number of Wednesdays in the billing month.
+-     *
+-     * @return array One row per client with allowance calculations.
+-     */
+-    private static function get_allowance_data_for_clients(
+-        array $client_rows,
+-        string $start_date,
+-        string $end_date,
+-        int $weeks_in_month = 4
+-    ): array {
+-        if (empty($client_rows)) {
+-            return [];
+-        }
+-
+-        $clients_by_user_id = [];
+-        $wp_user_ids        = [];
+-        foreach ($client_rows as $c) {
+-            $uid = (int) $c['wp_user_id'];
+-            if ($uid > 0) {
+-                $clients_by_user_id[$uid] = $c;
+-                $wp_user_ids[]            = $uid;
+-            }
+-        }
+-
+-        if (empty($wp_user_ids)) {
+-            return [];
+-        }
+-
+-        $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
+-        $orders      = $order_query->get_orders_with_items_for_users($wp_user_ids, $start_date, $end_date);
+-
+-        if (empty($orders)) {
+-            return [];
+-        }
+-
+-        // Look up product types for all items.
+-        $all_product_ids = [];
+-        foreach ($orders as $order) {
+-            foreach ($order['items'] as $item) {
+-                $pid = (int) $item['wc_product_id'];
+-                if ($pid > 0) {
+-                    $all_product_ids[$pid] = $pid;
+-                }
+-            }
+-        }
+-        $product_types = $order_query->get_product_types_for_ids(array_values($all_product_ids));
+-
+-        $days_in_month = (int) date('t', strtotime($end_date));
+-
+-        // Accumulate totals per client.
+-        $client_aggregates = [];
+-
+-        foreach ($orders as $order) {
+-            $uid    = (int) $order['wp_user_id'];
+-            $client = isset($clients_by_user_id[$uid]) ? $clients_by_user_id[$uid] : null;
+-            if (!$client) {
+-                continue;
+-            }
+-
+-            $cid = (int) $client['client_id'];
+-            if (!isset($client_aggregates[$cid])) {
+-                $rate_id       = isset($order['mealsdb_rate_id']) ? (int) $order['mealsdb_rate_id'] : 0;
+-                $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid);
+-
+-                $client_aggregates[$cid] = [
+-                    'client'               => $client,
+-                    'resolved_rate'        => $resolved_rate,
+-                    'total_mains'          => 0,
+-                    'total_sides_taxable'  => 0,
+-                    'total_sides_nontax'   => 0,
+-                    'total_tax_amount'     => 0.0,
+-                ];
+-            }
+-
+-            foreach ($order['items'] as $item) {
+-                $pid  = (int) $item['wc_product_id'];
+-                $qty  = (float) $item['quantity'];
+-                $prod = isset($product_types[$pid]) ? $product_types[$pid] : null;
+-
+-                $ptype  = $prod ? $prod['product_type'] : 'meal';
+-                $is_tax = $prod ? !empty($prod['taxable']) : false;
+-
+-                if ($ptype === 'meal') {
+-                    $client_aggregates[$cid]['total_mains'] += $qty;
+-                } elseif ($ptype === 'side') {
+-                    if ($is_tax) {
+-                        $client_aggregates[$cid]['total_sides_taxable'] += $qty;
+-                        $client_aggregates[$cid]['total_tax_amount']    += (float) ($item['line_tax'] ?? 0);
+-                    } else {
+-                        $client_aggregates[$cid]['total_sides_nontax'] += $qty;
+-                    }
+-                }
+-            }
+-        }
+-
+-        $results = [];
+-
+-        foreach ($client_aggregates as $cid => $agg) {
+-            $client = $agg['client'];
+-
+-            $user_mains   = (int) ($client['allowance_mains'] ?? 0);
+-            $user_sides   = (int) ($client['allowance_sides'] ?? 0);
+-            $user_service = strtolower(trim($client['requisition_period'] ?? 'week'));
+-
+-            // --- Allowance calculation ---
+-            $mains_allowed = 0;
+-            $sides_allowed = 0;
+-
+-            switch ($user_service) {
+-                case 'month':
+-                    $mains_allowed = ($user_mains == 31) ? $days_in_month : $user_mains;
+-                    $sides_allowed = ($user_sides == 31) ? $days_in_month : $user_sides;
+-                    break;
+-
+-                case 'week':
+-                    $mains_allowed = $user_mains * $weeks_in_month;
+-                    $sides_allowed = $user_sides * $weeks_in_month;
+-
+-                    // Override: 7 per week = every day; 14 per week = twice per day
+-                    if ($user_mains == 7) {
+-                        $mains_allowed = $days_in_month;
+-                    }
+-                    if ($user_mains == 14) {
+-                        $mains_allowed = 2 * $days_in_month;
+-                    }
+-                    if ($user_sides == 7) {
+-                        $sides_allowed = $days_in_month;
+-                    }
+-                    if ($user_sides == 14) {
+-                        $sides_allowed = 2 * $days_in_month;
+-                    }
+-                    break;
+-
+-                case 'day':
+-                    $mains_allowed = $user_mains * $days_in_month;
+-                    $sides_allowed = $user_sides * $days_in_month;
+-                    break;
+-            }
+-
+-            // --- Mains split ---
+-            $total_mains = (int) $agg['total_mains'];
+-            $bill_mains  = min($total_mains, $mains_allowed);
+-            $bnm_mains   = max(0, $total_mains - $mains_allowed);
+-
+-            // --- Sides split (taxable first, then non-taxable with remaining allowance) ---
+-            $taxable_sides     = (int) $agg['total_sides_taxable'];
+-            $non_taxable_sides = (int) $agg['total_sides_nontax'];
+-            $total_sides       = $taxable_sides + $non_taxable_sides;
+-
+-            // Taxable sides get priority against the allowance.
+-            $bill_tax_sides    = min($sides_allowed, $taxable_sides);
+-            $overage_tax_sides = $taxable_sides - $bill_tax_sides;
+-
+-            // Remaining allowance after taxable sides.
+-            $remaining_sides = ($overage_tax_sides == 0)
+-                ? max(0, $sides_allowed - $taxable_sides)
+-                : 0;
+-
+-            // Non-taxable sides fill whatever allowance remains.
+-            $bill_nontax_sides    = min($non_taxable_sides, $remaining_sides);
+-            $overage_nontax_sides = $non_taxable_sides - $bill_nontax_sides;
+-
+-            $bill_sides = $bill_tax_sides + $bill_nontax_sides;
+-
+-            $results[] = [
+-                'client'               => $client,
+-                'resolved_rate'        => $agg['resolved_rate'],
+-                'client_contribution'  => (float) ($client['client_contribution'] ?? 0),
+-
+-                // Mains
+-                'total_mains'          => $total_mains,
+-                'mains_allowed'        => $mains_allowed,
+-                'bill_mains'           => $bill_mains,
+-                'bnm_mains'            => $bnm_mains,
+-
+-                // Sides totals
+-                'total_sides'          => $total_sides,
+-                'sides_allowed'        => $sides_allowed,
+-                'taxable_sides'        => $taxable_sides,
+-                'non_taxable_sides'    => $non_taxable_sides,
+-
+-                // Sides splits
+-                'bill_tax_sides'       => $bill_tax_sides,
+-                'overage_tax_sides'    => $overage_tax_sides,
+-                'remaining_sides'      => $remaining_sides,
+-                'bill_nontax_sides'    => $bill_nontax_sides,
+-                'overage_nontax_sides' => $overage_nontax_sides,
+-                'bill_sides'           => $bill_sides,
+-
+-                // Tax
+-                'total_tax_amount'     => $agg['total_tax_amount'],
+-
+-                // Service info
+-                'user_service'         => $user_service,
+-            ];
+-        }
+ 
+-        // Sort by last_name, first_name.
+-        usort($results, function ($a, $b) {
+-            $cmp = strcmp($a['client']['last_name'] ?? '', $b['client']['last_name'] ?? '');
+-            return $cmp !== 0 ? $cmp : strcmp($a['client']['first_name'] ?? '', $b['client']['first_name'] ?? '');
+-        });
+ 
+-        return $results;
+-    }
+-
+-    /**
+-     * Read allocation-based billing data from the allocation engine tables.
+-     *
+-     * Replaces get_allowance_data_for_clients() by reading pre-calculated data
+-     * from meals_client_allocations instead of recalculating from raw WC orders.
+-     *
+-     * @param array  $client_rows Rows from meals_clients.
+-     * @param string $start_date  Y-m-d.
+-     * @param string $end_date    Y-m-d.
+-     *
+-     * @return array One row per client with allowance calculations, same keys as
+-     *               get_allowance_data_for_clients().
+-     */
+-    private static function get_allocation_based_billing(array $client_rows, string $start_date, string $end_date): array {
+-        if (empty($client_rows)) {
+-            return [];
+-        }
+-
+-        $engine        = new MealsDB_Allocation_Engine();
+-        $order_query   = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
+-        $billing_month = substr($start_date, 0, 7); // "YYYY-MM"
+-
+-        $results = [];
+-
+-        foreach ($client_rows as $client) {
+-            $client_id = (int) $client['client_id'];
+-
+-            // Get the allocation summary for this month.
+-            $alloc = $engine->get_client_month_summary($client_id, $billing_month);
+-
+-            if (!$alloc) {
+-                // No allocation exists — recalculate on-demand.
+-                $engine->recalculate_month_totals($client_id, $billing_month);
+-                $alloc = $engine->get_client_month_summary($client_id, $billing_month);
+-            }
+-
+-            if (!$alloc) {
+-                continue;
+-            }
+-
+-            $permitted_mains = (int) $alloc['permitted_mains'];
+-            $permitted_sides = (int) $alloc['permitted_sides'];
+-            $total_mains     = (int) $alloc['used_mains'];
+-            $total_sides     = (int) $alloc['used_sides'];
+-            $tax_sides       = (int) $alloc['used_tax_sides'];
+-            $nontax_sides    = (int) $alloc['used_nontax_sides'];
+-
+-            // Bill vs overage for mains.
+-            $bill_mains    = min($total_mains, $permitted_mains);
+-            $overage_mains = max($total_mains - $permitted_mains, 0);
+-
+-            // Sides split: taxable sides get priority against the allowance.
+-            // (This matches the existing logic in get_allowance_data_for_clients.)
+-            $bill_tax_sides      = min($tax_sides, $permitted_sides);
+-            $remaining_allowance = max($permitted_sides - $bill_tax_sides, 0);
+-            $bill_nontax_sides   = min($nontax_sides, $remaining_allowance);
+-            $bill_sides          = $bill_tax_sides + $bill_nontax_sides;
+-
+-            $overage_tax_sides    = $tax_sides - $bill_tax_sides;
+-            $overage_nontax_sides = $nontax_sides - $bill_nontax_sides;
+-
+-            // Resolve rate using client's default rate.
+-            $resolved_rate = $order_query->resolve_rate_for_order(0, $client_id);
+-
+-            $results[] = [
+-                'client'               => $client,
+-                'resolved_rate'        => $resolved_rate,
+-                'client_contribution'  => (float) ($client['client_contribution'] ?? 0),
+-
+-                // Mains
+-                'total_mains'          => $total_mains,
+-                'mains_allowed'        => $permitted_mains,
+-                'bill_mains'           => $bill_mains,
+-                'bnm_mains'            => $overage_mains,
+-
+-                // Sides totals
+-                'total_sides'          => $total_sides,
+-                'sides_allowed'        => $permitted_sides,
+-                'taxable_sides'        => $tax_sides,
+-                'non_taxable_sides'    => $nontax_sides,
+-
+-                // Sides splits
+-                'bill_tax_sides'       => $bill_tax_sides,
+-                'overage_tax_sides'    => $overage_tax_sides,
+-                'remaining_sides'      => $remaining_allowance - $bill_nontax_sides,
+-                'bill_nontax_sides'    => $bill_nontax_sides,
+-                'overage_nontax_sides' => $overage_nontax_sides,
+-                'bill_sides'           => $bill_sides,
+-
+-                // Tax (not available from allocation tables; zero for SDNB legacy format)
+-                'total_tax_amount'     => 0.0,
+-
+-                // Service info
+-                'user_service'         => strtolower(trim($client['requisition_period'] ?? 'week')),
+-            ];
+-        }
+-
+-        // Sort by last_name, first_name.
+-        usort($results, function ($a, $b) {
+-            $cmp = strcmp($a['client']['last_name'] ?? '', $b['client']['last_name'] ?? '');
+-            return $cmp !== 0 ? $cmp : strcmp($a['client']['first_name'] ?? '', $b['client']['first_name'] ?? '');
+-        });
+-
+-        return $results;
+-    }
+ 
+     /**
+      * Split a client's allowance row into one or two invoice lines.
+      *
+-     * @param array $row Single client row from get_allowance_data_for_clients().
++     * @param array $row Single client row from get_phase2_billing_data()
++     *                   adapted into the shape this method expects
++     *                   (bill_mains/bill_sides/bill_tax_sides/bill_nontax_sides/
++     *                   client_contribution/resolved_rate + nested 'client').
+      * @return array Array of 1 or 2 invoice line arrays.
+      */
+     private static function split_into_invoice_lines(array $row): array {
+@@ -1675,28 +1244,6 @@ class MealsDB_Invoice_Generator {
+     }
+ 
+ 
+-    /**
+-     * Get WooCommerce product IDs for overage order items.
+-     *
+-     * These are stored as a WordPress option so admins can configure them
+-     * without code changes. Defaults match the legacy system.
+-     *
+-     * @return array{mains: int, taxable_sides: int, nontax_sides: int}
+-     */
+-    public static function get_overage_product_ids(): array {
+-        $defaults = MealsDB_Operational_Constants::default_overage_product_ids();
+-
+-        $saved = get_option('mealsdb_overage_product_ids', []);
+-        if (!is_array($saved)) {
+-            $saved = [];
+-        }
+-
+-        return [
+-            'mains'         => (int) ($saved['mains'] ?? $defaults['mains']),
+-            'taxable_sides' => (int) ($saved['taxable_sides'] ?? $defaults['taxable_sides']),
+-            'nontax_sides'  => (int) ($saved['nontax_sides'] ?? $defaults['nontax_sides']),
+-        ];
+-    }
+ 
+     /**
+      * Get WooCommerce product IDs for fee line items (contribution and delivery fee).
+@@ -1717,76 +1264,5 @@ class MealsDB_Invoice_Generator {
+         ];
+     }
+ 
+-    /**
+-     * Get SDNB clients with non-zero overages for a billing period.
+-     *
+-     * @param string $zone           Zone code (M or S).
+-     * @param string $start_date     Y-m-d.
+-     * @param string $end_date       Y-m-d.
+-     * @param int    $weeks_in_month Number of Wednesdays.
+-     * @return array Rows with overage quantities per client.
+-     */
+-    public static function get_sdnb_overages(string $zone, string $start_date, string $end_date, int $weeks_in_month = 4): array {
+-        $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+-        $sql = sprintf(
+-            'SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
+-                    individual_id, individual_id_index, client_contribution, delivery_area_zone,
+-                    default_rate_id, allowance_mains, allowance_sides, requisition_period
+-             FROM `%s`
+-             WHERE client_type = ? AND use_legacy_billing = 1
+-               AND delivery_area_zone = ? AND active = 1 AND wp_user_id > 0',
+-            $clients_table
+-        );
+-
+-        $client_type = 'SDNB';
+-        $client_rows = self::query_clients($sql, 'ss', [$client_type, $zone]);
+-
+-        $allowance_rows = self::get_allocation_based_billing($client_rows, $start_date, $end_date);
+-
+-        // Filter to only clients with overages.
+-        return array_filter($allowance_rows, function ($row) {
+-            return ($row['bnm_mains'] > 0 || $row['overage_tax_sides'] > 0 || $row['overage_nontax_sides'] > 0);
+-        });
+-    }
+-
+-    /**
+-     * Get Veteran clients with non-zero overages for a billing period.
+-     *
+-     * @param string $start_date Y-m-d.
+-     * @param string $end_date   Y-m-d.
+-     * @return array Rows with overage quantities per client.
+-     */
+-    public static function get_vac_overages(string $start_date, string $end_date): array {
+-        $csv_content = self::generate_vac_csv($start_date, $end_date);
+-        if (empty($csv_content)) {
+-            return [];
+-        }
+ 
+-        $lines   = explode("\n", $csv_content);
+-        $headers = str_getcsv(array_shift($lines));
+-        $results = [];
+-
+-        foreach ($lines as $line) {
+-            if (empty(trim($line))) { continue; }
+-            $data = array_combine($headers, str_getcsv($line));
+-            if (!$data) { continue; }
+-
+-            $bnm_mains     = (int) ($data['BNM Mains'] ?? 0);
+-            $overage_tax   = (int) ($data['Overage Tax Sides'] ?? 0);
+-            $overage_nontax = (int) ($data['Overage Non Taxable Sides'] ?? 0);
+-
+-            if ($bnm_mains > 0 || $overage_tax > 0 || $overage_nontax > 0) {
+-                $results[] = [
+-                    'health_card'          => $data['K#'] ?? '',
+-                    'last_name'            => $data['Client Last Name'] ?? '',
+-                    'first_name'           => $data['Client First Name'] ?? '',
+-                    'bnm_mains'            => $bnm_mains,
+-                    'overage_tax_sides'    => $overage_tax,
+-                    'overage_nontax_sides' => $overage_nontax,
+-                ];
+-            }
+-        }
+-
+-        return $results;
+-    }
+ }
+diff --git a/includes/services/class-reports.php b/includes/services/class-reports.php
+index f40f183..03203d9 100644
+--- a/includes/services/class-reports.php
++++ b/includes/services/class-reports.php
+@@ -1465,7 +1465,20 @@ class MealsDB_Reports {
+      *   is_multi_month_error (bool), error_message (string|null).
+      */
+     public function spillover_report(string $billing_month): array {
+-        if (!preg_match('/^\d{4}-\d{2}$/', $billing_month)) {
++        // Defence-in-depth: the AJAX handler already gates on capability, but a
++        // direct service caller (WP-CLI, REST, custom cron) must not reach the
++        // PII-bearing client-name/order-id queries below without the plugin's
++        // required capability. Mirrors every other report method in this class.
++        if (!self::is_authorized_to_read_reports()) {
++            return [];
++        }
++
++        // Strict month validation: the bare \d{2} would accept impossible
++        // months like 2025-13 (DateTime throws -> 500) and 2025-00 (DateTime
++        // silently normalises to the previous December, querying the wrong
++        // month). Constrain to 01-12 so bad input is rejected cleanly here
++        // and at the AJAX boundary before any DateTime/SQL work.
++        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
+             return [];
+         }
+ 
+diff --git a/tests/test-allocation-engine-fingerprint.php b/tests/test-allocation-engine-fingerprint.php
+deleted file mode 100644
+index 10ad42b..0000000
+--- a/tests/test-allocation-engine-fingerprint.php
++++ /dev/null
+@@ -1,172 +0,0 @@
+-<?php
+-/**
+- * Tests for MealsDB_Allocation_Engine idempotency helpers.
+- *
+- * Covers fingerprint_allocation_rows() and build_desired_allocation_rows()
+- * — the two private helpers the G3 idempotency check depends on.
+- *
+- * Run with: php tests/test-allocation-engine-fingerprint.php
+- */
+-
+-if (!defined('ABSPATH')) {
+-    define('ABSPATH', dirname(__DIR__) . '/');
+-}
+-
+-require_once __DIR__ . '/../includes/class-autoloader.php';
+-MealsDB_Autoloader::register(dirname(__DIR__) . '/');
+-
+-if (!function_exists('__')) {
+-    function __(string $text, string $domain = 'default') { return $text; }
+-}
+-if (!function_exists('apply_filters')) {
+-    function apply_filters(string $tag, $value, ...$args) { return $value; }
+-}
+-
+-if (!class_exists('wpdb')) {
+-    class wpdb {
+-        public string $prefix = 'wp_';
+-        public string $last_error = '';
+-        public function prepare($query, ...$args) { return $query; }
+-        public function get_results($query, $output = 'OBJECT') { return []; }
+-        public function get_row($query, $output = 'OBJECT', $y = 0) { return null; }
+-        public function get_var($query, $x = 0, $y = 0) { return null; }
+-        public function query($query) { return 0; }
+-    }
+-}
+-
+-/**
+- * Reflection helpers to exercise the private statics / instance methods
+- * without going through the full allocate_order entry point (which
+- * would need a forest of WC / HPOS stubs we don't care about here).
+- */
+-function fingerprint(array $rows): string {
+-    $m = new ReflectionMethod('MealsDB_Allocation_Engine', 'fingerprint_allocation_rows');
+-    $m->setAccessible(true);
+-    return (string) $m->invoke(null, $rows);
+-}
+-
+-function build_rows(
+-    int $client_id,
+-    int $wc_order_id,
+-    string $order_date_str,
+-    string $delivery_date,
+-    string $coverage_start,
+-    string $coverage_end,
+-    string $month1,
+-    string $month2,
+-    int $mains,
+-    int $sides,
+-    int $tax_sides,
+-    int $nontax_sides
+-): array {
+-    $cov_start_dt = new DateTime($coverage_start);
+-    $cov_end_dt   = new DateTime($coverage_end);
+-
+-    $engine = new class extends MealsDB_Allocation_Engine {
+-        public function __construct() { /* skip real ctor */ }
+-    };
+-
+-    $m = new ReflectionMethod('MealsDB_Allocation_Engine', 'build_desired_allocation_rows');
+-    $m->setAccessible(true);
+-    return (array) $m->invoke(
+-        $engine, $client_id, $wc_order_id, $order_date_str, $delivery_date,
+-        $coverage_start, $coverage_end, $month1, $month2,
+-        $mains, $sides, $tax_sides, $nontax_sides,
+-        $cov_start_dt, $cov_end_dt
+-    );
+-}
+-
+-$failures = [];
+-$passed   = 0;
+-function assert_equal($expected, $actual, string $label) {
+-    global $failures, $passed;
+-    if ($expected === $actual) { $passed++; return; }
+-    $failures[] = sprintf("FAIL: %s\n  expected: %s\n  actual:   %s", $label, var_export($expected, true), var_export($actual, true));
+-}
+-function assert_not_equal($a, $b, string $label) {
+-    global $failures, $passed;
+-    if ($a !== $b) { $passed++; return; }
+-    $failures[] = "FAIL: $label (values unexpectedly equal: " . var_export($a, true) . ')';
+-}
+-
+-// ---------------------------------------------------------------------------
+-// fingerprint_allocation_rows
+-// ---------------------------------------------------------------------------
+-assert_equal('', fingerprint([]), 'empty input → empty fingerprint (caller treats as "no match")');
+-
+-$row = [
+-    'client_id' => 42, 'wc_order_id' => 100, 'order_date' => '2026-04-01',
+-    'delivery_date' => '2026-04-05', 'coverage_start' => '2026-04-05',
+-    'coverage_end' => '2026-04-11', 'billing_month' => '2026-04',
+-    'mains_count' => 5, 'sides_count' => 3, 'tax_sides_count' => 1, 'nontax_sides_count' => 2,
+-];
+-$fp_int = fingerprint([$row]);
+-assert_not_equal('', $fp_int, 'single-row fingerprint is non-empty');
+-
+-// Same row — same fingerprint.
+-assert_equal($fp_int, fingerprint([$row]), 'identical input → identical fingerprint');
+-
+-// Type normalisation: wpdb returns numeric columns as strings.
+-$row_as_strings = array_map(static function ($v) { return is_int($v) ? (string) $v : $v; }, $row);
+-assert_equal($fp_int, fingerprint([$row_as_strings]), 'stringified ints produce the same fingerprint');
+-
+-// Order independence: a two-row set hashes identically regardless of
+-// input order, because the helper sorts by (billing_month, coverage_start).
+-$row_a = $row;
+-$row_b = array_merge($row, ['billing_month' => '2026-05', 'coverage_start' => '2026-05-01', 'coverage_end' => '2026-05-04']);
+-assert_equal(fingerprint([$row_a, $row_b]), fingerprint([$row_b, $row_a]), 'row order is irrelevant');
+-
+-// Different counts → different fingerprint.
+-$row_changed = $row;
+-$row_changed['mains_count'] = 6;
+-assert_not_equal($fp_int, fingerprint([$row_changed]), 'changed count → different fingerprint');
+-
+-// ---------------------------------------------------------------------------
+-// build_desired_allocation_rows — single month
+-// ---------------------------------------------------------------------------
+-$single = build_rows(42, 100, '2026-04-01', '2026-04-05', '2026-04-05', '2026-04-11', '2026-04', '2026-04', 7, 3, 2, 1);
+-assert_equal(1, count($single), 'single-month delivery produces 1 row');
+-assert_equal(7, $single[0]['mains_count'], 'single-month mains passed through unchanged');
+-assert_equal('2026-04', $single[0]['billing_month'], 'single-month billing_month');
+-assert_equal('2026-04-05', $single[0]['coverage_start'], 'single-month coverage_start');
+-assert_equal('2026-04-11', $single[0]['coverage_end'], 'single-month coverage_end');
+-
+-// ---------------------------------------------------------------------------
+-// build_desired_allocation_rows — two-month straddle
+-// Jan 30 .. Feb 2 = 4 days total, 2 in Jan (30, 31), 2 in Feb (1, 2).
+-// 10 mains split 50/50 → 5 and 5.
+-// ---------------------------------------------------------------------------
+-$double = build_rows(42, 200, '2026-01-30', '2026-01-30', '2026-01-30', '2026-02-02', '2026-01', '2026-02', 10, 6, 4, 2);
+-assert_equal(2, count($double), 'two-month delivery produces 2 rows');
+-assert_equal('2026-01', $double[0]['billing_month'], 'first row → month1');
+-assert_equal('2026-02', $double[1]['billing_month'], 'second row → month2');
+-assert_equal(5, $double[0]['mains_count'], 'month1 gets 5 mains');
+-assert_equal(5, $double[1]['mains_count'], 'month2 gets remaining 5 mains');
+-assert_equal(10, $double[0]['mains_count'] + $double[1]['mains_count'], 'mains split sums to original');
+-assert_equal(6,  $double[0]['sides_count'] + $double[1]['sides_count'], 'sides split sums to original');
+-assert_equal(4,  $double[0]['tax_sides_count'] + $double[1]['tax_sides_count'], 'tax_sides split sums to original');
+-assert_equal(2,  $double[0]['nontax_sides_count'] + $double[1]['nontax_sides_count'], 'nontax_sides split sums to original');
+-assert_equal('2026-01-31', $double[0]['coverage_end'], 'month1 row ends on last day of Jan');
+-assert_equal('2026-02-01', $double[1]['coverage_start'], 'month2 row starts on first day of Feb');
+-
+-// ---------------------------------------------------------------------------
+-// End-to-end: desired fingerprint matches an "existing" SELECT result
+-// (simulated as strings, as wpdb would return them).
+-// ---------------------------------------------------------------------------
+-$existing = array_map(static function ($r) {
+-    return array_map(static function ($v) { return is_int($v) ? (string) $v : $v; }, $r);
+-}, $single);
+-
+-assert_equal(fingerprint($single), fingerprint($existing), 'desired rows match stringified existing rows → fingerprints equal');
+-
+-// ---------------------------------------------------------------------------
+-// Output
+-// ---------------------------------------------------------------------------
+-if (!empty($failures)) {
+-    fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");
+-    fwrite(STDERR, sprintf("%d passed, %d failed\n", $passed, count($failures)));
+-    exit(1);
+-}
+-
+-fwrite(STDOUT, sprintf("OK: %d assertions passed\n", $passed));
+-exit(0);
+diff --git a/tests/test-allocation-engine-lock.php b/tests/test-allocation-engine-lock.php
+deleted file mode 100644
+index 626fa05..0000000
+--- a/tests/test-allocation-engine-lock.php
++++ /dev/null
+@@ -1,176 +0,0 @@
+-<?php
+-/**
+- * Unit tests for MealsDB_Allocation_Engine::lock_allocation_month().
+- *
+- * Locks in the INSERT-IGNORE-then-SELECT-FOR-UPDATE invariant: without
+- * this pattern, concurrent allocate/deallocate calls for the same
+- * (client_id, billing_month) can deadlock on the SUM step inside
+- * recalculate_month_totals().
+- *
+- * Run with: php tests/test-allocation-engine-lock.php
+- */
+-
+-if (!defined('ABSPATH')) {
+-    define('ABSPATH', dirname(__DIR__) . '/');
+-}
+-
+-require_once __DIR__ . '/../includes/class-autoloader.php';
+-MealsDB_Autoloader::register(dirname(__DIR__) . '/');
+-
+-if (!function_exists('__')) {
+-    function __(string $text, string $domain = 'default') { return $text; }
+-}
+-if (!function_exists('apply_filters')) {
+-    function apply_filters(string $tag, $value, ...$args) { return $value; }
+-}
+-
+-// Minimal wpdb shim (fallback for runs outside WordPress).
+-if (!class_exists('wpdb')) {
+-    class wpdb {
+-        public string $prefix = 'wp_';
+-        public string $last_error = '';
+-        public function prepare($query, ...$args) { return $query; }
+-        public function get_results($query, $output = 'OBJECT') { return []; }
+-        public function get_row($query, $output = 'OBJECT', $y = 0) { return null; }
+-        public function get_var($query, $x = 0, $y = 0) { return null; }
+-        public function query($query) { return 0; }
+-        public function delete($table, $where, $format = null) { return 0; }
+-        public function insert($table, $data, $format = null) { return 0; }
+-    }
+-}
+-
+-/**
+- * Records every wpdb call in order so tests can assert sequence and
+- * fingerprint the SQL shape. prepare() returns the interpolated query
+- * so downstream assertions can match on the literal text.
+- */
+-class LockTest_Wpdb extends wpdb {
+-    public array $query_log = [];
+-    public $insert_ignore_result = 1;
+-    public $select_for_update_result = '42';
+-
+-    public function __construct() { /* no parent */ }
+-
+-    public function prepare($query, ...$args) {
+-        // Trivial interpolation — good enough for substring assertions.
+-        if (!empty($args) && is_array($args[0] ?? null)) {
+-            $args = $args[0];
+-        }
+-        $out = $query;
+-        foreach ($args as $a) {
+-            $out = preg_replace('/%d|%s/', is_int($a) ? (string) $a : "'" . addslashes((string) $a) . "'", $out, 1);
+-        }
+-        return $out;
+-    }
+-
+-    public function query($sql) {
+-        $this->query_log[] = ['method' => 'query', 'sql' => $sql];
+-        if (stripos($sql, 'INSERT IGNORE') === 0 && stripos($sql, 'client_allocations') !== false) {
+-            return $this->insert_ignore_result;
+-        }
+-        return 1;
+-    }
+-
+-    public function get_var($sql, $x = 0, $y = 0) {
+-        $this->query_log[] = ['method' => 'get_var', 'sql' => $sql];
+-        if (stripos($sql, 'FOR UPDATE') !== false) {
+-            return $this->select_for_update_result;
+-        }
+-        return null;
+-    }
+-}
+-
+-/**
+- * Exposes the private lock_allocation_month() for direct test.
+- *
+- * MealsDB_Allocation_Engine::$wpdb is a private property, so we can't
+- * set it from a subclass with normal assignment. Use reflection to
+- * inject the test double without invoking the real constructor (which
+- * would try to instantiate MealsDB_WC_Order_Query against a partial
+- * stub).
+- */
+-class LockTest_Engine extends MealsDB_Allocation_Engine {
+-    public function __construct(wpdb $wpdb) {
+-        $prop = new ReflectionProperty(parent::class, 'wpdb');
+-        $prop->setAccessible(true);
+-        $prop->setValue($this, $wpdb);
+-    }
+-
+-    public function lock_month_public(int $client_id, string $billing_month): bool {
+-        $ref = new ReflectionMethod(parent::class, 'lock_allocation_month');
+-        $ref->setAccessible(true);
+-        return (bool) $ref->invoke($this, $client_id, $billing_month);
+-    }
+-}
+-
+-$failures = [];
+-$passed   = 0;
+-
+-function assert_true($value, string $label) {
+-    global $failures, $passed;
+-    if ((bool) $value) { $passed++; return; }
+-    $failures[] = "FAIL: $label (expected true, got " . var_export($value, true) . ')';
+-}
+-function assert_false($value, string $label) {
+-    global $failures, $passed;
+-    if (!(bool) $value) { $passed++; return; }
+-    $failures[] = "FAIL: $label (expected false, got " . var_export($value, true) . ')';
+-}
+-function assert_contains(string $needle, string $haystack, string $label) {
+-    global $failures, $passed;
+-    if (stripos($haystack, $needle) !== false) { $passed++; return; }
+-    $failures[] = "FAIL: $label (expected '$needle' in '$haystack')";
+-}
+-
+-// ---------------------------------------------------------------------------
+-// Happy path: INSERT IGNORE precedes SELECT FOR UPDATE; helper returns true.
+-// ---------------------------------------------------------------------------
+-$wpdb   = new LockTest_Wpdb();
+-$engine = new LockTest_Engine($wpdb);
+-
+-assert_true($engine->lock_month_public(42, '2026-04'), 'lock_allocation_month returns true on happy path');
+-
+-// Expect exactly 2 queries: 1× INSERT IGNORE (via query()), 1× SELECT FOR UPDATE (via get_var()).
+-assert_true(count($wpdb->query_log) === 2, 'exactly 2 queries issued');
+-assert_true($wpdb->query_log[0]['method'] === 'query', 'first call is wpdb::query()');
+-assert_contains('INSERT IGNORE', $wpdb->query_log[0]['sql'], 'first query is INSERT IGNORE');
+-assert_contains('client_allocations', $wpdb->query_log[0]['sql'], 'first query targets client_allocations');
+-assert_contains("client_id, billing_month", $wpdb->query_log[0]['sql'], 'INSERT IGNORE includes only the key columns');
+-
+-assert_true($wpdb->query_log[1]['method'] === 'get_var', 'second call is wpdb::get_var()');
+-assert_contains('FOR UPDATE', $wpdb->query_log[1]['sql'], 'second query is SELECT ... FOR UPDATE');
+-assert_contains('client_id', $wpdb->query_log[1]['sql'], 'SELECT filters by client_id');
+-assert_contains('billing_month', $wpdb->query_log[1]['sql'], 'SELECT filters by billing_month');
+-assert_contains("'2026-04'", $wpdb->query_log[1]['sql'], 'billing_month was bound to the SELECT');
+-
+-// ---------------------------------------------------------------------------
+-// INSERT IGNORE failure: helper returns false, SELECT FOR UPDATE never fires.
+-// ---------------------------------------------------------------------------
+-$wpdb = new LockTest_Wpdb();
+-$wpdb->insert_ignore_result = false;
+-$engine = new LockTest_Engine($wpdb);
+-
+-assert_false($engine->lock_month_public(42, '2026-04'), 'lock_allocation_month returns false when INSERT IGNORE fails');
+-assert_true(count($wpdb->query_log) === 1, 'INSERT IGNORE failure short-circuits before SELECT FOR UPDATE');
+-
+-// ---------------------------------------------------------------------------
+-// SELECT FOR UPDATE returns null: helper returns false.
+-// ---------------------------------------------------------------------------
+-$wpdb = new LockTest_Wpdb();
+-$wpdb->select_for_update_result = null;
+-$engine = new LockTest_Engine($wpdb);
+-
+-assert_false($engine->lock_month_public(42, '2026-04'), 'lock_allocation_month returns false when SELECT returns null');
+-assert_true(count($wpdb->query_log) === 2, 'both queries issued even when SELECT FOR UPDATE returns null');
+-
+-// ---------------------------------------------------------------------------
+-// Output
+-// ---------------------------------------------------------------------------
+-if (!empty($failures)) {
+-    fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");
+-    fwrite(STDERR, sprintf("%d passed, %d failed\n", $passed, count($failures)));
+-    exit(1);
+-}
+-
+-fwrite(STDOUT, sprintf("OK: %d assertions passed\n", $passed));
+-exit(0);
+diff --git a/tests/test-spillover-report.php b/tests/test-spillover-report.php
+index 44f010f..2cd130a 100644
+--- a/tests/test-spillover-report.php
++++ b/tests/test-spillover-report.php
+@@ -18,6 +18,13 @@ require_once __DIR__ . '/../includes/class-autoloader.php';
+ MealsDB_Autoloader::register(dirname(__DIR__) . '/');
+ if (!class_exists('wpdb')) { class wpdb {} }
+ 
++// WP function stubs so MealsDB_Reports' defence-in-depth capability gate
++// (is_authorized_to_read_reports -> MealsDB_Permissions::can_access_plugin)
++// can run without a full WP stack. An authorized user is simulated.
++if (!function_exists('is_user_logged_in')) { function is_user_logged_in(): bool { return true; } }
++if (!function_exists('current_user_can'))  { function current_user_can($c): bool { return true; } }
++if (!function_exists('apply_filters'))      { function apply_filters($tag, $value, ...$args) { return $value; } }
++
+ class SpillWpdb extends wpdb {
+     public $prefix = 'wp_';
+     public array $scripted = []; // pattern => result for get_results
+@@ -134,6 +141,10 @@ chk(count($rows), 0, 'empty month: no rows');
+ $reports = new MealsDB_Reports(new SpillWpdb());
+ chk(count($reports->spillover_report('not-a-month')), 0, 'invalid month: rejected');
+ chk(count($reports->spillover_report('2025')), 0, 'invalid month: short string rejected');
++// Impossible month numbers must be rejected before DateTime sees them:
++// 2025-13 would throw (500) and 2025-00 would normalise to 2024-12.
++chk(count($reports->spillover_report('2025-13')), 0, 'invalid month: month > 12 rejected');
++chk(count($reports->spillover_report('2025-00')), 0, 'invalid month: month 00 rejected');
+ 
+ // ----- Test 6: CSV export header + content -----
+ $rows = [
+diff --git a/views/admin-invoice.php b/views/admin-invoice.php
+index 8f6f53b..6a02fd4 100644
+--- a/views/admin-invoice.php
++++ b/views/admin-invoice.php
+@@ -170,108 +170,6 @@ $zones = isset($zones) && is_array($zones) ? $zones : [];
+             </div>
+         </div>
+ 
+-        <div class="card" style="margin-top: 20px;">
+-            <h2 class="title">Import Overages</h2>
+-
+-            <div style="padding: 20px;">
+-                <table class="form-table">
+-                    <tbody>
+-                        <tr>
+-                            <th scope="row">
+-                                <label for="overage_client_type">Client Type</label>
+-                            </th>
+-                            <td>
+-                                <select name="overage_client_type" id="overage_client_type" class="regular-text" required>
+-                                    <option value="">-- Select Client Type --</option>
+-                                    <option value="SDNB">SDNB</option>
+-                                    <option value="Veteran">Veteran</option>
+-                                </select>
+-                            </td>
+-                        </tr>
+-                        <tr id="overage_zone_row" style="display: none;">
+-                            <th scope="row">
+-                                <label for="overage_zone">Zone</label>
+-                            </th>
+-                            <td>
+-                                <select name="overage_zone" id="overage_zone" class="regular-text">
+-                                    <option value="">-- Select Zone --</option>
+-                                    <?php foreach ($zones as $zone_code): ?>
+-                                        <option value="<?php echo esc_attr($zone_code); ?>">
+-                                            <?php echo esc_html($zone_code); ?>
+-                                            <?php if ($zone_code === 'M'): ?>(Moncton)<?php elseif ($zone_code === 'S'): ?>(Sussex)<?php endif; ?>
+-                                        </option>
+-                                    <?php endforeach; ?>
+-                                </select>
+-                            </td>
+-                        </tr>
+-                        <tr id="overage_weeks_row" style="display: none;">
+-                            <th scope="row">
+-                                <label for="overage_weeks_in_month">Number of Wednesdays</label>
+-                            </th>
+-                            <td>
+-                                <input type="number" name="overage_weeks_in_month" id="overage_weeks_in_month" class="small-text" min="1" max="6" value="4">
+-                            </td>
+-                        </tr>
+-                        <tr>
+-                            <th scope="row">
+-                                <label for="overage_start_date">Start Date</label>
+-                            </th>
+-                            <td>
+-                                <input type="date" name="overage_start_date" id="overage_start_date" class="regular-text mealsdb-datepicker" required>
+-                            </td>
+-                        </tr>
+-                        <tr>
+-                            <th scope="row">
+-                                <label for="overage_end_date">End Date</label>
+-                            </th>
+-                            <td>
+-                                <input type="date" name="overage_end_date" id="overage_end_date" class="regular-text mealsdb-datepicker" required>
+-                            </td>
+-                        </tr>
+-                        <tr>
+-                            <th scope="row">
+-                                <label for="overage_invoice_date">Invoice Date</label>
+-                            </th>
+-                            <td>
+-                                <input type="date" name="overage_invoice_date" id="overage_invoice_date" class="regular-text mealsdb-datepicker">
+-                                <p class="description">Date to stamp on created orders. Defaults to today.</p>
+-                            </td>
+-                        </tr>
+-                    </tbody>
+-                </table>
+-
+-                <p>
+-                    <button type="button" class="button button-secondary" id="preview_overages_btn">
+-                        <span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span>
+-                        Preview Overages
+-                    </button>
+-                </p>
+-
+-                <div id="overages_preview" style="display: none; margin-top: 15px;">
+-                    <h3>Clients with Overages (<span id="overages_count">0</span>)</h3>
+-                    <table class="widefat striped" id="overages_table">
+-                        <thead>
+-                            <tr>
+-                                <th>Name</th>
+-                                <th>BNM Mains</th>
+-                                <th>Overage Tax Sides</th>
+-                                <th>Overage Non-Tax Sides</th>
+-                            </tr>
+-                        </thead>
+-                        <tbody></tbody>
+-                    </table>
+-
+-                    <p style="margin-top: 15px;">
+-                        <button type="button" class="button button-primary" id="create_overage_orders_btn">
+-                            <span class="dashicons dashicons-cart" style="vertical-align: middle;"></span>
+-                            Create Overage Orders
+-                        </button>
+-                    </p>
+-                </div>
+-
+-                <div id="overages_message" style="display: none; margin-top: 10px;"></div>
+-            </div>
+-        </div>
+     </div>
+ </div>
+ 
