@@ -90,6 +90,163 @@ class MealsDB_Invoice_Generator {
     ];
 
     /**
+     * Phase 2 canonical billing data fetcher.
+     *
+     * Replaces the per-order (get_invoice_data_for_clients) and the
+     * allowance-cap (get_allocation_based_billing) data sources with a
+     * single source of truth: ONE ROW PER CLIENT, holding what the
+     * allocation engine assigned to this billing month plus the contribution
+     * line-item sum for the same scope. The engine already enforced the
+     * monthly allowance (phase 1 fill with single-month spill), so the
+     * generators never need to cap or compare to allowance anymore.
+     *
+     * Tax follows the allocated taxable-side count via the per-rate HST
+     * multiplier (sdnb_rate_tiers[rate].hst_multiplier_line1). For VAC, tax
+     * is computed downstream via $vac_billing['sides_hst_rate'] (handled in
+     * the VAC generator, not here).
+     *
+     * @param array<int, array<string, mixed>> $client_rows  Rows from meals_clients
+     *                                                       (must include client_id, wp_user_id,
+     *                                                       default_rate_id, client_contribution).
+     * @param string                            $billing_month YYYY-MM.
+     *
+     * @return array<int, array<string, mixed>> Indexed by client_id. Each row:
+     *   client_id, wp_user_id, first_name, last_name, [other client cols passed through],
+     *   resolved_rate (float), allocated_mains (int), allocated_tax_sides (int),
+     *   allocated_nontax_sides (int), allocated_sides (int),
+     *   contribution_cents (int) — summed from monthly orders' product-5675 line items,
+     *   basic_cents (int), tax_cents (int) — HST per the rate tier when applicable.
+     */
+    private static function get_phase2_billing_data(array $client_rows, string $billing_month): array {
+        if (empty($client_rows) || !preg_match('/^\d{4}-\d{2}$/', $billing_month)) {
+            return [];
+        }
+
+        global $wpdb;
+        $summary_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+        $alloc_table   = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+
+        // Build the client_id list once.
+        $client_ids = [];
+        foreach ($client_rows as $c) {
+            $cid = (int) ($c['client_id'] ?? 0);
+            if ($cid > 0) { $client_ids[$cid] = true; }
+        }
+        if (empty($client_ids)) { return []; }
+        $cid_list = implode(',', array_map('intval', array_keys($client_ids)));
+
+        // Bulk-fetch all summary rows for this (clients, month) in one shot.
+        $summary_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT client_id, used_mains, used_sides, used_tax_sides, used_nontax_sides
+             FROM `{$summary_table}`
+             WHERE billing_month = %s AND client_id IN ({$cid_list})",
+            $billing_month
+        ), ARRAY_A);
+        $summary_by_cid = [];
+        foreach ((array) $summary_rows as $r) {
+            $summary_by_cid[(int) $r['client_id']] = $r;
+        }
+
+        // Bulk-fetch the list of orders whose meals were allocated to this
+        // billing month, per client. Contribution and tax both ride on
+        // these orders.
+        $allocated_order_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT DISTINCT client_id, wc_order_id
+             FROM `{$alloc_table}`
+             WHERE billing_month = %s AND client_id IN ({$cid_list})",
+            $billing_month
+        ), ARRAY_A);
+        $orders_by_cid = [];
+        foreach ((array) $allocated_order_rows as $r) {
+            $orders_by_cid[(int) $r['client_id']][] = (int) $r['wc_order_id'];
+        }
+
+        $order_query = new MealsDB_WC_Order_Query($wpdb);
+
+        $out = [];
+        foreach ($client_rows as $client) {
+            $cid = (int) ($client['client_id'] ?? 0);
+            if ($cid <= 0) { continue; }
+
+            $s = $summary_by_cid[$cid] ?? [
+                'used_mains'        => 0,
+                'used_sides'        => 0,
+                'used_tax_sides'    => 0,
+                'used_nontax_sides' => 0,
+            ];
+
+            $allocated_mains        = (int) $s['used_mains'];
+            $allocated_sides        = (int) $s['used_sides'];
+            $allocated_tax_sides    = (int) $s['used_tax_sides'];
+            $allocated_nontax_sides = (int) $s['used_nontax_sides'];
+
+            $rate_id       = isset($client['default_rate_id']) ? (int) $client['default_rate_id'] : 0;
+            $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid);
+
+            // Contribution: sum of product-5675 line items across orders
+            // whose meals landed in this billing month for this client.
+            $contribution_cents = self::sum_contribution_for_orders($orders_by_cid[$cid] ?? []);
+
+            // Basic = allocated_units × rate. "Allocated units" = mains for
+            // most clients; legacy two-line splitting may include sides on
+            // line 1 / line 2 — that lives downstream in split_into_invoice_lines.
+            $basic_cents = MealsDB_Money::multiply($allocated_mains, $resolved_rate);
+
+            // HST: only via the per-rate multiplier table; non-SDNB tax
+            // (VAC) is computed in its own path.
+            $tax_cents = 0;
+            $rate_key  = number_format((float) $resolved_rate, 2, '.', '');
+            if (isset(self::$sdnb_rate_tiers[$rate_key]) && $allocated_tax_sides > 0) {
+                $mult = (float) self::$sdnb_rate_tiers[$rate_key]['hst_multiplier_line1'];
+                $tax_cents = (int) round($allocated_tax_sides * $mult * 100);
+            }
+
+            $out[$cid] = array_merge($client, [
+                'allocated_mains'        => $allocated_mains,
+                'allocated_sides'        => $allocated_sides,
+                'allocated_tax_sides'    => $allocated_tax_sides,
+                'allocated_nontax_sides' => $allocated_nontax_sides,
+                'resolved_rate'          => $resolved_rate,
+                'contribution_cents'     => $contribution_cents,
+                'basic_cents'            => $basic_cents,
+                'tax_cents'              => $tax_cents,
+            ]);
+        }
+        return $out;
+    }
+
+    /**
+     * Sum the cents of product-5675 (Client Contribution) line items across
+     * the given wc_order_ids. Reads WC HPOS order_itemmeta directly so it
+     * runs against the same data WC uses.
+     */
+    private static function sum_contribution_for_orders(array $wc_order_ids): int {
+        if (empty($wc_order_ids)) { return 0; }
+        global $wpdb;
+
+        $order_list = implode(',', array_map('intval', $wc_order_ids));
+        $items_table = $wpdb->prefix . 'woocommerce_order_items';
+        $meta_table  = $wpdb->prefix . 'woocommerce_order_itemmeta';
+
+        // Sum line_total for items whose _product_id meta is 5675 across the orders.
+        // line_total is stored as a string-formatted decimal; CAST to handle.
+        $sql = "
+            SELECT COALESCE(SUM(CAST(lt.meta_value AS DECIMAL(12,4))), 0)
+            FROM `{$items_table}` i
+            INNER JOIN `{$meta_table}` pm ON pm.order_item_id = i.order_item_id
+                                          AND pm.meta_key = '_product_id'
+                                          AND pm.meta_value = '5675'
+            INNER JOIN `{$meta_table}` lt ON lt.order_item_id = i.order_item_id
+                                          AND lt.meta_key = '_line_total'
+            WHERE i.order_id IN ({$order_list})
+              AND i.order_item_type = 'line_item'
+        ";
+        $sum_decimal = (string) $wpdb->get_var($sql);
+        // Convert decimal dollars to integer cents without float drift.
+        return MealsDB_Money::to_cents($sum_decimal);
+    }
+
+    /**
      * Shared data-fetch: resolves orders, rates, and product types for a set of clients.
      *
      * Returns one row per order, enriched with client fields, resolved rate,
@@ -820,10 +977,39 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Fetch invoice data via allocation engine tables.
-        $invoice_rows = self::get_allocation_based_billing($client_rows, $start_date, $end_date);
+        // Phase 2: bill what the allocation engine assigned to this month.
+        // No min(used, permitted) cap — the engine's fill (phase 1) already
+        // enforced allowance, so allocated_* IS the billable count.
+        $billing_month  = substr($start_date, 0, 7);
+        $billing_by_cid = self::get_phase2_billing_data($client_rows, $billing_month);
 
-        // Apply allowance engine + two-line splits to get final invoice lines.
+        // Adapt phase-2 rows into the shape split_into_invoice_lines expects:
+        // bill_mains / bill_sides / bill_tax_sides / bill_nontax_sides come
+        // straight from allocated_* (the engine's monthly summary).
+        $invoice_rows = [];
+        foreach ($client_rows as $c) {
+            $cid = (int) ($c['client_id'] ?? 0);
+            $b   = $billing_by_cid[$cid] ?? null;
+            if (!$b || (int) $b['allocated_mains'] <= 0) {
+                continue; // No allocation in this month → no line.
+            }
+            $invoice_rows[] = [
+                'client'              => $c,
+                'resolved_rate'       => $b['resolved_rate'],
+                'bill_mains'          => (int) $b['allocated_mains'],
+                'bill_sides'          => (int) $b['allocated_sides'],
+                'bill_tax_sides'      => (int) $b['allocated_tax_sides'],
+                'bill_nontax_sides'   => (int) $b['allocated_nontax_sides'],
+                // Contribution is the sum of product-5675 line items on
+                // orders allocated to this month. Stored on the row as a
+                // float so the existing split_into_invoice_lines path
+                // (which converts back to cents via to_cents) works
+                // unchanged.
+                'client_contribution' => (int) $b['contribution_cents'] / 100,
+            ];
+        }
+
+        // Apply two-line splits to get final invoice lines.
         $all_invoice_lines = [];
         foreach ($invoice_rows as $row) {
             $client = $row['client'];
@@ -978,7 +1164,11 @@ class MealsDB_Invoice_Generator {
             $row[8]  = number_format($line['rate'], 2, '.', '');
             $row[9]  = MealsDB_Money::format($basic_cost_cents);
             $row[23] = MealsDB_Money::format($contribution_cents);
-            $row[24] = MealsDB_Money::format($basic_cost_cents);
+            // Dept. Cost (col 25 in the spec / row[24] zero-indexed) is
+            // Basic Cost minus Client Contribution — what the department
+            // (government) pays. Confirmed against Janet's Jan 2025 Moncton
+            // submission (Brammah: basic 366.50, contrib 10.24, dept 356.26).
+            $row[24] = MealsDB_Money::format($basic_cost_cents - $contribution_cents);
             $row[27] = number_format(0, 2, '.', '');
             $row[30] = number_format(0, 2, '.', '');
             $row[33] = number_format(0, 2, '.', '');
@@ -1020,41 +1210,48 @@ class MealsDB_Invoice_Generator {
         // Phase 1: pre-rebuild dirty client-months in this filter (scope A).
         self::rebuild_dirty_for_invoice($start_date, $client_rows);
 
-        // Fetch invoice data via WC HPOS.
-        $invoice_rows = self::get_invoice_data_for_clients($client_rows, $start_date, $end_date);
+        // Phase 2: read allocated quantities + contribution-line sum + tax
+        // from the engine summary. One row per client.
+        $billing_month   = substr($start_date, 0, 7);
+        $billing_by_cid  = self::get_phase2_billing_data($client_rows, $billing_month);
 
         $csv = [];
 
-        // Header row
+        // Header row — 18 columns, matches Janet's Nov 2025 submission.
         $csv[] = 'Service Confirmation Item Id,Product Name,Service Request Id,Client Name,No. Of Units,Unit Type,Rate,Kilometres,Kilometre Rate,Other Cost (transportation),Other Cost (meals),Other Cost (sundry),Other Cost (admin fees),Other Cost (recreation),Other Cost (parking),Client Contribution,Stat Holiday Units,Tax';
 
-        // Data rows — sorted by client name.
-        usort($invoice_rows, function ($a, $b) {
-            $name_a = strtoupper($a['first_name'] . ' ' . $a['last_name']);
-            $name_b = strtoupper($b['first_name'] . ' ' . $b['last_name']);
-            return strcmp($name_a, $name_b);
+        // Sort clients by name for stable output.
+        usort($client_rows, function ($a, $b) {
+            $na = strtoupper(($a['first_name'] ?? '') . ' ' . ($a['last_name'] ?? ''));
+            $nb = strtoupper(($b['first_name'] ?? '') . ' ' . ($b['last_name'] ?? ''));
+            return strcmp($na, $nb);
         });
 
-        foreach ($invoice_rows as $r) {
-            $sci_id      = 'SCI-' . str_pad($r['order_id'], 8, '0', STR_PAD_LEFT);
-            $client_name = strtoupper($r['first_name']) . ' ' . strtoupper($r['last_name']);
+        foreach ($client_rows as $c) {
+            $cid = (int) ($c['client_id'] ?? 0);
+            $b   = $billing_by_cid[$cid] ?? null;
+            if (!$b) {
+                continue; // No allocation in this month → no invoice line.
+            }
+            $allocated_mains = (int) $b['allocated_mains'];
+            if ($allocated_mains <= 0) {
+                continue; // Skip zero-meal rows; nothing to bill.
+            }
 
-            // Money values come straight from the integer-cents totals that
-            // get_invoice_data_for_clients() accumulates, so the CSV total
-            // agrees penny-exactly with the per-line math.
-            $contribution_cents = (int) ($r['client_contribution_cents']
-                ?? MealsDB_Money::to_cents($r['client_contribution'] ?? 0));
-            $tax_cents = (int) ($r['tax_amount_cents']
-                ?? MealsDB_Money::to_cents($r['tax_amount'] ?? 0));
+            $client_name = strtoupper($c['first_name'] ?? '') . ' ' . strtoupper($c['last_name'] ?? '');
 
+            // The new-portal CSV has no Total column — the portal computes
+            // the total from Units, Rate, Contribution, Tax. The plugin
+            // emits those four as separate fields and lets the portal do
+            // the math. (Confirmed against Janet's Nov 2025 submission.)
             $csv[] = MealsDB_CSV::row([
-                $sci_id,
+                '', // Service Confirmation Item Id — assigned by the SDNB portal on upload, left blank.
                 'Meal Services - Services de repas',
-                $r['sdnb_service_request_id'] ?: '',
+                $c['sdnb_service_request_id'] ?: '',
                 $client_name,
-                intval($r['total_units']),
+                $allocated_mains,
                 'Meal',
-                number_format($r['resolved_rate'], 2, '.', ''),
+                number_format((float) $b['resolved_rate'], 2, '.', ''),
                 '', // Kilometres
                 '', // Kilometre Rate
                 '', // Other Cost (transportation)
@@ -1063,14 +1260,13 @@ class MealsDB_Invoice_Generator {
                 '', // Other Cost (admin fees)
                 '', // Other Cost (recreation)
                 '', // Other Cost (parking)
-                MealsDB_Money::format($contribution_cents),
+                (int) $b['contribution_cents'] > 0 ? MealsDB_Money::format((int) $b['contribution_cents']) : '',
                 '', // Stat Holiday Units
-                MealsDB_Money::format($tax_cents),
+                (int) $b['tax_cents'] > 0 ? MealsDB_Money::format((int) $b['tax_cents']) : '0',
             ]);
         }
 
         // Finalize the billing month for all included clients.
-        $billing_month = substr($start_date, 0, 7);
         $engine = new MealsDB_Allocation_Engine();
         foreach ($client_rows as $client) {
             $engine->finalize_month((int) $client['client_id'], $billing_month);
@@ -1128,39 +1324,32 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Fetch allocation data for all veterans from the allocation engine.
+        // Phase 2: bill what the engine allocated to this month.
+        // No min/cap, no overage, no contribution subtraction (per VAC
+        // per old vet-invoice line 521: new_total = mains_cost + sides_cost + HST).
+        $billing_month   = substr($start_date, 0, 7);
+        $billing_by_cid  = self::get_phase2_billing_data($client_rows, $billing_month);
+
         $engine      = new MealsDB_Allocation_Engine();
         $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
-        $billing_month = substr($start_date, 0, 7);
 
         $vet_aggregates = [];
         foreach ($client_rows as $client) {
             $cid = (int) $client['client_id'];
-
-            $alloc = $engine->get_client_month_summary($cid, $billing_month);
-
-            if (!$alloc) {
-                // No allocation exists — recalculate on-demand.
-                $engine->recalculate_month_totals($cid, $billing_month);
-                $alloc = $engine->get_client_month_summary($cid, $billing_month);
+            $b   = $billing_by_cid[$cid] ?? null;
+            if (!$b) {
+                continue; // no allocation this month -> no row
             }
-
-            $total_mains  = $alloc ? (int) $alloc['used_mains'] : 0;
-            $total_sides  = $alloc ? (int) $alloc['used_sides'] : 0;
-            $tax_sides    = $alloc ? (int) $alloc['used_tax_sides'] : 0;
-            $nontax_sides = $alloc ? (int) $alloc['used_nontax_sides'] : 0;
-
-            // Resolve rate using client's default rate.
-            $resolved_rate = $order_query->resolve_rate_for_order(0, $cid);
 
             $vet_aggregates[$cid] = [
                 'client'                => $client,
-                'resolved_rate'         => $resolved_rate,
-                'mains_ordered'         => $total_mains,
-                'sides_ordered_taxable' => $tax_sides,
-                'sides_ordered_nontax'  => $nontax_sides,
-                'sides_cost'            => 0.0,
-                'sides_tax'             => 0.0,
+                'resolved_rate'         => $b['resolved_rate'],
+                'allocated_mains'       => (int) $b['allocated_mains'],
+                'allocated_tax_sides'   => (int) $b['allocated_tax_sides'],
+                'allocated_nontax_sides'=> (int) $b['allocated_nontax_sides'],
+                // For info columns only (Monthly Allowance / Allowance Remaining):
+                // expose the engine's monthly permitted figure as context.
+                'permitted_for_info'    => $engine->calculate_permitted_for_month($cid, $billing_month),
             ];
         }
 
@@ -1184,98 +1373,48 @@ class MealsDB_Invoice_Generator {
                 $health_card = MealsDB_Encryption::safe_decrypt($vet['vet_health_card']);
             }
 
-            $billing_address = trim($vet['street_name'] ?? '');
-
-            $billing_city    = $vet['city'] ?? '';
+            $billing_address  = trim($vet['street_name'] ?? '');
+            $billing_city     = $vet['city'] ?? '';
             $billing_postcode = $vet['postal_code'] ?? '';
-            $billing_phone   = $vet['client_phone_1'] ?? '';
+            $billing_phone    = $vet['client_phone_1'] ?? '';
+            $service          = strtolower($vet['requisition_period'] ?: 'week');
 
-            $resolved_rate         = $agg['resolved_rate'];
-            $mains_ordered         = $agg['mains_ordered'];
-            $sides_ordered_taxable = $agg['sides_ordered_taxable'];
-            $sides_ordered_nontax  = $agg['sides_ordered_nontax'];
-            $sides_cost            = $agg['sides_cost'];
-            $sides_tax             = $agg['sides_tax'];
+            $resolved_rate          = $agg['resolved_rate'];
+            $allocated_mains        = $agg['allocated_mains'];
+            $allocated_tax_sides    = $agg['allocated_tax_sides'];
+            $allocated_nontax_sides = $agg['allocated_nontax_sides'];
 
-            // --- Veteran allowance calculation ---
-            $user_mains   = (int) ($vet['allowance_mains'] ?? 0);
-            $user_sides   = (int) ($vet['allowance_sides'] ?? 0);
-            $service      = strtolower($vet['requisition_period'] ?: 'week');
-            $days_in_month = (int) date('t', strtotime($end_date));
+            // Phase 2: bill the allocated quantities. No caps at this layer
+            // (the engine's fill already enforced allowance, with spill to
+            // next month or a logged error if a delivery overran both
+            // months). bnm_mains / overage_* are therefore always 0.
+            $bill_mains           = $allocated_mains;
+            $bill_tax_sides       = $allocated_tax_sides;
+            $bill_nontax_sides    = $allocated_nontax_sides;
+            $bill_sides           = $bill_tax_sides + $bill_nontax_sides;
+            $bnm_mains            = 0;
+            $overage_tax_sides    = 0;
+            $overage_nontax_sides = 0;
 
-            // Calculate mains allowance from service frequency.
-            $mains_allowance     = 0;
-            $sides_allowance_raw = 0;
-
-            switch ($service) {
-                case 'month':
-                    $mains_allowance     = min($user_mains, $days_in_month);
-                    $sides_allowance_raw = min($user_sides, $days_in_month);
-                    break;
-                case 'day':
-                    $mains_allowance     = $user_mains * $days_in_month;
-                    $sides_allowance_raw = $user_sides * $days_in_month;
-                    break;
-                case 'week':
-                default:
-                    if ($user_mains == 7) {
-                        $mains_allowance = $days_in_month;
-                    } elseif ($user_mains == 14) {
-                        $mains_allowance = 2 * $days_in_month;
-                    } elseif ($user_mains <= 6) {
-                        $mains_allowance = $user_mains * 4;
-                    }
-                    if ($user_sides == 7) {
-                        $sides_allowance_raw = $days_in_month;
-                    } elseif ($user_sides == 14) {
-                        $sides_allowance_raw = 2 * $days_in_month;
-                    } elseif ($user_sides <= 6) {
-                        $sides_allowance_raw = $user_sides * 4;
-                    }
-                    break;
-            }
-
-            // 5-week month corrections.
-            if ($mains_allowance == 35) { $mains_allowance = 31; }
-            elseif ($mains_allowance == 70) { $mains_allowance = 62; }
-            if ($sides_allowance_raw == 35) { $sides_allowance_raw = 31; }
-            elseif ($sides_allowance_raw == 70) { $sides_allowance_raw = 62; }
-
-            // Mains billing.
-            $bill_mains           = min($mains_ordered, $mains_allowance);
-            $bnm_mains            = max(0, $mains_ordered - $mains_allowance);
+            // VAC cost components.
             $vet_mains_cost_cents = MealsDB_Money::multiply($bill_mains, $resolved_rate);
+            $sides_cost_cents     = MealsDB_Money::multiply($bill_sides, self::$vac_billing['sides_cost_rate']);
+            $tax_sides_base_cents = MealsDB_Money::multiply($bill_tax_sides, self::$vac_billing['sides_cost_rate']);
+            $sides_tax_cents      = MealsDB_Money::percent_of($tax_sides_base_cents, self::$vac_billing['sides_hst_rate']);
+            // VAC new_total = mains_cost + sides_cost + HST  (confirmed
+            // against old vet-invoice: NO contribution subtraction).
+            $new_total_cents      = $vet_mains_cost_cents + $sides_cost_cents + $sides_tax_cents;
 
-            // Monetary allowance → sides conversion, in integer cents.
+            // Informational columns (not used in billing decisions anymore).
+            $permitted          = $agg['permitted_for_info'];
+            $mains_allowance    = (int) ($permitted['permitted_mains'] ?? 0);
+            $sides_allowance    = (int) ($permitted['permitted_sides'] ?? 0);
+            $remaining_sides    = max(0, $sides_allowance - $bill_tax_sides);
+            // Keep the "Monthly Allowance" dollar field for compatibility
+            // with the existing column layout — derived from the mains cap.
             $monthly_allowance_cents   = MealsDB_Money::multiply($mains_allowance, self::$vac_billing['per_main_allowance']);
             $allowance_remaining_cents = max(0, $monthly_allowance_cents - $vet_mains_cost_cents);
-            // Sides conversion is "dollars per side" — compute in cents, then divide out.
-            $conversion_cents = MealsDB_Money::to_cents(self::$vac_billing['sides_conversion_rate']);
-            $new_sides        = $conversion_cents > 0
-                ? (int) floor($allowance_remaining_cents / $conversion_cents)
-                : 0;
 
-            // Use the derived sides count as the actual sides allowance.
-            $sides_allowance = $new_sides;
-
-            // Taxable sides first against the derived allowance.
-            $bill_tax_sides       = min($sides_ordered_taxable, $sides_allowance);
-            $overage_tax_sides    = max(0, $sides_ordered_taxable - $sides_allowance);
-            $remaining_sides      = max(0, $sides_allowance - $bill_tax_sides);
-
-            // Non-taxable sides fill the remainder.
-            $bill_nontax_sides    = min($sides_ordered_nontax, $remaining_sides);
-            $overage_nontax_sides = max(0, $sides_ordered_nontax - $bill_nontax_sides);
-
-            $bill_sides = $bill_tax_sides + $bill_nontax_sides;
-
-            // Cost calculations, in integer cents.
-            $sides_cost_cents    = MealsDB_Money::multiply($bill_tax_sides + $bill_nontax_sides, self::$vac_billing['sides_cost_rate']);
-            $tax_sides_base_cents = MealsDB_Money::multiply($bill_tax_sides, self::$vac_billing['sides_cost_rate']);
-            $sides_tax_cents     = MealsDB_Money::percent_of($tax_sides_base_cents, self::$vac_billing['sides_hst_rate']);
-            $new_total_cents     = $vet_mains_cost_cents + $sides_cost_cents + $sides_tax_cents;
-
-            // Check for errors/warnings
             $errors = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
 
             $csv[] = MealsDB_CSV::row([
@@ -1288,21 +1427,21 @@ class MealsDB_Invoice_Generator {
                 $billing_phone ?: '',
                 'Meal',
                 number_format($resolved_rate, 2, '.', ''),
-                $mains_ordered,
+                $allocated_mains,     // Mains Ordered (under phase 2: what the engine allocated)
                 $mains_allowance,
                 $bill_mains,
                 $bnm_mains,
-                $sides_ordered_taxable,
+                $allocated_tax_sides + $allocated_nontax_sides, // Sides Ordered
                 $sides_allowance,
                 0, // Desserts (track separately if needed)
                 0, // Muffins (track separately if needed)
-                $sides_ordered_taxable,
+                $allocated_tax_sides, // Total Tax Sides Ordered
                 $bill_tax_sides,
                 $overage_tax_sides,
                 $remaining_sides,
                 0, // Cereal (track separately if needed)
-                $sides_ordered_nontax, // Soup counted as non-tax sides
-                $sides_ordered_nontax,
+                $allocated_nontax_sides, // Soup
+                $allocated_nontax_sides, // Total Non-Tax Sides Ordered
                 $bill_nontax_sides,
                 $overage_nontax_sides,
                 $bill_sides,
