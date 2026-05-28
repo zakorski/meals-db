@@ -584,6 +584,14 @@ class MealsDB_Admin_UI {
                     'editUrl' => admin_url('post.php?action=edit&post='),
                 ],
             ],
+            'mealsdb-spillover-report' => [
+                'file' => 'assets/js/spillover-report.js',
+                'cfg'  => 'mealsdbSpilloverReport',
+                'data' => [
+                    'ajaxUrl' => admin_url('admin-ajax.php'),
+                    'nonce'   => wp_create_nonce('mealsdb_nonce'),
+                ],
+            ],
         ];
 
         foreach ($bundles as $handle => $spec) {
@@ -746,9 +754,10 @@ class MealsDB_Admin_UI {
 
         $sub = isset($_GET['sub']) ? sanitize_key(wp_unslash((string) $_GET['sub'])) : 'fees';
         $subtabs = [
-            'fees'     => __('Fee Reconciliation', 'meals-db'),
-            'privates' => __('Private Sales', 'meals-db'),
-            'errors'   => __('Order Errors', 'meals-db'),
+            'fees'      => __('Fee Reconciliation', 'meals-db'),
+            'privates'  => __('Private Sales', 'meals-db'),
+            'errors'    => __('Order Errors', 'meals-db'),
+            'spillover' => __('Over-Allowance Spill', 'meals-db'),
         ];
 
         echo '<div class="wrap">';
@@ -761,6 +770,9 @@ class MealsDB_Admin_UI {
                 break;
             case 'errors':
                 include MealsDB_Plugin::path('views/order-errors.php');
+                break;
+            case 'spillover':
+                include MealsDB_Plugin::path('views/spillover-report.php');
                 break;
             case 'fees':
             default:
