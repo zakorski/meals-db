@@ -1443,4 +1443,165 @@ class MealsDB_Reports {
 
         return [];
     }
+
+    /**
+     * Over-allowance spillover report.
+     *
+     * Lists deliveries where an order's meals could not fit entirely within
+     * the delivery month's allowance and spilled into the next month, OR
+     * where the spill could not fit there either (multi-month-spillover
+     * error, logged by MealsDB_Allocation_Rebuilder).
+     *
+     * Source: rows in meals_allocation_errors (the rebuilder logs there on
+     * multi-month overflow) PLUS deliveries with rows in delivery_allocations
+     * for both the delivery month and the next month referencing the same
+     * order (the "normal" single-month spill case — not an error, just
+     * visibility).
+     *
+     * @param string $billing_month YYYY-MM (the delivery month being reported).
+     * @return array<int, array<string,mixed>> One row per (client, order) that spilled,
+     *   with: client_id, client_name, wc_order_id, delivery_date,
+     *   mains_in_month, sides_in_month, mains_spilled, sides_spilled,
+     *   is_multi_month_error (bool), error_message (string|null).
+     */
+    public function spillover_report(string $billing_month): array {
+        // Defence-in-depth: the AJAX handler already gates on capability, but a
+        // direct service caller (WP-CLI, REST, custom cron) must not reach the
+        // PII-bearing client-name/order-id queries below without the plugin's
+        // required capability. Mirrors every other report method in this class.
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
+        // Strict month validation: the bare \d{2} would accept impossible
+        // months like 2025-13 (DateTime throws -> 500) and 2025-00 (DateTime
+        // silently normalises to the previous December, querying the wrong
+        // month). Constrain to 01-12 so bad input is rejected cleanly here
+        // and at the AJAX boundary before any DateTime/SQL work.
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
+            return [];
+        }
+
+        $next_month_obj  = new DateTime($billing_month . '-01');
+        $next_month_obj->modify('+1 month');
+        $next_month      = $next_month_obj->format('Y-m');
+
+        $alloc_table    = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+        $errors_table   = MealsDB_DB::get_table_name(MealsDB_Tables::ALLOCATION_ERRORS);
+        $clients_table  = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+
+        // 1. Single-month spills: orders whose delivery date is in the
+        //    selected month but which have rows in BOTH this month and
+        //    next month (the rebuilder's spill behaviour). DATE_FORMAT
+        //    handles the delivery_date -> YYYY-MM extraction inline.
+        $spill_rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT
+                a1.client_id,
+                a1.wc_order_id,
+                a1.delivery_date,
+                a1.mains_count    AS mains_in_month,
+                a1.sides_count    AS sides_in_month,
+                a2.mains_count    AS mains_spilled,
+                a2.sides_count    AS sides_spilled,
+                c.first_name,
+                c.last_name
+             FROM `{$alloc_table}` a1
+             INNER JOIN `{$alloc_table}` a2
+                     ON a2.wc_order_id   = a1.wc_order_id
+                    AND a2.client_id     = a1.client_id
+                    AND a2.billing_month = %s
+             LEFT JOIN `{$clients_table}` c ON c.client_id = a1.client_id
+             WHERE a1.billing_month = %s
+               AND DATE_FORMAT(a1.delivery_date, '%%Y-%%m') = %s
+               AND (a2.mains_count > 0 OR a2.sides_count > 0)
+             ORDER BY a1.delivery_date ASC, c.last_name ASC, c.first_name ASC",
+            $next_month,
+            $billing_month,
+            $billing_month
+        ), ARRAY_A);
+
+        $out = [];
+        foreach ((array) $spill_rows as $r) {
+            $out[] = [
+                'client_id'            => (int) $r['client_id'],
+                'client_name'          => trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')),
+                'wc_order_id'          => (int) $r['wc_order_id'],
+                'delivery_date'        => (string) $r['delivery_date'],
+                'mains_in_month'       => (int) $r['mains_in_month'],
+                'sides_in_month'       => (int) $r['sides_in_month'],
+                'mains_spilled'        => (int) $r['mains_spilled'],
+                'sides_spilled'        => (int) $r['sides_spilled'],
+                'is_multi_month_error' => false,
+                'error_message'        => null,
+            ];
+        }
+
+        // 2. Multi-month-spillover errors: rebuilder logs to allocation_errors
+        //    when even the next month can't absorb the overflow. These are
+        //    real problems that need attention.
+        $err_rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT
+                e.client_id,
+                e.wc_order_id,
+                e.mains_unplaced,
+                e.sides_unplaced,
+                e.message,
+                a.delivery_date,
+                a.mains_count AS mains_in_month,
+                a.sides_count AS sides_in_month,
+                c.first_name,
+                c.last_name
+             FROM `{$errors_table}` e
+             LEFT JOIN `{$alloc_table}` a
+                    ON a.client_id     = e.client_id
+                   AND a.wc_order_id   = e.wc_order_id
+                   AND a.billing_month = e.billing_month
+             LEFT JOIN `{$clients_table}` c ON c.client_id = e.client_id
+             WHERE e.billing_month = %s
+               AND e.error_type = 'multi_month_spillover'
+             ORDER BY a.delivery_date ASC, c.last_name ASC",
+            $billing_month
+        ), ARRAY_A);
+
+        foreach ((array) $err_rows as $r) {
+            $out[] = [
+                'client_id'            => (int) $r['client_id'],
+                'client_name'          => trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')),
+                'wc_order_id'          => (int) $r['wc_order_id'],
+                'delivery_date'        => (string) ($r['delivery_date'] ?? ''),
+                'mains_in_month'       => (int) ($r['mains_in_month'] ?? 0),
+                'sides_in_month'       => (int) ($r['sides_in_month'] ?? 0),
+                'mains_spilled'        => (int) $r['mains_unplaced'],
+                'sides_spilled'        => (int) $r['sides_unplaced'],
+                'is_multi_month_error' => true,
+                'error_message'        => (string) ($r['message'] ?? ''),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * CSV export for the over-allowance spillover report.
+     *
+     * @param array<int, array<string,mixed>> $rows from spillover_report().
+     */
+    public function export_spillover_csv(array $rows): string {
+        $out = [];
+        $out[] = 'Delivery Date,Client,Order ID,Mains in Month,Sides in Month,Mains Spilled,Sides Spilled,Multi-Month Error,Error Detail';
+        foreach ($rows as $r) {
+            $out[] = MealsDB_CSV::row([
+                $r['delivery_date'] ?? '',
+                $r['client_name'] ?? '',
+                $r['wc_order_id'] ?? 0,
+                $r['mains_in_month'] ?? 0,
+                $r['sides_in_month'] ?? 0,
+                $r['mains_spilled'] ?? 0,
+                $r['sides_spilled'] ?? 0,
+                !empty($r['is_multi_month_error']) ? 'Yes' : 'No',
+                $r['error_message'] ?? '',
+            ]);
+        }
+        return implode("\n", $out);
+    }
 }

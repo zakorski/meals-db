@@ -18,6 +18,7 @@ class MealsDB_Ajax_Reports {
         add_action('wp_ajax_mealsdb_delivery_fee_reconciliation', [self::class, 'delivery_fee_reconciliation']);
         add_action('wp_ajax_mealsdb_private_customer_report', [self::class, 'private_customer_report']);
         add_action('wp_ajax_mealsdb_order_error_report', [self::class, 'order_error_report']);
+        add_action('wp_ajax_mealsdb_spillover_report', [self::class, 'spillover_report']);
     }
 
     /**
@@ -203,5 +204,46 @@ class MealsDB_Ajax_Reports {
         $result  = $reports->order_error_report($start_date, $end_date);
 
         wp_send_json_success($result);
+    }
+
+    /**
+     * Over-allowance spillover report — phase 3.
+     * Lists meals delivered in the selected month that spilled into the
+     * next month (engine's allowance fill behavior), plus any
+     * multi-month-spillover errors logged by the rebuilder.
+     */
+    public static function spillover_report(): void {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        $capability = MealsDB_Permissions::required_capability();
+        if (!is_string($capability) || $capability === '') {
+            $capability = 'manage_woocommerce';
+        }
+        if (!current_user_can($capability)) {
+            wp_send_json_error(['message' => __('You are not allowed to perform this action.', 'meals-db')], 403);
+            return;
+        }
+
+        self::enforce_rate_limit();
+
+        $billing_month = isset($_REQUEST['billing_month'])
+            ? sanitize_text_field(wp_unslash((string) $_REQUEST['billing_month']))
+            : '';
+        // Constrain the month to 01-12: a bare \d{2} would let 2025-13 or
+        // 2025-00 through to the service layer, where DateTime either throws
+        // (500) or silently normalises to the wrong month.
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
+            wp_send_json_error(['message' => __('Month must be in YYYY-MM format.', 'meals-db')]);
+            return;
+        }
+
+        $reports = new MealsDB_Reports($GLOBALS['wpdb']);
+        $rows    = $reports->spillover_report($billing_month);
+        $csv     = $reports->export_spillover_csv($rows);
+
+        wp_send_json_success([
+            'rows' => $rows,
+            'csv'  => $csv,
+        ]);
     }
 }
