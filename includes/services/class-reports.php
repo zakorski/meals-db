@@ -1465,7 +1465,20 @@ class MealsDB_Reports {
      *   is_multi_month_error (bool), error_message (string|null).
      */
     public function spillover_report(string $billing_month): array {
-        if (!preg_match('/^\d{4}-\d{2}$/', $billing_month)) {
+        // Defence-in-depth: the AJAX handler already gates on capability, but a
+        // direct service caller (WP-CLI, REST, custom cron) must not reach the
+        // PII-bearing client-name/order-id queries below without the plugin's
+        // required capability. Mirrors every other report method in this class.
+        if (!self::is_authorized_to_read_reports()) {
+            return [];
+        }
+
+        // Strict month validation: the bare \d{2} would accept impossible
+        // months like 2025-13 (DateTime throws -> 500) and 2025-00 (DateTime
+        // silently normalises to the previous December, querying the wrong
+        // month). Constrain to 01-12 so bad input is rejected cleanly here
+        // and at the AJAX boundary before any DateTime/SQL work.
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
             return [];
         }
 

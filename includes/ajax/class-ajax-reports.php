@@ -229,7 +229,10 @@ class MealsDB_Ajax_Reports {
         $billing_month = isset($_REQUEST['billing_month'])
             ? sanitize_text_field(wp_unslash((string) $_REQUEST['billing_month']))
             : '';
-        if (!preg_match('/^\d{4}-\d{2}$/', $billing_month)) {
+        // Constrain the month to 01-12: a bare \d{2} would let 2025-13 or
+        // 2025-00 through to the service layer, where DateTime either throws
+        // (500) or silently normalises to the wrong month.
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
             wp_send_json_error(['message' => __('Month must be in YYYY-MM format.', 'meals-db')]);
             return;
         }

@@ -18,6 +18,13 @@ require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 if (!class_exists('wpdb')) { class wpdb {} }
 
+// WP function stubs so MealsDB_Reports' defence-in-depth capability gate
+// (is_authorized_to_read_reports -> MealsDB_Permissions::can_access_plugin)
+// can run without a full WP stack. An authorized user is simulated.
+if (!function_exists('is_user_logged_in')) { function is_user_logged_in(): bool { return true; } }
+if (!function_exists('current_user_can'))  { function current_user_can($c): bool { return true; } }
+if (!function_exists('apply_filters'))      { function apply_filters($tag, $value, ...$args) { return $value; } }
+
 class SpillWpdb extends wpdb {
     public $prefix = 'wp_';
     public array $scripted = []; // pattern => result for get_results
@@ -134,6 +141,10 @@ chk(count($rows), 0, 'empty month: no rows');
 $reports = new MealsDB_Reports(new SpillWpdb());
 chk(count($reports->spillover_report('not-a-month')), 0, 'invalid month: rejected');
 chk(count($reports->spillover_report('2025')), 0, 'invalid month: short string rejected');
+// Impossible month numbers must be rejected before DateTime sees them:
+// 2025-13 would throw (500) and 2025-00 would normalise to 2024-12.
+chk(count($reports->spillover_report('2025-13')), 0, 'invalid month: month > 12 rejected');
+chk(count($reports->spillover_report('2025-00')), 0, 'invalid month: month 00 rejected');
 
 // ----- Test 6: CSV export header + content -----
 $rows = [
