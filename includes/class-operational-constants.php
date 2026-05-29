@@ -86,18 +86,32 @@ class MealsDB_Operational_Constants {
     // -------------------------------------------------------------
     //
     // Source: SDNB contract; rates reviewed annually. Rural rates
-    // apply to Sussex zone clients per the SDNB contract addendum.
-    // Note: the invoice generator's $sdnb_billing array is keyed by
-    // string forms of the primary-main rate ('14.66' / '15.47') —
-    // those string keys are an internal lookup convention, not
-    // duplicates of these constants.
-
+    // apply to Sussex-zone ('S') clients per the SDNB contract addendum;
+    // see SDNB_RURAL_ZONE_CODES / is_rural_zone().
+    //
+    // To flip rates at cutover, edit ONLY the six values below. There is
+    // no longer a duplicate rate table to keep in sync (the invoice
+    // generator's old $sdnb_rate_tiers array was removed, LB-7) and no
+    // multipliers to recompute (HST is now a clean ×15% — see HST_RATE).
     const SDNB_RATE_PRIMARY_MAIN         = 14.66;
     const SDNB_RATE_PRIMARY_MAIN_RURAL   = 15.47;
     const SDNB_RATE_SECONDARY_MAIN       = 10.18;
     const SDNB_RATE_SECONDARY_MAIN_RURAL = 10.93;
     const SDNB_RATE_SIDE                 = 4.48;
     const SDNB_RATE_SIDE_RURAL           = 4.54;
+
+    /**
+     * SDNB service-zone codes that bill at the RURAL rate.
+     *
+     * Rurality is a property of the client's delivery zone
+     * (meals_clients.delivery_area_zone), NOT of the rate value. Zone
+     * 'S' is the Sussex service centre (rural per the SDNB contract
+     * addendum); 'M' is Moncton (urban). Deriving rurality from the
+     * zone — not from the price — is what lets the rate VALUES change
+     * at cutover without the code silently picking the wrong tier
+     * (LB-7). Add a code here if a new rural service zone is onboarded.
+     */
+    const SDNB_RURAL_ZONE_CODES = ['S'];
 
     // -------------------------------------------------------------
     // VAC billing rates (CAD dollars)
@@ -115,22 +129,20 @@ class MealsDB_Operational_Constants {
     const VAC_SIDES_HST_RATE         = 0.15;
 
     // -------------------------------------------------------------
-    // HST multipliers — net portion for invoice line items
+    // HST
     // -------------------------------------------------------------
     //
-    // SDNB invoices show base rate plus HST as separate line items.
-    // These multipliers represent the NET portion (rate before HST)
-    // for each gross rate value:
-    //   gross_rate * multiplier = net (pre-HST)
-    //   gross_rate * (1 - multiplier) = HST portion
+    // Harmonized Sales Tax applied to taxable SIDES only — mains are
+    // NEVER taxed, and prices are PRE-TAX, so HST is simply added:
+    //   hst = taxable_side_price * HST_RATE.
     //
-    // Values are historical, derived from the HST/rate breakdown
-    // the legacy invoice generator produces. If HST rate changes,
-    // recalculate these.
+    // This replaces the old baked-in net-portion multipliers
+    // (0.672/0.82/0.681), which were derived from the OLD combined
+    // prices and silently mis-billed once the prices changed (LB-7).
+    // Same 15% applies to SDNB and VAC sides (VAC_SIDES_HST_RATE is
+    // the same value, kept for the VAC path's local vocabulary).
 
-    const HST_MULTIPLIER_PRIMARY_MAIN   = 0.672;
-    const HST_MULTIPLIER_RURAL_MAIN     = 0.82;
-    const HST_MULTIPLIER_SECONDARY_MAIN = 0.681;
+    const HST_RATE = 0.15;
 
     // -------------------------------------------------------------
     // Apetito supplier configuration
@@ -192,5 +204,23 @@ class MealsDB_Operational_Constants {
      */
     public static function get_sdnb_side_rate(bool $rural = false): float {
         return $rural ? self::SDNB_RATE_SIDE_RURAL : self::SDNB_RATE_SIDE;
+    }
+
+    /**
+     * Whether an SDNB service-zone code bills at the rural rate.
+     *
+     * Centralises the rural-zone test so callers derive rurality from
+     * the client's zone, not from the rate value (LB-7). Comparison is
+     * case-insensitive and trims surrounding whitespace so a stored
+     * ' s ' still resolves correctly.
+     *
+     * @param string|null $zone delivery_area_zone code ('M', 'S', ...).
+     * @return bool
+     */
+    public static function is_rural_zone(?string $zone): bool {
+        if ($zone === null) {
+            return false;
+        }
+        return in_array(strtoupper(trim($zone)), self::SDNB_RURAL_ZONE_CODES, true);
     }
 }
