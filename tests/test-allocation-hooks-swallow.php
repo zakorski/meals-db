@@ -132,11 +132,19 @@ try {
 }
 assert_equal(false, $threw, 'on_order_created swallows engine exceptions');
 
+// STR-LOG: the hook logger is now a facade over meals_event_log. A hook
+// 'errored' maps to trunk outcome='degraded' (it was caught/swallowed),
+// the legacy outcome is preserved in context.hook_outcome, the hook name
+// is the trunk `event`, and the error text lands in `message`.
 $last = end($wpdb->rows);
-assert_equal('errored', $last['outcome'] ?? null, 'errored outcome recorded for new_order');
+assert_equal('degraded', $last['outcome'] ?? null, 'errored hook → trunk outcome=degraded for new_order');
 assert_true(
-    !empty($last['error_message']) && strpos((string) $last['error_message'], 'engine failure on allocate') !== false,
-    'error_message preserved for new_order'
+    !empty($last['context']) && strpos((string) $last['context'], '"hook_outcome":"errored"') !== false,
+    'legacy errored outcome preserved in context for new_order'
+);
+assert_true(
+    !empty($last['message']) && strpos((string) $last['message'], 'engine failure on allocate') !== false,
+    'error_message preserved in trunk message for new_order'
 );
 
 // ---------------------------------------------------------------------------
@@ -150,7 +158,7 @@ try {
 }
 assert_equal(false, $threw, 'on_order_cancelled swallows engine exceptions');
 $last = end($wpdb->rows);
-assert_equal('errored', $last['outcome'] ?? null, 'errored outcome recorded for cancelled');
+assert_equal('degraded', $last['outcome'] ?? null, 'errored hook → trunk outcome=degraded for cancelled');
 
 // ---------------------------------------------------------------------------
 // on_order_status_changed: same contract.
@@ -179,8 +187,8 @@ try {
 }
 assert_equal(false, $threw, 'on_order_trashed swallows engine exceptions');
 $last = end($wpdb->rows);
-assert_equal('errored', $last['outcome'] ?? null, 'errored outcome recorded for trash (deallocate_order was reached)');
-assert_equal('woocommerce_trash_order', $last['hook_name'] ?? null, 'trash recorded under the HPOS hook name');
+assert_equal('degraded', $last['outcome'] ?? null, 'degraded recorded for trash (deallocate_order was reached)');
+assert_equal('woocommerce_trash_order', $last['event'] ?? null, 'trash recorded under the HPOS hook name (trunk event)');
 
 // ---------------------------------------------------------------------------
 // on_order_deleted (HPOS woocommerce_delete_order): same contract.
@@ -193,8 +201,8 @@ try {
 }
 assert_equal(false, $threw, 'on_order_deleted swallows engine exceptions');
 $last = end($wpdb->rows);
-assert_equal('errored', $last['outcome'] ?? null, 'errored outcome recorded for delete (deallocate_order was reached)');
-assert_equal('woocommerce_delete_order', $last['hook_name'] ?? null, 'delete recorded under the HPOS hook name');
+assert_equal('degraded', $last['outcome'] ?? null, 'degraded recorded for delete (deallocate_order was reached)');
+assert_equal('woocommerce_delete_order', $last['event'] ?? null, 'delete recorded under the HPOS hook name (trunk event)');
 
 // ---------------------------------------------------------------------------
 // nightly_sync IS allowed to re-throw — cron's native ledger should

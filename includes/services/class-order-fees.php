@@ -133,6 +133,20 @@ class MealsDB_Order_Fees {
             // Observe-only relative to WC. Log and swallow.
             error_log('[MealsDB Order Fees] apply_to_order failed for order '
                 . $wc_order_id . ': ' . $e->getMessage());
+            // STR-LOG: a fee that failed to apply means the order is
+            // mis-billed — visible as degraded, scoped to the order.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'error',
+                    'category'    => 'billing',
+                    'subsystem'   => 'order_fees',
+                    'event'       => 'apply_to_order.failed',
+                    'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'     => $e->getMessage(),
+                    'entity_type' => 'order',
+                    'entity_id'   => (int) $wc_order_id,
+                ]);
+            }
         }
     }
 

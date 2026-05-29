@@ -325,6 +325,20 @@ class MealsDB_Migration_Consolidated {
             } catch (\Throwable $e) {
                 // Non-fatal — store null rather than blocking the insert.
                 self::log(sprintf('Could not encrypt diet/comments for user %d: %s', $uid, $e->getMessage()));
+                // STR-LOG: this is the silent-data-loss shape — we pressed
+                // on and dropped the value. Surface it as degraded.
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity'    => 'warning',
+                        'category'    => 'migration',
+                        'subsystem'   => 'migration_consolidated',
+                        'event'       => 'encrypt_diet_comments.dropped',
+                        'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message'     => $e->getMessage(),
+                        'entity_type' => 'user',
+                        'entity_id'   => (int) $uid,
+                    ]);
+                }
             }
 
             $street_name = $meta['billing_address_1'] ?? null;

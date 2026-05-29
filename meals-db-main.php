@@ -3,7 +3,7 @@
  * Plugin Name: Meals Database
  * Plugin URI: https://github.com/zakorski/meals-db
  * Description: Custom plugin for Meals & More database integration.
- * Version: 1.0.395
+ * Version: 1.0.396
  * Author: Zak Sikorski
  * Author URI: https://zakorski.com
  * GitHub Plugin URI: zakorski/meals-db
@@ -137,6 +137,13 @@ add_action('plugins_loaded', function () {
     MealsDB_Daily_Report::register_hooks();
     MealsDB_Log_Retention::register_hooks();
     MealsDB_Cron_Status_Page::init();
+
+    // Directive STR-LOG — central event-log trunk. The Event Log
+    // dashboard (manage_options) reads meals_event_log + meals_audit_log;
+    // the digest sweeps failed/degraded events at ~05:00 and emails a
+    // scrubbed summary (out of the hot path — never inside record()).
+    MealsDB_Event_Log_Page::init();
+    MealsDB_Event_Digest::register_hooks();
 });
 
 /**
@@ -531,6 +538,7 @@ function meals_db_check_requirements() {
  *   - mealsdb_nightly_task_sync       (class-task-cron.php)
  *   - mealsdb_daily_report            (class-daily-report.php)
  *   - mealsdb_log_retention           (class-log-retention.php)
+ *   - mealsdb_event_digest            (class-event-digest.php)
  *
  * The original handler only cleared the first one; the second was
  * orphaned and would re-fire daily on a deactivated install.
@@ -541,6 +549,7 @@ register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook('mealsdb_nightly_task_sync');
     wp_clear_scheduled_hook('mealsdb_daily_report');
     wp_clear_scheduled_hook('mealsdb_log_retention');
+    wp_clear_scheduled_hook('mealsdb_event_digest');
 });
 
 // Register the plugin update checker against the GitHub repository.

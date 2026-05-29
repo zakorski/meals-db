@@ -1,7 +1,9 @@
 <?php
 /**
- * Daily report job — reads meals_job_log and meals_hook_log, computes
- * anomalies, and emails configured recipients.
+ * Daily report job — reads job + hook telemetry from the meals_event_log
+ * trunk (via the MealsDB_Job_Logger / MealsDB_Hook_Logger facades, which
+ * re-express the old job_log/hook_log row shapes — directive STR-LOG),
+ * computes anomalies, and emails configured recipients.
  *
  * Schedules itself for 04:00 site time (cPanel cron fires ~04:15)
  * which is far enough after the 02:00 / 03:00 nightly jobs that they

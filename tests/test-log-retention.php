@@ -108,48 +108,63 @@ try {
     assert_true(false, 'retention run() should not throw: ' . $e->getMessage());
 }
 
-// Two DELETEs expected — one per table.
-assert_equal(2, count($wpdb->deletes), 'retention issued exactly 2 DELETEs (hook log + job log)');
+// STR-LOG trunk: retention now prunes a single table (meals_event_log)
+// in 4 passes — three severity bands plus the aged degraded/failed pass.
+assert_equal(4, count($wpdb->deletes), 'retention issued 4 DELETEs (3 severity bands + unresolved pass)');
 
-// Both must include LIMIT, otherwise a giant backlog could lock the
-// table for seconds.
+// Every pass must be bounded by LIMIT and target the trunk, otherwise a
+// giant backlog could lock the table for seconds.
 foreach ($wpdb->deletes as $i => $sql) {
     assert_true(
         preg_match('/LIMIT\s+\d+/i', $sql) === 1,
         sprintf('DELETE #%d includes LIMIT clause', $i)
     );
+    assert_true(
+        stripos($sql, 'meals_event_log') !== false,
+        sprintf('DELETE #%d targets the event_log trunk', $i)
+    );
 }
 
-// Job-log DELETE must explicitly exclude rows with status='running'.
-$job_delete = null;
+// No pass may ever delete a 'running' row (hang detection). The band
+// passes exclude it explicitly; the unresolved pass targets only
+// degraded/failed (neither of which is running).
 foreach ($wpdb->deletes as $sql) {
-    if (stripos($sql, 'meals_job_log') !== false) {
-        $job_delete = $sql;
+    assert_true(
+        stripos($sql, "outcome IN ('running'") === false,
+        'no DELETE targets running rows'
+    );
+}
+
+// At least one band pass must exclude running/degraded/failed (those are
+// deferred to the long-window unresolved pass).
+$band_excludes = false;
+foreach ($wpdb->deletes as $sql) {
+    if (stripos($sql, "outcome NOT IN ('running', 'degraded', 'failed')") !== false) {
+        $band_excludes = true;
         break;
     }
 }
-assert_true($job_delete !== null, 'job log DELETE present');
-assert_true(stripos($job_delete, "status NOT IN ('running')") !== false, 'job log DELETE excludes running rows');
+assert_true($band_excludes, 'severity-band DELETE excludes running/degraded/failed');
 
-// Hook-log DELETE filters by fired_at and a UTC-shaped cutoff.
-$hook_delete = null;
+// The unresolved pass deletes aged degraded/failed only.
+$unresolved = null;
 foreach ($wpdb->deletes as $sql) {
-    if (stripos($sql, 'meals_hook_log') !== false) {
-        $hook_delete = $sql;
+    if (stripos($sql, "outcome IN ('degraded', 'failed')") !== false) {
+        $unresolved = $sql;
         break;
     }
 }
-assert_true($hook_delete !== null, 'hook log DELETE present');
+assert_true($unresolved !== null, 'aged degraded/failed DELETE present');
 assert_true(
-    preg_match('/fired_at\` < \'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\'/', $hook_delete) === 1,
-    'hook log cutoff is a normal datetime literal'
+    preg_match('/occurred_at < \'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\'/', $unresolved) === 1,
+    'cutoff is a normal UTC datetime literal'
 );
 
-// Confirm the retention job itself logs a row to meals_job_log via
-// MealsDB_Job_Logger::start/finish.
+// Confirm the retention job itself logs a run to the trunk via the
+// Job_Logger facade (category='job', event='log_retention').
 $found = false;
 foreach ($wpdb->rows as $row) {
-    if (($row['job_name'] ?? '') === 'log_retention') {
+    if (($row['event'] ?? '') === 'log_retention' && ($row['category'] ?? '') === 'job') {
         $found = true;
         break;
     }

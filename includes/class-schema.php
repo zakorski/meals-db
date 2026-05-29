@@ -471,66 +471,59 @@ class MealsDB_Schema {
                     ],
                 ],
             ],
-            MealsDB_Tables::JOB_LOG => [
-                'table'   => MealsDB_Tables::JOB_LOG,
+            // Central operational event-log trunk (directive STR-LOG).
+            // Collapses the former meals_job_log + meals_hook_log. The
+            // job-lifecycle columns (started_at / completed_at /
+            // duration_seconds / records_*) are kept FIRST-CLASS and
+            // indexable — NOT buried in `context` — so hang-detection and
+            // duration survive the collapse. Most rows are immutable point
+            // events; the few job rows are mutable (start() inserts
+            // outcome='running', finish()/fail() UPDATE the same row).
+            // The `degraded` outcome is the point of the exercise: it lets
+            // a caller say "I continued but swallowed a problem" instead of
+            // reporting a clean success — see directive §"degraded".
+            MealsDB_Tables::EVENT_LOG => [
+                'table'   => MealsDB_Tables::EVENT_LOG,
                 'engine'  => 'InnoDB',
                 'columns' => [
                     'log_id'            => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
-                    'job_name'          => 'VARCHAR(100) NOT NULL',
-                    'started_at'        => 'DATETIME NOT NULL',
+                    'occurred_at'       => 'DATETIME NOT NULL',
+                    'severity'          => "ENUM('debug','info','notice','warning','error','critical') NOT NULL DEFAULT 'info'",
+                    'category'          => 'VARCHAR(50) NOT NULL',
+                    'subsystem'         => 'VARCHAR(100) NULL',
+                    'event'             => 'VARCHAR(150) NOT NULL',
+                    'outcome'           => "ENUM('succeeded','failed','degraded','running') NOT NULL DEFAULT 'succeeded'",
+                    'message'           => 'TEXT NULL',
+                    'context'           => 'JSON NULL',
+                    'entity_type'       => 'VARCHAR(30) NULL',
+                    'entity_id'         => 'BIGINT UNSIGNED NULL',
+                    'correlation_id'    => 'VARCHAR(40) NULL',
+                    'user_id'           => 'BIGINT UNSIGNED NULL',
+                    // Job-lifecycle columns (NULL for non-job events).
+                    'started_at'        => 'DATETIME NULL',
                     'completed_at'      => 'DATETIME NULL',
                     'duration_seconds'  => 'INT UNSIGNED NULL',
-                    'status'            => "ENUM('running','success','failure','timeout') NOT NULL DEFAULT 'running'",
                     'records_processed' => 'INT UNSIGNED NULL',
                     'records_updated'   => 'INT UNSIGNED NULL',
                     'records_skipped'   => 'INT UNSIGNED NULL',
                     'records_errored'   => 'INT UNSIGNED NULL',
-                    'error_message'     => 'TEXT NULL',
-                    'context'           => 'JSON NULL',
                 ],
                 'primary_key' => ['log_id'],
                 'indexes' => [
                     [
-                        'name'    => 'idx_job_name_started',
+                        'name'    => 'idx_occurred',
                         'type'    => 'INDEX',
-                        'columns' => ['job_name', 'started_at'],
+                        'columns' => ['occurred_at'],
                     ],
                     [
-                        'name'    => 'idx_status',
+                        'name'    => 'idx_severity',
                         'type'    => 'INDEX',
-                        'columns' => ['status'],
+                        'columns' => ['severity'],
                     ],
                     [
-                        'name'    => 'idx_started_at',
+                        'name'    => 'idx_category',
                         'type'    => 'INDEX',
-                        'columns' => ['started_at'],
-                    ],
-                ],
-            ],
-            MealsDB_Tables::HOOK_LOG => [
-                'table'   => MealsDB_Tables::HOOK_LOG,
-                'engine'  => 'InnoDB',
-                'columns' => [
-                    'log_id'        => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
-                    'hook_name'     => 'VARCHAR(100) NOT NULL',
-                    'fired_at'      => 'DATETIME NOT NULL',
-                    'target_type'   => 'VARCHAR(20) NULL',
-                    'target_id'     => 'BIGINT UNSIGNED NULL',
-                    'context'       => 'JSON NULL',
-                    'outcome'       => "ENUM('processed','skipped','errored') NOT NULL DEFAULT 'processed'",
-                    'error_message' => 'TEXT NULL',
-                ],
-                'primary_key' => ['log_id'],
-                'indexes' => [
-                    [
-                        'name'    => 'idx_hook_fired',
-                        'type'    => 'INDEX',
-                        'columns' => ['hook_name', 'fired_at'],
-                    ],
-                    [
-                        'name'    => 'idx_target',
-                        'type'    => 'INDEX',
-                        'columns' => ['target_type', 'target_id'],
+                        'columns' => ['category'],
                     ],
                     [
                         'name'    => 'idx_outcome',
@@ -538,9 +531,25 @@ class MealsDB_Schema {
                         'columns' => ['outcome'],
                     ],
                     [
-                        'name'    => 'idx_fired_at',
+                        'name'    => 'idx_event',
                         'type'    => 'INDEX',
-                        'columns' => ['fired_at'],
+                        'columns' => ['event'],
+                    ],
+                    [
+                        'name'    => 'idx_entity',
+                        'type'    => 'INDEX',
+                        'columns' => ['entity_type', 'entity_id'],
+                    ],
+                    [
+                        'name'    => 'idx_correlation',
+                        'type'    => 'INDEX',
+                        'columns' => ['correlation_id'],
+                    ],
+                    // Hang detection: find stale 'running' rows quickly.
+                    [
+                        'name'    => 'idx_running',
+                        'type'    => 'INDEX',
+                        'columns' => ['outcome', 'occurred_at'],
                     ],
                 ],
             ],

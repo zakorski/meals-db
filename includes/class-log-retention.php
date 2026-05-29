@@ -1,9 +1,20 @@
 <?php
 /**
- * Log retention cron — prunes meals_hook_log and meals_job_log so
- * neither table grows unbounded. Runs at 04:30 site time (30 min
- * after the daily report) so report queries see the full window
- * before pruning begins.
+ * Log retention cron — prunes the `meals_event_log` trunk (directive
+ * STR-LOG) so it never grows unbounded (the MAJ-2 lesson). Runs at 04:30
+ * site time, 30 min after the daily report, so report queries see the
+ * full window before pruning begins.
+ *
+ * Pruning is by SEVERITY + AGE, with two hard guards (directive
+ * §"disciplines" #5):
+ *   - NEVER prune an outcome='running' row (the daily report's hang
+ *     detection needs it to stay visible until it resolves).
+ *   - NEVER prune an unresolved 'degraded'/'failed' row until it has aged
+ *     past the long window — a swallowed problem must survive long enough
+ *     to be noticed, regardless of its severity band.
+ *
+ * meals_audit_log is NOT touched here — it is a compliance artifact with
+ * its own (long, legally-mandated) retention. See CLAUDE.md §6.
  *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
@@ -18,19 +29,20 @@ class MealsDB_Log_Retention {
     public const JOB_NAME = 'log_retention';
 
     /**
-     * Retention windows in days. Hook log churns fast (10K rows/month
-     * typical) so keep ~3 months for trend reporting. Job log is tiny
-     * (a handful of rows per day) so keep a year for "did this fire
-     * monthly" investigations.
+     * Retention windows in days, by severity band. debug/info churn fast
+     * (hook fires, ~10K/month) so keep ~3 months for trend reporting;
+     * warnings a little longer; errors/critical a year. degraded/failed
+     * rows ALWAYS use the long window regardless of their severity.
      */
-    private const HOOK_LOG_DAYS = 90;
-    private const JOB_LOG_DAYS  = 365;
+    private const SHORT_DAYS  = 90;   // debug, info
+    private const MEDIUM_DAYS = 180;  // notice, warning
+    private const LONG_DAYS   = 365;  // error, critical — and all degraded/failed
 
     /**
      * Hard cap on rows deleted per pass. Without this, a backlog
-     * accumulated during an outage could be deleted in a single
-     * statement large enough to lock the table for seconds —
-     * stretching across a checkout request that fires a hook.
+     * accumulated during an outage could be deleted in a single statement
+     * large enough to lock the table for seconds — stretching across a
+     * checkout request that fires a hook.
      */
     private const MAX_ROWS_PER_PASS = 5000;
 
@@ -44,22 +56,20 @@ class MealsDB_Log_Retention {
     public static function run(): void {
         $log_id = MealsDB_Job_Logger::start(self::JOB_NAME);
         try {
-            $hook_deleted = self::prune_table(
-                MealsDB_Tables::HOOK_LOG,
-                'fired_at',
-                self::HOOK_LOG_DAYS
-            );
-            $job_deleted = self::prune_table(
-                MealsDB_Tables::JOB_LOG,
-                'started_at',
-                self::JOB_LOG_DAYS,
-                ['running'] // never prune a row that's still 'running'
-            );
+            $deleted = 0;
+
+            // Per-band prune of RESOLVED, non-running rows. degraded/failed
+            // are excluded here and handled by the long-window pass below.
+            $deleted += self::prune_band(['debug', 'info'], self::SHORT_DAYS);
+            $deleted += self::prune_band(['notice', 'warning'], self::MEDIUM_DAYS);
+            $deleted += self::prune_band(['error', 'critical'], self::LONG_DAYS);
+
+            // Aged degraded/failed (any severity), excluding running.
+            $deleted += self::prune_unresolved(self::LONG_DAYS);
 
             MealsDB_Job_Logger::finish($log_id, [
-                'records_processed' => $hook_deleted + $job_deleted,
-                'hook_log_deleted'  => $hook_deleted,
-                'job_log_deleted'   => $job_deleted,
+                'records_processed' => $deleted,
+                'event_log_deleted' => $deleted,
             ]);
         } catch (\Throwable $e) {
             MealsDB_Job_Logger::fail($log_id, $e->getMessage());
@@ -69,41 +79,60 @@ class MealsDB_Log_Retention {
     }
 
     /**
-     * @param string   $table_const           Constant from MealsDB_Tables.
-     * @param string   $timestamp_column      Column used to determine age.
-     * @param int      $days                  Keep rows newer than this.
-     * @param string[] $exclude_running_status If set, exclude these
-     *                                        statuses from the delete
-     *                                        (only used on the job log).
+     * Delete rows in the given severity band older than $days, but only
+     * those whose outcome is neither 'running' (never prune) nor
+     * 'degraded'/'failed' (handled separately on the long window).
+     *
+     * @param string[] $severities
      */
-    private static function prune_table(
-        string $table_const,
-        string $timestamp_column,
-        int $days,
-        array $exclude_running_status = []
-    ): int {
+    private static function prune_band(array $severities, int $days): int {
         global $wpdb;
 
-        $table  = MealsDB_DB::get_table_name($table_const);
+        $table  = MealsDB_DB::get_table_name(MealsDB_Tables::EVENT_LOG);
         $cutoff = gmdate('Y-m-d H:i:s', time() - ($days * 86400));
 
-        if (!empty($exclude_running_status)) {
-            // The job log can have a row still in 'running' state
-            // because the job is genuinely long-running. Don't prune
-            // those; the daily report's hang-detection needs them.
-            $placeholders = implode(',', array_fill(0, count($exclude_running_status), '%s'));
-            $sql = $wpdb->prepare(
-                "DELETE FROM `{$table}` WHERE `{$timestamp_column}` < %s AND status NOT IN ($placeholders) LIMIT %d",
-                array_merge([$cutoff], $exclude_running_status, [self::MAX_ROWS_PER_PASS])
-            );
-        } else {
-            $sql = $wpdb->prepare(
-                "DELETE FROM `{$table}` WHERE `{$timestamp_column}` < %s LIMIT %d",
-                $cutoff,
-                self::MAX_ROWS_PER_PASS
-            );
-        }
+        $sev_placeholders = implode(',', array_fill(0, count($severities), '%s'));
+        $sql = $wpdb->prepare(
+            "DELETE FROM `{$table}`
+             WHERE occurred_at < %s
+               AND severity IN ($sev_placeholders)
+               AND outcome NOT IN (%s, %s, %s)
+             LIMIT %d",
+            array_merge(
+                [$cutoff],
+                $severities,
+                [
+                    MealsDB_Event_Log::OUTCOME_RUNNING,
+                    MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    MealsDB_Event_Log::OUTCOME_FAILED,
+                    self::MAX_ROWS_PER_PASS,
+                ]
+            )
+        );
+        $result = $wpdb->query($sql);
+        return $result === false ? 0 : (int) $result;
+    }
 
+    /**
+     * Delete aged 'degraded'/'failed' rows (any severity) older than
+     * $days. 'running' is excluded — it is never pruned.
+     */
+    private static function prune_unresolved(int $days): int {
+        global $wpdb;
+
+        $table  = MealsDB_DB::get_table_name(MealsDB_Tables::EVENT_LOG);
+        $cutoff = gmdate('Y-m-d H:i:s', time() - ($days * 86400));
+
+        $sql = $wpdb->prepare(
+            "DELETE FROM `{$table}`
+             WHERE occurred_at < %s
+               AND outcome IN (%s, %s)
+             LIMIT %d",
+            $cutoff,
+            MealsDB_Event_Log::OUTCOME_DEGRADED,
+            MealsDB_Event_Log::OUTCOME_FAILED,
+            self::MAX_ROWS_PER_PASS
+        );
         $result = $wpdb->query($sql);
         return $result === false ? 0 : (int) $result;
     }
