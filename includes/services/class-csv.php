@@ -23,6 +23,17 @@ class MealsDB_CSV {
     private const FORMULA_TRIGGERS = [ '=', '+', '-', '@', "\t", "\r" ];
 
     /**
+     * Matches a value that is a well-formed plain number, optionally signed.
+     * Optional leading - or +, digits, an optional single decimal part, and
+     * NOTHING else (anchored). "-10.24" / "1024" / "+5" qualify; "-2+3",
+     * "-=1", "-1-1", "1,024" do not.
+     *
+     * Used by cell() to exempt genuine numeric values (esp. negative money)
+     * from the leading-char formula guard.
+     */
+    private const NUMERIC_VALUE = '/^[-+]?\d+(\.\d+)?$/';
+
+    /**
      * Sanitize and quote a single CSV field.
      *
      * @param mixed $value Raw cell value (scalars are stringified).
@@ -34,7 +45,21 @@ class MealsDB_CSV {
 
         $string = is_scalar($value) ? (string) $value : '';
 
-        if ($string !== '' && in_array($string[0], self::FORMULA_TRIGGERS, true)) {
+        // QW-3: a well-formed number (incl. negative money like -10.24) is NOT a
+        // formula-injection vector — a spreadsheet renders it as the number it
+        // is. Exempt it from the leading-char guard so negative amounts aren't
+        // corrupted into text ('-10.24) in a government-bound numeric column.
+        // MealsDB_Money::format / number_format emit a leading '-' for
+        // negatives, which previously tripped the guard (audit MAJ-3). A leading
+        // '-' (or '+', '@', etc.) in a NON-numeric string is still neutralised:
+        // "-2+3" typed into a name field is a real injection vector and stays
+        // quoted. cell_strict() is intentionally NOT changed — it strips for the
+        // handful of exports that must never contain a formula at any cost.
+        $is_plain_number = ($string !== '') && preg_match(self::NUMERIC_VALUE, $string) === 1;
+
+        if (!$is_plain_number
+            && $string !== ''
+            && in_array($string[0], self::FORMULA_TRIGGERS, true)) {
             // Prepend a single quote so spreadsheet apps treat the value as
             // text. The quote is stripped on display in Excel/Numbers but
             // remains in the underlying data — acceptable trade for safety.

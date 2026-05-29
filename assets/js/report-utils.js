@@ -37,12 +37,19 @@
     //      double-quotes doubled up. Without this, a client name like
     //      "Smith, John" splits into two cells and corrupts the row.
     var FORMULA_TRIGGERS = '=+-@\t\r';
+    // QW-3: a well-formed number (incl. negative money like -10.24) is not a
+    // formula — exempt it from the leading-char guard so negative amounts
+    // aren't corrupted into text ('-10.24). Mirrors MealsDB_CSV::NUMERIC_VALUE.
+    // Anchored: "-2+3" is NOT numeric and stays quoted as an injection vector.
+    var NUMERIC_VALUE = /^[-+]?\d+(\.\d+)?$/;
     function csvCell(value) {
         if (value === null || value === undefined) {
             return '';
         }
         var str = String(value);
-        if (str.length && FORMULA_TRIGGERS.indexOf(str.charAt(0)) !== -1) {
+        if (str.length
+            && !NUMERIC_VALUE.test(str)
+            && FORMULA_TRIGGERS.indexOf(str.charAt(0)) !== -1) {
             str = "'" + str;
         }
         if (/[",\r\n]/.test(str)) {

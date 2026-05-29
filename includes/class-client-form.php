@@ -1160,10 +1160,21 @@ class MealsDB_Client_Form {
     /**
      * Encode a draft payload for storage.
      *
-     * Drafts contain the same PII columns the live record encrypts, so
-     * encrypt the JSON envelope under the same key. Falls back to plain
-     * JSON when encryption is unavailable (e.g. test fixtures without a
-     * configured key) so saving still works in those environments.
+     * Drafts contain the same PII columns the live record encrypts
+     * (individual_id, requisition_id, vet_health_card, names, addresses), so
+     * the JSON envelope is encrypted under the same key.
+     *
+     * QW-2 — fail CLOSED, never open. Previously this fell back to storing the
+     * PLAINTEXT JSON when encryption was unavailable or threw, which meant a
+     * missing/misconfigured key silently persisted full government PII as
+     * cleartext in meals_drafts. That is inconsistent with the three live
+     * client-write paths, which all abort rather than write plaintext PII. The
+     * right trade for a PII system is: a draft that can't be encrypted is NOT
+     * saved (and the caller surfaces "Failed to save draft."). Losing an
+     * unsaved draft beats writing government IDs in cleartext.
+     *
+     * NOTE: the WRITE path now refuses plaintext, but decode_draft_payload()
+     * still READS legacy plaintext drafts — only writing cleartext is forbidden.
      *
      * @return string|false
      */
@@ -1173,13 +1184,16 @@ class MealsDB_Client_Form {
             return false;
         }
         if (!class_exists('MealsDB_Encryption')) {
-            return $json;
+            // No encryption layer at all → refuse to persist PII as plaintext.
+            error_log('[MealsDB] Draft not saved: encryption unavailable; refusing to store PII as plaintext.');
+            return false;
         }
         try {
             return MealsDB_Encryption::encrypt($json);
         } catch (\Throwable $e) {
-            error_log('[MealsDB] Draft encrypt fallback to plaintext: ' . $e->getMessage());
-            return $json;
+            // Fail closed: never fall back to plaintext PII at rest.
+            error_log('[MealsDB] Draft not saved: encryption failed (' . $e->getMessage() . '); refusing plaintext fallback.');
+            return false;
         }
     }
 

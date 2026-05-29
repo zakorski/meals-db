@@ -1,0 +1,2 @@
+includes/class-client-form.php:1050:        $json = self::encode_draft_payload($data);
+includes/class-client-form.php:1170:    private static function encode_draft_payload(array $data) {
