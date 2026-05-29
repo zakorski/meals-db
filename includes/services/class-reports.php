@@ -114,7 +114,7 @@ class MealsDB_Reports {
             LEFT JOIN `{$meals_products_table}` mp
                 ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
             WHERE o.date_created_gmt >= %s
-                AND o.date_created_gmt <= %s
+                AND o.date_created_gmt < %s
                 AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
                 AND o.type = 'shop_order'
                 AND (mp.product_type IS NULL OR mp.product_type IN ('meal', 'side'))
@@ -122,7 +122,7 @@ class MealsDB_Reports {
             ORDER BY item ASC
         ";
 
-        $prepared = $this->wpdb->prepare($sql, $dates['start'], $dates['end']);
+        $prepared = $this->wpdb->prepare($sql, $dates['start'], $dates['end_exclusive']);
         $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
 
         return array_map([$this, 'format_resupply_row'], is_array($rows) ? $rows : []);
@@ -176,7 +176,7 @@ class MealsDB_Reports {
             LEFT JOIN `{$meals_products_table}` mp
                 ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
             WHERE o.date_created_gmt >= %s
-                AND o.date_created_gmt <= %s
+                AND o.date_created_gmt < %s
                 AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
                 AND o.type = 'shop_order'
                 AND (mp.product_type IS NULL OR mp.product_type IN ('meal', 'side'))
@@ -184,7 +184,7 @@ class MealsDB_Reports {
             ORDER BY item ASC
         ";
 
-        $prepared = $this->wpdb->prepare($sql, $dates['start'], $dates['end']);
+        $prepared = $this->wpdb->prepare($sql, $dates['start'], $dates['end_exclusive']);
         $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
 
         if (!is_array($rows)) {
@@ -942,8 +942,12 @@ class MealsDB_Reports {
         $sides_cat_ids = [25, 23, 37, 43];
 
         // 3. Date range for WC order query.
-        $start_datetime = $start_date . ' 00:00:00';
-        $end_datetime   = $end_date . ' 23:59:59';
+        // Half-open interval [start, end_exclusive): start of the start day to
+        // start of the day AFTER the end day. The previous `<= '... 23:59:59'`
+        // bound dropped any order in the final sub-second and was inconsistent
+        // with the half-open convention used elsewhere in this file (audit MAJ-5).
+        $start_datetime = gmdate('Y-m-d 00:00:00', strtotime($start_date));
+        $end_datetime   = gmdate('Y-m-d 00:00:00', strtotime($end_date . ' +1 day'));
         $valid_statuses = ['wc-processing', 'wc-completed', 'wc-paid'];
 
         $orders_table     = $this->wpdb->prefix . 'wc_orders';
@@ -979,7 +983,7 @@ class MealsDB_Reports {
             "SELECT id, customer_id, tax_amount
              FROM {$orders_table}
              WHERE customer_id IN ($user_placeholders)
-               AND date_created_gmt >= %s AND date_created_gmt <= %s
+               AND date_created_gmt >= %s AND date_created_gmt < %s
                AND status IN ('wc-processing', 'wc-completed', 'wc-paid')
                AND type = 'shop_order'",
             ...array_merge($wp_user_ids, [$start_datetime, $end_datetime])
@@ -1209,13 +1213,16 @@ class MealsDB_Reports {
 
         // 1. Batch-fetch all orders in the date range from HPOS.
         $orders_table = $this->wpdb->prefix . 'wc_orders';
-        $start_dt = $start_date . ' 00:00:00';
-        $end_dt   = $end_date . ' 23:59:59';
+        // Half-open interval [start, end_exclusive) — see private_customer_report
+        // above; the old `<= '... 23:59:59'` bound was inconsistent and clipped
+        // the final sub-second (audit MAJ-5).
+        $start_dt = gmdate('Y-m-d 00:00:00', strtotime($start_date));
+        $end_dt   = gmdate('Y-m-d 00:00:00', strtotime($end_date . ' +1 day'));
 
         $order_rows = $this->wpdb->get_results($this->wpdb->prepare(
             "SELECT id, customer_id, date_created_gmt, status
              FROM {$orders_table}
-             WHERE date_created_gmt >= %s AND date_created_gmt <= %s
+             WHERE date_created_gmt >= %s AND date_created_gmt < %s
                AND status NOT IN ('wc-trash', 'trash')
                AND type = 'shop_order'
              ORDER BY date_created_gmt ASC",
@@ -1416,9 +1423,19 @@ class MealsDB_Reports {
             $end   = $tmp;
         }
 
+        // Half-open interval: start of the start day (inclusive) to start of the
+        // day AFTER the end day (exclusive). Previously this returned the end day
+        // at 00:00:00 and the queries compared with `<= %s`, so an order at any
+        // time after midnight on the final day was `> end` and silently excluded —
+        // "report through Jan 31" dropped all of Jan 31 (audit MAJ-5). gmdate/UTC
+        // so the boundary does not drift across DST (mirrors
+        // MealsDB_WC_Order_Query::get_orders_for_users). Every consumer must use
+        // `>= start AND < end_exclusive`; the key is renamed from `end` to
+        // `end_exclusive` deliberately, so any missed call site trips an
+        // undefined-index notice rather than silently inheriting old semantics.
         return [
-            'start' => gmdate('Y-m-d H:i:s', $start),
-            'end'   => gmdate('Y-m-d H:i:s', $end),
+            'start'         => gmdate('Y-m-d 00:00:00', $start),
+            'end_exclusive' => gmdate('Y-m-d 00:00:00', strtotime('+1 day', $end)),
         ];
     }
 
