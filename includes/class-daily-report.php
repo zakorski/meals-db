@@ -38,8 +38,11 @@ class MealsDB_Daily_Report {
         'woocommerce_order_status_refunded',
         'woocommerce_order_status_failed',
         'woocommerce_order_status_trash',
-        'trashed_post',
-        'before_delete_post',
+        // HPOS order-lifecycle hooks (LB-5). The old wp_posts hooks
+        // (trashed_post / before_delete_post) never fired for orders under
+        // HPOS, so monitoring them read as "healthy" when it meant "dead".
+        'woocommerce_trash_order',
+        'woocommerce_delete_order',
         'profile_update',
         'woocommerce_customer_save_address',
         'woocommerce_created_customer',

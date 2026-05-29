@@ -23,8 +23,11 @@ class MealsDB_Allocation_Hooks {
         add_action('woocommerce_order_status_refunded', [self::class, 'on_order_refunded'], 20, 1);
         add_action('woocommerce_order_status_failed', [self::class, 'on_order_failed'], 20, 1);
         add_action('woocommerce_order_status_trash', [self::class, 'on_order_status_trashed'], 20, 1);
-        add_action('trashed_post', [self::class, 'on_order_trashed'], 20, 1);
-        add_action('before_delete_post', [self::class, 'on_order_deleted'], 20, 1);
+        // HPOS: orders are not posts, so trashed_post / before_delete_post never
+        // fire for them. Subscribe to WooCommerce's own order-lifecycle hooks,
+        // which fire with an order ID and only for orders. (LB-5)
+        add_action('woocommerce_trash_order', [self::class, 'on_order_trashed'], 20, 1);
+        add_action('woocommerce_delete_order', [self::class, 'on_order_deleted'], 20, 1);
 
         // Quick Order creates orders via wc_create_order() which fires woocommerce_new_order.
         // No additional hook needed for Quick Order.
@@ -249,53 +252,27 @@ class MealsDB_Allocation_Hooks {
     }
 
     /**
-     * Handle order trashed via post mechanism.
+     * Handle order trashed (HPOS: woocommerce_trash_order). Fires with an
+     * order ID, only for orders, so no post-type guard is needed — the old
+     * get_post_type($id) === 'shop_order' guard never matched under HPOS
+     * (orders aren't posts), so this handler used to be dead. (LB-5)
      *
-     * @param int $post_id
+     * @param int $order_id
      */
-    public static function on_order_trashed(int $post_id): void {
-        try {
-            if (get_post_type($post_id) !== 'shop_order') {
-                // Don't record fires for non-orders — trashed_post
-                // fires for every post type and the noise would
-                // swamp the hook log. Only record the ones that
-                // matter to this plugin.
-                return;
-            }
-            $engine = new MealsDB_Allocation_Engine();
-            $engine->deallocate_order($post_id);
-            self::safe_record_hook('trashed_post', 'order', $post_id);
-        } catch (\Throwable $e) {
-            self::safe_record_hook(
-                'trashed_post', 'order', $post_id,
-                MealsDB_Hook_Logger::OUTCOME_ERRORED,
-                ['exception' => get_class($e)],
-                $e->getMessage()
-            );
-        }
+    public static function on_order_trashed(int $order_id): void {
+        self::process_deallocation_hook('woocommerce_trash_order', $order_id);
     }
 
     /**
-     * Handle order permanently deleted via post mechanism.
+     * Handle order permanently deleted (HPOS: woocommerce_delete_order).
+     * Fires with an order ID, only for orders — no post-type guard needed,
+     * and deallocate_order() is self-validating (no-ops if the ID has no
+     * allocations). (LB-5)
      *
-     * @param int $post_id
+     * @param int $order_id
      */
-    public static function on_order_deleted(int $post_id): void {
-        try {
-            if (get_post_type($post_id) !== 'shop_order') {
-                return;
-            }
-            $engine = new MealsDB_Allocation_Engine();
-            $engine->deallocate_order($post_id);
-            self::safe_record_hook('before_delete_post', 'order', $post_id);
-        } catch (\Throwable $e) {
-            self::safe_record_hook(
-                'before_delete_post', 'order', $post_id,
-                MealsDB_Hook_Logger::OUTCOME_ERRORED,
-                ['exception' => get_class($e)],
-                $e->getMessage()
-            );
-        }
+    public static function on_order_deleted(int $order_id): void {
+        self::process_deallocation_hook('woocommerce_delete_order', $order_id);
     }
 
     /**
