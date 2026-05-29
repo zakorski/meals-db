@@ -379,33 +379,66 @@ class MealsDB_Slip_PDF_Generator {
     }
 
     /**
-     * Determine whether $delivery_date is the earliest delivery of its
-     * billing month for $client_id, by querying meals_delivery_allocations.
+     * Should the monthly client contribution be collected on this delivery?
+     *
+     * The contribution is collected once per billing month, on the first
+     * delivery. Historically this was inferred from MIN(delivery_date) in
+     * meals_delivery_allocations — but those detail rows only exist after the
+     * allocation rebuilder has run (see LB-1). Before materialisation, the old
+     * code defaulted to TRUE and over-collected the contribution on every
+     * delivery (LB-4).
+     *
+     * The authoritative signal is the contribution_applied flag on
+     * meals_client_allocations, set when the fee path bills the contribution.
+     * We use that as the source of truth: if the contribution has already been
+     * applied this month, do NOT collect again. When we genuinely cannot
+     * determine state, we fail to the financially-safe direction (do not
+     * over-collect).
      */
     private function is_first_delivery_of_month(int $client_id, string $delivery_date): bool {
         if ($client_id <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery_date)) {
-            return true;
+            return false; // can't identify the client/month — do not over-collect
         }
         if (!isset($GLOBALS['wpdb'])) {
-            return true;
+            return false; // no DB — do not over-collect
         }
 
-        $wpdb = $GLOBALS['wpdb'];
+        $wpdb          = $GLOBALS['wpdb'];
         $billing_month = substr($delivery_date, 0, 7);
-        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+        $summary_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+        $alloc_table   = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
 
+        // 1) Authoritative: has the contribution already been applied/collected
+        //    this month? If so, this is NOT a collect-the-contribution delivery.
+        $already_applied = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT contribution_applied FROM `{$summary_table}`
+             WHERE client_id = %d AND billing_month = %s",
+            $client_id,
+            $billing_month
+        ));
+        if ($already_applied === 1) {
+            return false;
+        }
+
+        // 2) If allocation detail rows exist, use the genuine earliest-delivery
+        //    signal (correct once the rebuilder has materialised the month).
         $earliest = $wpdb->get_var($wpdb->prepare(
             "SELECT MIN(delivery_date) FROM `{$alloc_table}`
              WHERE client_id = %d AND billing_month = %s",
             $client_id,
             $billing_month
         ));
-
-        if ($earliest === null || $earliest === '') {
-            return true;
+        if ($earliest !== null && $earliest !== '') {
+            return (string) $earliest === $delivery_date;
         }
 
-        return (string) $earliest === $delivery_date;
+        // 3) No allocation rows AND contribution not yet applied. We cannot
+        //    prove this is the earliest delivery. Per LB-4, do NOT default to
+        //    collecting (the old bug). Once LB-1 materialises allocations and/or
+        //    the fee path sets contribution_applied, the correct delivery will
+        //    collect it. Failing safe here means at worst a contribution is
+        //    collected one delivery later — never over-collected every visit.
+        return false;
     }
 
     // -----------------------------------------------------------------
