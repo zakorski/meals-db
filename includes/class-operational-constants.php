@@ -89,11 +89,17 @@ class MealsDB_Operational_Constants {
     // apply to Sussex-zone ('S') clients per the SDNB contract addendum;
     // see SDNB_RURAL_ZONE_CODES / is_rural_zone().
     //
-    // To flip rates at cutover, edit ONLY the six values below. There is
-    // no longer a duplicate rate table to keep in sync (the invoice
-    // generator's old $sdnb_rate_tiers array was removed, LB-7) and no
-    // multipliers to recompute (SDNB HST is now sourced live from
-    // WooCommerce — see MealsDB_Invoice_Generator::resolve_hst_rate).
+    // SEED DEFAULTS (directive DEFINITIONS-1): these six values are no longer
+    // the LIVE source for the SDNB program rates. They now SEED
+    // MealsDB_Rate_Definitions, which the operator edits on the Rate
+    // Definitions admin page (option mealsdb_rate_definitions). The accessor
+    // returns the stored option value if present, else the seed below — so
+    // editing a constant here changes only the seed/fallback, NOT the live
+    // billed rate. To change a live rate, edit it on the page (it's audited);
+    // a constant edit here would do nothing once an override is stored.
+    //
+    // HST is unaffected — it is still sourced live from WooCommerce (LB-7);
+    // Definitions introduces no HST constant or field.
     const SDNB_RATE_PRIMARY_MAIN         = 14.66;
     const SDNB_RATE_PRIMARY_MAIN_RURAL   = 15.47;
     const SDNB_RATE_SECONDARY_MAIN       = 10.18;
@@ -123,6 +129,15 @@ class MealsDB_Operational_Constants {
     //   VAC_RATE_SIDE          — per-side cost rate.
     //   VAC_SIDES_CONVERSION_RATE — remaining allowance ÷ this gives
     //                               sides allowed for the month.
+    //
+    // SEED DEFAULTS (directive DEFINITIONS-1): VAC_PER_MAIN_ALLOWANCE (now the
+    // VAC per-main COVERAGE) and VAC_RATE_SIDE seed MealsDB_Rate_Definitions
+    // ('vac_per_main_coverage' / 'vac_side'). The coverage is the
+    // annually-changing number — Janet edits it on the Rate Definitions page
+    // (10.64 → 11.14 at cutover), not here. VAC_SIDES_CONVERSION_RATE and
+    // VAC_SIDES_HST_RATE are NOT rates that move on a business cadence and are
+    // NOT moved to Definitions. The actual VAC consumption of the accessor
+    // values is wired in INV-DRAFT-3; this directive only exposes them.
 
     const VAC_PER_MAIN_ALLOWANCE     = 10.64;
     const VAC_RATE_SIDE              = 4.10;
@@ -189,11 +204,30 @@ class MealsDB_Operational_Constants {
     /**
      * Get the SDNB main rate for a tier and rurality.
      *
+     * Reads through MealsDB_Rate_Definitions (directive DEFINITIONS-1) so the
+     * operator-edited program rate wins, falling back to the seed constant.
+     * The signature is unchanged — every generator call site (lines ~246/317/
+     * 354) is untouched; this is facade discipline. The class_exists guard
+     * keeps this safe if the accessor somehow hasn't loaded (it always does
+     * via the autoloader); in that degenerate case it returns the seed.
+     *
      * @param string $tier 'primary' or 'secondary'
      * @param bool   $rural Whether the client is in a rural zone.
      * @return float Rate in dollars.
      */
     public static function get_sdnb_main_rate(string $tier, bool $rural = false): float {
+        $key = ($tier === 'primary')
+            ? ($rural ? 'sdnb_primary_main_rural' : 'sdnb_primary_main')
+            : ($rural ? 'sdnb_secondary_main_rural' : 'sdnb_secondary_main');
+
+        if (class_exists('MealsDB_Rate_Definitions')) {
+            $rate = MealsDB_Rate_Definitions::get($key);
+            if ($rate !== null) {
+                return (float) $rate;
+            }
+        }
+
+        // Seed fallback (accessor unavailable / unknown key).
         if ($tier === 'primary') {
             return $rural ? self::SDNB_RATE_PRIMARY_MAIN_RURAL : self::SDNB_RATE_PRIMARY_MAIN;
         }
@@ -203,10 +237,22 @@ class MealsDB_Operational_Constants {
     /**
      * Get the SDNB side rate.
      *
+     * Reads through MealsDB_Rate_Definitions (directive DEFINITIONS-1); see
+     * get_sdnb_main_rate() for the facade/fallback rationale.
+     *
      * @param bool $rural Whether the client is in a rural zone.
      * @return float Rate in dollars.
      */
     public static function get_sdnb_side_rate(bool $rural = false): float {
+        $key = $rural ? 'sdnb_side_rural' : 'sdnb_side';
+
+        if (class_exists('MealsDB_Rate_Definitions')) {
+            $rate = MealsDB_Rate_Definitions::get($key);
+            if ($rate !== null) {
+                return (float) $rate;
+            }
+        }
+
         return $rural ? self::SDNB_RATE_SIDE_RURAL : self::SDNB_RATE_SIDE;
     }
 

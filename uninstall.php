@@ -139,6 +139,8 @@ function mealsdb_uninstall_cleanup_current_site(): void {
     // Directive STR-LOG digest options.
     delete_option('mealsdb_event_digest_last_run');
     delete_option('mealsdb_event_digest_min_severity');
+    // Directive DEFINITIONS-1 operator-editable program rates.
+    delete_option('mealsdb_rate_definitions');
 
     // Plugin transients — caches that would otherwise linger as stale
     // wp_options rows after the tables they describe are gone.
