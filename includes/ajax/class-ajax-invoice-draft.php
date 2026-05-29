@@ -202,10 +202,22 @@ class MealsDB_Ajax_Invoice_Draft {
             }
 
             // Audit ONLY an actual change (decision #3 + T-4): logging no-ops
-            // would bury the real edits. The composite "<cid>:<field>" name is
-            // what MealsDB_Logger::redact_value now unpacks to fingerprint a
-            // PII field's old/new (INV-DRAFT-2 logger change) — so a name/ID
-            // edit never lands as cleartext in the audit log.
+            // would bury the real edits.
+            //
+            // Redaction scope (verified, not assumed — directive PII note): the
+            // composite "<cid>:<field>" name is what MealsDB_Logger::redact_value
+            // now unpacks (INV-DRAFT-2 logger change) so an edit to a field IN
+            // its SENSITIVE_FIELDS list — the encrypted PII (individual_id,
+            // vet_health_card, requisition_id), addresses, emails, phones — is
+            // fingerprinted rather than stored as cleartext. It does NOT cover
+            // first_name/last_name: those are not encrypted at rest and are
+            // deliberately absent from SENSITIVE_FIELDS, so a name edit is
+            // logged in cleartext here — exactly as the existing sync_override
+            // audit path (class-sync-mutate.php) already records name changes.
+            // The audit log is itself manage_options-gated, so this is the
+            // plugin's standing decision, not a new exposure. If names should
+            // ever be fingerprinted, add them to SENSITIVE_FIELDS (one place,
+            // plugin-wide) rather than scrubbing here.
             if ($old !== $validated) {
                 MealsDB_Logger::log(
                     'invoice_draft_edit',
