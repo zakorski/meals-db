@@ -24,7 +24,13 @@ if (!function_exists('apply_filters')) { function apply_filters($t, $v) { return
 if (!function_exists('add_action'))    { function add_action(...$a) {} }
 if (!function_exists('wp_next_scheduled')) { function wp_next_scheduled(...$a) { return false; } }
 if (!function_exists('wp_schedule_event'))  { function wp_schedule_event(...$a) {} }
-if (!function_exists('get_post_type'))  { function get_post_type($p) { return 'shop_order'; } }
+// NOTE (LB-5): the trash/delete deallocation handlers no longer call
+// get_post_type — under HPOS orders are not posts, so the old
+// get_post_type($id) === 'shop_order' guard never matched and the handlers
+// were dead. The previous unconditional get_post_type→'shop_order' stub here
+// MASKED that bug (it made the guard pass in the test's fake world while
+// production silently early-returned). It has been removed deliberately; the
+// trash/delete assertions below now exercise the real, ungated path.
 if (!function_exists('wp_json_encode')) {
     function wp_json_encode($d, $f = 0, $depth = 512) {
         $r = json_encode($d, $f, $depth);
@@ -156,6 +162,39 @@ try {
     $threw = true;
 }
 assert_equal(false, $threw, 'on_order_status_changed swallows engine exceptions');
+
+// ---------------------------------------------------------------------------
+// on_order_trashed (HPOS woocommerce_trash_order): engine throws → must NOT
+// propagate, MUST log an errored row. Reaching the engine at all proves the
+// handler no longer early-returns on a get_post_type guard (LB-5). With the
+// guard in place and no get_post_type stub, this would have fatalled or
+// short-circuited before touching the engine — so the errored row is the
+// proof the real deallocation path runs.
+// ---------------------------------------------------------------------------
+$threw = false;
+try {
+    MealsDB_Allocation_Hooks::on_order_trashed(321);
+} catch (\Throwable $e) {
+    $threw = true;
+}
+assert_equal(false, $threw, 'on_order_trashed swallows engine exceptions');
+$last = end($wpdb->rows);
+assert_equal('errored', $last['outcome'] ?? null, 'errored outcome recorded for trash (deallocate_order was reached)');
+assert_equal('woocommerce_trash_order', $last['hook_name'] ?? null, 'trash recorded under the HPOS hook name');
+
+// ---------------------------------------------------------------------------
+// on_order_deleted (HPOS woocommerce_delete_order): same contract.
+// ---------------------------------------------------------------------------
+$threw = false;
+try {
+    MealsDB_Allocation_Hooks::on_order_deleted(654);
+} catch (\Throwable $e) {
+    $threw = true;
+}
+assert_equal(false, $threw, 'on_order_deleted swallows engine exceptions');
+$last = end($wpdb->rows);
+assert_equal('errored', $last['outcome'] ?? null, 'errored outcome recorded for delete (deallocate_order was reached)');
+assert_equal('woocommerce_delete_order', $last['hook_name'] ?? null, 'delete recorded under the HPOS hook name');
 
 // ---------------------------------------------------------------------------
 // nightly_sync IS allowed to re-throw — cron's native ledger should
