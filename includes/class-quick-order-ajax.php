@@ -362,12 +362,25 @@ class MealsDB_Quick_Order_Ajax {
                     'message' => __('A rate can only be applied to an active Meals DB client.', 'meals-db'),
                 ]);
             }
-            if (!self::validate_rate_for_client($rate_id, $client_id)) {
+            // MAJ-1: a WP user can own multiple active client records
+            // (operator-confirmed dual-program case: e.g. SDNB + Veteran).
+            // get_active_client_id_for_user() above picks one arbitrarily
+            // (LIMIT 1). The selected rate, however, pins exactly one client
+            // (meals_client_rates.rate_id is unique and carries client_id), so
+            // resolve the client FROM the rate and target THAT record — this is
+            // how the operator routes the order to the intended program. The
+            // lookup also re-validates that the rate's client is an ACTIVE
+            // record owned by this WP user, so an operator cannot apply another
+            // user's rate (this supersedes the old validate_rate_for_client
+            // check, which validated against the arbitrary LIMIT 1 client).
+            $rate_client_id = self::resolve_active_client_for_rate_user($rate_id, $wp_user_id);
+            if ($rate_client_id <= 0) {
                 wp_send_json([
                     'success' => false,
                     'message' => __('Invalid rate selection.', 'meals-db'),
                 ]);
             }
+            $client_id = $rate_client_id;
         }
 
         try {
@@ -981,20 +994,45 @@ class MealsDB_Quick_Order_Ajax {
     /**
      * Validate that a rate_id belongs to a given client in meals_client_rates.
      */
-    private static function validate_rate_for_client(int $rate_id, int $client_id): bool {
+    /**
+     * Resolve the active meals_clients.client_id that owns a given rate FOR a
+     * given WP user, or 0 if the rate does not belong to an active client of
+     * that user.
+     *
+     * MAJ-1: a WP user can own multiple active client records (dual-program:
+     * SDNB + Veteran). The selected rate pins exactly one of them
+     * (meals_client_rates.rate_id is unique and carries client_id), so the
+     * order can be routed to the intended program rather than the arbitrary
+     * `wp_user_id ... LIMIT 1` client. The join to meals_clients enforces, in
+     * one query, that the rate's client is (a) owned by this WP user and (b)
+     * active — so an operator cannot apply another user's rate, and the
+     * returned id is the correct program record to bill.
+     *
+     * @return int client_id, or 0 when the rate is not a valid selection.
+     */
+    private static function resolve_active_client_for_rate_user(int $rate_id, int $wp_user_id): int {
+        if ($rate_id <= 0 || $wp_user_id <= 0) {
+            return 0;
+        }
+
         global $wpdb;
 
-        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
-        $row = $wpdb->get_row(
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $rates_table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
+
+        $client_id = $wpdb->get_var(
             $wpdb->prepare(
-                "SELECT rate_id FROM `{$table_name}` WHERE rate_id = %d AND client_id = %d LIMIT 1",
+                "SELECT c.client_id
+                   FROM `{$rates_table}` r
+                   JOIN `{$clients_table}` c ON c.client_id = r.client_id
+                  WHERE r.rate_id = %d AND c.wp_user_id = %d AND c.active = 1
+                  LIMIT 1",
                 $rate_id,
-                $client_id
-            ),
-            ARRAY_A
+                $wp_user_id
+            )
         );
 
-        return $row !== null;
+        return (int) $client_id;
     }
 
     /**

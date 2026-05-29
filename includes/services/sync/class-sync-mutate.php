@@ -655,11 +655,26 @@ class MealsDB_Sync_Mutate {
         $escaped_pk     = str_replace('`', '``', $primary_key);
         $escaped_column = str_replace('`', '``', $wp_column);
 
-        // Refuse if this WP user is already linked to a different client.
-        // The schema does not (yet) declare wp_user_id as UNIQUE, so this
-        // is an application-level check; multiple clients sharing a WP
-        // user yields nondeterministic results in find_government_client_
-        // by_wp_user (which uses LIMIT 1) and silently mis-routes orders.
+        // Detect whether this WP user is already linked to a DIFFERENT client.
+        //
+        // The schema intentionally does NOT declare wp_user_id as UNIQUE: the
+        // operator has confirmed a legitimate case where one WordPress user
+        // maps to two client records — a person who is both an SDNB recipient
+        // AND a Veteran (distinct programs, distinct billing). Per directive
+        // MAJ-1 we ALLOW the duplicate link instead of hard-refusing it.
+        //
+        // The hard refusal used to exist because the order->client resolvers
+        // (MealsDB_Allocation_Engine::resolve_client_for_order and
+        // MealsDB_Order_Fees::resolve_government_client) fall back to a
+        // `wp_user_id ... LIMIT 1` lookup, which would arbitrarily pick one of
+        // the two records and silently mis-route an order's billing. That risk
+        // is now handled at the resolver layer: those resolvers disambiguate a
+        // multi-client user by the order's mealsdb_rate_id (a rate row pins
+        // exactly one client) and emit a `degraded` trunk event when they
+        // cannot — so a mis-route is logged and greppable rather than silent.
+        // We therefore permit the link and record the duplicate as an
+        // operational warning (an attempt/outcome -> the trunk, NOT the audit
+        // log, which is for committed data changes).
         $existing_client_sql = sprintf(
             'SELECT `%s` FROM `%s` WHERE `%s` = %%d AND `%s` <> %%d LIMIT 1',
             $escaped_pk,
@@ -671,17 +686,29 @@ class MealsDB_Sync_Mutate {
             $connection->prepare($existing_client_sql, $user_id, $client_id)
         );
         if ($existing_client !== null) {
-            if ($transaction_started) {
-                $connection->query('ROLLBACK');
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'warning',
+                    'category'    => 'sync',
+                    'subsystem'   => 'sync_mutate',
+                    'event'       => 'link_wp_user.duplicate_allowed',
+                    'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'     => sprintf(
+                        'WP user %d now linked to multiple clients (existing %d, new %d) — dual-program; resolver routes orders by rate.',
+                        $user_id,
+                        (int) $existing_client,
+                        $client_id
+                    ),
+                    'entity_type' => 'user',
+                    'entity_id'   => $user_id,
+                    'context'     => [
+                        'existing_client' => (int) $existing_client,
+                        'new_client'      => $client_id,
+                    ],
+                ]);
             }
-            return new WP_Error(
-                'mealsdb_link_user_already_linked',
-                sprintf(
-                    __('WordPress user %1$d is already linked to Meals DB client %2$d. Unlink the existing client first.', 'meals-db'),
-                    $user_id,
-                    (int) $existing_client
-                )
-            );
+            // Fall through to the UPDATE in the same transaction: a duplicate
+            // is no longer fatal.
         }
 
         $update_sql = sprintf('UPDATE `%s` SET `%s` = %%d WHERE `%s` = %%d', $escaped_table, $escaped_column, $escaped_pk);

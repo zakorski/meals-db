@@ -266,10 +266,7 @@ class MealsDB_Allocation_Engine {
                 $wc_order_id
             ));
             if ($wp_user_id) {
-                $client_id = (int) $this->wpdb->get_var($this->wpdb->prepare(
-                    "SELECT client_id FROM {$clients_table} WHERE wp_user_id = %d LIMIT 1",
-                    $wp_user_id
-                ));
+                $client_id = $this->resolve_client_id_by_wp_user($wp_user_id, $wc_order_id, false);
             }
         }
 
@@ -279,10 +276,7 @@ class MealsDB_Allocation_Engine {
                 $wc_order_id
             ));
             if ($customer_id > 0) {
-                $client_id = (int) $this->wpdb->get_var($this->wpdb->prepare(
-                    "SELECT client_id FROM {$clients_table} WHERE wp_user_id = %d AND active = 1 LIMIT 1",
-                    $customer_id
-                ));
+                $client_id = $this->resolve_client_id_by_wp_user($customer_id, $wc_order_id, true);
             }
         }
 
@@ -302,6 +296,102 @@ class MealsDB_Allocation_Engine {
         }
 
         return $client_id;
+    }
+
+    /**
+     * Resolve a meals_clients.client_id from a WordPress user id for a given
+     * order, deterministically when the user maps to MULTIPLE client records.
+     *
+     * Directive MAJ-1: a WP user may legitimately own two client records (a
+     * person who is both an SDNB recipient and a Veteran). The historical
+     * `wp_user_id ... LIMIT 1` lookup would pick one arbitrarily and silently
+     * mis-route the order's billing. When the user has exactly one client the
+     * behaviour is unchanged (the program signal is irrelevant — the 99% path).
+     * When the user has several, we disambiguate by the order's mealsdb_rate_id:
+     * a rate row (meals_client_rates) is unique and carries its owning
+     * client_id, so it pins exactly one of the candidates. If the order carries
+     * no rate (or it matches none of the candidates) we keep the first
+     * candidate but emit a `degraded` trunk event so the mis-route is visible,
+     * not silent — turning the original "silently mis-routes" risk into a
+     * logged, greppable event.
+     *
+     * @param int  $wp_user_id   WP user / WC customer id.
+     * @param int  $wc_order_id  Order being routed (source of the rate signal).
+     * @param bool $active_only  Restrict to active clients (branch-3 semantics).
+     * @return int client_id, or 0 if the user maps to no client.
+     */
+    private function resolve_client_id_by_wp_user(int $wp_user_id, int $wc_order_id, bool $active_only): int {
+        if ($wp_user_id <= 0) {
+            return 0;
+        }
+
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $active_clause = $active_only ? ' AND active = 1' : '';
+
+        $candidates = array_map('intval', (array) $this->wpdb->get_col($this->wpdb->prepare(
+            "SELECT client_id FROM {$clients_table} WHERE wp_user_id = %d{$active_clause} ORDER BY client_id ASC",
+            $wp_user_id
+        )));
+
+        $count = count($candidates);
+        if ($count === 0) {
+            return 0;
+        }
+        if ($count === 1) {
+            // Single client: today's behaviour, untouched. The order's program
+            // signal is irrelevant when there is only one record to route to.
+            return $candidates[0];
+        }
+
+        // Multiple clients share this WP user — disambiguate by the order's
+        // rate, which pins exactly one client (rate_id is unique in
+        // meals_client_rates and carries the owning client_id).
+        $meta_table = $this->wpdb->prefix . 'wc_orders_meta';
+        $rate_id = (int) $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT meta_value FROM {$meta_table} WHERE order_id = %d AND meta_key = 'mealsdb_rate_id' LIMIT 1",
+            $wc_order_id
+        ));
+
+        if ($rate_id > 0) {
+            $rates_table  = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
+            $placeholders = implode(',', array_fill(0, $count, '%d'));
+            $matched = (int) $this->wpdb->get_var($this->wpdb->prepare(
+                "SELECT client_id FROM {$rates_table} WHERE rate_id = %d AND client_id IN ({$placeholders}) LIMIT 1",
+                array_merge([$rate_id], $candidates)
+            ));
+            if ($matched > 0) {
+                return $matched;
+            }
+        }
+
+        // Could not pin a single client from the order. Keep the historical
+        // first-row pick, but make the ambiguity VISIBLE (degraded) so it can
+        // be investigated rather than silently mis-billing.
+        if (class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'    => 'warning',
+                'category'    => 'allocation',
+                'subsystem'   => 'allocation_engine',
+                'event'       => 'resolver.ambiguous_multi_client',
+                'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message'     => sprintf(
+                    'Order %d: WP user %d maps to %d clients and the order pins none — routed to client %d by fallback.',
+                    $wc_order_id,
+                    $wp_user_id,
+                    $count,
+                    $candidates[0]
+                ),
+                'entity_type' => 'order',
+                'entity_id'   => $wc_order_id,
+                'context'     => [
+                    'wp_user_id' => $wp_user_id,
+                    'candidates' => $candidates,
+                    'chosen'     => $candidates[0],
+                ],
+            ]);
+        }
+
+        return $candidates[0];
     }
 
     /**
