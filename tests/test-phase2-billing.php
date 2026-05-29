@@ -18,6 +18,15 @@
  */
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
+
+// Mock WooCommerce's tax API: get_phase2_billing_data resolves the HST
+// rate live from WC_Tax (LB-7 follow-up — no fallback). 15% standard rate.
+if (!class_exists('WC_Tax')) {
+    class WC_Tax {
+        public static function get_rates($tax_class = '') { return [['rate' => 15.0]]; }
+    }
+}
+
 require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 if (!class_exists('wpdb')) { class wpdb {} }

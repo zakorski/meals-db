@@ -8,9 +8,13 @@
  *
  * The HST figures here intentionally DIFFER from the old
  * net-portion-multiplier model (0.672/0.82/0.681). That model was
- * wrong for pre-tax pricing; the correct basis is a clean 15% on the
- * taxable side price. Do NOT "fix" these expectations back to the old
+ * wrong for pre-tax pricing; the correct basis is the taxable side
+ * price × the HST rate. Do NOT "fix" these expectations back to the old
  * multiplier output — the change is the correction (LB-7).
+ *
+ * The HST RATE is sourced LIVE from WooCommerce (no fallback) per the
+ * operator's decision, so this test mocks WC_Tax. A configurable global
+ * lets us also assert the no-fallback behavior (WC unconfigured → 0%).
  *
  * Run with: php tests/test-invoice-hst-lb7.php
  */
@@ -19,10 +23,26 @@ if (!defined('ABSPATH')) {
     define('ABSPATH', dirname(__DIR__) . '/');
 }
 
+// Mock WooCommerce's tax API. resolve_hst_rate() calls WC_Tax::get_rates('').
+// $GLOBALS['__wc_hst_percent'] controls the returned rate: a number → that
+// percent; null → no rate configured (the no-fallback 0% case).
+$GLOBALS['__wc_hst_percent'] = 15.0;
+if (!class_exists('WC_Tax')) {
+    class WC_Tax {
+        public static function get_rates($tax_class = '') {
+            $p = $GLOBALS['__wc_hst_percent'] ?? null;
+            return $p === null ? [] : [['rate' => $p]];
+        }
+    }
+}
+
 require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 
 if (!function_exists('__')) { function __(string $t, string $d = 'default') { return $t; } }
+
+// The WC-sourced rate the mock returns by default (0.15).
+$HST = 15.0 / 100;
 
 $failures = [];
 $passed   = 0;
@@ -58,9 +78,9 @@ assert_equal(false, MealsDB_Operational_Constants::is_rural_zone(null), 'null zo
 // HST math primitive: taxable sides × side rate × 15%, half-up to cents.
 // Urban side rate = 4.48; rural side rate = 4.54. Mains never enter this.
 // ---------------------------------------------------------------------------
-$hst = function (int $count, bool $rural): int {
+$hst = function (int $count, bool $rural) use ($HST): int {
     $rate = MealsDB_Operational_Constants::get_sdnb_side_rate($rural);
-    return MealsDB_Money::percent_of(MealsDB_Money::multiply($count, $rate), MealsDB_Operational_Constants::HST_RATE);
+    return MealsDB_Money::percent_of(MealsDB_Money::multiply($count, $rate), $HST);
 };
 // 4 × 4.48 = 17.92 → ×0.15 = 2.688 → 269 cents (half-up).
 assert_equal(269, $hst(4, false), 'urban HST: 4 taxable sides @ 4.48 × 15%');
@@ -151,9 +171,29 @@ assert_equal(1, count($lines), 'no overflow → single line');
 assert_equal(0, $lines[0]['tax_cents'], 'no taxable sides → no HST');
 
 // ---------------------------------------------------------------------------
-// The obsolete net-portion multiplier constants are gone.
+// The obsolete net-portion multiplier constants are gone, and there is no
+// SDNB HST constant any more (the rate is WC-sourced, no fallback).
 // ---------------------------------------------------------------------------
 assert_equal(false, defined('MealsDB_Operational_Constants::HST_MULTIPLIER_PRIMARY_MAIN'), 'HST_MULTIPLIER_PRIMARY_MAIN constant removed');
+assert_equal(false, defined('MealsDB_Operational_Constants::HST_RATE'), 'SDNB HST_RATE constant removed (rate now sourced from WC)');
+
+// ---------------------------------------------------------------------------
+// NO FALLBACK: when WooCommerce has no standard rate configured, HST is 0
+// (the deliberate, operator-chosen behavior). A rural client with taxable
+// sides that would otherwise bill HST must produce 0 tax_cents.
+// ---------------------------------------------------------------------------
+$GLOBALS['__wc_hst_percent'] = null; // simulate WC tax unconfigured
+$lines = $run_split([
+    'client'              => $rural_client, // zone 'S', would be rural HST
+    'resolved_rate'       => MealsDB_Operational_Constants::SDNB_RATE_PRIMARY_MAIN,
+    'bill_mains'          => 10,
+    'bill_sides'          => 4,
+    'bill_tax_sides'      => 4,
+    'bill_nontax_sides'   => 0,
+    'client_contribution' => 0,
+]);
+assert_equal(0, $lines[0]['tax_cents'], 'no WC rate → 0% HST (no fallback to a constant)');
+$GLOBALS['__wc_hst_percent'] = 15.0; // restore for any later assertions
 
 // ---------------------------------------------------------------------------
 // Output

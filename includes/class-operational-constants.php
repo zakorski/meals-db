@@ -92,7 +92,8 @@ class MealsDB_Operational_Constants {
     // To flip rates at cutover, edit ONLY the six values below. There is
     // no longer a duplicate rate table to keep in sync (the invoice
     // generator's old $sdnb_rate_tiers array was removed, LB-7) and no
-    // multipliers to recompute (HST is now a clean ×15% — see HST_RATE).
+    // multipliers to recompute (SDNB HST is now sourced live from
+    // WooCommerce — see MealsDB_Invoice_Generator::resolve_hst_rate).
     const SDNB_RATE_PRIMARY_MAIN         = 14.66;
     const SDNB_RATE_PRIMARY_MAIN_RURAL   = 15.47;
     const SDNB_RATE_SECONDARY_MAIN       = 10.18;
@@ -132,17 +133,20 @@ class MealsDB_Operational_Constants {
     // HST
     // -------------------------------------------------------------
     //
-    // Harmonized Sales Tax applied to taxable SIDES only — mains are
+    // Harmonized Sales Tax applies to taxable SIDES only — mains are
     // NEVER taxed, and prices are PRE-TAX, so HST is simply added:
-    //   hst = taxable_side_price * HST_RATE.
+    //   hst = taxable_side_price * hst_rate.
     //
     // This replaces the old baked-in net-portion multipliers
     // (0.672/0.82/0.681), which were derived from the OLD combined
     // prices and silently mis-billed once the prices changed (LB-7).
-    // Same 15% applies to SDNB and VAC sides (VAC_SIDES_HST_RATE is
-    // the same value, kept for the VAC path's local vocabulary).
-
-    const HST_RATE = 0.15;
+    //
+    // The SDNB invoice HST RATE is sourced LIVE from WooCommerce
+    // (MealsDB_Invoice_Generator::resolve_hst_rate) per the operator's
+    // decision — there is intentionally no SDNB HST constant here, so a
+    // rate change is made once in WC Settings → Tax. The VAC path keeps
+    // its own VAC_SIDES_HST_RATE (above); if VAC should also source from
+    // WC, that is a separate change.
 
     // -------------------------------------------------------------
     // Apetito supplier configuration

@@ -353,13 +353,16 @@ Billing is the highest-risk area in the plugin. Key facts:
 
 - **Mains are NEVER taxed.** (The code already does this correctly — tax is only ever applied to taxable sides.)
 - **Prices are PRE-TAX.** HST is *added*, not backed out.
-- **Taxable sides:** HST = side price × **15%**. Non-taxable sides get no HST.
+- **Taxable sides:** HST = side price × the configured HST rate (NB = **15%**). Non-taxable sides get no HST.
 - The taxable/non-taxable split is tracked end-to-end (`tax_sides_count` / `nontax_sides_count` on the allocation detail; the rebuilder allocates taxable-first; the invoice taxes only taxable sides). Taxability is per-item via the products table `taxable` flag.
-- **FIXED (directive LB-7):** HST is now computed as `taxable_sides × pre-tax side rate × MealsDB_Operational_Constants::HST_RATE (0.15)` at both sites (mains never taxed). The obsolete baked-in net-portion multipliers (`0.672`/`0.82`/`0.681`, formerly `$sdnb_rate_tiers[...]['hst_multiplier_*']` and `HST_MULTIPLIER_*` constants) are deleted. **Note:** because the old multipliers were NOT a clean 15%, the corrected math produces DIFFERENT (correct) HST amounts on SDNB invoices — review against a known-good legacy invoice with the operator before cutover. There is no dedicated VAC HST change here; VAC keeps its own `VAC_SIDES_HST_RATE` (same 15%).
+- **FIXED (directive LB-7):** HST is computed as `taxable_sides × pre-tax side rate × hst_rate` at both SDNB sites (mains never taxed). The obsolete baked-in net-portion multipliers (`0.672`/`0.82`/`0.681`, formerly `$sdnb_rate_tiers[...]['hst_multiplier_*']` and `HST_MULTIPLIER_*` constants) are deleted.
+- **SDNB HST rate is sourced LIVE from WooCommerce** (`MealsDB_Invoice_Generator::resolve_hst_rate()` → `WC_Tax::get_rates('')`, mirroring the Quick Order preview), per the operator's decision. There is **no SDNB HST constant** — change the rate once in WC Settings → Tax. **NO FALLBACK by design:** if WC tax is disabled/unconfigured the rate resolves to 0 and the invoice's HST is 0 (the zero case is logged but does not change the value). Keep the WC standard tax rate configured at 15% or the government CSV under-reports HST. The VAC path is unchanged — it still uses `VAC_SIDES_HST_RATE` (15%); switching VAC to WC would be a separate change.
+- **Note:** because the old multipliers were NOT a clean 15%, the corrected math produces DIFFERENT (correct) HST amounts on SDNB invoices — review against a known-good legacy invoice with the operator before cutover.
+- **New-portal caveat (LB-7):** the SDNB client queries must select `delivery_area_zone` — it's what resolves the urban vs rural side rate for HST. `generate_sdnb_new_portal` originally omitted it (fixed); if you add another SDNB generator, select the zone or rural clients silently bill the urban side rate.
 
 ### Current pricing (pending changes — see the operator's rate email)
 
-New rates are approved. **Do NOT change the SDNB values yet** — the operator has said to leave SDNB pricing as-is pending Social Development IT's answer on retroactive billing. (Retroactive billing is the agency's operations problem and is OUT OF SCOPE for the plugin.) The *code* fixes (de-dup rates, drop the price-keyed lookup, switch HST to ×15%) are **done** (directive LB-7); the *value* flip is now a one-place edit of the six `SDNB_RATE_*` constants at cutover.
+New rates are approved. **Do NOT change the SDNB values yet** — the operator has said to leave SDNB pricing as-is pending Social Development IT's answer on retroactive billing. (Retroactive billing is the agency's operations problem and is OUT OF SCOPE for the plugin.) The *code* fixes (de-dup rates, drop the price-keyed lookup, WC-sourced HST) are **done** (directive LB-7); the *value* flip is now a one-place edit of the six `SDNB_RATE_*` constants at cutover (the HST rate itself lives in WC Settings → Tax).
 
 | Item | New value (pre-tax) | When |
 |---|---|---|

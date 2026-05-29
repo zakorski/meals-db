@@ -69,6 +69,54 @@ class MealsDB_Invoice_Generator {
     ];
 
     /**
+     * Resolve the HST rate (as a decimal fraction, e.g. 0.15) from
+     * WooCommerce's configured STANDARD tax rate.
+     *
+     * Per the operator's decision (LB-7 follow-up), the SDNB
+     * government-invoice HST rate is sourced LIVE from WooCommerce
+     * rather than from a plugin constant, so a rate change is made once
+     * in WC Settings → Tax. This mirrors the Quick Order preview path
+     * (MealsDB_Admin_UI::resolve_quick_order_tax_rate) so the invoice
+     * and the QO preview agree on the rate.
+     *
+     * NO FALLBACK — by design: if WooCommerce is unavailable, tax is
+     * disabled, or no standard rate is configured, this returns 0.0 and
+     * the invoice's HST is 0. That means a misconfigured WC tax table
+     * silently produces a 0% HST government invoice. The zero case is
+     * LOGGED (logging does not change the returned value — it is not a
+     * fallback) so the condition is at least traceable after the fact.
+     *
+     * NOTE: the VAC generator does NOT use this — it bills HST via its
+     * own MealsDB_Operational_Constants::VAC_SIDES_HST_RATE. If VAC
+     * should also source from WC, that is a separate change.
+     */
+    private static function resolve_hst_rate(): float {
+        if (!class_exists('WC_Tax')) {
+            MealsDB_Logger::error('[MealsDB Invoice] HST rate: WC_Tax unavailable — invoice HST will be 0%.');
+            return 0.0;
+        }
+
+        try {
+            $rates = \WC_Tax::get_rates('');
+            if (is_array($rates) && !empty($rates)) {
+                $first_rate = reset($rates);
+                if (is_array($first_rate) && isset($first_rate['rate'])) {
+                    $rate = (float) $first_rate['rate'];
+                    if ($rate > 0) {
+                        return $rate / 100;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Invoice] HST rate read from WC failed: ' . $e->getMessage());
+            return 0.0;
+        }
+
+        MealsDB_Logger::error('[MealsDB Invoice] HST rate from WC resolved to 0% — invoice HST will be 0.');
+        return 0.0;
+    }
+
+    /**
      * Canonical billing data fetcher.
      *
      * Returns ONE ROW PER CLIENT for the billing month, holding what the
@@ -78,9 +126,10 @@ class MealsDB_Invoice_Generator {
      * to cap or compare to allowance anymore.
      *
      * Tax follows the allocated taxable-side count: HST = taxable sides ×
-     * the (rurality-resolved) pre-tax side rate × 15%. Mains are never
-     * taxed. For VAC, tax is computed downstream via
-     * $vac_billing['sides_hst_rate'] (handled in the VAC generator, not here).
+     * the (rurality-resolved) pre-tax side rate × the WC-sourced HST rate
+     * (see resolve_hst_rate). Mains are never taxed. For VAC, tax is
+     * computed downstream via $vac_billing['sides_hst_rate'] (handled in
+     * the VAC generator, not here).
      *
      * @param array<int, array<string, mixed>> $client_rows  Rows from meals_clients
      *                                                       (must include client_id, wp_user_id,
@@ -140,6 +189,11 @@ class MealsDB_Invoice_Generator {
 
         $order_query = new MealsDB_WC_Order_Query($wpdb);
 
+        // Resolve the HST rate once for the whole batch (sourced live from
+        // WooCommerce — see resolve_hst_rate). No fallback: a 0 here means
+        // 0% HST on the invoice.
+        $hst_rate = self::resolve_hst_rate();
+
         $out = [];
         foreach ($client_rows as $client) {
             $cid = (int) ($client['client_id'] ?? 0);
@@ -169,17 +223,17 @@ class MealsDB_Invoice_Generator {
             // line 1 / line 2 — that lives downstream in split_into_invoice_lines.
             $basic_cents = MealsDB_Money::multiply($allocated_mains, $resolved_rate);
 
-            // HST: taxable sides only, at the pre-tax side rate × 15%.
-            // Mains are never taxed. Side rate is resolved from the
-            // client's zone, NOT from the price (LB-7 — replaces the
-            // obsolete net-portion multiplier table). Non-SDNB tax (VAC)
-            // is computed in its own path.
+            // HST: taxable sides only, at the pre-tax side rate × the
+            // WC-sourced HST rate. Mains are never taxed. Side rate is
+            // resolved from the client's zone, NOT from the price (LB-7 —
+            // replaces the obsolete net-portion multiplier table).
+            // Non-SDNB tax (VAC) is computed in its own path.
             $tax_cents = 0;
             if ($allocated_tax_sides > 0) {
                 $rural       = MealsDB_Operational_Constants::is_rural_zone($client['delivery_area_zone'] ?? null);
                 $side_rate   = MealsDB_Operational_Constants::get_sdnb_side_rate($rural);
                 $sides_cents = MealsDB_Money::multiply($allocated_tax_sides, $side_rate);
-                $tax_cents   = MealsDB_Money::percent_of($sides_cents, MealsDB_Operational_Constants::HST_RATE);
+                $tax_cents   = MealsDB_Money::percent_of($sides_cents, $hst_rate);
             }
 
             $out[$cid] = array_merge($client, [
@@ -249,6 +303,8 @@ class MealsDB_Invoice_Generator {
         // rate are then sourced from MealsDB_Operational_Constants.
         $rural     = MealsDB_Operational_Constants::is_rural_zone($client['delivery_area_zone'] ?? null);
         $side_rate = MealsDB_Operational_Constants::get_sdnb_side_rate($rural);
+        // HST rate sourced live from WooCommerce (no fallback) — see resolve_hst_rate.
+        $hst_rate  = self::resolve_hst_rate();
 
         $bill_mains        = (int) $row['bill_mains'];
         $bill_sides        = (int) $row['bill_sides'];
@@ -264,7 +320,7 @@ class MealsDB_Invoice_Generator {
             ? 0 : min($mains_on_line_1 - $tax_sides_on_line_1, $bill_nontax_sides);
         // HST per line: taxable sides × pre-tax side rate × 15%. (LB-7)
         $hst_line_1_cents = ($tax_sides_on_line_1 > 0)
-            ? MealsDB_Money::percent_of(MealsDB_Money::multiply($tax_sides_on_line_1, $side_rate), MealsDB_Operational_Constants::HST_RATE)
+            ? MealsDB_Money::percent_of(MealsDB_Money::multiply($tax_sides_on_line_1, $side_rate), $hst_rate)
             : 0;
 
         // Line 2 calculations.
@@ -272,7 +328,7 @@ class MealsDB_Invoice_Generator {
         $tax_sides_on_line_2    = $bill_tax_sides - $tax_sides_on_line_1;
         $nontax_sides_on_line_2 = $bill_nontax_sides - $nontax_sides_on_line_1;
         $hst_line_2_cents = ($tax_sides_on_line_2 > 0)
-            ? MealsDB_Money::percent_of(MealsDB_Money::multiply($tax_sides_on_line_2, $side_rate), MealsDB_Operational_Constants::HST_RATE)
+            ? MealsDB_Money::percent_of(MealsDB_Money::multiply($tax_sides_on_line_2, $side_rate), $hst_rate)
             : 0;
 
         $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2 + $hst_line_2_cents) > 0;
