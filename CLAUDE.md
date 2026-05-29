@@ -38,7 +38,7 @@ For especially destructive operations (force_rebuild, delete_users), additionall
 - Rate-limit (`MealsDB_Rate_Limiter::check_rate_limit`).
 - Audit-log via `MealsDB_Logger::log()`.
 
-> **FIXED (directive QW-1, was audit MAJ-8):** `includes/ajax/class-ajax-db-sync.php` (`mealsdb_db_sync_phase`) now applies the rate-limit layer like every sibling migration handler — `MealsDB_Rate_Limiter::check_rate_limit('migration_destructive')` (5/hour, fail-closed) immediately after the capability check, before any work. It was previously the only AJAX handler missing it while running 300-second destructive phases.
+> **FIXED (directive QW-1, was audit MAJ-8):** `includes/ajax/class-ajax-db-sync.php` (`mealsdb_db_sync_phase`) now applies the `migration_destructive` rate limit (5/hour, fail-closed) — but on the FIRST chunk of a real write only (`!$dry_run && $offset === 0`), NOT on every call. This endpoint is driven by `views/data-ops.php`, which recursively re-posts per 100-row chunk and then again for the rates phase, so gating every chunk would 429 a normal sync mid-walk. The fix mirrors the established `MealsDB_Ajax_Migration::run_consolidated_phase` first-chunk-only pattern (and `::verify()`, which is deliberately unthrottled for chunked phases). A full sync consumes 2 tokens (clients + rates) — well within the bucket — while still capping fresh destructive runs.
 
 ### 2. Capability conventions
 
