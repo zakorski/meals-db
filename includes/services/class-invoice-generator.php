@@ -754,8 +754,12 @@ class MealsDB_Invoice_Generator {
     public static function generate_sdnb_new_portal($start_date, $end_date) {
         // Query eligible clients from external DB.
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        // delivery_area_zone is required so HST resolves the correct
+        // (urban vs rural) side rate in get_phase2_billing_data — without
+        // it, Sussex/rural clients with taxable sides would silently bill
+        // at the urban side rate and under-report HST (LB-7).
         $sql = "SELECT client_id, wp_user_id, first_name, last_name, sdnb_service_request_id,
-                    client_contribution, default_rate_id
+                    client_contribution, default_rate_id, delivery_area_zone
              FROM `{$clients_table}`
              WHERE client_type = %s AND use_legacy_billing = 0
                AND active = 1 AND wp_user_id > 0";
