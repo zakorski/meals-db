@@ -124,6 +124,20 @@ class MealsDB_Logger {
 
         $field_key = strtolower($field);
         if (!in_array($field_key, self::SENSITIVE_FIELDS, true)) {
+            // The invoice-draft per-field audit (INV-DRAFT-2) names the
+            // changed field as "<client_id>:<field>" so one draft (target_id)
+            // can carry per-client, per-field edit rows. That composite would
+            // slip past the exact-match check above and write a government ID
+            // (individual_id / vet_health_card / requisition_id) or an address
+            // to the audit log in CLEARTEXT. Extract the field portion of a
+            // "<digits>:<field>" key and re-check it against the sensitive
+            // list. No existing (non-composite) caller passes a colon-bearing
+            // field name, so this is inert for every other call site.
+            if (preg_match('/^\d+:(.+)$/', $field_key, $m)
+                && in_array($m[1], self::SENSITIVE_FIELDS, true)) {
+                $fingerprint = substr(hash('sha256', $value), 0, 12);
+                return '[redacted:sha256=' . $fingerprint . ']';
+            }
             return $value;
         }
 
