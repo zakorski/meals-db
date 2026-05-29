@@ -6,7 +6,9 @@
  *   - MealsDB_Invoice_Generator::get_phase2_billing_data (the canonical
  *     fetcher: allocated quantities + contribution sum + tax)
  *   - Tax computation against the real Janet rate $14.66 (modal 30 tax sides
- *     × 0.672 = $20.16, matching her Nov 2025 submission)
+ *     × urban side rate 4.48 × 15% = $20.16, matching her Nov 2025 submission).
+ *     Post-LB-7 HST is side_rate × 0.15; the urban result is unchanged because
+ *     the old 0.672 multiplier was exactly 4.48 × 0.15.
  *   - Legacy Dept. Cost = Basic − Contribution math against Janet's
  *     real Jan 2025 Moncton row (Brammah Peter)
  *   - VAC total = mains_cost + sides_cost + HST (no contribution
@@ -113,7 +115,7 @@ chk(is_array($row), true, '14.66 HST: row returned');
 chk((int) $row['allocated_mains'], 30, '14.66 HST: 30 mains');
 chk((int) $row['allocated_tax_sides'], 30, '14.66 HST: 30 tax sides');
 chk_close((float) $row['resolved_rate'], 14.66, 0.001, '14.66 HST: rate resolved');
-chk((int) $row['tax_cents'], 2016, '14.66 HST: 30 × 0.672 = $20.16 (2016 cents)');
+chk((int) $row['tax_cents'], 2016, '14.66 HST: 30 sides × 4.48 × 15% = $20.16 (2016 cents)');
 chk((int) $row['contribution_cents'], 0, '14.66 HST: no contribution');
 
 // ---------------------------------------------------------------------------

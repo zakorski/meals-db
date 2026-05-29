@@ -45,27 +45,6 @@ class MealsDB_Invoice_Generator {
     ];
 
     /**
-     * SDNB rate tiers for two-line invoice calculations.
-     *
-     * Each primary rate maps to its secondary rates and HST multipliers.
-     * These values come from the old billing system and are contractual.
-     */
-    private static $sdnb_rate_tiers = [
-        '14.66' => [
-            'secondary_rate_mains' => 10.18,
-            'secondary_rate_sides' => 4.48,
-            'hst_multiplier_line1' => 0.672,
-            'hst_multiplier_line2' => 0.672,
-        ],
-        '15.47' => [
-            'secondary_rate_mains' => 10.93,
-            'secondary_rate_sides' => 4.54,
-            'hst_multiplier_line1' => 0.82,
-            'hst_multiplier_line2' => 0.681,
-        ],
-    ];
-
-    /**
      * VAC monthly allowances by service frequency
      */
     private static $vac_allowances = [
@@ -98,10 +77,10 @@ class MealsDB_Invoice_Generator {
      * (phase 1 fill with single-month spill), so the generators never need
      * to cap or compare to allowance anymore.
      *
-     * Tax follows the allocated taxable-side count via the per-rate HST
-     * multiplier (sdnb_rate_tiers[rate].hst_multiplier_line1). For VAC, tax
-     * is computed downstream via $vac_billing['sides_hst_rate'] (handled in
-     * the VAC generator, not here).
+     * Tax follows the allocated taxable-side count: HST = taxable sides ×
+     * the (rurality-resolved) pre-tax side rate × 15%. Mains are never
+     * taxed. For VAC, tax is computed downstream via
+     * $vac_billing['sides_hst_rate'] (handled in the VAC generator, not here).
      *
      * @param array<int, array<string, mixed>> $client_rows  Rows from meals_clients
      *                                                       (must include client_id, wp_user_id,
@@ -190,13 +169,17 @@ class MealsDB_Invoice_Generator {
             // line 1 / line 2 — that lives downstream in split_into_invoice_lines.
             $basic_cents = MealsDB_Money::multiply($allocated_mains, $resolved_rate);
 
-            // HST: only via the per-rate multiplier table; non-SDNB tax
-            // (VAC) is computed in its own path.
+            // HST: taxable sides only, at the pre-tax side rate × 15%.
+            // Mains are never taxed. Side rate is resolved from the
+            // client's zone, NOT from the price (LB-7 — replaces the
+            // obsolete net-portion multiplier table). Non-SDNB tax (VAC)
+            // is computed in its own path.
             $tax_cents = 0;
-            $rate_key  = number_format((float) $resolved_rate, 2, '.', '');
-            if (isset(self::$sdnb_rate_tiers[$rate_key]) && $allocated_tax_sides > 0) {
-                $mult = (float) self::$sdnb_rate_tiers[$rate_key]['hst_multiplier_line1'];
-                $tax_cents = (int) round($allocated_tax_sides * $mult * 100);
+            if ($allocated_tax_sides > 0) {
+                $rural       = MealsDB_Operational_Constants::is_rural_zone($client['delivery_area_zone'] ?? null);
+                $side_rate   = MealsDB_Operational_Constants::get_sdnb_side_rate($rural);
+                $sides_cents = MealsDB_Money::multiply($allocated_tax_sides, $side_rate);
+                $tax_cents   = MealsDB_Money::percent_of($sides_cents, MealsDB_Operational_Constants::HST_RATE);
             }
 
             $out[$cid] = array_merge($client, [
@@ -258,8 +241,14 @@ class MealsDB_Invoice_Generator {
      */
     private static function split_into_invoice_lines(array $row): array {
         $rate = (float) $row['resolved_rate'];
-        $rate_key = number_format($rate, 2, '.', '');
-        $tier = isset(self::$sdnb_rate_tiers[$rate_key]) ? self::$sdnb_rate_tiers[$rate_key] : null;
+
+        $client = $row['client'];
+        // Rurality comes from the client's delivery zone, NOT the rate
+        // value — the price must not be the source of truth for which
+        // rate tier applies (LB-7). The side rate and the line-2 main
+        // rate are then sourced from MealsDB_Operational_Constants.
+        $rural     = MealsDB_Operational_Constants::is_rural_zone($client['delivery_area_zone'] ?? null);
+        $side_rate = MealsDB_Operational_Constants::get_sdnb_side_rate($rural);
 
         $bill_mains        = (int) $row['bill_mains'];
         $bill_sides        = (int) $row['bill_sides'];
@@ -267,41 +256,39 @@ class MealsDB_Invoice_Generator {
         $bill_nontax_sides = (int) $row['bill_nontax_sides'];
         $client_contribution_cents = MealsDB_Money::to_cents($row['client_contribution'] ?? 0);
 
-        $hst_mult_l1 = $tier ? $tier['hst_multiplier_line1'] : 0;
-        $hst_mult_l2 = $tier ? $tier['hst_multiplier_line2'] : 0;
-
         // Line 1 calculations.
         $mains_on_line_1 = ($bill_sides == 0) ? $bill_mains : min($bill_mains, $bill_sides);
         $tax_sides_on_line_1 = ($bill_sides == 0 || $bill_tax_sides == 0)
             ? 0 : min($mains_on_line_1, $bill_tax_sides);
         $nontax_sides_on_line_1 = ($bill_sides == 0 || $bill_nontax_sides == 0)
             ? 0 : min($mains_on_line_1 - $tax_sides_on_line_1, $bill_nontax_sides);
-        // HST multiplier is applied per taxable side: multiplier × count → dollars → cents.
-        $hst_line_1_cents = ($tax_sides_on_line_1 != 0)
-            ? MealsDB_Money::multiply($tax_sides_on_line_1, $hst_mult_l1)
+        // HST per line: taxable sides × pre-tax side rate × 15%. (LB-7)
+        $hst_line_1_cents = ($tax_sides_on_line_1 > 0)
+            ? MealsDB_Money::percent_of(MealsDB_Money::multiply($tax_sides_on_line_1, $side_rate), MealsDB_Operational_Constants::HST_RATE)
             : 0;
 
         // Line 2 calculations.
         $mains_on_line_2        = max(0, $bill_mains - $mains_on_line_1);
         $tax_sides_on_line_2    = $bill_tax_sides - $tax_sides_on_line_1;
         $nontax_sides_on_line_2 = $bill_nontax_sides - $nontax_sides_on_line_1;
-        $hst_line_2_cents = ($tax_sides_on_line_2 != 0)
-            ? MealsDB_Money::multiply($tax_sides_on_line_2, $hst_mult_l2)
+        $hst_line_2_cents = ($tax_sides_on_line_2 > 0)
+            ? MealsDB_Money::percent_of(MealsDB_Money::multiply($tax_sides_on_line_2, $side_rate), MealsDB_Operational_Constants::HST_RATE)
             : 0;
 
         $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2 + $hst_line_2_cents) > 0;
 
-        // Determine second line rate.
+        // Line-2 rate from constants, not the deleted tier table. (LB-7)
+        // A line-2 carrying mains bills at the secondary main rate; a
+        // sides-only line-2 bills at the side rate.
         $second_line_rate = 0;
-        if ($has_second_line && $tier) {
+        if ($has_second_line) {
             $second_line_rate = ($mains_on_line_2 > 0)
-                ? $tier['secondary_rate_mains']
+                ? MealsDB_Operational_Constants::get_sdnb_main_rate('secondary', $rural)
                 : (($tax_sides_on_line_2 + $nontax_sides_on_line_2 > 0)
-                    ? $tier['secondary_rate_sides']
+                    ? $side_rate
                     : 0);
         }
 
-        $client = $row['client'];
         $lines = [];
 
         // Line 1.
