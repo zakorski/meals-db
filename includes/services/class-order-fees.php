@@ -105,7 +105,7 @@ class MealsDB_Order_Fees {
             if ($delivery_fee > 0
                 && $fee_ids['delivery_fee'] > 0
                 && !self::order_has_product($order, $fee_ids['delivery_fee'])) {
-                if (self::add_fee_product($order, $fee_ids['delivery_fee'])) {
+                if (self::add_fee_product($order, $fee_ids['delivery_fee'], $delivery_fee)) {
                     $dirty = true;
                 }
             }
@@ -116,7 +116,7 @@ class MealsDB_Order_Fees {
                 if (!self::contribution_applied_this_month($client_id, $billing_month)
                     && !self::order_has_product($order, $fee_ids['client_contribution'])) {
 
-                    if (self::add_fee_product($order, $fee_ids['client_contribution'])) {
+                    if (self::add_fee_product($order, $fee_ids['client_contribution'], $client_contribution)) {
                         $dirty = true;
                         self::mark_contribution_applied($client_id, $billing_month, $wc_order_id);
                     }
@@ -231,18 +231,47 @@ class MealsDB_Order_Fees {
     }
 
     /**
-     * Add a fee product to the order as a quantity-1 line item. Does NOT
-     * touch tax — WooCommerce applies the product's configured tax during
-     * calculate_totals(). Returns true if added.
+     * Add a fee product to the order as a quantity-1 line item, priced at the
+     * per-client amount (NOT the product's catalog price).
+     *
+     * LB-2: previously this added the product at its catalog price, ignoring
+     * the client's negotiated client_contribution / delivery_fee. Every client
+     * whose negotiated fee differed from the catalog default was billed the
+     * wrong amount while the per-client dollar values were loaded and discarded.
+     * We keep using the fee PRODUCT (5675/4122) so the on-order shape matches
+     * legacy/normal orders and the reconciliation/order-query layer can find it
+     * uniformly (see file header) — but we override the line subtotal/total to
+     * the per-client value. Reconciliation sums _line_subtotal
+     * (MealsDB_WC_Order_Query::get_total_paid_for_product), so the override is
+     * read back correctly.
+     *
+     * Does NOT touch tax — WooCommerce applies the product's configured tax
+     * during calculate_totals(). Returns true if added.
+     *
+     * @param float $amount Per-client fee amount in DOLLARS.
      */
-    private static function add_fee_product(WC_Order $order, int $product_id): bool {
+    private static function add_fee_product(WC_Order $order, int $product_id, float $amount): bool {
         $product = wc_get_product($product_id);
         if (!$product instanceof WC_Product) {
             error_log('[MealsDB Order Fees] Fee product ' . $product_id
                 . ' not found; cannot apply fee to order ' . $order->get_id());
             return false;
         }
-        $order->add_product($product, 1);
+
+        // Normalise to a clean 2dp dollar value via MealsDB_Money (integer
+        // cents, half-up) so we never push float drift like 40.00000001 into
+        // the WC line total. MealsDB_Money has no dollars-out helper, so round
+        // through cents -> format() (a "%.2f" string) and cast back to float.
+        $amount = (float) MealsDB_Money::format(MealsDB_Money::to_cents($amount));
+
+        $item_id = $order->add_product($product, 1, [
+            'subtotal' => $amount,
+            'total'    => $amount,
+        ]);
+
+        if (!$item_id) {
+            return false;
+        }
         return true;
     }
 
