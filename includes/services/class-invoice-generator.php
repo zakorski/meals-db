@@ -44,29 +44,14 @@ class MealsDB_Invoice_Generator {
         ]
     ];
 
-    /**
-     * VAC monthly allowances by service frequency
-     */
-    private static $vac_allowances = [
-        'day' => ['mains' => 7, 'amount' => 74.48],
-        'week' => ['mains' => 31, 'amount' => 329.84],
-        'month' => ['mains' => 124, 'amount' => 1319.36]
-    ];
-
-    /**
-     * VAC billing constants (contractual rates).
-     *
-     * Sourced from MealsDB_Operational_Constants so the value lives
-     * in one place (directive 18 Part D wired the four literals here
-     * to the corresponding constants without changing the numeric
-     * values).
-     */
-    private static $vac_billing = [
-        'per_main_allowance'     => MealsDB_Operational_Constants::VAC_PER_MAIN_ALLOWANCE,
-        'sides_conversion_rate'  => MealsDB_Operational_Constants::VAC_SIDES_CONVERSION_RATE,
-        'sides_cost_rate'        => MealsDB_Operational_Constants::VAC_RATE_SIDE,
-        'sides_hst_rate'         => MealsDB_Operational_Constants::VAC_SIDES_HST_RATE,
-    ];
+    // INV-DRAFT-3 Step 4c: the old VAC billing-constant tables ($vac_allowances
+    // and $vac_billing — per_main_allowance / sides_conversion_rate /
+    // sides_cost_rate / sides_hst_rate) are RETIRED. The corrected VAC model
+    // (build_vac_draft_rows + serialize_vac_csv) bills mains-only and reads its
+    // rates LIVE from MealsDB_Rate_Definitions ('vac_per_main_coverage',
+    // 'vac_side'); the dead VAC_SIDES_CONVERSION_RATE is no longer referenced;
+    // and HST stays WC-sourced (LB-7). Sides are folded by hand on the draft
+    // grid (fold_amount / fold_hst), not priced from a constant here.
 
     /**
      * Resolve the HST rate (as a decimal fraction, e.g. 0.15) from
@@ -86,9 +71,11 @@ class MealsDB_Invoice_Generator {
      * LOGGED (logging does not change the returned value — it is not a
      * fallback) so the condition is at least traceable after the fact.
      *
-     * NOTE: the VAC generator does NOT use this — it bills HST via its
-     * own MealsDB_Operational_Constants::VAC_SIDES_HST_RATE. If VAC
-     * should also source from WC, that is a separate change.
+     * NOTE: under the corrected VAC model (INV-DRAFT-3) the VAC serializer
+     * does NOT compute HST at all — VAC is billed mains-only and the HST on
+     * folded sides (fold_hst) is hand-entered on the draft grid. If the
+     * operator later asks the system to auto-seed fold_hst, that seed would
+     * use THIS WC-sourced rate (LB-7) — there is no VAC HST constant.
      */
     private static function resolve_hst_rate(): float {
         if (!class_exists('WC_Tax')) {
@@ -139,9 +126,9 @@ class MealsDB_Invoice_Generator {
      *
      * Tax follows the allocated taxable-side count: HST = taxable sides ×
      * the (rurality-resolved) pre-tax side rate × the WC-sourced HST rate
-     * (see resolve_hst_rate). Mains are never taxed. For VAC, tax is
-     * computed downstream via $vac_billing['sides_hst_rate'] (handled in
-     * the VAC generator, not here).
+     * (see resolve_hst_rate). Mains are never taxed. The VAC path does NOT use
+     * this tax figure — under the corrected mains-only model (INV-DRAFT-3) VAC
+     * sides are folded by hand on the draft grid (fold_hst), not taxed here.
      *
      * @param array<int, array<string, mixed>> $client_rows  Rows from meals_clients
      *                                                       (must include client_id, wp_user_id,
@@ -675,7 +662,90 @@ class MealsDB_Invoice_Generator {
             return [];
         }
         $billing_month = substr($start_date, 0, 7);
-        return self::get_phase2_billing_data($client_rows, $billing_month);
+        $rows = self::get_phase2_billing_data($client_rows, $billing_month);
+
+        // INV-DRAFT-3 Step 4a — the CORRECTED VAC billing row.
+        //
+        // VAC is invoiced MAINS-ONLY: a single "Food and Delivery / of N
+        // Meals" line and a total whose "(includes HST)" figure is the HST on
+        // sides FOLDED into the per-main gap — never a separate side line
+        // (verified against the 27 Jan-2025 reimbursement PDFs). The fold is
+        // Janet's hand-work and is NOT a formula, so we do NOT reproduce it
+        // here: we produce a correct mains-only starting point and expose the
+        // fold as explicit, editable, audited draft fields she fills on the
+        // grid (the entire reason the draft layer exists).
+        //
+        // The serializer (serialize_vac_csv) reads ONLY these row fields and
+        // never re-queries, so the draft's edited values flow straight to the
+        // output. new_user_flag is computed HERE (it depends on the billing
+        // PERIOD, not "now") to keep the serializer a pure rows→string fn.
+        $engine        = class_exists('MealsDB_Allocation_Engine') ? new MealsDB_Allocation_Engine() : null;
+        $vac_side_rate = MealsDB_Rate_Definitions::get('vac_side');
+        $vac_side_rate = is_float($vac_side_rate) ? $vac_side_rate : 0.0;
+        $coverage      = MealsDB_Rate_Definitions::get('vac_per_main_coverage');
+        $coverage      = is_float($coverage) ? $coverage : 0.0;
+
+        foreach ($rows as $cid => &$row) {
+            $cid_int = (int) $cid;
+
+            // Decrypt vet_health_card for display/PDF. The draft payload is
+            // encrypted at rest (encode_payload), so carrying the plaintext
+            // here is consistent with the rest of the draft's PII.
+            $row['vet_health_card'] = !empty($row['vet_health_card'])
+                ? MealsDB_Encryption::safe_decrypt($row['vet_health_card'])
+                : '';
+
+            // --- Editable corrected-model fields (Step 4a) ---
+            $row['bill_mains'] = (int) ($row['allocated_mains'] ?? 0);
+            // bill_rate: the per-main dollar figure ON THE WIRE.
+            // DECISION-GATE DEFAULT (directive INV-DRAFT-3): seeds from the
+            // per-client resolved_rate (the COST rate), NOT the VAC coverage
+            // ceiling. The Decision gate (cost-rate vs coverage on the wire)
+            // is the one open operator question — if the operator answers
+            // "seed coverage", change this single line to:
+            //   $row['bill_rate'] = $coverage;
+            // That is a seed change, not a re-architecture.
+            $row['bill_rate'] = (float) ($row['resolved_rate'] ?? 0);
+            // fold_amount: dollar value of sides folded into the per-main gap.
+            // SEEDS TO 0 — Janet enters it per veteran on the grid (her
+            // hand-work, now captured + audited). Stored as a dollar float so
+            // the edit layer (classify_field → money) round-trips it as
+            // dollars.
+            $row['fold_amount'] = 0.0;
+            // fold_hst: HST on the folded TAXABLE sides — the "(includes HST)"
+            // figure on the Blue Cross form. SEEDS TO 0 (Decision-gate
+            // default). If the operator later asks to auto-seed it, compute
+            // the taxable portion of the fold × resolve_hst_rate() HERE — a
+            // one-line seed change. HST stays WC-sourced (LB-7); do NOT
+            // reintroduce a VAC HST constant.
+            $row['fold_hst'] = 0.0;
+
+            // --- Informational context (NEVER summed into the VAC total) ---
+            // Permitted figures for the operator's reference while deciding
+            // the fold. Computed here (build time) so the serializer never
+            // re-queries.
+            if ($engine !== null) {
+                $permitted = $engine->calculate_permitted_for_month($cid_int, $billing_month);
+                $row['info_mains_allowance'] = (int) ($permitted['permitted_mains'] ?? 0);
+                $row['info_sides_allowance'] = (int) ($permitted['permitted_sides'] ?? 0);
+            } else {
+                $row['info_mains_allowance'] = 0;
+                $row['info_sides_allowance'] = 0;
+            }
+            // Monthly coverage dollars — sourced from Definitions
+            // (vac_per_main_coverage), NOT the dead VAC_SIDES_CONVERSION_RATE
+            // or a constant. Informational only.
+            $row['info_monthly_allowance_cents'] = MealsDB_Money::multiply($row['info_mains_allowance'], $coverage);
+            // Side COST for reference (Definitions vac_side × allocated sides),
+            // explicitly NOT part of the billed total.
+            $allocated_sides = (int) ($row['allocated_tax_sides'] ?? 0) + (int) ($row['allocated_nontax_sides'] ?? 0);
+            $row['info_sides_cost_cents'] = MealsDB_Money::multiply($allocated_sides, $vac_side_rate);
+
+            $row['new_user_flag'] = self::check_new_user_flag((int) ($row['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No';
+        }
+        unset($row);
+
+        return $rows;
     }
 
     /**
@@ -715,6 +785,48 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month = 4) {
+        // Shared top-half (INV-DRAFT-1 Step 5): query → dirty-rebuild →
+        // decrypt → phase-2 assemble. The SAME per-client rows the draft
+        // builder produces (refactor, don't fork).
+        $rows = self::build_sdnb_legacy_draft_rows($zone, $start_date, $end_date);
+
+        // Pure serialization (INV-DRAFT-3 Step 1): rows → CSV with no DB
+        // access, so the draft-finalize path can run Janet's EDITED rows
+        // through the IDENTICAL formatter.
+        $csv = self::serialize_sdnb_legacy($rows, [
+            'zone'       => $zone,
+            'start_date' => $start_date,
+            'end_date'   => $end_date,
+        ]);
+
+        // finalize_month moved OUT of the serializer into the caller
+        // (Step 1): the serializer must be side-effect-free. The
+        // draft-finalize path finalizes separately (idempotent — LB-3), so
+        // neither path double-finalizes harmfully.
+        self::finalize_months_for_rows($rows, substr($start_date, 0, 7));
+
+        return $csv;
+    }
+
+    /**
+     * Pure serializer for the SDNB legacy zone-based CSV (INV-DRAFT-3 Step 1).
+     *
+     * Takes phase-2 rows (from build_sdnb_legacy_draft_rows OR a draft's
+     * edited `current`) plus invoice context; returns the CSV string. NO DB
+     * access, NO finalize_month — output is byte-identical to the
+     * pre-refactor generate_sdnb_legacy for the same rows with no edits
+     * (characterization test T-A1). The merged phase-2 row carries every
+     * client identity field, so it doubles as the 'client' sub-array
+     * split_into_invoice_lines expects.
+     *
+     * @param array<int|string,array> $rows phase-2 rows keyed by client_id.
+     * @param array                   $ctx  ['zone','start_date','end_date'].
+     */
+    public static function serialize_sdnb_legacy(array $rows, array $ctx): string {
+        $zone       = (string) ($ctx['zone'] ?? 'M');
+        $start_date = (string) ($ctx['start_date'] ?? '');
+        $end_date   = (string) ($ctx['end_date'] ?? '');
+
         // Get service center info
         $service_center = isset(self::$service_centers[$zone]) ? self::$service_centers[$zone] : self::$service_centers['M'];
 
@@ -730,15 +842,12 @@ class MealsDB_Invoice_Generator {
         }
         $invoice_number = $end_date_obj->format('Y M d') . ' ' . $zone;
 
-        // Shared with build_sdnb_legacy_draft_rows() — one code path produces
-        // the queried + dirty-rebuilt + PII-decrypted client rows (INV-DRAFT-1
-        // Step 5; refactor, don't fork).
-        $client_rows = self::collect_sdnb_legacy_client_rows($zone, $start_date);
-
-        // Pre-compute duplicate individual_id counts for error checking.
+        // Pre-compute duplicate individual_id counts for error checking
+        // (over ALL rows handed in, matching the pre-refactor pass over
+        // every queried client_row).
         $sdnb_duplicate_counts = [];
-        foreach ($client_rows as $c) {
-            $idx = $c['individual_id_index'] ?? '';
+        foreach ($rows as $c) {
+            $idx = is_array($c) ? ($c['individual_id_index'] ?? '') : '';
             if ($idx !== '') {
                 if (!isset($sdnb_duplicate_counts[$idx])) {
                     $sdnb_duplicate_counts[$idx] = 0;
@@ -747,35 +856,27 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Phase 2: bill what the allocation engine assigned to this month.
-        // No min(used, permitted) cap — the engine's fill (phase 1) already
-        // enforced allowance, so allocated_* IS the billable count.
-        $billing_month  = substr($start_date, 0, 7);
-        $billing_by_cid = self::get_phase2_billing_data($client_rows, $billing_month);
-
         // Adapt phase-2 rows into the shape split_into_invoice_lines expects:
         // bill_mains / bill_sides / bill_tax_sides / bill_nontax_sides come
         // straight from allocated_* (the engine's monthly summary).
         $invoice_rows = [];
-        foreach ($client_rows as $c) {
-            $cid = (int) ($c['client_id'] ?? 0);
-            $b   = $billing_by_cid[$cid] ?? null;
-            if (!$b || (int) $b['allocated_mains'] <= 0) {
+        foreach ($rows as $b) {
+            if (!is_array($b) || (int) ($b['allocated_mains'] ?? 0) <= 0) {
                 continue; // No allocation in this month → no line.
             }
             $invoice_rows[] = [
-                'client'              => $c,
-                'resolved_rate'       => $b['resolved_rate'],
+                'client'              => $b,
+                'resolved_rate'       => $b['resolved_rate'] ?? 0,
                 'bill_mains'          => (int) $b['allocated_mains'],
-                'bill_sides'          => (int) $b['allocated_sides'],
-                'bill_tax_sides'      => (int) $b['allocated_tax_sides'],
-                'bill_nontax_sides'   => (int) $b['allocated_nontax_sides'],
+                'bill_sides'          => (int) ($b['allocated_sides'] ?? 0),
+                'bill_tax_sides'      => (int) ($b['allocated_tax_sides'] ?? 0),
+                'bill_nontax_sides'   => (int) ($b['allocated_nontax_sides'] ?? 0),
                 // Contribution is the sum of product-5675 line items on
                 // orders allocated to this month. Stored on the row as a
                 // float so the existing split_into_invoice_lines path
                 // (which converts back to cents via to_cents) works
                 // unchanged.
-                'client_contribution' => (int) $b['contribution_cents'] / 100,
+                'client_contribution' => (int) ($b['contribution_cents'] ?? 0) / 100,
             ];
         }
 
@@ -948,14 +1049,30 @@ class MealsDB_Invoice_Generator {
             $csv[] = MealsDB_CSV::row($row);
         }
 
-        // Finalize the billing month for all included clients.
-        $billing_month = substr($start_date, 0, 7);
-        $engine = new MealsDB_Allocation_Engine();
-        foreach ($client_rows as $client) {
-            $engine->finalize_month((int) $client['client_id'], $billing_month);
-        }
-
         return implode("\n", $csv);
+    }
+
+    /**
+     * Shared finalize helper (INV-DRAFT-3 Step 1): freeze the billing month
+     * for every client_id in a row map via the LB-3 finalize_month path.
+     * Called by the direct-download generators AFTER serializing; the
+     * draft-finalize path finalizes on its own (idempotent). Kept out of the
+     * serializers so those stay pure rows→string functions.
+     *
+     * @param array<int|string,mixed> $rows          row map keyed by client_id.
+     * @param string                  $billing_month 'YYYY-MM'.
+     */
+    private static function finalize_months_for_rows(array $rows, string $billing_month): void {
+        if ($billing_month === '' || !class_exists('MealsDB_Allocation_Engine')) {
+            return;
+        }
+        $engine = new MealsDB_Allocation_Engine();
+        foreach (array_keys($rows) as $cid) {
+            $cid_int = (int) $cid;
+            if ($cid_int > 0) {
+                $engine->finalize_month($cid_int, $billing_month);
+            }
+        }
     }
 
     /**
@@ -966,40 +1083,52 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_sdnb_new_portal($start_date, $end_date) {
-        // Shared with build_sdnb_new_portal_draft_rows() — one code path
-        // produces the queried + dirty-rebuilt client rows (INV-DRAFT-1 Step 5;
-        // refactor, don't fork).
-        $client_rows = self::collect_sdnb_new_portal_client_rows($start_date);
+        // Shared top-half (INV-DRAFT-1 Step 5): query → dirty-rebuild →
+        // phase-2 assemble. The SAME rows the draft builder produces.
+        $rows = self::build_sdnb_new_portal_draft_rows($start_date, $end_date);
 
-        // Phase 2: read allocated quantities + contribution-line sum + tax
-        // from the engine summary. One row per client.
-        $billing_month   = substr($start_date, 0, 7);
-        $billing_by_cid  = self::get_phase2_billing_data($client_rows, $billing_month);
+        $csv = self::serialize_sdnb_new_portal($rows);
 
+        // finalize_month moved OUT of the serializer (Step 1).
+        self::finalize_months_for_rows($rows, substr($start_date, 0, 7));
+
+        return $csv;
+    }
+
+    /**
+     * Pure serializer for the SDNB new-portal CSV (INV-DRAFT-3 Step 1).
+     * Takes phase-2 rows (build or a draft's edited `current`) → CSV string.
+     * NO DB access, NO finalize — byte-identical to the pre-refactor output
+     * for the same rows (characterization test T-A2).
+     *
+     * @param array<int|string,array> $rows phase-2 rows keyed by client_id.
+     */
+    public static function serialize_sdnb_new_portal(array $rows): string {
         $csv = [];
 
         // Header row — 18 columns, matches Janet's Nov 2025 submission.
         $csv[] = 'Service Confirmation Item Id,Product Name,Service Request Id,Client Name,No. Of Units,Unit Type,Rate,Kilometres,Kilometre Rate,Other Cost (transportation),Other Cost (meals),Other Cost (sundry),Other Cost (admin fees),Other Cost (recreation),Other Cost (parking),Client Contribution,Stat Holiday Units,Tax';
 
-        // Sort clients by name for stable output.
-        usort($client_rows, function ($a, $b) {
-            $na = strtoupper(($a['first_name'] ?? '') . ' ' . ($a['last_name'] ?? ''));
-            $nb = strtoupper(($b['first_name'] ?? '') . ' ' . ($b['last_name'] ?? ''));
+        // Sort rows by name for stable output. The merged phase-2 row carries
+        // first_name/last_name, so we sort the row VALUES directly (keys are
+        // client_id and are irrelevant to serialization order).
+        $list = array_values($rows);
+        usort($list, function ($a, $b) {
+            $na = strtoupper((($a['first_name'] ?? '') . ' ' . ($a['last_name'] ?? '')));
+            $nb = strtoupper((($b['first_name'] ?? '') . ' ' . ($b['last_name'] ?? '')));
             return strcmp($na, $nb);
         });
 
-        foreach ($client_rows as $c) {
-            $cid = (int) ($c['client_id'] ?? 0);
-            $b   = $billing_by_cid[$cid] ?? null;
-            if (!$b) {
-                continue; // No allocation in this month → no invoice line.
+        foreach ($list as $b) {
+            if (!is_array($b)) {
+                continue;
             }
-            $allocated_mains = (int) $b['allocated_mains'];
+            $allocated_mains = (int) ($b['allocated_mains'] ?? 0);
             if ($allocated_mains <= 0) {
                 continue; // Skip zero-meal rows; nothing to bill.
             }
 
-            $client_name = strtoupper($c['first_name'] ?? '') . ' ' . strtoupper($c['last_name'] ?? '');
+            $client_name = strtoupper($b['first_name'] ?? '') . ' ' . strtoupper($b['last_name'] ?? '');
 
             // The new-portal CSV has no Total column — the portal computes
             // the total from Units, Rate, Contribution, Tax. The plugin
@@ -1008,11 +1137,11 @@ class MealsDB_Invoice_Generator {
             $csv[] = MealsDB_CSV::row([
                 '', // Service Confirmation Item Id — assigned by the SDNB portal on upload, left blank.
                 'Meal Services - Services de repas',
-                $c['sdnb_service_request_id'] ?: '',
+                $b['sdnb_service_request_id'] ?? '',
                 $client_name,
                 $allocated_mains,
                 'Meal',
-                number_format((float) $b['resolved_rate'], 2, '.', ''),
+                number_format((float) ($b['resolved_rate'] ?? 0), 2, '.', ''),
                 '', // Kilometres
                 '', // Kilometre Rate
                 '', // Other Cost (transportation)
@@ -1021,16 +1150,10 @@ class MealsDB_Invoice_Generator {
                 '', // Other Cost (admin fees)
                 '', // Other Cost (recreation)
                 '', // Other Cost (parking)
-                (int) $b['contribution_cents'] > 0 ? MealsDB_Money::format((int) $b['contribution_cents']) : '',
+                (int) ($b['contribution_cents'] ?? 0) > 0 ? MealsDB_Money::format((int) $b['contribution_cents']) : '',
                 '', // Stat Holiday Units
-                (int) $b['tax_cents'] > 0 ? MealsDB_Money::format((int) $b['tax_cents']) : '0',
+                (int) ($b['tax_cents'] ?? 0) > 0 ? MealsDB_Money::format((int) $b['tax_cents']) : '0',
             ]);
-        }
-
-        // Finalize the billing month for all included clients.
-        $engine = new MealsDB_Allocation_Engine();
-        foreach ($client_rows as $client) {
-            $engine->finalize_month((int) $client['client_id'], $billing_month);
         }
 
         return implode("\n", $csv);
@@ -1044,19 +1167,55 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_vac_csv($start_date, $end_date) {
-        // Shared with build_vac_draft_rows() — one code path produces the
-        // queried + dirty-rebuilt + PII-decrypted client rows (INV-DRAFT-1
-        // Step 5; refactor, don't fork).
-        $client_rows = self::collect_vac_client_rows($start_date);
-
-        if (empty($client_rows)) {
+        // Shared top-half + corrected-model augmentation (INV-DRAFT-3 Step 4a):
+        // build_vac_draft_rows runs the SAME query → dirty-rebuild → decrypt →
+        // phase-2 pass the draft builder does, then attaches the editable
+        // mains-only billing fields. The SAME rows a draft carries.
+        $rows = self::build_vac_draft_rows($start_date, $end_date);
+        if (empty($rows)) {
             return '';
         }
 
-        // Pre-compute duplicate individual_id counts for error checking.
+        $csv = self::serialize_vac_csv($rows);
+
+        // finalize_month moved OUT of the serializer into the caller (Step 1).
+        self::finalize_months_for_rows($rows, substr($start_date, 0, 7));
+
+        return $csv;
+    }
+
+    /**
+     * Pure serializer for the VAC data CSV (INV-DRAFT-3 Steps 1 + 4b).
+     *
+     * Takes VAC draft rows (from build_vac_draft_rows OR a draft's edited
+     * `current`) → 37-column CSV string. NO DB access, NO finalize, NO
+     * re-derivation: it serializes EXACTLY the fields on the rows, so Janet's
+     * grid edits (bill_rate, fold_amount, fold_hst) flow straight to output.
+     *
+     * THE CORRECTED VAC MODEL (Step 4b): VAC is billed MAINS-ONLY. The total is
+     *     vac_total = bill_mains × bill_rate + fold_amount + fold_hst
+     * NOT the old `mains_cost + sides_cost + sides_HST`. Sides are NOT a billed
+     * line — they are folded by hand into the per-main gap (fold_amount), and
+     * the HST on the taxable portion of that fold is the "(includes HST)"
+     * figure (fold_hst). Both seed to 0 (Decision-gate default) and are
+     * hand-entered on the grid.
+     *
+     * COLUMN LAYOUT: positions 0-35 are the legacy 36-column Blue Cross layout
+     * and are LOAD-BEARING — generate_vac_pdf maps positionally onto indices
+     * 0-6 (identity), 11 (Bill Mains = meal count), 32 (Bill HST = fold_hst),
+     * 33 (New Total = vac_total). DO NOT reorder or remove a column before
+     * index 33 or the PDF stamps the wrong cells. "Fold Amount" is APPENDED at
+     * index 36 so the hand-entered fold is visible/auditable in the data file
+     * without disturbing the PDF contract. "Sides Cost" (31) is relabelled
+     * Info Only — it is reference-only and is NEVER summed into New Total.
+     *
+     * @param array<int|string,array> $rows VAC draft rows keyed by client_id.
+     */
+    public static function serialize_vac_csv(array $rows): string {
+        // Pre-compute duplicate individual_id counts (over ALL rows handed in).
         $vet_duplicate_counts = [];
-        foreach ($client_rows as $c) {
-            $idx = $c['individual_id_index'] ?? '';
+        foreach ($rows as $c) {
+            $idx = is_array($c) ? ($c['individual_id_index'] ?? '') : '';
             if ($idx !== '') {
                 if (!isset($vet_duplicate_counts[$idx])) {
                     $vet_duplicate_counts[$idx] = 0;
@@ -1065,142 +1224,99 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Phase 2: bill what the engine allocated to this month.
-        // No min/cap, no overage, no contribution subtraction (per VAC
-        // per old vet-invoice line 521: new_total = mains_cost + sides_cost + HST).
-        $billing_month   = substr($start_date, 0, 7);
-        $billing_by_cid  = self::get_phase2_billing_data($client_rows, $billing_month);
-
-        $engine      = new MealsDB_Allocation_Engine();
-        $order_query = new MealsDB_WC_Order_Query($GLOBALS['wpdb']);
-
-        $vet_aggregates = [];
-        foreach ($client_rows as $client) {
-            $cid = (int) $client['client_id'];
-            $b   = $billing_by_cid[$cid] ?? null;
-            if (!$b) {
-                continue; // no allocation this month -> no row
-            }
-
-            $vet_aggregates[$cid] = [
-                'client'                => $client,
-                'resolved_rate'         => $b['resolved_rate'],
-                'allocated_mains'       => (int) $b['allocated_mains'],
-                'allocated_tax_sides'   => (int) $b['allocated_tax_sides'],
-                'allocated_nontax_sides'=> (int) $b['allocated_nontax_sides'],
-                // For info columns only (Monthly Allowance / Allowance Remaining):
-                // expose the engine's monthly permitted figure as context.
-                'permitted_for_info'    => $engine->calculate_permitted_for_month($cid, $billing_month),
-            ];
-        }
-
-        // Sort by last_name, first_name.
-        uasort($vet_aggregates, function ($a, $b) {
-            $cmp = strcmp($a['client']['last_name'] ?? '', $b['client']['last_name'] ?? '');
-            return $cmp !== 0 ? $cmp : strcmp($a['client']['first_name'] ?? '', $b['client']['first_name'] ?? '');
+        // Sort by last_name, first_name (stable output). Sort the row VALUES;
+        // the client_id keys are irrelevant to serialization order.
+        $list = array_values($rows);
+        usort($list, function ($a, $b) {
+            $cmp = strcmp((string) ($a['last_name'] ?? ''), (string) ($b['last_name'] ?? ''));
+            return $cmp !== 0 ? $cmp : strcmp((string) ($a['first_name'] ?? ''), (string) ($b['first_name'] ?? ''));
         });
 
         $csv = [];
 
-        // Header row
-        $csv[] = 'K#,Client Last Name,Client First Name,Billing Address 1,Billing City,Billing Postcode,Billing Phone,Unit Type,Rate,Mains Ordered,Mains Allowance,Bill Mains,BNM Mains,Sides Ordered,Sides Allowance,Desserts,Muffin,Total Tax Sides Ordered,Bill Tax Sides,Overage Tax Sides,Remaining Sides,Cereal,Soup,Total Non-Tax Sides Ordered,Bill Non-Taxable Sides,Overage Non Taxable Sides,Bill Sides,Service,Monthly Allowance,Vet Mains Cost,Allowance Remaining,Sides Cost,Bill HST,New Total,Errors,New User flag';
+        // Header — 36 legacy columns + appended "Fold Amount" (37th).
+        $csv[] = 'K#,Client Last Name,Client First Name,Billing Address 1,Billing City,Billing Postcode,Billing Phone,Unit Type,Rate,Mains Ordered,Mains Allowance,Bill Mains,BNM Mains,Sides Ordered,Sides Allowance,Desserts,Muffin,Total Tax Sides Ordered,Bill Tax Sides,Overage Tax Sides,Remaining Sides,Cereal,Soup,Total Non-Tax Sides Ordered,Bill Non-Taxable Sides,Overage Non Taxable Sides,Bill Sides,Service,Monthly Allowance,Vet Mains Cost,Allowance Remaining,Sides Cost (Info Only),Bill HST,New Total,Errors,New User flag,Fold Amount';
 
-        foreach ($vet_aggregates as $agg) {
-            $vet = $agg['client'];
-
-            // Decrypt vet_health_card (encrypted PII field).
-            $health_card = '';
-            if (!empty($vet['vet_health_card'])) {
-                $health_card = MealsDB_Encryption::safe_decrypt($vet['vet_health_card']);
+        foreach ($list as $vet) {
+            if (!is_array($vet)) {
+                continue;
             }
 
-            $billing_address  = trim($vet['street_name'] ?? '');
+            // vet_health_card was decrypted at build time (build_vac_draft_rows);
+            // safe_decrypt again would be a no-op on plaintext, but read it as-is.
+            $health_card      = (string) ($vet['vet_health_card'] ?? '');
+            $billing_address  = trim((string) ($vet['street_name'] ?? ''));
             $billing_city     = $vet['city'] ?? '';
             $billing_postcode = $vet['postal_code'] ?? '';
             $billing_phone    = $vet['client_phone_1'] ?? '';
-            $service          = strtolower($vet['requisition_period'] ?: 'week');
+            $service          = strtolower((string) ($vet['requisition_period'] ?? '') ?: 'week');
 
-            $resolved_rate          = $agg['resolved_rate'];
-            $allocated_mains        = $agg['allocated_mains'];
-            $allocated_tax_sides    = $agg['allocated_tax_sides'];
-            $allocated_nontax_sides = $agg['allocated_nontax_sides'];
+            // Corrected mains-only billing fields (editable on the grid).
+            $bill_rate              = (float) ($vet['bill_rate'] ?? ($vet['resolved_rate'] ?? 0));
+            $bill_mains             = (int) ($vet['bill_mains'] ?? ($vet['allocated_mains'] ?? 0));
+            $allocated_mains        = (int) ($vet['allocated_mains'] ?? 0);
+            $allocated_tax_sides    = (int) ($vet['allocated_tax_sides'] ?? 0);
+            $allocated_nontax_sides = (int) ($vet['allocated_nontax_sides'] ?? 0);
+            $allocated_sides        = $allocated_tax_sides + $allocated_nontax_sides;
 
-            // Phase 2: bill the allocated quantities. No caps at this layer
-            // (the engine's fill already enforced allowance, with spill to
-            // next month or a logged error if a delivery overran both
-            // months). bnm_mains / overage_* are therefore always 0.
-            $bill_mains           = $allocated_mains;
-            $bill_tax_sides       = $allocated_tax_sides;
-            $bill_nontax_sides    = $allocated_nontax_sides;
-            $bill_sides           = $bill_tax_sides + $bill_nontax_sides;
-            $bnm_mains            = 0;
-            $overage_tax_sides    = 0;
-            $overage_nontax_sides = 0;
+            // fold_amount / fold_hst are stored as DOLLAR floats (the edit
+            // layer round-trips them as dollars). The VAC total is mains-only
+            // plus the hand-entered fold and its HST — sides are NOT billed.
+            $fold_amount_cents    = MealsDB_Money::to_cents($vet['fold_amount'] ?? 0);
+            $fold_hst_cents       = MealsDB_Money::to_cents($vet['fold_hst'] ?? 0);
+            $vet_mains_cost_cents = MealsDB_Money::multiply($bill_mains, $bill_rate);
+            $vac_total_cents      = $vet_mains_cost_cents + $fold_amount_cents + $fold_hst_cents;
 
-            // VAC cost components.
-            $vet_mains_cost_cents = MealsDB_Money::multiply($bill_mains, $resolved_rate);
-            $sides_cost_cents     = MealsDB_Money::multiply($bill_sides, self::$vac_billing['sides_cost_rate']);
-            $tax_sides_base_cents = MealsDB_Money::multiply($bill_tax_sides, self::$vac_billing['sides_cost_rate']);
-            $sides_tax_cents      = MealsDB_Money::percent_of($tax_sides_base_cents, self::$vac_billing['sides_hst_rate']);
-            // VAC new_total = mains_cost + sides_cost + HST  (confirmed
-            // against old vet-invoice: NO contribution subtraction).
-            $new_total_cents      = $vet_mains_cost_cents + $sides_cost_cents + $sides_tax_cents;
-
-            // Informational columns (not used in billing decisions anymore).
-            $permitted          = $agg['permitted_for_info'];
-            $mains_allowance    = (int) ($permitted['permitted_mains'] ?? 0);
-            $sides_allowance    = (int) ($permitted['permitted_sides'] ?? 0);
-            $remaining_sides    = max(0, $sides_allowance - $bill_tax_sides);
-            // Keep the "Monthly Allowance" dollar field for compatibility
-            // with the existing column layout — derived from the mains cap.
-            $monthly_allowance_cents   = MealsDB_Money::multiply($mains_allowance, self::$vac_billing['per_main_allowance']);
+            // Informational figures — reference only, NEVER summed into the total.
+            $mains_allowance           = (int) ($vet['info_mains_allowance'] ?? 0);
+            $sides_allowance           = (int) ($vet['info_sides_allowance'] ?? 0);
+            $remaining_sides           = max(0, $sides_allowance - $allocated_tax_sides);
+            $monthly_allowance_cents   = (int) ($vet['info_monthly_allowance_cents'] ?? 0);
             $allowance_remaining_cents = max(0, $monthly_allowance_cents - $vet_mains_cost_cents);
+            $info_sides_cost_cents     = (int) ($vet['info_sides_cost_cents'] ?? 0);
 
-            $errors = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
+            $errors        = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
+            $new_user_flag = (string) ($vet['new_user_flag'] ?? 'No');
 
             $csv[] = MealsDB_CSV::row([
-                $health_card,
-                $vet['last_name'] ?: '',
-                $vet['first_name'] ?: '',
-                $billing_address, // MealsDB_CSV::cell() handles embedded commas via quoting.
-                $billing_city ?: '',
-                $billing_postcode ?: '',
-                $billing_phone ?: '',
-                'Meal',
-                number_format($resolved_rate, 2, '.', ''),
-                $allocated_mains,     // Mains Ordered (under phase 2: what the engine allocated)
-                $mains_allowance,
-                $bill_mains,
-                $bnm_mains,
-                $allocated_tax_sides + $allocated_nontax_sides, // Sides Ordered
-                $sides_allowance,
-                0, // Desserts (track separately if needed)
-                0, // Muffins (track separately if needed)
-                $allocated_tax_sides, // Total Tax Sides Ordered
-                $bill_tax_sides,
-                $overage_tax_sides,
-                $remaining_sides,
-                0, // Cereal (track separately if needed)
-                $allocated_nontax_sides, // Soup
-                $allocated_nontax_sides, // Total Non-Tax Sides Ordered
-                $bill_nontax_sides,
-                $overage_nontax_sides,
-                $bill_sides,
-                $service,
-                MealsDB_Money::format($monthly_allowance_cents),
-                MealsDB_Money::format($vet_mains_cost_cents),
-                MealsDB_Money::format($allowance_remaining_cents),
-                MealsDB_Money::format($sides_cost_cents),
-                MealsDB_Money::format($sides_tax_cents),
-                MealsDB_Money::format($new_total_cents),
-                $errors,
-                self::check_new_user_flag((int) ($vet['wp_user_id'] ?? 0), $start_date, $end_date) ?: 'No',
+                $health_card,                                      // 0  K#
+                $vet['last_name'] ?? '',                           // 1  Last Name
+                $vet['first_name'] ?? '',                          // 2  First Name
+                $billing_address, // MealsDB_CSV::cell() quotes embedded commas. // 3 Address
+                $billing_city ?: '',                               // 4  City
+                $billing_postcode ?: '',                           // 5  Postcode
+                $billing_phone ?: '',                              // 6  Phone
+                'Meal',                                            // 7  Unit Type
+                number_format($bill_rate, 2, '.', ''),             // 8  Rate (bill_rate, on the wire)
+                $allocated_mains,                                  // 9  Mains Ordered
+                $mains_allowance,                                  // 10 Mains Allowance (info)
+                $bill_mains,                                       // 11 Bill Mains  ← PDF: meal count
+                0,                                                 // 12 BNM Mains
+                $allocated_sides,                                  // 13 Sides Ordered (info)
+                $sides_allowance,                                  // 14 Sides Allowance (info)
+                0,                                                 // 15 Desserts
+                0,                                                 // 16 Muffin
+                $allocated_tax_sides,                              // 17 Total Tax Sides Ordered (info)
+                $allocated_tax_sides,                              // 18 Bill Tax Sides (info — not billed)
+                0,                                                 // 19 Overage Tax Sides
+                $remaining_sides,                                  // 20 Remaining Sides (info)
+                0,                                                 // 21 Cereal
+                $allocated_nontax_sides,                           // 22 Soup
+                $allocated_nontax_sides,                           // 23 Total Non-Tax Sides Ordered (info)
+                $allocated_nontax_sides,                           // 24 Bill Non-Taxable Sides (info — not billed)
+                0,                                                 // 25 Overage Non Taxable Sides
+                $allocated_sides,                                  // 26 Bill Sides (info — not billed)
+                $service,                                          // 27 Service
+                MealsDB_Money::format($monthly_allowance_cents),   // 28 Monthly Allowance (info, Definitions coverage)
+                MealsDB_Money::format($vet_mains_cost_cents),       // 29 Vet Mains Cost = bill_mains × bill_rate
+                MealsDB_Money::format($allowance_remaining_cents),  // 30 Allowance Remaining (info)
+                MealsDB_Money::format($info_sides_cost_cents),      // 31 Sides Cost (INFO ONLY — NOT summed)
+                MealsDB_Money::format($fold_hst_cents),             // 32 Bill HST = fold_hst  ← PDF: "(includes HST)"
+                MealsDB_Money::format($vac_total_cents),            // 33 New Total = vac_total ← PDF: total
+                $errors,                                           // 34 Errors
+                $new_user_flag,                                    // 35 New User flag
+                MealsDB_Money::format($fold_amount_cents),          // 36 Fold Amount (appended — auditable)
             ]);
-        }
-
-        // Finalize the billing month for all included clients.
-        foreach ($client_rows as $client) {
-            $engine->finalize_month((int) $client['client_id'], $billing_month);
         }
 
         return implode("\n", $csv);
@@ -1239,6 +1355,31 @@ class MealsDB_Invoice_Generator {
      * @return string PDF bytes (caller writes to disk or streams).
      */
     public static function generate_vac_pdf($start_date, $end_date) {
+        // STAGE 1 → STAGE 2: build the data CSV, then render it. The PDF is a
+        // PURE renderer over the CSV (serialize_vac_pdf_from_csv) so the
+        // draft-finalize path can stamp Janet's EDITED CSV — not a fresh
+        // generation — onto the form (INV-DRAFT-3 Step 2).
+        $csv_content = self::generate_vac_csv($start_date, $end_date);
+        return self::serialize_vac_pdf_from_csv($csv_content, $end_date);
+    }
+
+    /**
+     * Render a VAC reimbursement PDF from an already-built VAC data CSV
+     * (INV-DRAFT-3 Step 2). PURE renderer: it parses the CSV and stamps each
+     * row onto the Blue Cross form — it does NOT query the DB or regenerate
+     * the data. Called by generate_vac_pdf (direct path, fresh CSV) AND by the
+     * draft-finalize path (the draft's edited CSV), so the bytes a finalized
+     * draft yields are exactly the bytes Janet reviewed.
+     *
+     * The signature date stamped on the form (date of service / signature) is
+     * the billing-period END — passed in rather than re-derived, since the
+     * CSV itself carries no per-invoice date.
+     *
+     * @param string $csv_content The VAC data CSV (serialize_vac_csv output).
+     * @param string $end_date    YYYY-MM-DD billing-period end (stamped date).
+     * @return string PDF bytes ('' when there is nothing to render).
+     */
+    public static function serialize_vac_pdf_from_csv(string $csv_content, string $end_date): string {
         if (!class_exists('Dompdf\\Dompdf')) {
             throw new RuntimeException(
                 'DomPDF is not available — run `composer install` in the meals-db plugin directory.'
@@ -1255,11 +1396,9 @@ class MealsDB_Invoice_Generator {
         }
         $formatted_date = $end_date_obj->format('d/m/y');
 
-        // Pull the phase-2 VAC CSV as our data source. Parsing it back into
-        // rows keeps stage-2 a pure renderer — the same CSV the operator can
-        // download is what feeds the PDF.
-        $csv_content = self::generate_vac_csv($start_date, $end_date);
-        $lines       = explode("\n", $csv_content);
+        // Parse the CSV back into rows. Stage 2 is a pure renderer — the same
+        // CSV the operator can download is what feeds the PDF.
+        $lines = explode("\n", $csv_content);
         if (!empty($lines)) {
             array_shift($lines); // drop header
         }

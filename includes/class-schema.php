@@ -639,6 +639,16 @@ class MealsDB_Schema {
                     'created_at'    => 'DATETIME NOT NULL',
                     'finalized_by'  => 'BIGINT UNSIGNED NULL',
                     'finalized_at'  => 'DATETIME NULL',
+                    // INV-DRAFT-3 Step 2: the EXACT serialized artifact captured
+                    // at finalize time (encrypted via encode_payload, like the
+                    // payload — it carries the same PII; the VAC PDF is binary,
+                    // so it is base64'd inside the encrypted blob). A finalized
+                    // government invoice is immutable — the download endpoint
+                    // streams these bytes rather than regenerating, which could
+                    // drift if any input changed. Additive column: Schema_Sync
+                    // ADDS it on upgrade (STR-11 — it cannot ALTER, but an add
+                    // is exactly what it does).
+                    'finalized_output' => 'LONGTEXT NULL',
                 ],
                 'primary_key' => ['draft_id'],
                 'indexes' => [
