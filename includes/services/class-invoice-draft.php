@@ -289,13 +289,19 @@ class MealsDB_Invoice_Draft {
      * allocation rebuild cannot silently recompute a month whose invoice has
      * been finalized.
      *
-     * INV-DRAFT-1 SKELETON: per-pipeline serialization is wired in INV-DRAFT-3.
-     * For now finalize returns the (possibly-edited) `current` row set — the
-     * point of doing the skeleton here is the freeze semantics, which the
-     * schema and service must support from day one.
+     * INV-DRAFT-3: per-pipeline serialization is now wired. finalize
+     * serializes `current` through the pipeline's PURE serializer and encrypts
+     * the bytes FIRST, then — only once the artifact exists — freezes the
+     * months (the one-way LB-3 lock) and persists the EXACT bytes
+     * (finalized_output) in one guarded status transition. Ordering the
+     * fallible work before the freeze means a serialize/encrypt failure leaves
+     * the draft editable and its month rebuildable (PR #393 review). The
+     * download endpoint (Step 3) streams the persisted bytes — they are NOT
+     * regenerated on download.
      *
-     * @return mixed The serialized output (INV-DRAFT-3) or, for now, the
-     *               `current` row map; null on failure/refusal.
+     * @return array|null The structured output map
+     *                    (['pipeline'=>..., 'files'=>[...]]) on success;
+     *                    null on failure/refusal.
      */
     public static function finalize(int $draft_id) {
         try {
@@ -312,11 +318,61 @@ class MealsDB_Invoice_Draft {
             $current        = (isset($payload['current']) && is_array($payload['current']))
                 ? $payload['current'] : [];
             $billing_month = (string) ($draft['billing_month'] ?? '');
+            $pipeline      = (string) ($draft['pipeline'] ?? '');
 
-            // Step 6.3 — freeze every client's allocation month via the SAME
-            // method LB-1/LB-3 use. finalize_month is idempotent (re-setting
-            // is_finalized=1 is a no-op), so finalizing a month that a prior
-            // draft already locked must NOT error (T-6).
+            // ORDER MATTERS (PR #393 review): serialize + encrypt BEFORE
+            // freezing the months. finalize_month is a one-way lock — once a
+            // client-month is finalized the rebuilder will not touch it (LB-3).
+            // If we froze first and THEN failed to produce/encrypt the artifact
+            // (unknown pipeline, serializer threw, encryption unavailable), we
+            // would leave an editable, un-finalized draft whose allocations are
+            // nonetheless locked — so a retry or correction could no longer
+            // rebuild the billed month even though NO finalized invoice exists.
+            // Doing the fallible work first means an early return leaves the
+            // months untouched and the draft fully recoverable.
+
+            // Step 6.2 (INV-DRAFT-3) — serialize `current` through the
+            // pipeline's PURE serializer. The serializer takes ROWS, not a
+            // date, and never re-queries — so it formats Janet's EDITED rows,
+            // not a fresh generation, and is side-effect-free.
+            $output = self::serialize_current($pipeline, $current, $draft);
+            if ($output === null) {
+                // Unknown pipeline / serializer failure — do NOT finalize (and,
+                // critically, do NOT freeze) a draft we cannot produce a
+                // downloadable artifact for.
+                return null;
+            }
+
+            // Capture the EXACT bytes at finalize time (immutable government
+            // artifact — Step 2 rationale). Encrypt at rest (QW-2 fail-closed):
+            // the output carries the same PII as the payload; the VAC PDF rides
+            // as base64 inside the encrypted blob.
+            $encoded_output = MealsDB_Encryption::encode_payload($output);
+            if ($encoded_output === false) {
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity'  => 'error',
+                        'category'  => 'billing',
+                        'subsystem' => 'invoice_draft',
+                        'event'     => 'finalize.encrypt_failed',
+                        'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message'   => 'Invoice draft not finalized: finalized-output encryption failed.',
+                    ]);
+                }
+                // Months are still untouched — the draft remains editable and
+                // its month rebuildable. Bail before any freeze.
+                return null;
+            }
+
+            // Step 6.3 — NOW that the artifact exists and is encrypted, freeze
+            // every client's allocation month via the SAME method LB-1/LB-3 use.
+            // finalize_month is idempotent (re-setting is_finalized=1 is a
+            // no-op), so finalizing a month a prior draft already locked must
+            // NOT error (T-6). This sits immediately before the guarded UPDATE
+            // so the freeze and the status transition share the same tail: if a
+            // concurrent request already finalized this draft (lost race below),
+            // the winner also froze, so the months SHOULD be frozen — the
+            // freeze here is then a harmless idempotent no-op.
             if ($billing_month !== '' && class_exists('MealsDB_Allocation_Engine')) {
                 $engine = new MealsDB_Allocation_Engine();
                 foreach (array_keys($current) as $client_id) {
@@ -327,24 +383,21 @@ class MealsDB_Invoice_Draft {
                 }
             }
 
-            // Step 6.2 — serialize `current` through the pipeline's existing
-            // serializer. Wired per-pipeline in INV-DRAFT-3 (VAC first); the
-            // skeleton returns the row set so the freeze + status transition
-            // are exercisable now.
-            $output = $current;
-
-            // Step 6.4 — mark the draft finalized.
+            // Step 6.4 — mark finalized + persist the captured artifact in ONE
+            // guarded UPDATE (the status='draft' WHERE clause keeps the
+            // transition atomic).
             global $wpdb;
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::INVOICE_DRAFTS);
             $finalized = $wpdb->update(
                 $table,
                 [
-                    'status'       => 'finalized',
-                    'finalized_by' => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
-                    'finalized_at' => gmdate('Y-m-d H:i:s'),
+                    'status'           => 'finalized',
+                    'finalized_by'     => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
+                    'finalized_at'     => gmdate('Y-m-d H:i:s'),
+                    'finalized_output' => $encoded_output,
                 ],
                 ['draft_id' => $draft_id, 'status' => 'draft'],
-                ['%s', '%d', '%s'],
+                ['%s', '%d', '%s', '%s'],
                 ['%d', '%s']
             );
 
@@ -370,6 +423,128 @@ class MealsDB_Invoice_Draft {
             return $output;
         } catch (\Throwable $e) {
             self::log_error('finalize', $e);
+            return null;
+        }
+    }
+
+    /**
+     * Serialize a draft's `current` rows into the per-pipeline downloadable
+     * artifact(s) (INV-DRAFT-3 Step 2). Returns a structured map:
+     *
+     *   ['pipeline' => <pipeline>, 'files' => [
+     *       'csv' => ['mime'=>'text/csv', 'filename'=>..., 'content'=><string>],
+     *       'pdf' => ['mime'=>'application/pdf', 'filename'=>..., 'b64'=><base64>], // VAC only
+     *   ]]
+     *
+     * The CSV content is a string; the (VAC) PDF rides as base64 ('b64') so the
+     * whole map survives JSON encoding inside the encrypted blob. Returns null
+     * on an unknown pipeline.
+     *
+     * PDF generation is BEST-EFFORT: if dompdf is unavailable (or throws), the
+     * CSV still finalizes and the PDF file is simply omitted — the download
+     * endpoint then reports the PDF unavailable rather than the finalize 500ing
+     * on an environment without the renderer.
+     */
+    private static function serialize_current(string $pipeline, array $current, array $draft): ?array {
+        $billing_month = (string) ($draft['billing_month'] ?? '');
+        $period_start  = (string) ($draft['period_start'] ?? '');
+        $period_end    = (string) ($draft['period_end'] ?? '');
+        $params        = is_array($draft['params'] ?? null) ? $draft['params'] : [];
+
+        // Filename-safe month slug (e.g. "2025-01").
+        $slug_month = preg_replace('/[^0-9A-Za-z\-]/', '', $billing_month);
+        if ($slug_month === '' || $slug_month === null) {
+            $slug_month = 'month';
+        }
+
+        if (!class_exists('MealsDB_Invoice_Generator')) {
+            return null;
+        }
+
+        switch ($pipeline) {
+            case self::PIPELINE_VAC:
+                $csv   = MealsDB_Invoice_Generator::serialize_vac_csv($current);
+                $files = [
+                    'csv' => [
+                        'mime'     => 'text/csv',
+                        'filename' => 'vac-' . $slug_month . '.csv',
+                        'content'  => $csv,
+                    ],
+                ];
+                // Stage 2 PDF over the EDITED CSV (not a fresh generation).
+                try {
+                    $pdf = MealsDB_Invoice_Generator::serialize_vac_pdf_from_csv($csv, $period_end);
+                    if (is_string($pdf) && $pdf !== '') {
+                        $files['pdf'] = [
+                            'mime'     => 'application/pdf',
+                            'filename' => 'vac-' . $slug_month . '.pdf',
+                            'b64'      => base64_encode($pdf),
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    // Best-effort: CSV still finalizes. Surface as degraded.
+                    self::log_error('finalize_vac_pdf', $e);
+                }
+                return ['pipeline' => $pipeline, 'files' => $files];
+
+            case self::PIPELINE_SDNB_LEGACY:
+                $zone = isset($params['zone']) ? (string) $params['zone'] : 'M';
+                $csv  = MealsDB_Invoice_Generator::serialize_sdnb_legacy($current, [
+                    'zone'       => $zone,
+                    'start_date' => $period_start,
+                    'end_date'   => $period_end,
+                ]);
+                return ['pipeline' => $pipeline, 'files' => [
+                    'csv' => [
+                        'mime'     => 'text/csv',
+                        'filename' => 'sdnb-legacy-' . strtolower($zone) . '-' . $slug_month . '.csv',
+                        'content'  => $csv,
+                    ],
+                ]];
+
+            case self::PIPELINE_SDNB_NEW:
+                $csv = MealsDB_Invoice_Generator::serialize_sdnb_new_portal($current);
+                return ['pipeline' => $pipeline, 'files' => [
+                    'csv' => [
+                        'mime'     => 'text/csv',
+                        'filename' => 'sdnb-new-portal-' . $slug_month . '.csv',
+                        'content'  => $csv,
+                    ],
+                ]];
+        }
+
+        return null;
+    }
+
+    /**
+     * Load + decrypt a finalized draft's captured output (INV-DRAFT-3 Step 3,
+     * for the download endpoint). Returns the structured ['pipeline','files']
+     * map, or null if the draft is missing, NOT finalized, or has no
+     * decryptable finalized_output.
+     */
+    public static function get_finalized_output(int $draft_id): ?array {
+        try {
+            if ($draft_id <= 0) {
+                return null;
+            }
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::INVOICE_DRAFTS);
+            $row = $wpdb->get_row($wpdb->prepare(
+                "SELECT status, finalized_output FROM `{$table}` WHERE draft_id = %d",
+                $draft_id
+            ), ARRAY_A);
+
+            if (!is_array($row) || ($row['status'] ?? '') !== 'finalized') {
+                return null;
+            }
+            $stored = (string) ($row['finalized_output'] ?? '');
+            if ($stored === '') {
+                return null;
+            }
+            $decoded = MealsDB_Encryption::decode_payload($stored);
+            return is_array($decoded) ? $decoded : null;
+        } catch (\Throwable $e) {
+            self::log_error('get_finalized_output', $e);
             return null;
         }
     }

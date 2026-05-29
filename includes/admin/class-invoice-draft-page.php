@@ -23,9 +23,10 @@
  * "no inline <script> > 20 lines" rule — the directive's "no build step" is
  * satisfied by a plain enqueued .js, no bundler involved).
  *
- * Finalize caveat (INV-DRAFT-3): finalize here only LOCKS + audits the draft.
- * The real per-pipeline CSV/PDF serialization + download arrives in
- * INV-DRAFT-3, so there is intentionally NO "download invoice" affordance yet.
+ * Finalize (INV-DRAFT-3): finalizing locks + audits the draft AND serializes
+ * the per-pipeline artifact, captured (encrypted) on the draft. A finalized
+ * draft's review view then offers Download CSV (and, for VAC, Download PDF)
+ * via the admin-post stream endpoint.
  *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
@@ -284,18 +285,53 @@ class MealsDB_Invoice_Draft_Page {
         echo '</tbody></table>';
 
         if ($editable) {
-            // Finalize button. NOTE (INV-DRAFT-2): this only LOCKS + audits the
-            // draft — it does NOT produce a downloadable invoice. Per-pipeline
-            // CSV/PDF serialization + the download affordance are INV-DRAFT-3.
-            // Do not mistake the absence of a download for an oversight.
+            // Finalize button. INV-DRAFT-3: finalize now LOCKS + audits AND
+            // serializes the per-pipeline artifact, which becomes downloadable
+            // below once the page reloads into the read-only view.
             echo '<p style="margin-top:12px;">';
             echo '<button type="button" class="button button-primary mealsdb-draft-finalize" data-draft-id="'
                 . esc_attr((string) $draft_id) . '">' . esc_html__('Finalize draft', 'meals-db') . '</button>';
             echo ' <span class="description">'
-                . esc_html__('Finalizing locks the draft (read-only). Downloadable output arrives in a later release.', 'meals-db')
+                . esc_html__('Finalizing locks the draft (read-only) and produces the downloadable invoice file.', 'meals-db')
                 . '</span>';
             echo '</p>';
+        } else {
+            // Finalized: offer the captured artifact(s) for download (Step 3).
+            self::render_download_links($draft_id, (string) ($draft['pipeline'] ?? ''));
         }
+    }
+
+    /**
+     * Render the download affordance for a finalized draft (INV-DRAFT-3 Step
+     * 3). CSV for every pipeline; VAC additionally offers the Blue Cross PDF.
+     * Each link carries the dedicated download nonce; the admin-post handler
+     * re-checks capability + nonce + rate limit and streams the EXACT bytes
+     * captured at finalize time. A VAC PDF that could not be generated (no
+     * dompdf in the environment) returns a clean 404 from the handler.
+     */
+    private static function render_download_links(int $draft_id, string $pipeline): void {
+        if (!class_exists('MealsDB_Ajax_Invoice_Draft')) {
+            return;
+        }
+        $base  = admin_url('admin-post.php');
+        $nonce = wp_create_nonce(MealsDB_Ajax_Invoice_Draft::DOWNLOAD_NONCE_ACTION);
+
+        $link = function (string $which, string $label) use ($base, $nonce, $draft_id): string {
+            $url = add_query_arg([
+                'action'   => 'mealsdb_download_finalized_invoice',
+                'draft_id' => $draft_id,
+                'which'    => $which,
+                'nonce'    => $nonce,
+            ], $base);
+            return '<a class="button" href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
+        };
+
+        echo '<p style="margin-top:12px;">';
+        echo $link('csv', __('Download CSV', 'meals-db'));
+        if ($pipeline === MealsDB_Invoice_Draft::PIPELINE_VAC) {
+            echo ' ' . $link('pdf', __('Download PDF', 'meals-db'));
+        }
+        echo '</p>';
     }
 
     /**

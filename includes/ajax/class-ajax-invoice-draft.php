@@ -34,6 +34,14 @@ class MealsDB_Ajax_Invoice_Draft {
     public const NONCE_ACTION = 'mealsdb_invoice_draft_nonce';
 
     /**
+     * Separate nonce action for the finalized-invoice DOWNLOAD (INV-DRAFT-3
+     * Step 3). It is its own context because the download is an admin-post
+     * file stream (a GET link the page renders), not one of the three AJAX
+     * mutations above — a distinct action category, so a distinct nonce.
+     */
+    public const DOWNLOAD_NONCE_ACTION = 'mealsdb_download_finalized_invoice';
+
+    /**
      * Ceilings for server-side value validation. A single editable billing
      * value should never plausibly exceed these — they catch fat-fingers
      * (the directive's "999999") before they reach a government invoice.
@@ -46,6 +54,8 @@ class MealsDB_Ajax_Invoice_Draft {
         add_action('wp_ajax_mealsdb_generate_draft',   [__CLASS__, 'generate_draft']);
         add_action('wp_ajax_mealsdb_edit_draft_field', [__CLASS__, 'edit_draft_field']);
         add_action('wp_ajax_mealsdb_finalize_draft',   [__CLASS__, 'finalize_draft']);
+        // The download is an admin-post handler (it streams a file, not JSON).
+        add_action('admin_post_mealsdb_download_finalized_invoice', [__CLASS__, 'download_finalized']);
     }
 
     // -----------------------------------------------------------------
@@ -244,10 +254,11 @@ class MealsDB_Ajax_Invoice_Draft {
     // -----------------------------------------------------------------
 
     /**
-     * Lock + audit a draft. INV-DRAFT-2 stops here: it does NOT return a
-     * downloadable invoice — per-pipeline CSV/PDF serialization is INV-DRAFT-3.
-     * The UI refreshes into the read-only grid; the download affordance is
-     * deliberately absent until there is real output to download.
+     * Lock + audit a draft AND serialize its output (INV-DRAFT-3). finalize()
+     * now freezes the months, serializes `current` per pipeline, and persists
+     * the exact bytes (encrypted) on the draft. The JS reloads the page into
+     * the read-only grid, where the Download links (Step 3) appear. We return
+     * the set of available formats so the caller can surface them immediately.
      */
     public static function finalize_draft(): void {
         if (!self::guard('settings_modify')) {
@@ -261,23 +272,111 @@ class MealsDB_Ajax_Invoice_Draft {
                 return;
             }
 
-            // finalize() returns the placeholder row map on success (INV-DRAFT-1)
-            // or null on refusal/lost-race. We deliberately do NOT stream that
-            // return value as a file — it is not the real serialized invoice yet
-            // (INV-DRAFT-3). We only confirm the lock landed.
+            // finalize() returns the structured output map on success, or null
+            // on refusal / lost-race / serialization failure.
             $result = MealsDB_Invoice_Draft::finalize($draft_id);
             if ($result === null) {
-                wp_send_json_error(['message' => __('Could not finalize (already finalized or a concurrent change — reload).', 'meals-db')]);
+                wp_send_json_error(['message' => __('Could not finalize (already finalized, a concurrent change, or output could not be produced — reload).', 'meals-db')]);
                 return;
             }
+
+            $formats = (isset($result['files']) && is_array($result['files']))
+                ? array_keys($result['files']) : [];
 
             wp_send_json_success([
                 'finalized' => true,
                 'draft_id'  => $draft_id,
+                'formats'   => $formats,
             ]);
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Invoice_Draft AJAX] finalize failed: ' . $e->getMessage());
             wp_send_json_error(['message' => __('Unable to finalize draft. Please try again.', 'meals-db')]);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 3 — download_finalized (admin-post file stream, INV-DRAFT-3 Step 3)
+    // -----------------------------------------------------------------
+
+    /**
+     * Stream a finalized draft's captured artifact (CSV, or VAC PDF). This is
+     * an admin-post handler, NOT an AJAX one: it emits a file, not JSON.
+     *
+     * Guard order mirrors the AJAX spine but for a GET download:
+     *   1. capability  (manage_options — same tight audience; the artifact is
+     *                   decrypted client/veteran PII)
+     *   2. nonce       (DOWNLOAD_NONCE_ACTION, in the link the page rendered)
+     *   3. rate limit  (a READ bucket — this is a download of an already-
+     *                   finalized, immutable artifact, not a mutation)
+     *
+     * The bytes are the EXACT ones captured at finalize time (Step 2) — never
+     * regenerated here, so a finalized federal invoice is immutable. The CSV
+     * was produced through MealsDB_CSV (QW-3 formula-injection guard) at
+     * finalize; we do not re-touch it.
+     */
+    public static function download_finalized(): void {
+        // 1. Capability.
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('Insufficient permissions.', 'meals-db'), 403);
+        }
+        // 2. Nonce (in the GET link).
+        $nonce = isset($_GET['nonce']) ? sanitize_text_field(wp_unslash($_GET['nonce'])) : '';
+        if (!wp_verify_nonce($nonce, self::DOWNLOAD_NONCE_ACTION)) {
+            wp_die(esc_html__('Invalid or expired download link.', 'meals-db'), 403);
+        }
+        // 3. Rate limit (read bucket — fail-open for reads if backend down).
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_die(esc_html__('Rate limit exceeded. Please try again later.', 'meals-db'), 429);
+        }
+
+        $draft_id = isset($_GET['draft_id']) ? absint($_GET['draft_id']) : 0;
+        $which    = isset($_GET['which']) ? sanitize_key((string) $_GET['which']) : 'csv';
+        if ($draft_id <= 0) {
+            wp_die(esc_html__('Missing draft id.', 'meals-db'), 400);
+        }
+        if (!in_array($which, ['csv', 'pdf'], true)) {
+            $which = 'csv';
+        }
+
+        try {
+            // get_finalized_output() returns null unless the draft exists AND is
+            // finalized — so this fails closed on a draft-status (T-A5) or
+            // missing draft.
+            $output = MealsDB_Invoice_Draft::get_finalized_output($draft_id);
+            if ($output === null || empty($output['files']) || !is_array($output['files'])) {
+                wp_die(esc_html__('No finalized output available for this draft.', 'meals-db'), 404);
+            }
+
+            $file = $output['files'][$which] ?? null;
+            if (!is_array($file)) {
+                wp_die(esc_html__('Requested format is not available for this invoice.', 'meals-db'), 404);
+            }
+
+            // Resolve the bytes: CSV is stored as a string; PDF as base64.
+            if ($which === 'pdf') {
+                $bytes = isset($file['b64']) ? base64_decode((string) $file['b64'], true) : false;
+                if ($bytes === false) {
+                    wp_die(esc_html__('The PDF could not be read.', 'meals-db'), 500);
+                }
+            } else {
+                $bytes = (string) ($file['content'] ?? '');
+            }
+
+            $mime     = isset($file['mime']) ? (string) $file['mime'] : 'application/octet-stream';
+            $filename = isset($file['filename']) ? (string) $file['filename'] : ('invoice-' . $draft_id . '.' . $which);
+            // Defang the filename for the header (no path / CR-LF injection).
+            $filename = preg_replace('/[^A-Za-z0-9._-]/', '_', $filename);
+
+            nocache_headers();
+            header('Content-Type: ' . $mime);
+            header('Content-Disposition: attachment; filename="' . $filename . '"');
+            header('Content-Length: ' . strlen($bytes));
+            echo $bytes; // raw artifact bytes — already CSV-safe (QW-3) / binary PDF.
+            exit;
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Invoice_Draft AJAX] download failed: ' . $e->getMessage());
+            wp_die(esc_html__('Unable to download the invoice. Please contact an administrator.', 'meals-db'), 500);
         }
     }
 
@@ -380,7 +479,9 @@ class MealsDB_Ajax_Invoice_Draft {
         if (preg_match('/(mains|sides|count|weeks|quantity|_qty)/', $f)) {
             return 'count';
         }
-        if (preg_match('/(cents|rate|contribution|delivery_fee|fee|cost|basic|tax|amount|price|total|subtotal|allowance)/', $f)) {
+        // 'hst' is listed explicitly so VAC's fold_hst (the "(includes HST)"
+        // figure, INV-DRAFT-3) classifies as money — it has no 'tax' substring.
+        if (preg_match('/(cents|rate|contribution|delivery_fee|fee|cost|basic|tax|hst|amount|price|total|subtotal|allowance|fold)/', $f)) {
             return 'money';
         }
         return 'text';

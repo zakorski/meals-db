@@ -129,6 +129,13 @@ class MealsDB_Invoice_Generator {
             ],
         ];
     }
+    // INV-DRAFT-3: finalize() now serializes `current` through these. The
+    // stub returns deterministic strings; serialization correctness lives in
+    // test-invoice-serialize.php (against the REAL generator).
+    public static function serialize_vac_csv(array $rows): string { return "K#\n" . count($rows); }
+    public static function serialize_sdnb_legacy(array $rows, array $ctx): string { return "sdnb_legacy\n" . count($rows); }
+    public static function serialize_sdnb_new_portal(array $rows): string { return "sdnb_new\n" . count($rows); }
+    public static function serialize_vac_pdf_from_csv(string $csv, string $end): string { return '%PDF-stub'; }
 }
 
 require_once __DIR__ . '/../includes/class-autoloader.php';

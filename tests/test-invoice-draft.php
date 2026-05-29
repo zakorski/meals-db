@@ -307,6 +307,64 @@ chk(MealsDB_Invoice_Draft::finalize($idR), null, 'T-6b: finalize returns null wh
 chk(MealsDB_Invoice_Draft::get($idR)['status'], 'draft', 'T-6b: draft NOT recorded finalized after a lost race');
 
 // ===========================================================================
+// T-A4 (INV-DRAFT-3): finalize SERIALIZES `current` per pipeline, persists the
+// exact bytes ENCRYPTED in finalized_output, and get_finalized_output reads
+// them back. Uses the REAL MealsDB_Invoice_Generator serializers (the VAC PDF
+// is best-effort and absent here — no dompdf — so only the CSV is captured).
+// ===========================================================================
+$wA  = fresh_wpdb();
+$idF = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_VAC, '2026-05', '2026-05-01', '2026-05-31', sample_rows(), []
+);
+$outF = MealsDB_Invoice_Draft::finalize($idF);
+chk_true(is_array($outF) && ($outF['pipeline'] ?? '') === 'vac', 'T-A4: finalize returns the structured VAC output map');
+chk_true(isset($outF['files']['csv']['content']) && is_string($outF['files']['csv']['content']),
+    'T-A4: finalize output carries the VAC CSV string');
+// Persisted AND encrypted at rest (no cleartext leaks into the column).
+$stored_out = (string) ($wA->drafts[$idF]['finalized_output'] ?? '');
+chk_true($stored_out !== '', 'T-A4: finalized_output column populated');
+chk(strpos($stored_out, 'K#'), false, 'T-A4: finalized_output encrypted (CSV header not cleartext)');
+chk(strpos($stored_out, 'Zubrowski'), false, 'T-A4: finalized_output encrypted (client name not cleartext)');
+// get_finalized_output decrypts back to the structured map.
+$gotF = MealsDB_Invoice_Draft::get_finalized_output($idF);
+chk_true(is_array($gotF) && isset($gotF['files']['csv']['content']), 'T-A4: get_finalized_output decrypts the artifact');
+chk($gotF['files']['csv']['filename'], 'vac-2026-05.csv', 'T-A4: VAC CSV filename derived from billing month');
+
+// ===========================================================================
+// T-A5 (INV-DRAFT-3): the download getter requires a FINALIZED draft —
+// a draft-status draft (and an unknown id) yield null (download fails closed).
+// ===========================================================================
+$wB  = fresh_wpdb();
+$idD = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_SDNB_NEW, '2026-06', '2026-06-01', '2026-06-30', sample_rows(), []
+);
+chk(MealsDB_Invoice_Draft::get_finalized_output($idD), null, 'T-A5: draft-status draft has no downloadable output');
+MealsDB_Invoice_Draft::finalize($idD);
+$gotD = MealsDB_Invoice_Draft::get_finalized_output($idD);
+chk_true(is_array($gotD) && isset($gotD['files']['csv']), 'T-A5: finalized draft yields a downloadable CSV');
+chk(MealsDB_Invoice_Draft::get_finalized_output(999999), null, 'T-A5: unknown draft id → null');
+
+// ===========================================================================
+// T-A6 (PR #393 review): a serialization failure must NOT freeze the months.
+// The freeze is a one-way LB-3 lock; if finalize froze first and then failed to
+// produce the artifact, the draft would be left editable but its month locked
+// (un-rebuildable) with NO finalized invoice. We simulate the failure with a
+// draft whose pipeline serialize_current() can't handle (unknown pipeline),
+// and assert: finalize returns null, status stays 'draft', and finalize_month
+// fired ZERO times.
+// ===========================================================================
+$wC  = fresh_wpdb();
+$idX = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_VAC, '2026-07', '2026-07-01', '2026-07-31', sample_rows(), []
+);
+// Corrupt the stored pipeline so serialize_current() returns null AFTER get()
+// successfully decrypts the (validly-encrypted) payload.
+$wC->drafts[$idX]['pipeline'] = 'no_such_pipeline';
+chk(MealsDB_Invoice_Draft::finalize($idX), null, 'T-A6: finalize returns null when serialization fails');
+chk(MealsDB_Invoice_Draft::get($idX)['status'], 'draft', 'T-A6: draft stays editable after a serialize failure');
+chk(count($wC->finalize_calls), 0, 'T-A6: months NOT frozen when the artifact could not be produced');
+
+// ===========================================================================
 // T-7: shared-helper parity (QW-2) — round-trip + legacy plaintext JSON.
 // ===========================================================================
 $arr = ['a' => 1, 'b' => ['c' => 'déjà vu', 'd' => [1, 2, 3]]];
