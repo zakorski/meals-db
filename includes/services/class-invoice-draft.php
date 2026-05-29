@@ -348,7 +348,17 @@ class MealsDB_Invoice_Draft {
                 ['%d', '%s']
             );
 
-            if ($finalized === false) {
+            // $wpdb->update() returns the affected-row count, or false on
+            // error. ZERO affected rows means our guarded WHERE (status =
+            // 'draft') matched nothing — i.e. another request finalized or
+            // superseded this draft between self::get() above and here. Treat
+            // that lost race as a refusal: do NOT audit-log or return $output
+            // as if THIS request produced the finalized artifact, which would
+            // let a caller emit a duplicate/stale finalized invoice. (The
+            // per-client finalize_month locks above are idempotent, so the
+            // winner's lock stands; only the draft-row transition is ours to
+            // claim, and we didn't win it.)
+            if ($finalized === false || (int) $finalized === 0) {
                 return null;
             }
 

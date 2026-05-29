@@ -62,6 +62,7 @@ class DraftWpdb extends wpdb {
     public $last_error = '';
     public array $drafts = [];        // draft_id => raw column row
     public array $finalize_calls = []; // each finalize_month() WHERE clause
+    public bool $force_finalize_update_zero = false; // simulate the lost finalize race
     private int $next_id = 1;
 
     public function prepare($q, ...$a) {
@@ -125,6 +126,11 @@ class DraftWpdb extends wpdb {
 
     public function update($table, $data, $where, $df = null, $wf = null) {
         if (strpos($table, 'meals_invoice_drafts') !== false) {
+            // Simulate a concurrent finalize winning the race: get() saw
+            // status='draft' but our guarded WHERE now matches 0 rows.
+            if ($this->force_finalize_update_zero && isset($where['status']) && $where['status'] === 'draft') {
+                return 0;
+            }
             $id = (int) ($where['draft_id'] ?? 0);
             if (!isset($this->drafts[$id])) { return 0; }
             if (isset($where['status']) && ($this->drafts[$id]['status'] ?? '') !== $where['status']) {
@@ -287,6 +293,18 @@ $idB = MealsDB_Invoice_Draft::create(
 $outB = MealsDB_Invoice_Draft::finalize($idB);
 chk_true($outB !== null, 'T-6: second draft for an already-finalized month finalizes without throwing');
 chk(MealsDB_Invoice_Draft::get($idB)['status'], 'finalized', 'T-6: second draft status → finalized');
+
+// T-6b (PR #390 review): lost finalize race — get() sees 'draft' but the
+// guarded UPDATE matches 0 rows (a concurrent request finalized first). The
+// method must treat 0 affected rows as a refusal: return null and NOT claim
+// the finalized artifact.
+$w6b = fresh_wpdb();
+$idR = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_VAC, '2026-04', '2026-04-01', '2026-04-30', sample_rows(), []
+);
+$w6b->force_finalize_update_zero = true;
+chk(MealsDB_Invoice_Draft::finalize($idR), null, 'T-6b: finalize returns null when the status UPDATE affects 0 rows');
+chk(MealsDB_Invoice_Draft::get($idR)['status'], 'draft', 'T-6b: draft NOT recorded finalized after a lost race');
 
 // ===========================================================================
 // T-7: shared-helper parity (QW-2) — round-trip + legacy plaintext JSON.
