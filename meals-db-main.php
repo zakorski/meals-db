@@ -101,6 +101,8 @@ add_action('plugins_loaded', function () {
     MealsDB_WC_Product_Tab::init();
     MealsDB_Invoice_Page::init();
     MealsDB_Invoice_Draft_Page::init();
+    MealsDB_Rate_Definitions_Page::init();
+    MealsDB_Ajax_Rate_Definitions::init();
     MealsDB_Migration_Page::init();
     MealsDB_Ajax_Migration::init();
     MealsDB_Ajax_DB_Sync::init();
