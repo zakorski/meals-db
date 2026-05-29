@@ -92,6 +92,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Drafts::init();
     MealsDB_Ajax_Initials::init();
     MealsDB_Ajax_Invoice::init();
+    MealsDB_Ajax_Invoice_Draft::init();
     MealsDB_Ajax_Delivery_Slips::init();
     MealsDB_Ajax_Reports::init();
     MealsDB_Quick_Order_Products::init();
@@ -99,6 +100,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Staff::init();
     MealsDB_WC_Product_Tab::init();
     MealsDB_Invoice_Page::init();
+    MealsDB_Invoice_Draft_Page::init();
     MealsDB_Migration_Page::init();
     MealsDB_Ajax_Migration::init();
     MealsDB_Ajax_DB_Sync::init();

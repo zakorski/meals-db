@@ -22,6 +22,10 @@ class MealsDB_Rate_Limiter {
         'sync_operations'        => 100,  // Sync operations
         'delivery_slips'         => 100,  // Delivery slip generation
         'task_modify'            => 100,  // Task / rule mutations
+        // Per-cell edits to an invoice draft's review grid (INV-DRAFT-2).
+        // Generous because Janet tabs through many cells in one sitting;
+        // still a write, so it fails CLOSED (see MUTATING_ACTIONS).
+        'invoice_draft_edit'     => 300,  // Invoice-draft review-grid field edits
         'settings_modify'        => 20,   // Settings + bulk client backfills
         'migration_destructive'  => 5,    // Migration phases, cleanup, reset
         'schema_rebuild'         => 2,    // Catastrophic: drops every plugin table
@@ -40,6 +44,7 @@ class MealsDB_Rate_Limiter {
         'client_modify'         => true,
         'sync_operations'       => true,
         'task_modify'           => true,
+        'invoice_draft_edit'    => true,
         'settings_modify'       => true,
         'migration_destructive' => true,
         'schema_rebuild'        => true,
