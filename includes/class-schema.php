@@ -601,6 +601,64 @@ class MealsDB_Schema {
                     ],
                 ],
             ],
+
+            // Invoice draft staging (directive INV-DRAFT-1). One row per
+            // generated draft. `payload` is the encrypted snapshot+working
+            // copy of the per-client billing rows (see Step 3 of the
+            // directive) — it carries client/veteran PII (names, health-card #,
+            // individual_id), hence encryption at rest, like the client drafts.
+            MealsDB_Tables::INVOICE_DRAFTS => [
+                'table'   => MealsDB_Tables::INVOICE_DRAFTS,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'draft_id'      => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'pipeline'      => "ENUM('vac','sdnb_legacy','sdnb_new_portal') NOT NULL",
+                    // Period the invoice covers. period_start/end are the
+                    // user-typed Y-m-d the generator already takes;
+                    // billing_month is substr(start,0,7) — the same key
+                    // get_phase2_billing_data and finalize_month use.
+                    'billing_month' => 'CHAR(7) NOT NULL',
+                    'period_start'  => 'DATE NOT NULL',
+                    'period_end'    => 'DATE NOT NULL',
+                    // Pipeline params that aren't the period (e.g. SDNB legacy
+                    // zone). Small JSON; NOT PII. Lets finalize re-invoke the
+                    // right serializer.
+                    'params'        => 'JSON NULL',
+                    // 'superseded' is reserved for a future "mark replaced"
+                    // affordance — nothing writes it yet (regenerate creates a
+                    // NEW draft; operator decision #4). Declared now because
+                    // STR-11 schema-sync cannot alter an ENUM in place later.
+                    'status'        => "ENUM('draft','finalized','superseded') NOT NULL DEFAULT 'draft'",
+                    // Encrypted payload: BOTH the immutable generated snapshot
+                    // and the editable current working copy (see INV-DRAFT-1
+                    // Step 3 for the JSON shape).
+                    'payload'       => 'LONGTEXT NOT NULL',
+                    'row_count'     => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'edit_count'    => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'created_by'    => 'BIGINT UNSIGNED NULL',
+                    'created_at'    => 'DATETIME NOT NULL',
+                    'finalized_by'  => 'BIGINT UNSIGNED NULL',
+                    'finalized_at'  => 'DATETIME NULL',
+                ],
+                'primary_key' => ['draft_id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_pipeline_month',
+                        'type'    => 'INDEX',
+                        'columns' => ['pipeline', 'billing_month'],
+                    ],
+                    [
+                        'name'    => 'idx_status',
+                        'type'    => 'INDEX',
+                        'columns' => ['status'],
+                    ],
+                    [
+                        'name'    => 'idx_created',
+                        'type'    => 'INDEX',
+                        'columns' => ['created_at'],
+                    ],
+                ],
+            ],
         ];
     }
 
