@@ -289,11 +289,15 @@ class MealsDB_Invoice_Draft {
      * allocation rebuild cannot silently recompute a month whose invoice has
      * been finalized.
      *
-     * INV-DRAFT-3: per-pipeline serialization is now wired. finalize freezes
-     * the months, serializes `current` through the pipeline's PURE serializer,
-     * persists the EXACT bytes (encrypted) on the draft (finalized_output), and
-     * returns the structured output map. The download endpoint (Step 3) streams
-     * the persisted bytes — they are NOT regenerated on download.
+     * INV-DRAFT-3: per-pipeline serialization is now wired. finalize
+     * serializes `current` through the pipeline's PURE serializer and encrypts
+     * the bytes FIRST, then — only once the artifact exists — freezes the
+     * months (the one-way LB-3 lock) and persists the EXACT bytes
+     * (finalized_output) in one guarded status transition. Ordering the
+     * fallible work before the freeze means a serialize/encrypt failure leaves
+     * the draft editable and its month rebuildable (PR #393 review). The
+     * download endpoint (Step 3) streams the persisted bytes — they are NOT
+     * regenerated on download.
      *
      * @return array|null The structured output map
      *                    (['pipeline'=>..., 'files'=>[...]]) on success;
@@ -316,29 +320,26 @@ class MealsDB_Invoice_Draft {
             $billing_month = (string) ($draft['billing_month'] ?? '');
             $pipeline      = (string) ($draft['pipeline'] ?? '');
 
-            // Step 6.3 — freeze every client's allocation month via the SAME
-            // method LB-1/LB-3 use. finalize_month is idempotent (re-setting
-            // is_finalized=1 is a no-op), so finalizing a month that a prior
-            // draft already locked must NOT error (T-6).
-            if ($billing_month !== '' && class_exists('MealsDB_Allocation_Engine')) {
-                $engine = new MealsDB_Allocation_Engine();
-                foreach (array_keys($current) as $client_id) {
-                    $cid = (int) $client_id;
-                    if ($cid > 0) {
-                        $engine->finalize_month($cid, $billing_month);
-                    }
-                }
-            }
+            // ORDER MATTERS (PR #393 review): serialize + encrypt BEFORE
+            // freezing the months. finalize_month is a one-way lock — once a
+            // client-month is finalized the rebuilder will not touch it (LB-3).
+            // If we froze first and THEN failed to produce/encrypt the artifact
+            // (unknown pipeline, serializer threw, encryption unavailable), we
+            // would leave an editable, un-finalized draft whose allocations are
+            // nonetheless locked — so a retry or correction could no longer
+            // rebuild the billed month even though NO finalized invoice exists.
+            // Doing the fallible work first means an early return leaves the
+            // months untouched and the draft fully recoverable.
 
             // Step 6.2 (INV-DRAFT-3) — serialize `current` through the
             // pipeline's PURE serializer. The serializer takes ROWS, not a
             // date, and never re-queries — so it formats Janet's EDITED rows,
-            // not a fresh generation. The freeze above IS this path's
-            // finalize_month; the serializer is side-effect-free.
+            // not a fresh generation, and is side-effect-free.
             $output = self::serialize_current($pipeline, $current, $draft);
             if ($output === null) {
-                // Unknown pipeline / serializer failure — do NOT finalize a
-                // draft we cannot produce a downloadable artifact for.
+                // Unknown pipeline / serializer failure — do NOT finalize (and,
+                // critically, do NOT freeze) a draft we cannot produce a
+                // downloadable artifact for.
                 return null;
             }
 
@@ -358,7 +359,28 @@ class MealsDB_Invoice_Draft {
                         'message'   => 'Invoice draft not finalized: finalized-output encryption failed.',
                     ]);
                 }
+                // Months are still untouched — the draft remains editable and
+                // its month rebuildable. Bail before any freeze.
                 return null;
+            }
+
+            // Step 6.3 — NOW that the artifact exists and is encrypted, freeze
+            // every client's allocation month via the SAME method LB-1/LB-3 use.
+            // finalize_month is idempotent (re-setting is_finalized=1 is a
+            // no-op), so finalizing a month a prior draft already locked must
+            // NOT error (T-6). This sits immediately before the guarded UPDATE
+            // so the freeze and the status transition share the same tail: if a
+            // concurrent request already finalized this draft (lost race below),
+            // the winner also froze, so the months SHOULD be frozen — the
+            // freeze here is then a harmless idempotent no-op.
+            if ($billing_month !== '' && class_exists('MealsDB_Allocation_Engine')) {
+                $engine = new MealsDB_Allocation_Engine();
+                foreach (array_keys($current) as $client_id) {
+                    $cid = (int) $client_id;
+                    if ($cid > 0) {
+                        $engine->finalize_month($cid, $billing_month);
+                    }
+                }
             }
 
             // Step 6.4 — mark finalized + persist the captured artifact in ONE

@@ -345,6 +345,26 @@ chk_true(is_array($gotD) && isset($gotD['files']['csv']), 'T-A5: finalized draft
 chk(MealsDB_Invoice_Draft::get_finalized_output(999999), null, 'T-A5: unknown draft id → null');
 
 // ===========================================================================
+// T-A6 (PR #393 review): a serialization failure must NOT freeze the months.
+// The freeze is a one-way LB-3 lock; if finalize froze first and then failed to
+// produce the artifact, the draft would be left editable but its month locked
+// (un-rebuildable) with NO finalized invoice. We simulate the failure with a
+// draft whose pipeline serialize_current() can't handle (unknown pipeline),
+// and assert: finalize returns null, status stays 'draft', and finalize_month
+// fired ZERO times.
+// ===========================================================================
+$wC  = fresh_wpdb();
+$idX = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_VAC, '2026-07', '2026-07-01', '2026-07-31', sample_rows(), []
+);
+// Corrupt the stored pipeline so serialize_current() returns null AFTER get()
+// successfully decrypts the (validly-encrypted) payload.
+$wC->drafts[$idX]['pipeline'] = 'no_such_pipeline';
+chk(MealsDB_Invoice_Draft::finalize($idX), null, 'T-A6: finalize returns null when serialization fails');
+chk(MealsDB_Invoice_Draft::get($idX)['status'], 'draft', 'T-A6: draft stays editable after a serialize failure');
+chk(count($wC->finalize_calls), 0, 'T-A6: months NOT frozen when the artifact could not be produced');
+
+// ===========================================================================
 // T-7: shared-helper parity (QW-2) — round-trip + legacy plaintext JSON.
 // ===========================================================================
 $arr = ['a' => 1, 'b' => ['c' => 'déjà vu', 'd' => [1, 2, 3]]];
