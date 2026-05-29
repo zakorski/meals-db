@@ -178,10 +178,11 @@ class MealsDB_Order_Fees {
                 $wp_user_id = (int) $order->get_customer_id();
             }
             if ($wp_user_id > 0) {
-                $client_id = (int) $wpdb->get_var($wpdb->prepare(
-                    "SELECT client_id FROM {$clients_table} WHERE wp_user_id = %d AND active = 1 LIMIT 1",
-                    $wp_user_id
-                ));
+                // MAJ-1: a WP user may map to multiple active client records
+                // (operator-confirmed dual-program case: SDNB + Veteran).
+                // Disambiguate by the order's rate so the fee path and the
+                // allocation path agree on which client an order belongs to.
+                $client_id = self::resolve_client_id_by_wp_user($wp_user_id, $order);
             }
         }
 
@@ -203,6 +204,84 @@ class MealsDB_Order_Fees {
         }
 
         return $row;
+    }
+
+    /**
+     * Resolve an active meals_clients.client_id from a WP user id for this
+     * order, deterministically when the user maps to MULTIPLE client records.
+     *
+     * Mirrors MealsDB_Allocation_Engine::resolve_client_id_by_wp_user so the
+     * fee path and the allocation path agree on identity (directive MAJ-1). A
+     * single-client user is returned unchanged (the 99% path); a multi-client
+     * (dual-program) user is disambiguated by the order's mealsdb_rate_id,
+     * which pins exactly one client. When the order pins none, the first
+     * candidate is kept but a `degraded` trunk event is emitted so the
+     * ambiguity is logged rather than a fee silently billed to the wrong
+     * program.
+     *
+     * @param int      $wp_user_id WP user / WC customer id.
+     * @param WC_Order $order      Order being priced (source of the rate signal).
+     * @return int client_id, or 0 if the user maps to no active client.
+     */
+    private static function resolve_client_id_by_wp_user(int $wp_user_id, WC_Order $order): int {
+        if ($wp_user_id <= 0) {
+            return 0;
+        }
+
+        global $wpdb;
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+
+        $candidates = array_map('intval', (array) $wpdb->get_col($wpdb->prepare(
+            "SELECT client_id FROM {$clients_table} WHERE wp_user_id = %d AND active = 1 ORDER BY client_id ASC",
+            $wp_user_id
+        )));
+
+        $count = count($candidates);
+        if ($count === 0) {
+            return 0;
+        }
+        if ($count === 1) {
+            return $candidates[0];
+        }
+
+        $rate_id = (int) $order->get_meta('mealsdb_rate_id');
+        if ($rate_id > 0) {
+            $rates_table  = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
+            $placeholders = implode(',', array_fill(0, $count, '%d'));
+            $matched = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT client_id FROM {$rates_table} WHERE rate_id = %d AND client_id IN ({$placeholders}) LIMIT 1",
+                array_merge([$rate_id], $candidates)
+            ));
+            if ($matched > 0) {
+                return $matched;
+            }
+        }
+
+        if (class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'    => 'warning',
+                'category'    => 'allocation',
+                'subsystem'   => 'order_fees',
+                'event'       => 'resolver.ambiguous_multi_client',
+                'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message'     => sprintf(
+                    'Order %d: WP user %d maps to %d clients and the order pins none — fee routed to client %d by fallback.',
+                    (int) $order->get_id(),
+                    $wp_user_id,
+                    $count,
+                    $candidates[0]
+                ),
+                'entity_type' => 'order',
+                'entity_id'   => (int) $order->get_id(),
+                'context'     => [
+                    'wp_user_id' => $wp_user_id,
+                    'candidates' => $candidates,
+                    'chosen'     => $candidates[0],
+                ],
+            ]);
+        }
+
+        return $candidates[0];
     }
 
     /**

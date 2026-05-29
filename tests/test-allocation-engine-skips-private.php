@@ -78,6 +78,12 @@ if (!class_exists('wpdb')) {
         public function get_col($query, $x = 0) {
             $this->query_count++;
             if ($this->past_guard) { $this->post_guard_queries++; }
+            // MAJ-1: the customer_id fallback now resolves the candidate
+            // client list via get_col (deterministic multi-client routing).
+            // A single candidate (501 -> client 42) returns straight away.
+            if (stripos($query, 'SELECT client_id FROM') !== false) {
+                return [42];
+            }
             return [];
         }
         public function get_results($query, $output = OBJECT) {

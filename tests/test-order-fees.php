@@ -123,6 +123,17 @@ class OrderFeesWpdb {
         return null;
     }
     public function get_row($q, $o = OBJECT) { return $this->client; }
+    public function get_col($q, $x = 0) {
+        // MAJ-1: the wp_user fallback now resolves the candidate client list
+        // via get_col. A single active client is the common (single-program)
+        // case, returned straight away with no rate disambiguation.
+        if (stripos($q, 'client_id FROM') !== false) {
+            $id = (int) ($this->client['client_id'] ?? 0);
+            return $id > 0 ? [$id] : [];
+        }
+        return [];
+    }
+    public function insert($table, $data, $formats = null) { return 1; }
     public function query($q) {
         if (stripos($q, 'INSERT') !== false && stripos($q, 'contribution_applied') !== false) {
             $this->contribution_applied = 1;
