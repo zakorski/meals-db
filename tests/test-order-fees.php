@@ -23,8 +23,12 @@ if (!defined('MEALSDB_SHADOW_MODE')) { define('MEALSDB_SHADOW_MODE', false); }
 if (!class_exists('WC_Product')) {
     class WC_Product {
         protected int $pid;
+        // LB-2: a deliberately wrong catalog price. The applier must NOT bill
+        // this — it must override each fee line to the per-client amount.
+        public float $catalog_price = 999.99;
         public function __construct(int $pid = 0) { $this->pid = $pid; }
         public function get_id() { return $this->pid; }
+        public function get_price() { return $this->catalog_price; }
     }
 }
 if (!class_exists('WC_Order_Item_Product')) {
@@ -43,6 +47,11 @@ if (!class_exists('WC_Order')) {
         public array $items = [];
         public int $calculate_calls = 0;
         public int $save_calls = 0;
+        // LB-2: record the per-line subtotal/total the applier passes so the
+        // test can assert each fee line is priced at the client's negotiated
+        // amount, not the product catalog price. Keyed by product id.
+        public array $line_amounts = [];
+        public int $next_item_id = 0;
         public function __construct(int $id = 0, int $customer_id = 0, array $meta = []) {
             $this->id = $id; $this->customer_id = $customer_id; $this->meta = $meta;
         }
@@ -54,9 +63,19 @@ if (!class_exists('WC_Order')) {
             foreach ($this->items as $pid => $qty) { $out[] = new WC_Order_Item_Product((int) $pid); }
             return $out;
         }
-        public function add_product($product, $qty = 1) {
+        public function add_product($product, $qty = 1, $args = []) {
             $pid = (int) $product->get_id();
             $this->items[$pid] = ($this->items[$pid] ?? 0) + $qty;
+            // Capture the overridden line amount (LB-2). The applier always
+            // passes subtotal/total; record total (== subtotal for fees).
+            if (isset($args['total'])) {
+                $this->line_amounts[$pid] = (float) $args['total'];
+            } elseif (isset($args['subtotal'])) {
+                $this->line_amounts[$pid] = (float) $args['subtotal'];
+            }
+            // Modern WC_Order::add_product returns the new item id; the applier
+            // treats a falsy return as failure, so hand back a truthy id.
+            return ++$this->next_item_id;
         }
         public function calculate_totals() { $this->calculate_calls++; }
         public function save() { $this->save_calls++; }
@@ -142,6 +161,11 @@ check(($order->items[4122] ?? 0) === 1, 'A: delivery fee added exactly once acro
 check(($order->items[5675] ?? 0) === 1, 'A: contribution added exactly once');
 check($db->contribution_applied === 1, 'A: contribution marked applied');
 check($db->contribution_order_id === 900, 'A: contribution tagged with order id');
+// LB-2: the fee lines must carry the client's per-client amounts, NOT the
+// product catalog price (999.99). These are the assertions that previously
+// did not exist and let the catalog-price bug hide.
+check(($order->line_amounts[4122] ?? null) === 8.50, 'A: delivery fee line priced at per-client 8.50 (not catalog)');
+check(($order->line_amounts[5675] ?? null) === 40.00, 'A: contribution line priced at per-client 40.00 (not catalog)');
 
 [$order, $db] = scenario(
     ['client_id' => 6, 'client_type' => 'Veteran', 'delivery_fee' => 5.00, 'client_contribution' => 30.00],
@@ -175,6 +199,16 @@ check($db->contribution_applied === 0, 'D: month not marked when nothing due');
 );
 MealsDB_Order_Fees::apply_to_order(900);
 check(($order->items[4122] ?? 0) === 1, 'E: normal order gets delivery fee via customer_id fallback');
+
+// F: arbitrary per-client amounts (distinct from each other and from the
+// catalog price) must flow through to the order's fee line subtotals/totals.
+[$order, $db] = scenario(
+    ['client_id' => 10, 'client_type' => 'SDNB', 'delivery_fee' => 12.34, 'client_contribution' => 55.67],
+    705, ['mealsdb_client_id' => 10]
+);
+MealsDB_Order_Fees::apply_to_order(900);
+check(($order->line_amounts[4122] ?? null) === 12.34, 'F: delivery fee line reflects per-client 12.34');
+check(($order->line_amounts[5675] ?? null) === 55.67, 'F: contribution line reflects per-client 55.67');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
