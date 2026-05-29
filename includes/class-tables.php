@@ -35,6 +35,18 @@ class MealsDB_Tables
     public const ALLOCATION_ERRORS = 'meals_allocation_errors';
 
     /**
+     * Invoice draft staging (directive INV-DRAFT-1). Holds the per-client
+     * billing row set a generator would serialize, captured BEFORE
+     * serialization so the operator can review/edit it (INV-DRAFT-2) and only
+     * then emit the final CSV/PDF (INV-DRAFT-3). The PII-bearing payload is
+     * encrypted at rest under the same key as the live client record. This is
+     * an additive table (STR-11 schema-sync handles it) and is in all() below,
+     * so install/uninstall manage it via the standard loops — no literal-name
+     * special-casing needed.
+     */
+    public const INVOICE_DRAFTS = 'meals_invoice_drafts';
+
+    /**
      * Retrieve all canonical table names.
      *
      * @return string[]
@@ -57,6 +69,7 @@ class MealsDB_Tables
             self::EVENT_LOG,
             self::CLIENT_MONTH_DIRTY,
             self::ALLOCATION_ERRORS,
+            self::INVOICE_DRAFTS,
         ];
     }
 }

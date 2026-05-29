@@ -538,6 +538,174 @@ class MealsDB_Invoice_Generator {
         return is_array($rows) ? $rows : [];
     }
 
+    // ------------------------------------------------------------------
+    // Shared "collect client rows" top-halves (INV-DRAFT-1 Step 5).
+    //
+    // Each pipeline's generate_*() and its build_*_draft_rows() builder run
+    // the IDENTICAL query → dirty-rebuild → PII-decrypt sequence. Factoring it
+    // here keeps exactly one code path producing the rows (refactor, don't
+    // fork) and is output-preserving: the generators' serialization is
+    // unchanged, they just source their rows from here.
+    // ------------------------------------------------------------------
+
+    /**
+     * Veteran clients for a VAC billing run: query, pre-rebuild dirty
+     * client-months, decrypt the PII fields the generator reads. Note
+     * vet_health_card is NOT decrypted here — the VAC serializer decrypts it
+     * inline at output time (matching pre-refactor behaviour).
+     *
+     * @return array Decrypted client rows (DB-side column names).
+     */
+    private static function collect_vac_client_rows(string $start_date): array {
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
+                    vet_health_card, requisition_period, client_contribution, default_rate_id,
+                    street_name, city, postal_code, client_phone_1,
+                    allowance_mains, allowance_sides, individual_id, individual_id_index
+             FROM `{$clients_table}`
+             WHERE client_type = %s AND active = 1 AND wp_user_id > 0";
+
+        $client_rows = self::query_clients($sql, ['Veteran']);
+
+        // Phase 1: pre-rebuild dirty client-months in this filter (scope A).
+        self::rebuild_dirty_for_invoice($start_date, $client_rows);
+
+        // Decrypt encrypted PII fields.
+        foreach ($client_rows as &$c) {
+            foreach (['requisition_id', 'individual_id'] as $field) {
+                if (!empty($c[$field])) {
+                    $c[$field] = MealsDB_Encryption::safe_decrypt($c[$field]);
+                }
+            }
+        }
+        unset($c);
+
+        return $client_rows;
+    }
+
+    /**
+     * SDNB legacy (zone-based) clients: query, pre-rebuild dirty months,
+     * decrypt PII fields the generator reads.
+     *
+     * @return array Decrypted client rows (DB-side column names).
+     */
+    private static function collect_sdnb_legacy_client_rows($zone, string $start_date): array {
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
+                    individual_id, individual_id_index, client_contribution, delivery_area_zone,
+                    default_rate_id, allowance_mains, allowance_sides, requisition_period
+             FROM `{$clients_table}`
+             WHERE client_type = %s AND use_legacy_billing = 1
+               AND delivery_area_zone = %s AND active = 1 AND wp_user_id > 0";
+
+        $client_rows = self::query_clients($sql, ['SDNB', $zone]);
+
+        // Phase 1: before computing this invoice, rebuild any dirty
+        // client-months for the clients in this filter (scope A: only the
+        // clients on THIS invoice for THIS month).
+        self::rebuild_dirty_for_invoice($start_date, $client_rows);
+
+        // Decrypt encrypted PII fields.
+        foreach ($client_rows as &$c) {
+            foreach (['requisition_id', 'individual_id'] as $field) {
+                if (!empty($c[$field])) {
+                    $c[$field] = MealsDB_Encryption::safe_decrypt($c[$field]);
+                }
+            }
+        }
+        unset($c);
+
+        return $client_rows;
+    }
+
+    /**
+     * SDNB new-portal clients: query and pre-rebuild dirty months. No PII
+     * decryption — the new-portal CSV reads no encrypted columns directly.
+     * delivery_area_zone is selected so get_phase2_billing_data resolves the
+     * correct urban/rural side rate for HST (LB-7).
+     *
+     * @return array Client rows (DB-side column names).
+     */
+    private static function collect_sdnb_new_portal_client_rows(string $start_date): array {
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, sdnb_service_request_id,
+                    client_contribution, default_rate_id, delivery_area_zone
+             FROM `{$clients_table}`
+             WHERE client_type = %s AND use_legacy_billing = 0
+               AND active = 1 AND wp_user_id > 0";
+
+        $client_rows = self::query_clients($sql, ['SDNB']);
+
+        // Phase 1: pre-rebuild dirty client-months in this filter (scope A).
+        self::rebuild_dirty_for_invoice($start_date, $client_rows);
+
+        return $client_rows;
+    }
+
+    // ------------------------------------------------------------------
+    // Draft-row builders (INV-DRAFT-1 Step 5).
+    //
+    // These run the SAME query + phase-2 assembly the generators do, but
+    // RETURN the per-client billing-row map (keyed by client_id) instead of
+    // serializing. They are what INV-DRAFT-2's "Generate draft" button will
+    // call, then hand to MealsDB_Invoice_Draft::create(). The rows are
+    // self-contained (identity fields + phase-2 figures) so finalize can
+    // serialize without re-querying.
+    //
+    // NOTE (half-done state, per the directive's allowance): pipeline-specific
+    // finalize SERIALIZATION over these rows lands in INV-DRAFT-3 (VAC first).
+    // VAC-specific editable extras (the fold/HST hand-work, vet_health_card
+    // decryption for display) are also INV-DRAFT-3 — the payload row is an
+    // open associative array, so those keys can be added without a schema or
+    // shape change here.
+    // ------------------------------------------------------------------
+
+    /**
+     * Build the VAC per-client billing-row map for a draft.
+     *
+     * @param string $start_date Y-m-d (first day of billing month).
+     * @param string $end_date   Y-m-d (last day). Accepted for API parity with
+     *                           generate_vac_csv; the row figures key off the
+     *                           billing month derived from $start_date.
+     * @return array<int,array> client_id => phase-2 row (+ identity fields).
+     */
+    public static function build_vac_draft_rows($start_date, $end_date): array {
+        $client_rows = self::collect_vac_client_rows($start_date);
+        if (empty($client_rows)) {
+            return [];
+        }
+        $billing_month = substr($start_date, 0, 7);
+        return self::get_phase2_billing_data($client_rows, $billing_month);
+    }
+
+    /**
+     * Build the SDNB legacy per-client billing-row map for a draft.
+     *
+     * @return array<int,array> client_id => phase-2 row (+ identity fields).
+     */
+    public static function build_sdnb_legacy_draft_rows($zone, $start_date, $end_date): array {
+        $client_rows = self::collect_sdnb_legacy_client_rows($zone, $start_date);
+        if (empty($client_rows)) {
+            return [];
+        }
+        $billing_month = substr($start_date, 0, 7);
+        return self::get_phase2_billing_data($client_rows, $billing_month);
+    }
+
+    /**
+     * Build the SDNB new-portal per-client billing-row map for a draft.
+     *
+     * @return array<int,array> client_id => phase-2 row (+ identity fields).
+     */
+    public static function build_sdnb_new_portal_draft_rows($start_date, $end_date): array {
+        $client_rows = self::collect_sdnb_new_portal_client_rows($start_date);
+        if (empty($client_rows)) {
+            return [];
+        }
+        $billing_month = substr($start_date, 0, 7);
+        return self::get_phase2_billing_data($client_rows, $billing_month);
+    }
+
     /**
      * Generate SDNB Legacy Zone-Based Invoice
      *
@@ -562,32 +730,10 @@ class MealsDB_Invoice_Generator {
         }
         $invoice_number = $end_date_obj->format('Y M d') . ' ' . $zone;
 
-        // Query eligible clients from external DB.
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql = "SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
-                    individual_id, individual_id_index, client_contribution, delivery_area_zone,
-                    default_rate_id, allowance_mains, allowance_sides, requisition_period
-             FROM `{$clients_table}`
-             WHERE client_type = %s AND use_legacy_billing = 1
-               AND delivery_area_zone = %s AND active = 1 AND wp_user_id > 0";
-
-        $client_type = 'SDNB';
-        $client_rows = self::query_clients($sql, [$client_type, $zone]);
-
-        // Phase 1: before computing this invoice, rebuild any dirty
-        // client-months for the clients in this filter (scope A: only the
-        // clients on THIS invoice for THIS month).
-        self::rebuild_dirty_for_invoice($start_date, $client_rows);
-
-        // Decrypt encrypted PII fields.
-        foreach ($client_rows as &$c) {
-            foreach (['requisition_id', 'individual_id'] as $field) {
-                if (!empty($c[$field])) {
-                    $c[$field] = MealsDB_Encryption::safe_decrypt($c[$field]);
-                }
-            }
-        }
-        unset($c);
+        // Shared with build_sdnb_legacy_draft_rows() — one code path produces
+        // the queried + dirty-rebuilt + PII-decrypted client rows (INV-DRAFT-1
+        // Step 5; refactor, don't fork).
+        $client_rows = self::collect_sdnb_legacy_client_rows($zone, $start_date);
 
         // Pre-compute duplicate individual_id counts for error checking.
         $sdnb_duplicate_counts = [];
@@ -820,23 +966,10 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_sdnb_new_portal($start_date, $end_date) {
-        // Query eligible clients from external DB.
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        // delivery_area_zone is required so HST resolves the correct
-        // (urban vs rural) side rate in get_phase2_billing_data — without
-        // it, Sussex/rural clients with taxable sides would silently bill
-        // at the urban side rate and under-report HST (LB-7).
-        $sql = "SELECT client_id, wp_user_id, first_name, last_name, sdnb_service_request_id,
-                    client_contribution, default_rate_id, delivery_area_zone
-             FROM `{$clients_table}`
-             WHERE client_type = %s AND use_legacy_billing = 0
-               AND active = 1 AND wp_user_id > 0";
-
-        $client_type = 'SDNB';
-        $client_rows = self::query_clients($sql, [$client_type]);
-
-        // Phase 1: pre-rebuild dirty client-months in this filter (scope A).
-        self::rebuild_dirty_for_invoice($start_date, $client_rows);
+        // Shared with build_sdnb_new_portal_draft_rows() — one code path
+        // produces the queried + dirty-rebuilt client rows (INV-DRAFT-1 Step 5;
+        // refactor, don't fork).
+        $client_rows = self::collect_sdnb_new_portal_client_rows($start_date);
 
         // Phase 2: read allocated quantities + contribution-line sum + tax
         // from the engine summary. One row per client.
@@ -911,30 +1044,10 @@ class MealsDB_Invoice_Generator {
      * @return string CSV content
      */
     public static function generate_vac_csv($start_date, $end_date) {
-        // Query eligible veteran clients from external DB.
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql = "SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
-                    vet_health_card, requisition_period, client_contribution, default_rate_id,
-                    street_name, city, postal_code, client_phone_1,
-                    allowance_mains, allowance_sides, individual_id, individual_id_index
-             FROM `{$clients_table}`
-             WHERE client_type = %s AND active = 1 AND wp_user_id > 0";
-
-        $client_type = 'Veteran';
-        $client_rows = self::query_clients($sql, [$client_type]);
-
-        // Phase 1: pre-rebuild dirty client-months in this filter (scope A).
-        self::rebuild_dirty_for_invoice($start_date, $client_rows);
-
-        // Decrypt encrypted PII fields.
-        foreach ($client_rows as &$c) {
-            foreach (['requisition_id', 'individual_id'] as $field) {
-                if (!empty($c[$field])) {
-                    $c[$field] = MealsDB_Encryption::safe_decrypt($c[$field]);
-                }
-            }
-        }
-        unset($c);
+        // Shared with build_vac_draft_rows() — one code path produces the
+        // queried + dirty-rebuilt + PII-decrypted client rows (INV-DRAFT-1
+        // Step 5; refactor, don't fork).
+        $client_rows = self::collect_vac_client_rows($start_date);
 
         if (empty($client_rows)) {
             return '';

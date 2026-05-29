@@ -375,6 +375,72 @@ class MealsDB_Encryption {
     }
 
     /**
+     * Encode an array as an encrypted, at-rest-safe payload (QW-2 discipline:
+     * fail CLOSED — never persist PII as plaintext). Returns false on failure.
+     *
+     * Shared by client-form drafts (MealsDB_Client_Form::encode_draft_payload)
+     * and invoice drafts (MealsDB_Invoice_Draft). This was promoted here from
+     * the private client-form helper so the two callers share ONE implementation
+     * rather than re-creating the dual-maintenance trap (mirrors the STR-LOG
+     * facade approach). Losing an unsaved draft beats writing government IDs in
+     * cleartext — so a failure to encrypt is a refusal to persist, not a fallback.
+     *
+     * @param array $data
+     * @return string|false
+     */
+    public static function encode_payload(array $data) {
+        $json = function_exists('wp_json_encode') ? wp_json_encode($data) : json_encode($data);
+        if (!is_string($json)) {
+            return false;
+        }
+        try {
+            // self:: — we ARE the encryption class now.
+            return self::encrypt($json);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB] Payload not saved: encryption failed (' . $e->getMessage()
+                . '); refusing plaintext fallback.');
+            return false;
+        }
+    }
+
+    /**
+     * Decode a payload written by encode_payload(), tolerating legacy plaintext
+     * JSON (client-form drafts written before encryption existed). Returns null
+     * if neither path yields an array.
+     *
+     * The READ path deliberately still accepts legacy plaintext — only WRITING
+     * cleartext is forbidden (QW-2). The cheap shape check (first non-whitespace
+     * char is { or [) avoids invoking the encryption layer — and its
+     * legacy-decrypt warning — on every read of a plaintext-era draft.
+     *
+     * @param string $stored
+     * @return array|null
+     */
+    public static function decode_payload(string $stored): ?array {
+        if ($stored === '') {
+            return null;
+        }
+
+        $trimmed = ltrim($stored);
+        if ($trimmed !== '' && ($trimmed[0] === '{' || $trimmed[0] === '[')) {
+            $decoded = json_decode($stored, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        $decrypted = self::safe_decrypt($stored);
+        if (is_string($decrypted) && $decrypted !== '' && $decrypted !== $stored) {
+            $decoded = json_decode($decrypted, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Get singleton instance for backward compatibility.
      *
      * @return MealsDB_Encryption

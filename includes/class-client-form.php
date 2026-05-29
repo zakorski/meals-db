@@ -1179,22 +1179,17 @@ class MealsDB_Client_Form {
      * @return string|false
      */
     private static function encode_draft_payload(array $data) {
-        $json = function_exists('wp_json_encode') ? wp_json_encode($data) : json_encode($data);
-        if (!is_string($json)) {
-            return false;
-        }
         if (!class_exists('MealsDB_Encryption')) {
             // No encryption layer at all → refuse to persist PII as plaintext.
+            // (Kept here, not in the shared helper: inside MealsDB_Encryption
+            // this guard is meaningless — we'd already be in the class.)
             error_log('[MealsDB] Draft not saved: encryption unavailable; refusing to store PII as plaintext.');
             return false;
         }
-        try {
-            return MealsDB_Encryption::encrypt($json);
-        } catch (\Throwable $e) {
-            // Fail closed: never fall back to plaintext PII at rest.
-            error_log('[MealsDB] Draft not saved: encryption failed (' . $e->getMessage() . '); refusing plaintext fallback.');
-            return false;
-        }
+        // Delegate the encode + fail-closed discipline to the shared helper
+        // (directive INV-DRAFT-1 Step 2). Behaviour is unchanged: encrypted
+        // payload on success, false (never plaintext) on failure.
+        return MealsDB_Encryption::encode_payload($data);
     }
 
     /**
@@ -1205,33 +1200,14 @@ class MealsDB_Client_Form {
      * Returns null if neither path produces a JSON object.
      */
     public static function decode_draft_payload(string $stored): ?array {
-        if ($stored === '') {
-            return null;
-        }
-
-        // Cheap shape check: legacy drafts are JSON objects/arrays so the
-        // first non-whitespace character is { or [. Try that path first
-        // to avoid invoking the encryption layer (and its legacy-decrypt
-        // warning) on every read of a plaintext-era draft.
-        $trimmed = ltrim($stored);
-        if ($trimmed !== '' && ($trimmed[0] === '{' || $trimmed[0] === '[')) {
-            $decoded = json_decode($stored, true);
-            if (is_array($decoded)) {
-                return $decoded;
-            }
-        }
-
-        if (class_exists('MealsDB_Encryption')) {
-            $decrypted = MealsDB_Encryption::safe_decrypt($stored);
-            if (is_string($decrypted) && $decrypted !== '' && $decrypted !== $stored) {
-                $decoded = json_decode($decrypted, true);
-                if (is_array($decoded)) {
-                    return $decoded;
-                }
-            }
-        }
-
-        return null;
+        // Delegate to the shared helper (directive INV-DRAFT-1 Step 2). It
+        // performs the same cheap legacy-plaintext shape check first, then the
+        // encrypted path — behaviour is unchanged for client-form drafts. The
+        // class_exists guard is dropped here intentionally: if the encryption
+        // class were absent the shared helper would simply fall through its
+        // plaintext branch (and a draft that needs decryption can't be read
+        // without it anyway).
+        return MealsDB_Encryption::decode_payload($stored);
     }
 
     /**
