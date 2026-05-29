@@ -33,7 +33,11 @@ if (!function_exists('wp_json_encode')) {
 }
 
 // Minimal $wpdb so MealsDB_Hook_Logger::record() doesn't fatal.
-class SwallowTestWpdb {
+// Must extend wpdb because nightly_sync() now constructs
+// MealsDB_Allocation_Rebuilder (LB-1), whose dependency
+// MealsDB_WC_Order_Query type-hints wpdb in its constructor.
+if (!class_exists('wpdb')) { class wpdb {} }
+class SwallowTestWpdb extends wpdb {
     public $prefix = 'wp_';
     public $insert_id = 0;
     public $last_error = '';
@@ -58,6 +62,7 @@ class SwallowTestWpdb {
     public function get_var($sql) { return null; }
     public function get_row($sql, $o = OBJECT) { return null; }
     public function get_results($sql, $o = OBJECT) { return []; }
+    public function get_col($sql) { return []; }
 }
 $wpdb = new SwallowTestWpdb();
 $GLOBALS['wpdb'] = $wpdb;

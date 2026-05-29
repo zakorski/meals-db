@@ -316,6 +316,17 @@ class MealsDB_Allocation_Hooks {
         try {
             $engine = new MealsDB_Allocation_Engine();
 
+            // LB-1 fix: materialise any dirty client-months BEFORE re-summing.
+            // bulk_recalculate_month() only RE-SUMS existing meals_delivery_allocations
+            // rows; it does NOT create them. Dirty months that were never built (no
+            // invoice run, no manual recalc) have no rows to sum, so the nightly job
+            // used to write zero/stale summaries and report success. Consuming the
+            // dirty queue via the rebuilder here is what the invoice path and the
+            // manual Data-Ops button already do (rebuild_for_invoice / rebuild_all_dirty).
+            // Safe to run nightly because the rebuilder now skips finalized months (LB-3).
+            $rebuilder     = new MealsDB_Allocation_Rebuilder();
+            $rebuild_stats = $rebuilder->rebuild_all_dirty();
+
             $current_count = $engine->bulk_recalculate_month($current_month);
 
             // Heartbeat between months: lets the daily report and
@@ -341,6 +352,7 @@ class MealsDB_Allocation_Hooks {
                     'months_recalculated' => [$current_month, $next_month],
                     'current_month_count' => $current_count,
                     'next_month_count'    => $next_count,
+                    'dirty_rebuild_stats' => $rebuild_stats,   // LB-1: record what was materialised
                 ]);
             }
         } catch (\Throwable $e) {
