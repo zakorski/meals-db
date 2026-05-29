@@ -16,11 +16,16 @@ $GLOBALS['_pdf_slip_options']['mealsdb_fee_product_ids'] = [
 ];
 $GLOBALS['_pdf_slip_terms'] = [101 => [35]];
 
-// is_first_delivery_of_month: MIN(delivery_date) == today's delivery_date.
+// is_first_delivery_of_month: contribution not yet applied this month, and the
+// MIN(delivery_date) equals today's delivery_date — so this IS the genuine first
+// delivery and the contribution should be collected (LB-4 case 3).
 global $wpdb;
 $wpdb->get_var_handler = static function ($query, $args) {
     // Args: [client_id, billing_month]
-    return '2025-02-20';
+    if (strpos($query, 'contribution_applied') !== false) {
+        return 0; // contribution not yet applied this month
+    }
+    return '2025-02-20'; // earliest delivery in meals_delivery_allocations
 };
 
 $wc_order = new WC_Order();
