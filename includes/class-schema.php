@@ -586,6 +586,19 @@ class MealsDB_Schema {
                     'sides_unplaced' => 'INT NOT NULL DEFAULT 0',
                     'message'        => 'TEXT NULL',
                     'created_at'     => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
+                    // Dedup bookkeeping (directive MAJ-2). The nightly
+                    // rebuilder re-processes dirty months, so an unresolved
+                    // spillover on the same order used to write a fresh row
+                    // every run. The writer now upserts on the dedup key
+                    // below; occurrence_count tracks how many times the same
+                    // error recurred, last_seen_at drives retention (prune by
+                    // last_seen, NOT first_seen — a long-running recurring
+                    // error has an old first_seen but is still active).
+                    // NULL/defaulted so the additive schema sync can add them
+                    // to existing rows without a data migration (STR-11).
+                    'occurrence_count' => 'INT UNSIGNED NOT NULL DEFAULT 1',
+                    'first_seen_at'    => 'DATETIME NULL',
+                    'last_seen_at'     => 'DATETIME NULL',
                 ],
                 'primary_key' => ['id'],
                 'indexes' => [
@@ -598,6 +611,37 @@ class MealsDB_Schema {
                         'name'    => 'idx_created_at',
                         'type'    => 'INDEX',
                         'columns' => ['created_at'],
+                    ],
+                    // Dedup key (directive MAJ-2). The natural identity of an
+                    // allocation error is (client, month, order, type); a
+                    // repeat must UPDATE not INSERT (the upsert in
+                    // log_spillover_error relies on this UNIQUE key firing ON
+                    // DUPLICATE KEY). error_type is currently always
+                    // 'multi_month_spillover' (one writer, one type), but is
+                    // in the key so future error types dedup correctly without
+                    // a schema change.
+                    //
+                    // UPGRADE-PATH CAVEAT (verified against class-schema-sync):
+                    // this index is created only on the FRESH-INSTALL CREATE
+                    // TABLE path (generate_create_table_sql emits the indexes
+                    // array). MealsDB_Schema_Sync's additive upgrade adds the
+                    // three columns above to an EXISTING table but does NOT add
+                    // composite indexes from this array — so an
+                    // already-deployed install needs a manual
+                    //   ALTER TABLE <prefix>meals_allocation_errors
+                    //     ADD UNIQUE KEY uniq_dedup
+                    //       (client_id, billing_month, wc_order_id, error_type);
+                    // to activate dedup. Until that index exists the upsert
+                    // degrades to plain INSERT (no worse than the pre-MAJ-2
+                    // behaviour). The launch is a fresh install (operator
+                    // confirmed no live data), so CREATE TABLE applies it
+                    // cleanly. A populated install with existing dupes must
+                    // first collapse them to one row per key (directive MAJ-2
+                    // Step 1) or the ADD UNIQUE will fail on the duplicates.
+                    [
+                        'name'    => 'uniq_dedup',
+                        'type'    => 'UNIQUE',
+                        'columns' => ['client_id', 'billing_month', 'wc_order_id', 'error_type'],
                     ],
                 ],
             ],

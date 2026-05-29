@@ -32,6 +32,7 @@ class FinFakeWpdb extends wpdb {
     public $prefix = 'wp_';
     public array $inserts = [];        // [table => [row, ...]]
     public array $deletes = [];        // DELETE SQL strings (via query())
+    public array $error_upserts = [];  // INSERT...ON DUPLICATE SQL for allocation_errors (via query()) — MAJ-2
     public array $delete_calls = [];   // [table => [where, ...]] (via delete())
     public ?int $insert_id = 1;
     public string $client_type = 'SDNB';
@@ -55,6 +56,12 @@ class FinFakeWpdb extends wpdb {
     }
     public function query($sql) {
         if (stripos($sql, 'DELETE ') === 0) { $this->deletes[] = $sql; }
+        // MAJ-2: log_spillover_error now upserts via query() (INSERT ... ON
+        // DUPLICATE KEY UPDATE), no longer the plain insert() seam.
+        if (stripos($sql, 'INSERT INTO') !== false
+            && stripos($sql, 'meals_allocation_errors') !== false) {
+            $this->error_upserts[] = $sql;
+        }
         return 1;
     }
     public function get_var($q) { return $this->client_type; }
@@ -207,9 +214,10 @@ chk((int) inserts_into($GLOBALS['wpdb'], '2025-05')[0]['mains_count'], 5, 'spill
 chk(count(inserts_into($GLOBALS['wpdb'], '2025-06')), 0, 'spill: NO row written into finalized June');
 chk(delete_mentions($GLOBALS['wpdb'], '2025-06'), false, 'spill: finalized June not deleted');
 chk((int) $res['mains_unplaced'], 15, 'spill: 15 mains counted as unplaced (cannot enter finalized June)');
-$errs = $GLOBALS['wpdb']->inserts[err_table()] ?? [];
+$errs = $GLOBALS['wpdb']->error_upserts;  // MAJ-2: upserted via query()
 chk(count($errs), 1, 'spill: one spillover error logged');
-chk((string) ($errs[0]['error_type'] ?? ''), 'multi_month_spillover', 'spill: error tagged multi_month_spillover');
+chk(stripos($errs[0], 'multi_month_spillover') !== false, true, 'spill: error tagged multi_month_spillover');
+chk(stripos($errs[0], 'ON DUPLICATE KEY UPDATE') !== false, true, 'spill: error write is an upsert (dedup)');
 
 // ---------------------------------------------------------------------------
 // Case 4: Re-invoice no-op. rebuild_for_invoice() funnels through

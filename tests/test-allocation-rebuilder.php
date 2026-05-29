@@ -48,6 +48,32 @@ class RebFakeWpdb extends wpdb {
     }
     public function query($sql) {
         if (stripos($sql, 'DELETE ') === 0) { $this->deletes[] = $sql; }
+        // MAJ-2: log_spillover_error now upserts via query() (INSERT ... ON
+        // DUPLICATE KEY UPDATE) instead of the insert() seam. Parse the
+        // prepared VALUES tuple back into a row keyed like the old insert so
+        // the field-level assertions below (mains_unplaced, billing_month,
+        // error_type) keep observing through the same inserts[err_table]
+        // surface. The message carries no single quotes (the only quoting is
+        // the prepare() wrapper), so positional quoted-string matching is safe.
+        if (stripos($sql, 'INSERT INTO') !== false
+            && stripos($sql, 'meals_allocation_errors') !== false
+            && preg_match(
+                '/VALUES\s*\((\d+),\s*\'([^\']*)\',\s*(\d+),\s*\'([^\']*)\',\s*(\d+),\s*(\d+),\s*\'([^\']*)\',\s*(\d+),\s*\'([^\']*)\',\s*\'([^\']*)\'\)/s',
+                $sql, $m
+            )) {
+            $this->inserts[err_table_name()][] = [
+                'client_id'        => $m[1],
+                'billing_month'    => $m[2],
+                'wc_order_id'      => $m[3],
+                'error_type'       => $m[4],
+                'mains_unplaced'   => $m[5],
+                'sides_unplaced'   => $m[6],
+                'message'          => $m[7],
+                'occurrence_count' => $m[8],
+                'first_seen_at'    => $m[9],
+                'last_seen_at'     => $m[10],
+            ];
+        }
         return 1;
     }
     public function get_var($q) { return $this->get_var_return; }
