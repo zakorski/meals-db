@@ -447,6 +447,18 @@ class MealsDB_Sync_Mutate {
                 $connection->query('ROLLBACK');
             }
             error_log('[MealsDB Sync] Meals DB client update threw: ' . $e->getMessage());
+            // STR-LOG: rolled back and returned false (fail-closed), but a
+            // sync write that threw mid-transaction should be visible.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error',
+                    'category'  => 'sync',
+                    'subsystem' => 'sync_mutate',
+                    'event'     => 'update_client.threw',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_FAILED,
+                    'message'   => $e->getMessage(),
+                ]);
+            }
             return false;
         }
 
@@ -554,6 +566,18 @@ class MealsDB_Sync_Mutate {
                 $connection->query('ROLLBACK');
             }
             error_log('[MealsDB Sync] Meals DB client insert threw: ' . $e->getMessage());
+            // STR-LOG: rolled back and returned false (fail-closed), but a
+            // sync write that threw mid-transaction should be visible.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error',
+                    'category'  => 'sync',
+                    'subsystem' => 'sync_mutate',
+                    'event'     => 'create_client.threw',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_FAILED,
+                    'message'   => $e->getMessage(),
+                ]);
+            }
             return false;
         }
     }

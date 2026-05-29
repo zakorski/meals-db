@@ -119,27 +119,41 @@ When in doubt: read from `MealsDB_Clients_Repository::get_client_by_id()` (retur
 
 ### 6. Logging pattern
 
-Three distinct logging systems, used for different things:
+**TWO logging worlds, kept deliberately apart (directive STR-LOG, Option A).** What used to be three operational loggers (`meals_job_log` + `meals_hook_log`) is now ONE operational trunk; the audit log stays separate.
 
-**`MealsDB_Logger`** — audit log for business events (writes to `meals_audit_log` table):
+**The boundary (non-negotiable):**
+- **An *attempt/outcome*** → the operational trunk (`meals_event_log`). Pruned freely, queried freely.
+- **A *committed change to a data record*** → the audit log (`meals_audit_log`). Append-only, long retention, PII-fingerprinted, sensitive to read. **Never collapse the two.** They may share the Event Log dashboard (separate tabs) but never the table.
+
+**`MealsDB_Event_Log`** — the operational trunk. ONE write path for jobs, hooks, swallowed exceptions, degraded outcomes:
 ```php
-MealsDB_Logger::log($action, $target_id, $field, $old, $new, $source = 'mealsdb');
+MealsDB_Event_Log::record([
+    'severity' => 'error', 'category' => 'allocation', 'subsystem' => 'allocation_rebuilder',
+    'event' => 'rebuild.dirty_month', 'outcome' => 'degraded',
+    'message' => '…', 'context' => ['client_id' => 42], 'correlation_id' => $run_id,
+]);
 ```
-Has built-in PII redaction. Use this for: client edits, link/unlink, deletes, schema changes, force rebuilds, key rotations.
+Plus job-lifecycle helpers on the same table: `start_job()` (INSERT `outcome='running'`, returns log_id), `finish_job($id, $stats, $outcome)`, `fail_job($id, $msg, $stats)`, `heartbeat($id, $stats)`. The five inherited disciplines are enforced in `record()`: **PII-scrub on write** (message + recursive context), **UTC** (`gmdate`), **16KB / depth-10 context cap**, **fail-safe write** (a throwing `$wpdb` is swallowed → `error_log`, never propagates), **retention-aware** (`MealsDB_Log_Retention` prunes the trunk by severity+age, NEVER prunes `running`).
 
-**`MealsDB_Logger::error($message)`** — operational error log via `error_log()` with PII scrubbing. Use for: caught exceptions, validation failures, anything that goes wrong but doesn't crash. Pattern:
+**The `degraded` outcome** is the point of the whole exercise. `outcome` is one of `succeeded | failed | degraded | running`. `degraded` = "I continued, but swallowed a problem" (caught exception, partial result, a re-sum that found nothing, a CREATE that failed but we pressed on). It doesn't *prevent* a careless caller from writing `succeeded` — but it turns "silently lied" into "explicitly chose," which is greppable and code-reviewable. The dashboard + digest default to `outcome IN ('failed','degraded')`. **When you write a job or catch-and-swallow, make the success/failure/degraded decision correct — don't call `finish()`/log `succeeded` on a path that ate an error.**
+
+**`MealsDB_Job_Logger` and `MealsDB_Hook_Logger` are now THIN FACADES over the trunk.** Their public signatures are unchanged (`start/finish/fail/heartbeat/last_success/recent_runs/latest_in_window`; `record/count_in_window/count_by_outcome/last_fire/trailing_window_counts` + the `OUTCOME_*` constants), so the ~53 existing call sites were not touched — keep calling the facades; they translate to trunk rows (`category='job'` / `category='hook'`). Hook outcomes map onto the trunk as: `processed`→`succeeded`/severity `info`, `skipped`→`succeeded`/severity `debug`, `errored`→`degraded`/severity `warning` (the severity pairing is how `count_by_outcome` reconstructs the three-way breakdown — don't write a `category='hook'` row directly with a different severity). The reader methods re-express the old `status`/`error_message` shapes from the trunk's `outcome`/`message` columns so the daily report and Cron Status page render identically. **The old `meals_job_log` / `meals_hook_log` tables are retired** — removed from `MealsDB_Schema` and `MealsDB_Tables`; `uninstall.php` drops the legacy physical tables by literal name. On installs upgrading across this change they linger empty (no new writes) until uninstall.
+
+**`MealsDB_Logger::log(...)`** — the audit log (`meals_audit_log`). Built-in PII redaction. Use for: client edits, link/unlink, deletes, schema changes, force rebuilds, key rotations. NOT collapsed; NOT pruned by `MealsDB_Log_Retention`.
+
+**`MealsDB_Logger::error($message)`** — operational `error_log()` line with PII scrubbing. Still fine for a quick caught-exception breadcrumb, but for anything an operator should *see*, also `MealsDB_Event_Log::record(outcome:'degraded', …)` so it surfaces on the dashboard/digest. Pattern:
 ```php
 catch (\Throwable $e) {
     MealsDB_Logger::error('[MealsDB Subsystem] failed: ' . $e->getMessage());
+    MealsDB_Event_Log::record([
+        'severity' => 'error', 'category' => 'sync', 'subsystem' => 'subsystem',
+        'event' => 'thing.failed', 'outcome' => 'degraded', 'message' => $e->getMessage(),
+    ]);
     return false;
 }
 ```
 
-**`MealsDB_Job_Logger`** — long-running job lifecycle (Phase W). Use `start()`, `heartbeat()`, `finish()`, `fail()` for any cron job or batch operation. Writes to `meals_job_log` with UTC timestamps, duration, and a size-capped context blob. The daily report reads this to answer "did the job run / succeed?"
-
-**`MealsDB_Hook_Logger`** — WC hook firing telemetry (Phase W), to `meals_hook_log`. Used by `class-allocation-hooks.php` and `class-sync.php`. New hook handlers should integrate.
-
-> **Important (audit theme #1):** the job logger is HONEST — it records exactly the `finish()`/`fail()` it is told. Several bugs in this codebase come from CALLERS that detect a failure, discard it, and still call `finish()` with success stats (see the nightly-allocation and install bugs below). When you write a job, make sure your success/failure decision is correct — don't call `finish()` on a path that swallowed an error.
+**Dashboard + digest:** WP Admin → Meals DB → **Event Log** (`manage_options`, no external surface; two tabs — operational trunk + read-only audit trail). A daily `mealsdb_event_digest` sweep (~05:00, out of the hot path) emails a scrubbed summary of failed/degraded events since the last run. Recipients reuse the daily-report recipient option.
 
 ### 7. Catch `\Throwable`, log, swallow — don't rethrow
 

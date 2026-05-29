@@ -109,6 +109,18 @@ class MealsDB_Invoice_Generator {
             }
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Invoice] HST rate read from WC failed: ' . $e->getMessage());
+            // STR-LOG: swallowed, but we press on with HST=0 — that under-
+            // reports tax on the government CSV, so surface it as degraded.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error',
+                    'category'  => 'billing',
+                    'subsystem' => 'invoice_generator',
+                    'event'     => 'resolve_hst_rate.failed',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'   => 'WC_Tax HST read failed; invoice HST resolved to 0: ' . $e->getMessage(),
+                ]);
+            }
             return 0.0;
         }
 

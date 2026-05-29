@@ -1,14 +1,10 @@
 <?php
 /**
- * Tests for MealsDB_Job_Logger (Phase W cron monitoring).
- *
- * Covers directive tests 1, 2, 3:
- *   1. start() inserts a 'running' row and returns log_id
- *   2. finish() updates to 'success' with duration + stats
- *   3. fail() updates to 'failure' with error message
- *
- * Uses an in-memory $wpdb stub — keeps the test free of any real DB
- * dependency so it can run in CI without a MySQL fixture.
+ * Tests for MealsDB_Job_Logger AS A FACADE over the meals_event_log trunk
+ * (directive STR-LOG). Asserts the facade still presents the old public
+ * surface (start/finish/fail/heartbeat) while writing trunk rows:
+ * category='job', event=job_name, outcome running→succeeded/failed, the
+ * job-lifecycle columns preserved.
  *
  * Run with: php tests/test-job-logger.php
  */
@@ -55,7 +51,11 @@ class TestWpdb {
         $this->rows[$log_id] = array_merge($this->rows[$log_id], $data);
         return 1;
     }
-    public function prepare(string $sql, ...$args) { return $sql . ' /* args:' . json_encode($args) . ' */'; }
+    public function prepare(string $sql, ...$args) {
+        if (count($args) === 1 && is_array($args[0])) { $args = $args[0]; }
+        return $sql . ' /* args:' . json_encode($args) . ' */';
+    }
+    public function esc_like($t) { return addcslashes((string) $t, '_%\\'); }
     public function query($sql) { return 0; }
     public function get_var($sql) { return null; }
     public function get_row($sql, $output = OBJECT) { return null; }
@@ -64,7 +64,6 @@ class TestWpdb {
 $wpdb = new TestWpdb();
 $GLOBALS['wpdb'] = $wpdb;
 
-// MealsDB_DB::get_table_name needs to return a usable name; stub it.
 if (!class_exists('MealsDB_DB')) {
     class MealsDB_DB {
         public static function get_table_name(string $t): string { return 'wp_' . $t; }
@@ -87,19 +86,20 @@ function assert_true($v, string $label) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: start() returns a positive log_id and inserts a 'running' row.
+// Test 1: start() inserts a category='job', outcome='running' trunk row.
 // ---------------------------------------------------------------------------
 MealsDB_Job_Logger::_reset_started_cache();
 $id = MealsDB_Job_Logger::start('test_job_a', ['hello' => 'world']);
 assert_true($id > 0, 'start() returns a positive log_id');
 assert_true(isset($wpdb->rows[$id]), 'start() inserted a row');
-assert_equal('test_job_a', $wpdb->rows[$id]['job_name'] ?? null, 'start() set job_name');
-assert_equal('running', $wpdb->rows[$id]['status'] ?? null, 'start() set status=running');
+assert_equal('job', $wpdb->rows[$id]['category'] ?? null, 'start() set category=job');
+assert_equal('test_job_a', $wpdb->rows[$id]['event'] ?? null, 'start() set event=job_name');
+assert_equal('running', $wpdb->rows[$id]['outcome'] ?? null, 'start() set outcome=running');
 assert_true(!empty($wpdb->rows[$id]['started_at']), 'start() set started_at');
 assert_true(strpos((string) $wpdb->rows[$id]['context'], 'world') !== false, 'start() encoded context');
 
 // ---------------------------------------------------------------------------
-// Test 2: finish() promotes the row to success with counters.
+// Test 2: finish() promotes the row to succeeded with counters + duration.
 // ---------------------------------------------------------------------------
 MealsDB_Job_Logger::finish($id, [
     'records_processed' => 100,
@@ -107,7 +107,7 @@ MealsDB_Job_Logger::finish($id, [
     'records_skipped'   => 5,
     'records_errored'   => 0,
 ]);
-assert_equal('success', $wpdb->rows[$id]['status'] ?? null, 'finish() set status=success');
+assert_equal('succeeded', $wpdb->rows[$id]['outcome'] ?? null, 'finish() set outcome=succeeded');
 assert_equal(100, (int) ($wpdb->rows[$id]['records_processed'] ?? 0), 'finish() recorded records_processed');
 assert_equal(42, (int) ($wpdb->rows[$id]['records_updated'] ?? 0), 'finish() recorded records_updated');
 assert_equal(5, (int) ($wpdb->rows[$id]['records_skipped'] ?? 0), 'finish() recorded records_skipped');
@@ -115,33 +115,36 @@ assert_true(isset($wpdb->rows[$id]['completed_at']), 'finish() set completed_at'
 assert_true(isset($wpdb->rows[$id]['duration_seconds']), 'finish() set duration_seconds');
 
 // ---------------------------------------------------------------------------
-// Test 3: fail() records the error and counters, status=failure.
+// Test 3: fail() updates outcome=failed with scrubbed message in `message`.
 // ---------------------------------------------------------------------------
 $id2 = MealsDB_Job_Logger::start('test_job_b');
 MealsDB_Job_Logger::fail($id2, 'database is on fire', ['records_errored' => 3]);
-assert_equal('failure', $wpdb->rows[$id2]['status'] ?? null, 'fail() set status=failure');
+assert_equal('failed', $wpdb->rows[$id2]['outcome'] ?? null, 'fail() set outcome=failed');
+assert_equal('error', $wpdb->rows[$id2]['severity'] ?? null, 'fail() set severity=error');
 assert_true(
-    strpos((string) ($wpdb->rows[$id2]['error_message'] ?? ''), 'database is on fire') !== false,
-    'fail() persisted the error message'
+    strpos((string) ($wpdb->rows[$id2]['message'] ?? ''), 'database is on fire') !== false,
+    'fail() persisted the error message in `message`'
 );
 assert_equal(3, (int) ($wpdb->rows[$id2]['records_errored'] ?? 0), 'fail() recorded records_errored');
 
 // ---------------------------------------------------------------------------
-// Test 4: heartbeat() updates counters without changing status.
+// Test 4: heartbeat() updates counters without changing outcome.
 // ---------------------------------------------------------------------------
 $id3 = MealsDB_Job_Logger::start('test_job_c');
 MealsDB_Job_Logger::heartbeat($id3, ['records_processed' => 50]);
-assert_equal('running', $wpdb->rows[$id3]['status'] ?? null, 'heartbeat() leaves status=running');
+assert_equal('running', $wpdb->rows[$id3]['outcome'] ?? null, 'heartbeat() leaves outcome=running');
 assert_equal(50, (int) ($wpdb->rows[$id3]['records_processed'] ?? 0), 'heartbeat() updated processed count');
 
 // ---------------------------------------------------------------------------
 // Test 5: oversized context is truncated rather than exploding the row.
+// (A large array of short keys exceeds 16KB once encoded; it is not
+//  blob-shaped, so the PII scrubber doesn't collapse it first.)
 // ---------------------------------------------------------------------------
-$big = ['blob' => str_repeat('x', 20000)];
+$big = [];
+for ($i = 0; $i < 3000; $i++) { $big['key_' . $i] = $i; }
 $id4 = MealsDB_Job_Logger::start('test_job_d', $big);
 $stored = (string) $wpdb->rows[$id4]['context'];
-assert_true(strlen($stored) <= 1024, 'oversized context truncated');
-assert_true(strpos($stored, 'truncated') !== false, 'truncation marker present');
+assert_true(strpos($stored, 'truncated') !== false, 'oversized context truncated with marker');
 
 // ---------------------------------------------------------------------------
 // Test 6: invalid log_id no-ops cleanly (defensive).

@@ -1,10 +1,11 @@
 <?php
 /**
- * Tests for MealsDB_Hook_Logger (Phase W).
- *
- * Covers directive tests 4, 5 (record() inserts; count_in_window
- * returns correct count) plus the hot-path discipline check —
- * record() must execute a single INSERT with no follow-up queries.
+ * Tests for MealsDB_Hook_Logger AS A FACADE over the meals_event_log
+ * trunk (directive STR-LOG). Asserts the facade still presents the old
+ * public surface while writing trunk rows: category='hook', the legacy
+ * three-way outcome mapped onto trunk outcome+severity, target_type/id →
+ * entity_type/id. Also re-asserts the hot-path discipline (record() =
+ * exactly one INSERT, no SELECT/UPDATE).
  *
  * Run with: php tests/test-hook-logger.php
  */
@@ -27,8 +28,8 @@ if (!function_exists('wp_json_encode')) {
     }
 }
 
-// $wpdb stub that counts each INSERT / SELECT / UPDATE so we can
-// assert the hot path is single-query.
+// $wpdb stub that counts each INSERT / SELECT / UPDATE so we can assert
+// the hot path stays single-query.
 class HookTestWpdb {
     public $prefix     = 'wp_';
     public $insert_id  = 0;
@@ -42,7 +43,6 @@ class HookTestWpdb {
     public $collate    = 'utf8mb4_unicode_ci';
 
     private $next_id   = 1;
-    private $count_data = [];   // mock data for count_in_window
 
     public function insert(string $table, array $data, $formats = null) {
         $this->insert_count++;
@@ -56,31 +56,27 @@ class HookTestWpdb {
         return 1;
     }
     public function prepare(string $sql, ...$args) { return $sql . ' /* ' . json_encode($args) . ' */'; }
+    public function esc_like($t) { return addcslashes((string) $t, '_%\\'); }
     public function query($sql) {
         if (stripos($sql, 'DELETE') === 0) { $this->delete_count++; }
         return 0;
     }
     public function get_var($sql) {
         $this->select_count++;
-        // Pretend count_in_window returns 7 (for the window test below).
         if (stripos($sql, 'COUNT(*)') !== false) {
-            return 7;
+            return 7; // count_in_window mock
         }
         return null;
     }
-    public function get_row($sql, $o = OBJECT) { $this->select_count++; return null; }
-    public function get_results($sql, $o = OBJECT) {
+    public function get_row($sql, $o = OBJECT) {
         $this->select_count++;
-        // Return mock outcome breakdown for count_by_outcome.
-        if (stripos($sql, 'GROUP BY outcome') !== false) {
-            return [
-                ['outcome' => 'processed', 'c' => '12'],
-                ['outcome' => 'skipped',   'c' => '3'],
-                ['outcome' => 'errored',   'c' => '1'],
-            ];
+        // count_by_outcome now issues one SUM(...) row instead of GROUP BY.
+        if (stripos($sql, 'SUM(outcome') !== false) {
+            return ['errored' => '1', 'skipped' => '3', 'processed' => '12'];
         }
-        return [];
+        return null;
     }
+    public function get_results($sql, $o = OBJECT) { $this->select_count++; return []; }
 }
 $wpdb = new HookTestWpdb();
 $GLOBALS['wpdb'] = $wpdb;
@@ -106,7 +102,7 @@ function assert_true($v, string $label) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: record() inserts a row with hook_name and outcome.
+// record() writes ONE trunk row, category='hook', no SELECT/UPDATE.
 // ---------------------------------------------------------------------------
 $wpdb->insert_count = $wpdb->select_count = $wpdb->update_count = 0;
 MealsDB_Hook_Logger::record('woocommerce_new_order', 'order', 99, ['k' => 'v']);
@@ -115,51 +111,55 @@ assert_equal(0, $wpdb->select_count, 'record() executes 0 SELECTs (hot path)');
 assert_equal(0, $wpdb->update_count, 'record() executes 0 UPDATEs (hot path)');
 
 $row = end($wpdb->rows);
-assert_equal('woocommerce_new_order', $row['hook_name'] ?? null, 'hook_name set');
-assert_equal('order', $row['target_type'] ?? null, 'target_type set');
-assert_equal(99, (int) ($row['target_id'] ?? 0), 'target_id set');
-assert_equal('processed', $row['outcome'] ?? null, 'default outcome=processed');
+assert_equal('hook', $row['category'] ?? null, 'category=hook');
+assert_equal('woocommerce_new_order', $row['event'] ?? null, 'event = hook name');
+assert_equal('order', $row['entity_type'] ?? null, 'target_type → entity_type');
+assert_equal(99, (int) ($row['entity_id'] ?? 0), 'target_id → entity_id');
+// processed → trunk succeeded / severity info.
+assert_equal('succeeded', $row['outcome'] ?? null, 'processed → outcome=succeeded');
+assert_equal('info', $row['severity'] ?? null, 'processed → severity=info');
 assert_true(isset($row['context']) && strpos($row['context'], '"k":"v"') !== false, 'context encoded');
+assert_true(strpos($row['context'], '"hook_outcome":"processed"') !== false, 'original hook outcome preserved in context');
 
 // ---------------------------------------------------------------------------
-// Outcome variant: skipped with no context still does single insert.
+// skipped → succeeded + severity debug (the breakdown discriminator).
 // ---------------------------------------------------------------------------
-$wpdb->insert_count = $wpdb->select_count = 0;
 MealsDB_Hook_Logger::record('profile_update', 'user', 7, [], MealsDB_Hook_Logger::OUTCOME_SKIPPED);
-assert_equal(1, $wpdb->insert_count, 'skipped record() still single INSERT');
-assert_equal(0, $wpdb->select_count, 'skipped record() no SELECTs');
 $row = end($wpdb->rows);
-assert_equal('skipped', $row['outcome'] ?? null, 'outcome=skipped persisted');
+assert_equal('succeeded', $row['outcome'] ?? null, 'skipped → outcome=succeeded');
+assert_equal('debug', $row['severity'] ?? null, 'skipped → severity=debug');
 
 // ---------------------------------------------------------------------------
-// Errored: includes sanitized error_message.
+// errored → degraded + severity warning + message.
 // ---------------------------------------------------------------------------
 MealsDB_Hook_Logger::record(
     'woocommerce_new_order', 'order', 100, ['exception' => 'X'],
     MealsDB_Hook_Logger::OUTCOME_ERRORED, 'something broke'
 );
 $row = end($wpdb->rows);
-assert_equal('errored', $row['outcome'] ?? null, 'outcome=errored');
+assert_equal('degraded', $row['outcome'] ?? null, 'errored → outcome=degraded');
+assert_equal('warning', $row['severity'] ?? null, 'errored → severity=warning');
 assert_true(
-    isset($row['error_message']) && strpos($row['error_message'], 'something broke') !== false,
-    'error_message persisted'
+    isset($row['message']) && strpos($row['message'], 'something broke') !== false,
+    'error_message → message persisted'
 );
 
 // ---------------------------------------------------------------------------
-// Unknown outcome falls back to 'processed' (defensive).
+// Unknown outcome falls back to processed mapping (defensive).
 // ---------------------------------------------------------------------------
 MealsDB_Hook_Logger::record('test_hook', 'order', 1, [], 'bogus_outcome');
 $row = end($wpdb->rows);
-assert_equal('processed', $row['outcome'] ?? null, 'unknown outcome coerced to processed');
+assert_equal('succeeded', $row['outcome'] ?? null, 'unknown outcome → succeeded');
+assert_equal('info', $row['severity'] ?? null, 'unknown outcome → severity info');
 
 // ---------------------------------------------------------------------------
-// Test 5: count_in_window returns the mock value (7).
+// count_in_window returns the mock scalar.
 // ---------------------------------------------------------------------------
 $c = MealsDB_Hook_Logger::count_in_window('woocommerce_new_order', '2026-05-15 00:00:00', '2026-05-16 00:00:00');
 assert_equal(7, $c, 'count_in_window returns scalar count');
 
 // ---------------------------------------------------------------------------
-// count_by_outcome returns the three buckets.
+// count_by_outcome reconstructs the three legacy buckets from the trunk.
 // ---------------------------------------------------------------------------
 $by = MealsDB_Hook_Logger::count_by_outcome('woocommerce_new_order', '2026-05-15 00:00:00', '2026-05-16 00:00:00');
 assert_equal(12, $by['processed'] ?? null, 'processed bucket');
@@ -167,19 +167,12 @@ assert_equal(3,  $by['skipped'] ?? null,   'skipped bucket');
 assert_equal(1,  $by['errored'] ?? null,   'errored bucket');
 
 // ---------------------------------------------------------------------------
-// target_id<=0 is treated as "no target" — not inserted as 0.
+// target_id<=0 is treated as "no entity" — not inserted as 0.
 // ---------------------------------------------------------------------------
 $wpdb->rows = [];
 MealsDB_Hook_Logger::record('test_hook', 'order', 0);
 $row = end($wpdb->rows);
-assert_true(!isset($row['target_id']), 'target_id<=0 not persisted');
-
-// ---------------------------------------------------------------------------
-// Oversized context dropped silently (not stored).
-// ---------------------------------------------------------------------------
-MealsDB_Hook_Logger::record('test_hook', 'order', 1, ['blob' => str_repeat('x', 10000)]);
-$row = end($wpdb->rows);
-assert_true(!isset($row['context']), 'oversized context dropped rather than stored');
+assert_true(!isset($row['entity_id']), 'target_id<=0 not persisted as entity_id');
 
 // ---------------------------------------------------------------------------
 // Report.

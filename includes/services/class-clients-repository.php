@@ -632,6 +632,18 @@ class MealsDB_Clients_Repository {
             $data = MealsDB_Encryption::encrypt_columns($data);
         } catch (\Throwable $e) {
             error_log('[MealsDB Clients Repository] Create aborted: encryption failure (' . $e->getMessage() . ').');
+            // STR-LOG: a fail-CLOSED abort (correct), but a PII encryption
+            // failure on a client write is worth surfacing — outcome=failed.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error',
+                    'category'  => 'security',
+                    'subsystem' => 'clients_repository',
+                    'event'     => 'create.encryption_failed',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_FAILED,
+                    'message'   => $e->getMessage(),
+                ]);
+            }
             return 0;
         }
 

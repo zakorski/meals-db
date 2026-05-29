@@ -73,7 +73,16 @@ function mealsdb_uninstall_cleanup_current_site(): void {
             }
         }
 
-        foreach ($drop_order as $base) {
+        // Retired tables (directive STR-LOG): meals_job_log and
+        // meals_hook_log were collapsed into meals_event_log and removed
+        // from MealsDB_Tables, so MealsDB_Tables::all() no longer lists
+        // them. Drop them here by literal prefixed name so installs that
+        // upgraded across the collapse don't leave the old physical
+        // tables behind. (meals_event_log itself is in all() and dropped
+        // by the loop below.)
+        $legacy_retired = ['meals_job_log', 'meals_hook_log'];
+
+        foreach (array_merge($drop_order, $legacy_retired) as $base) {
             $table   = MealsDB_DB::get_table_name($base);
             $escaped = str_replace('`', '``', $table);
             $sql     = "DROP TABLE IF EXISTS `{$escaped}`";
@@ -113,6 +122,7 @@ function mealsdb_uninstall_cleanup_current_site(): void {
         'mealsdb_nightly_task_sync',
         'mealsdb_daily_report',
         'mealsdb_log_retention',
+        'mealsdb_event_digest',
     ];
 
     foreach ($plugin_cron_hooks as $hook) {
@@ -126,6 +136,9 @@ function mealsdb_uninstall_cleanup_current_site(): void {
     delete_option('mealsdb_zone_delivery_schedule');
     delete_option('mealsdb_overage_product_ids');
     delete_option('mealsdb_legacy_decrypt_disabled');
+    // Directive STR-LOG digest options.
+    delete_option('mealsdb_event_digest_last_run');
+    delete_option('mealsdb_event_digest_min_severity');
 
     // Plugin transients — caches that would otherwise linger as stale
     // wp_options rows after the tables they describe are gone.

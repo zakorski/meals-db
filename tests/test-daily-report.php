@@ -103,19 +103,30 @@ class DailyReportTestWpdb {
     }
     public function query($sql) { return 0; }
 
+    // Trunk collapse (STR-LOG): the loggers now query meals_event_log
+    // and the hook name is no longer always args[0] (count_by_outcome
+    // binds several discriminators first). Scan args for a known hook.
+    private function hook_from_args(array $args): string {
+        foreach ($args as $a) {
+            if (is_string($a) && in_array($a, MealsDB_Daily_Report::INSTRUMENTED_HOOKS, true)) {
+                return $a;
+            }
+        }
+        return '';
+    }
+
     public function get_var($prepared) {
         $sql  = is_array($prepared) ? $prepared['__sql'] : $prepared;
         $args = is_array($prepared) ? $prepared['__args'] : [];
 
-        if (stripos($sql, 'COUNT(*) FROM `wp_meals_hook_log`') !== false) {
+        if (stripos($sql, 'COUNT(*) FROM `wp_meals_event_log`') !== false) {
             // count_in_window — return canned count by hook name.
-            $hook = (string) ($args[0] ?? '');
-            return $this->hook_count_responses[$hook] ?? 0;
+            return $this->hook_count_responses[$this->hook_from_args($args)] ?? 0;
         }
         if (stripos($sql, 'SELECT completed_at') !== false) {
             return null; // last_success unknown
         }
-        if (stripos($sql, 'SELECT fired_at') !== false) {
+        if (stripos($sql, 'SELECT occurred_at') !== false) {
             return null; // last_fire unknown
         }
         return null;
@@ -125,9 +136,14 @@ class DailyReportTestWpdb {
         $sql  = is_array($prepared) ? $prepared['__sql'] : $prepared;
         $args = is_array($prepared) ? $prepared['__args'] : [];
 
-        // latest_in_window
-        if (stripos($sql, 'FROM `wp_meals_job_log`') !== false && stripos($sql, 'LIMIT 1') !== false) {
-            $job_name = (string) ($args[0] ?? '');
+        // count_by_outcome — one SUM(...) row reconstructing the buckets.
+        if (stripos($sql, 'SUM(outcome') !== false) {
+            return $this->hook_outcome_responses[$this->hook_from_args($args)] ?? null;
+        }
+        // latest_in_window (category='job', LIMIT 1). job_name is args[1]
+        // ('job', $job_name, $since).
+        if (stripos($sql, 'FROM `wp_meals_event_log`') !== false && stripos($sql, 'LIMIT 1') !== false) {
+            $job_name = (string) ($args[1] ?? '');
             return $GLOBALS['__test_latest'][$job_name] ?? null;
         }
         return null;
@@ -137,13 +153,8 @@ class DailyReportTestWpdb {
         $sql  = is_array($prepared) ? $prepared['__sql'] : $prepared;
         $args = is_array($prepared) ? $prepared['__args'] : [];
 
-        if (stripos($sql, 'GROUP BY outcome') !== false) {
-            $hook = (string) ($args[0] ?? '');
-            return $this->hook_outcome_responses[$hook] ?? [];
-        }
-        if (stripos($sql, 'GROUP BY DATE(fired_at)') !== false) {
-            $hook = (string) ($args[0] ?? '');
-            return $this->hook_trailing_responses[$hook] ?? [];
+        if (stripos($sql, 'GROUP BY DATE(occurred_at)') !== false) {
+            return $this->hook_trailing_responses[$this->hook_from_args($args)] ?? [];
         }
         // Reconciliation queries — return empty by default.
         return [];
@@ -221,8 +232,9 @@ $wpdb->hook_count_responses = [];
 $hookA = MealsDB_Daily_Report::INSTRUMENTED_HOOKS[0];
 $hookB = MealsDB_Daily_Report::INSTRUMENTED_HOOKS[1];
 
-$wpdb->hook_outcome_responses[$hookA] = [['outcome' => 'processed', 'c' => 1]];
-$wpdb->hook_outcome_responses[$hookB] = [['outcome' => 'processed', 'c' => 45]];
+// count_by_outcome now returns a single SUM row with the three buckets.
+$wpdb->hook_outcome_responses[$hookA] = ['processed' => 1,  'skipped' => 0, 'errored' => 0];
+$wpdb->hook_outcome_responses[$hookB] = ['processed' => 45, 'skipped' => 0, 'errored' => 0];
 
 // 7 day backfill rows. Daily count 50 for the past 7 days for both.
 $daily_rows = [];
@@ -301,12 +313,13 @@ try {
 
 $found_daily_report = false;
 foreach ($wpdb->job_log_rows as $row) {
-    if (($row['job_name'] ?? '') === 'daily_report' && ($row['status'] ?? '') === 'success') {
+    // Trunk row: category='job', event='daily_report', outcome='succeeded'.
+    if (($row['event'] ?? '') === 'daily_report' && ($row['outcome'] ?? '') === 'succeeded') {
         $found_daily_report = true;
         break;
     }
 }
-assert_true($found_daily_report, 'run() logged a daily_report row with status=success');
+assert_true($found_daily_report, 'run() logged a daily_report trunk row with outcome=succeeded');
 
 // ---------------------------------------------------------------------------
 // Threshold setting bounds.

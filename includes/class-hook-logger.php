@@ -1,17 +1,28 @@
 <?php
 /**
- * Hook firing logger for Meals DB.
+ * Hook firing logger — now a THIN FACADE over MealsDB_Event_Log
+ * (directive STR-LOG, Option A). Public surface unchanged (record /
+ * count_in_window / count_by_outcome / last_fire / trailing_window_counts
+ * + the OUTCOME_* constants), so the writer call sites in
+ * class-allocation-hooks.php and class-sync.php did not have to change.
  *
- * Records every fire of the WC/WP hooks this plugin cares about so
- * the daily report can answer "did the hook fire at all yesterday?"
- * separately from "did the plugin act on it?". A hook can fire and
- * still result in `outcome='skipped'` when the order isn't a Meals
- * client — distinguishing that case from "hook never fired" is the
- * specific value-add over the audit log.
+ * Writes go to the `meals_event_log` trunk with category='hook'; the old
+ * `meals_hook_log` table is retired.
  *
- * Performance: record() executes one INSERT and nothing else on the
- * hot path. It's called from order-creation hooks, profile_update,
- * etc. — anything more would taste real to a checkout flow.
+ * Outcome mapping (directive §"facade"): the trunk only has
+ * succeeded/degraded, but the daily report still needs the three-way
+ * processed/skipped/errored breakdown. We preserve it by pairing the
+ * trunk outcome with severity as a discriminator (and stash the original
+ * hook outcome in context for the dashboard):
+ *
+ *   hook processed → outcome=succeeded, severity=info
+ *   hook skipped   → outcome=succeeded, severity=debug   (intentional no-op)
+ *   hook errored   → outcome=degraded,  severity=warning (caught/swallowed)
+ *
+ * count_by_outcome() reconstructs the three counts from that pairing.
+ * Because the facade controls every hook write, the pairing is consistent
+ * — do not log a category='hook' row through MealsDB_Event_Log directly
+ * with a different severity, or the breakdown will misclassify it.
  *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
@@ -28,13 +39,6 @@ class MealsDB_Hook_Logger {
 
     /**
      * Record that a hook fired.
-     *
-     * @param string      $hook_name     WP/WC hook name.
-     * @param string|null $target_type   'order' | 'user' | etc. or null.
-     * @param int|null    $target_id     Numeric ID (post or user), or null.
-     * @param array       $context       JSON-encodable extra info.
-     * @param string      $outcome       processed | skipped | errored.
-     * @param string|null $error_message Sanitized error text when outcome=errored.
      */
     public static function record(
         string $hook_name,
@@ -44,51 +48,25 @@ class MealsDB_Hook_Logger {
         string $outcome = self::OUTCOME_PROCESSED,
         ?string $error_message = null
     ): void {
-        global $wpdb;
-
-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::HOOK_LOG);
-
         if (!in_array($outcome, [self::OUTCOME_PROCESSED, self::OUTCOME_SKIPPED, self::OUTCOME_ERRORED], true)) {
             $outcome = self::OUTCOME_PROCESSED;
         }
 
-        $data    = [
-            'hook_name' => $hook_name,
-            'fired_at'  => gmdate('Y-m-d H:i:s'),
-            'outcome'   => $outcome,
-        ];
-        $formats = ['%s', '%s', '%s'];
+        // Preserve the original hook outcome for the dashboard / debugging;
+        // count_by_outcome() reconstructs counts from severity+outcome.
+        $context['hook_outcome'] = $outcome;
 
-        if ($target_type !== null && $target_type !== '') {
-            // Trim aggressively — the column is VARCHAR(20).
-            $data['target_type'] = substr($target_type, 0, 20);
-            $formats[] = '%s';
-        }
-        if ($target_id !== null && $target_id > 0) {
-            $data['target_id'] = $target_id;
-            $formats[] = '%d';
-        }
-        if (!empty($context)) {
-            $encoded = wp_json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE, 6);
-            if (is_string($encoded) && strlen($encoded) <= 4096) {
-                $data['context'] = $encoded;
-                $formats[] = '%s';
-            }
-        }
-        if ($error_message !== null && $error_message !== '') {
-            $data['error_message'] = MealsDB_Logger::sanitize_for_log($error_message);
-            $formats[] = '%s';
-        }
-
-        // Single INSERT, no SELECTs, no follow-up writes. Failures here
-        // must never bubble up — instrumentation breaking checkout is
-        // a regression worse than the gap the instrumentation closes.
-        $result = $wpdb->insert($table, $data, $formats);
-        if ($result === false) {
-            // Quietly drop a redacted line into error_log. Don't throw,
-            // don't recurse into the audit log, don't retry.
-            MealsDB_Logger::error('[Hook Logger] insert failed for ' . $hook_name . ': ' . $wpdb->last_error);
-        }
+        MealsDB_Event_Log::record([
+            'category'      => 'hook',
+            'event'         => $hook_name,
+            'subsystem'     => 'wc_hooks',
+            'outcome'       => self::trunk_outcome($outcome),
+            'severity'      => self::trunk_severity($outcome),
+            'message'       => $error_message,
+            'context'       => $context,
+            'entity_type'   => $target_type,
+            'entity_id'     => $target_id,
+        ]);
     }
 
     /**
@@ -97,9 +75,10 @@ class MealsDB_Hook_Logger {
     public static function count_in_window(string $hook_name, string $start_utc, string $end_utc): int {
         global $wpdb;
 
-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::HOOK_LOG);
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::EVENT_LOG);
         $sql   = $wpdb->prepare(
-            "SELECT COUNT(*) FROM `{$table}` WHERE hook_name = %s AND fired_at >= %s AND fired_at < %s",
+            "SELECT COUNT(*) FROM `{$table}` WHERE category = %s AND event = %s AND occurred_at >= %s AND occurred_at < %s",
+            'hook',
             $hook_name,
             $start_utc,
             $end_utc
@@ -108,48 +87,52 @@ class MealsDB_Hook_Logger {
     }
 
     /**
-     * Count hook fires grouped by outcome, within a UTC window.
+     * Count hook fires grouped by the (reconstructed) legacy outcome.
      *
      * @return array<string, int> Keys: processed, skipped, errored.
      */
     public static function count_by_outcome(string $hook_name, string $start_utc, string $end_utc): array {
         global $wpdb;
 
-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::HOOK_LOG);
-        $sql   = $wpdb->prepare(
-            "SELECT outcome, COUNT(*) AS c FROM `{$table}` WHERE hook_name = %s AND fired_at >= %s AND fired_at < %s GROUP BY outcome",
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::EVENT_LOG);
+        // Reconstruct the three-way breakdown from the outcome+severity
+        // pairing the facade writes (see class docblock).
+        $sql = $wpdb->prepare(
+            "SELECT
+                SUM(outcome = %s) AS errored,
+                SUM(outcome = %s AND severity = %s) AS skipped,
+                SUM(outcome = %s AND severity <> %s) AS processed
+             FROM `{$table}`
+             WHERE category = %s AND event = %s AND occurred_at >= %s AND occurred_at < %s",
+            MealsDB_Event_Log::OUTCOME_DEGRADED,
+            MealsDB_Event_Log::OUTCOME_SUCCEEDED,
+            'debug',
+            MealsDB_Event_Log::OUTCOME_SUCCEEDED,
+            'debug',
+            'hook',
             $hook_name,
             $start_utc,
             $end_utc
         );
-        $rows = $wpdb->get_results($sql, ARRAY_A);
+        $row = $wpdb->get_row($sql, ARRAY_A);
 
-        $out = [
-            self::OUTCOME_PROCESSED => 0,
-            self::OUTCOME_SKIPPED   => 0,
-            self::OUTCOME_ERRORED   => 0,
+        return [
+            self::OUTCOME_PROCESSED => (int) ($row['processed'] ?? 0),
+            self::OUTCOME_SKIPPED   => (int) ($row['skipped'] ?? 0),
+            self::OUTCOME_ERRORED   => (int) ($row['errored'] ?? 0),
         ];
-        if (!is_array($rows)) {
-            return $out;
-        }
-        foreach ($rows as $row) {
-            $key = (string) ($row['outcome'] ?? '');
-            if (isset($out[$key])) {
-                $out[$key] = (int) ($row['c'] ?? 0);
-            }
-        }
-        return $out;
     }
 
     /**
-     * Most recent fire timestamp (UTC) for a hook, or null if never seen.
+     * Most recent fire timestamp (UTC) for a hook, or null.
      */
     public static function last_fire(string $hook_name): ?string {
         global $wpdb;
 
-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::HOOK_LOG);
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::EVENT_LOG);
         $sql   = $wpdb->prepare(
-            "SELECT fired_at FROM `{$table}` WHERE hook_name = %s ORDER BY fired_at DESC LIMIT 1",
+            "SELECT occurred_at FROM `{$table}` WHERE category = %s AND event = %s ORDER BY occurred_at DESC LIMIT 1",
+            'hook',
             $hook_name
         );
         $value = $wpdb->get_var($sql);
@@ -157,22 +140,22 @@ class MealsDB_Hook_Logger {
     }
 
     /**
-     * Trailing-N-day daily averages for a hook, ending at $end_utc-1.
-     * Returns N day counts and their average. Used for anomaly checks.
+     * Trailing-N-day daily counts for a hook, ending at $end_utc-1.
      *
      * @return array{daily: array<int, int>, average: float}
      */
     public static function trailing_window_counts(string $hook_name, string $end_utc, int $days): array {
         global $wpdb;
 
-        $days = max(1, min(90, $days));
-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::HOOK_LOG);
+        $days  = max(1, min(90, $days));
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::EVENT_LOG);
 
         $start_unix = strtotime($end_utc . ' UTC') - ($days * 86400);
         $start_utc  = gmdate('Y-m-d H:i:s', $start_unix);
 
         $sql = $wpdb->prepare(
-            "SELECT DATE(fired_at) AS d, COUNT(*) AS c FROM `{$table}` WHERE hook_name = %s AND fired_at >= %s AND fired_at < %s GROUP BY DATE(fired_at)",
+            "SELECT DATE(occurred_at) AS d, COUNT(*) AS c FROM `{$table}` WHERE category = %s AND event = %s AND occurred_at >= %s AND occurred_at < %s GROUP BY DATE(occurred_at)",
+            'hook',
             $hook_name,
             $start_utc,
             $end_utc
@@ -194,5 +177,31 @@ class MealsDB_Hook_Logger {
         $avg = $days > 0 ? $sum / $days : 0.0;
 
         return ['daily' => $daily, 'average' => $avg];
+    }
+
+    /**
+     * Legacy hook outcome → trunk outcome.
+     */
+    private static function trunk_outcome(string $hook_outcome): string {
+        // errored was caught and swallowed by the hook handler → degraded.
+        // processed/skipped are both non-error → succeeded.
+        return $hook_outcome === self::OUTCOME_ERRORED
+            ? MealsDB_Event_Log::OUTCOME_DEGRADED
+            : MealsDB_Event_Log::OUTCOME_SUCCEEDED;
+    }
+
+    /**
+     * Legacy hook outcome → trunk severity (the breakdown discriminator).
+     */
+    private static function trunk_severity(string $hook_outcome): string {
+        switch ($hook_outcome) {
+            case self::OUTCOME_ERRORED:
+                return 'warning';
+            case self::OUTCOME_SKIPPED:
+                return 'debug';
+            case self::OUTCOME_PROCESSED:
+            default:
+                return 'info';
+        }
     }
 }

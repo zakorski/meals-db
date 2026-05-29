@@ -18,8 +18,19 @@ class MealsDB_Tables
     public const SCHEDULE_RULES = 'meals_schedule_rules';
     public const TASKS = 'meals_tasks';
     public const PURCHASE_ORDERS = 'meals_purchase_orders';
-    public const JOB_LOG = 'meals_job_log';
-    public const HOOK_LOG = 'meals_hook_log';
+
+    /**
+     * Central operational event-log trunk (directive STR-LOG). Collapses
+     * the former meals_job_log + meals_hook_log into one table. The old
+     * JOB_LOG / HOOK_LOG constants were removed deliberately: nothing
+     * writes those tables anymore (the Job/Hook loggers are now thin
+     * facades over this trunk). uninstall.php drops the legacy physical
+     * tables by literal name for installs upgrading across this change.
+     * meals_audit_log stays SEPARATE — it is a compliance artifact, not
+     * an operational log (see CLAUDE.md §6, "Boundary").
+     */
+    public const EVENT_LOG = 'meals_event_log';
+
     public const CLIENT_MONTH_DIRTY = 'meals_client_month_dirty';
     public const ALLOCATION_ERRORS = 'meals_allocation_errors';
 
@@ -43,8 +54,7 @@ class MealsDB_Tables
             self::SCHEDULE_RULES,
             self::TASKS,
             self::PURCHASE_ORDERS,
-            self::JOB_LOG,
-            self::HOOK_LOG,
+            self::EVENT_LOG,
             self::CLIENT_MONTH_DIRTY,
             self::ALLOCATION_ERRORS,
         ];
