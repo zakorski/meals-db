@@ -18,6 +18,15 @@
  */
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
+
+// Mock WooCommerce's tax API: get_phase2_billing_data resolves the HST
+// rate live from WC_Tax (LB-7 follow-up — no fallback). 15% standard rate.
+if (!class_exists('WC_Tax')) {
+    class WC_Tax {
+        public static function get_rates($tax_class = '') { return [['rate' => 15.0]]; }
+    }
+}
+
 require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 if (!class_exists('wpdb')) { class wpdb {} }
@@ -117,6 +126,29 @@ chk((int) $row['allocated_tax_sides'], 30, '14.66 HST: 30 tax sides');
 chk_close((float) $row['resolved_rate'], 14.66, 0.001, '14.66 HST: rate resolved');
 chk((int) $row['tax_cents'], 2016, '14.66 HST: 30 sides × 4.48 × 15% = $20.16 (2016 cents)');
 chk((int) $row['contribution_cents'], 0, '14.66 HST: no contribution');
+
+// ---------------------------------------------------------------------------
+// Test 1b (LB-7 zone regression): a RURAL client (delivery_area_zone='S')
+// with 30 taxable sides must bill HST at the RURAL side rate ($4.54), NOT
+// the urban $4.48. Regression guard for callers (e.g. generate_sdnb_new_portal)
+// that must select delivery_area_zone — without it the row falls back to
+// urban and under-reports HST. 30 × 4.54 × 15% = $20.43 → 2043 cents.
+// ---------------------------------------------------------------------------
+$wpdb_rural = new P2WpdbWithRate();
+$wpdb_rural->rate = 15.47;
+$wpdb_rural->scripted = $wpdb->scripted;
+$GLOBALS['wpdb'] = $wpdb_rural;
+$rural_client = ['client_id' => 42, 'wp_user_id' => 100, 'default_rate_id' => 1, 'client_contribution' => 0,
+                 'first_name' => 'Test', 'last_name' => 'Client', 'delivery_area_zone' => 'S'];
+$out = call_p2([$rural_client], '2025-11');
+chk((int) $out[42]['tax_cents'], 2043, 'rural HST: 30 sides × 4.54 × 15% = $20.43 (2043 cents)');
+
+// Same client WITHOUT the zone column present → urban fallback (documents
+// the bug that motivated requiring delivery_area_zone in the new-portal query).
+unset($rural_client['delivery_area_zone']);
+$GLOBALS['wpdb'] = $wpdb_rural;
+$out = call_p2([$rural_client], '2025-11');
+chk((int) $out[42]['tax_cents'], 2016, 'missing zone falls back to urban side rate (2016 cents)');
 
 // ---------------------------------------------------------------------------
 // Test 2: contribution sum picks up the order-line query result.
