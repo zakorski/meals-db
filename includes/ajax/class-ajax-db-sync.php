@@ -25,6 +25,17 @@ class MealsDB_Ajax_DB_Sync {
             wp_send_json_error( [ 'message' => 'Unauthorized.' ], 403 );
         }
 
+        // QW-1: this was the only AJAX handler missing the rate-limit layer,
+        // yet it runs 300-second destructive migration phases (create_clients /
+        // create_rates). Throttle it like every sibling migration handler so a
+        // nonce-bearing caller (or CSRF/XSS-assisted request) can't loop the
+        // expensive destructive phases unbounded. Mutating + expensive →
+        // migration_destructive (5/hour), which fails CLOSED.
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded.', 'meals-db' ) ], 429 );
+        }
+
         set_time_limit( 300 );
 
         $phase   = (int) ( $_POST['phase'] ?? 0 );

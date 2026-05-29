@@ -38,7 +38,7 @@ For especially destructive operations (force_rebuild, delete_users), additionall
 - Rate-limit (`MealsDB_Rate_Limiter::check_rate_limit`).
 - Audit-log via `MealsDB_Logger::log()`.
 
-> **Known gap (audit MAJ-8):** `includes/ajax/class-ajax-db-sync.php` (`mealsdb_db_sync_phase`) is the ONLY AJAX handler missing the rate-limit layer, and it runs 300-second destructive migration phases. It should use the `migration_destructive` bucket. When you touch it, add the rate limit.
+> **FIXED (directive QW-1, was audit MAJ-8):** `includes/ajax/class-ajax-db-sync.php` (`mealsdb_db_sync_phase`) now applies the rate-limit layer like every sibling migration handler — `MealsDB_Rate_Limiter::check_rate_limit('migration_destructive')` (5/hour, fail-closed) immediately after the capability check, before any work. It was previously the only AJAX handler missing it while running 300-second destructive phases.
 
 ### 2. Capability conventions
 
@@ -81,7 +81,7 @@ The **instance** repository methods `MealsDB_Clients_Repository::create_client()
 
 > **Correction from the previous CLAUDE.md:** the old version said "only the form encrypts; the repository does not." That was wrong — there are three auto-encrypt entry points (form, static `create()`, sync mutator), and only the *instance* create/update skip it. Don't assume the form is the only encrypting path.
 
-> **Known bug (audit MAJ-4):** client DRAFTS encrypt their payload too, but the draft codec (`MealsDB_Client_Form::encode_draft_payload`) **fails OPEN** — on an encryption exception it stores the PII as plaintext JSON. This is inconsistent with the three write paths above (which fail closed). Drafts should be made to fail closed.
+> **FIXED (directive QW-2, was audit MAJ-4):** client DRAFTS now fail CLOSED like the three live write paths. `MealsDB_Client_Form::encode_draft_payload` returns `false` (never plaintext) when encryption is unavailable or throws; the caller surfaces a clean "Failed to save draft." rather than silently persisting PII as cleartext in `meals_drafts`. Note the READ path (`decode_draft_payload`) still decodes legacy plaintext drafts — only WRITING cleartext is forbidden.
 
 Decryption:
 - `MealsDB_Encryption::decrypt($ciphertext)` — strict, throws on failure.
@@ -260,7 +260,7 @@ If you're writing data to a CSV (reports, invoices, downloads), route through th
 
 Don't bypass this. CSV injection is a real attack vector and the legacy system had instances of it.
 
-> **Known bug (audit MAJ-3 / recon-07/12):** the guard mis-handles legitimate NEGATIVE money. `MealsDB_Money::format` emits a leading `-`, which triggers the `'`-prefix, so `-10.24` becomes `'-10.24` in a numeric column of a government-bound CSV. The bug exists in BOTH the PHP `MealsDB_CSV` and the JS `report-utils.js`, and `test-reports-csv-injection.php` currently asserts the buggy behavior as correct. When you fix it (exempt numeric-leading-minus), fix BOTH files and update that test.
+> **FIXED (directive QW-3, was audit MAJ-3 / recon-07/12):** the guard no longer corrupts legitimate NEGATIVE money. Both `MealsDB_CSV::cell()` (PHP) and `Report.csvCell` / `csvCell` (JS, `report-utils.js`) now exempt well-formed plain numbers — anchored `/^[-+]?\d+(\.\d+)?$/` — from the leading-char formula guard, so `-10.24` exports intact instead of becoming `'-10.24`. A leading `-`/`+`/`@`/`=` on a NON-numeric string (e.g. `-2+3` in a name field) is still neutralised — the distinction is numeric-VALUE vs text-FIELD. `cell_strict()` is intentionally unchanged (it strips for must-never-be-a-formula exports). `test-reports-csv-injection.php` now asserts the corrected behavior.
 
 ### 15. File handling
 
