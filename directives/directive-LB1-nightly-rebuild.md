@@ -130,7 +130,7 @@ The key assertion is **detail rows were created**, because a re-sum-only impleme
 - Do **not** change the HPOS trash/delete hooks — that's LB-5.
 - Do **not** alter the cron schedule time (03:00 is fine).
 
-> **Cross-check with LB-3 before shipping:** this directive makes the nightly job rebuild dirty months. If `rebuild_all_dirty()` does not currently skip finalized months (LB-3), then turning it loose nightly could rewrite finalized/submitted detail every night. **Verify in P4 whether `rebuild_all_dirty()` / `fill_months` guards finalized months.** If it does not, LB-3 must land first (or in the same change). This is the one ordering dependency in the blocker set.
+> **Cross-check with LB-3 — RESOLVED:** this directive makes the nightly job rebuild dirty months. The ordering dependency was that `rebuild_all_dirty()` / `fill_months` must skip finalized months, or running it nightly would rewrite finalized/submitted detail. **Directive LB-3 has now landed:** `rebuild_client_month` skips a finalized target month and `fill_months` excludes finalized months (target or neighbour) from both the DELETE and the inserts. So the P4 question "does `rebuild_all_dirty()` skip finalized months?" now answers YES, and the nightly rebuild is safe to ship.
 
 ---
 

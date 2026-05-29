@@ -41,6 +41,40 @@ class MealsDB_Allocation_Rebuilder {
     }
 
     // =====================================================================
+    //  Internal — finalized-month protection (LB-3)
+    // =====================================================================
+
+    /**
+     * Which of the given (client_id, month) pairs are finalized?
+     *
+     * Finalized months are submitted invoices and must never be deleted or
+     * rewritten by the fill. Returns the subset of $months that are finalized
+     * for this client.
+     *
+     * @param int      $client_id
+     * @param string[] $months  YYYY-MM values
+     * @return array<string,bool> month => true, for finalized months only
+     */
+    private function finalized_months(int $client_id, array $months): array {
+        if (empty($months)) {
+            return [];
+        }
+        $alloc_summary = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+        $placeholders  = implode(',', array_fill(0, count($months), '%s'));
+        $params        = array_merge([$client_id], $months);
+        $rows = $this->wpdb->get_col($this->wpdb->prepare(
+            "SELECT billing_month FROM `{$alloc_summary}`
+             WHERE client_id = %d AND billing_month IN ({$placeholders}) AND is_finalized = 1",
+            $params
+        ));
+        $out = [];
+        foreach ((array) $rows as $m) {
+            $out[(string) $m] = true;
+        }
+        return $out;
+    }
+
+    // =====================================================================
     //  Public API
     // =====================================================================
 
@@ -114,6 +148,26 @@ class MealsDB_Allocation_Rebuilder {
         $prior_month = self::prior_month($billing_month);
         $next_month  = self::next_month($billing_month);
 
+        // LB-3: never rebuild a finalized month — it's a submitted invoice.
+        // The $finalized set covers all three window months so the fill below
+        // also protects finalized PRIOR/NEXT neighbours from being deleted or
+        // written into (rebuilding open June pulls in May; if May is finalized
+        // its submitted detail must survive untouched).
+        $finalized = $this->finalized_months($client_id, [
+            $prior_month,
+            $billing_month,
+            $next_month,
+        ]);
+        if (isset($finalized[$billing_month])) {
+            error_log(sprintf(
+                '[MealsDB Rebuilder] Skipped finalized target month %s for client %d.',
+                $billing_month,
+                $client_id
+            ));
+            $this->clear_dirty($client_id, $billing_month); // consume the flag; nothing to do
+            return ['mains_unplaced' => 0, 'sides_unplaced' => 0];
+        }
+
         // Allowances for the three months involved.
         $cap_prior = $this->engine->calculate_permitted_for_month($client_id, $prior_month);
         $cap_curr  = $this->engine->calculate_permitted_for_month($client_id, $billing_month);
@@ -133,13 +187,19 @@ class MealsDB_Allocation_Rebuilder {
             $client_id,
             [$prior_month => $cap_prior, $billing_month => $cap_curr, $next_month => $cap_next],
             $deliveries,
-            $billing_month
+            $billing_month,
+            $finalized              // LB-3: months in here are never deleted or written
         );
 
-        // Refresh summaries for all three affected months.
-        $this->engine->recalculate_month_totals($client_id, $prior_month);
-        $this->engine->recalculate_month_totals($client_id, $billing_month);
-        $this->engine->recalculate_month_totals($client_id, $next_month);
+        // Refresh summaries for the affected months — but skip any finalized
+        // neighbour. The engine already guards finalized months internally, but
+        // skipping explicitly here keeps intent clear and avoids the log noise
+        // the engine emits when asked to recalculate a finalized month.
+        foreach ([$prior_month, $billing_month, $next_month] as $m) {
+            if (!isset($finalized[$m])) {
+                $this->engine->recalculate_month_totals($client_id, $m);
+            }
+        }
 
         // Clear ONLY the month we were asked to rebuild. The prior and next
         // months are recomputed here as context, but their own spillover
@@ -241,18 +301,26 @@ class MealsDB_Allocation_Rebuilder {
      *        delivery whose overflow cannot be placed within $caps.
      * @return array{mains_unplaced:int, sides_unplaced:int}
      */
-    private function fill_months(int $client_id, array $caps, array $deliveries, ?string $error_month = null): array {
+    private function fill_months(int $client_id, array $caps, array $deliveries, ?string $error_month = null, array $finalized = []): array {
         $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
         $months      = array_keys($caps);
 
         // Wipe the slate for the affected months — we recompute from scratch.
-        $placeholders = implode(',', array_fill(0, count($months), '%s'));
-        $params = array_merge([$client_id], $months);
-        $this->wpdb->query($this->wpdb->prepare(
-            "DELETE FROM `{$alloc_table}`
-             WHERE client_id = %d AND billing_month IN ({$placeholders})",
-            $params
-        ));
+        // LB-3: but NEVER delete a finalized month (submitted invoice). A
+        // finalized month is excluded from the DELETE here and from the insert
+        // path below, so it keeps exactly the detail rows it had at finalization.
+        $months_to_clear = array_values(array_filter($months, static function ($m) use ($finalized) {
+            return empty($finalized[$m]);
+        }));
+        if (!empty($months_to_clear)) {
+            $placeholders = implode(',', array_fill(0, count($months_to_clear), '%s'));
+            $params = array_merge([$client_id], $months_to_clear);
+            $this->wpdb->query($this->wpdb->prepare(
+                "DELETE FROM `{$alloc_table}`
+                 WHERE client_id = %d AND billing_month IN ({$placeholders})",
+                $params
+            ));
+        }
 
         // Independent running headroom per month.
         $headroom = [];
@@ -277,10 +345,13 @@ class MealsDB_Allocation_Rebuilder {
             // Pass 1: fill the delivery month up to headroom.
             $place_to_month = function(string $month) use (
                 &$remaining_mains, &$remaining_tax_sides, &$remaining_nontax_sides,
-                &$headroom, $d, $client_id, $alloc_table
+                &$headroom, $d, $client_id, $alloc_table, $finalized
             ) {
-                if (!isset($headroom[$month])) {
-                    return; // outside our two-month window — leave for caller
+                if (!isset($headroom[$month]) || !empty($finalized[$month])) {
+                    // Outside our window, OR finalized (immutable): leave the
+                    // meals for the caller to spill / count as unplaced. You
+                    // cannot retroactively add meals to a submitted invoice.
+                    return;
                 }
                 $put_mains       = min($remaining_mains,                $headroom[$month]['mains']);
                 $sides_remaining = $remaining_tax_sides + $remaining_nontax_sides;
