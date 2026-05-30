@@ -91,6 +91,43 @@ class MealsDB_Date_Calculator {
     }
 
     /**
+     * Snap a date to the delivery weekday WITHIN that date's own
+     * Sunday-anchored week (no week projection).
+     *
+     * Unlike next_date(), this does NOT advance by the frequency — it
+     * answers "which calendar date is the delivery weekday in the same
+     * Sun..Sat week as $date?". Used by the delivery-slip occurrence
+     * mapping (MAJ-6), where an order rides the delivery weekday in its
+     * own creation week when that weekday is still upcoming, and only
+     * rolls forward a full cycle once the weekday has passed.
+     *
+     * @param string      $date         Y-m-d.
+     * @param string|null $delivery_day Day name (any case) or null/''.
+     * @return string|null Y-m-d of the delivery weekday in $date's week,
+     *                     or null if either input is unusable.
+     */
+    public static function snap_to_delivery_day(string $date, ?string $delivery_day): ?string {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            return null;
+        }
+        $offset = self::day_offset($delivery_day);
+        if ($offset === null) {
+            return null;
+        }
+        try {
+            $base = new DateTimeImmutable($date, new DateTimeZone('UTC'));
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        // Sunday that starts $date's week. PHP 'w': Sun=0 .. Sat=6.
+        $dow         = (int) $base->format('w');
+        $week_sunday = $base->modify('-' . $dow . ' days');
+
+        return $week_sunday->modify('+' . $offset . ' days')->format('Y-m-d');
+    }
+
+    /**
      * Normalise a day name to its Sunday-offset, or null if unrecognised.
      */
     private static function day_offset(?string $delivery_day): ?int {

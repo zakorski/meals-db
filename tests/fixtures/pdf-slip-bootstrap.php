@@ -199,6 +199,11 @@ if (!class_exists('PdfSlipFakeClientQuery')) {
         public function get_orders_for_date(array $wp_user_ids, string $delivery_date): array {
             return $this->orders;
         }
+        public function get_orders_for_delivery_date(array $clients, string $delivery_date): array {
+            // Tests hand a fixed dataset; the delivery-basis filtering itself
+            // is covered by tests/test-slips-delivery-date.php.
+            return $this->orders;
+        }
         public function get_orders_for_range(array $wp_user_ids, string $start_date, string $end_date): array {
             return $this->orders;
         }

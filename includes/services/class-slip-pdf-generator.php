@@ -98,8 +98,14 @@ class MealsDB_Slip_PDF_Generator {
             return [];
         }
         if ($start_date === $end_date) {
-            return $this->client_query->get_orders_for_date(array_keys($clients), $start_date);
+            // Single delivery-date slips: select orders on the DELIVERY basis
+            // (the client's delivery_day + frequency), NOT the order creation
+            // date — see MAJ-6. Pass the full clients map so the occurrence
+            // mapping can read each client's cadence.
+            return $this->client_query->get_orders_for_delivery_date($clients, $start_date);
         }
+        // Zone mode supplies an explicit creation-date range chosen by the
+        // operator; it keeps the creation-date basis (out of MAJ-6 scope).
         return $this->client_query->get_orders_for_range(array_keys($clients), $start_date, $end_date);
     }
 
