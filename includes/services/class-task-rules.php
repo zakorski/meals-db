@@ -360,6 +360,9 @@ class MealsDB_Task_Rules {
         $created = 0;
 
         if ($rule['spawn_type'] === self::SPAWN_FIXED) {
+            // SPAWN_FIXED has no per-entity dimension: one task per rule per
+            // scheduled date. The spawn_key (entity placeholder '-') makes a
+            // re-run of the same due date an idempotent no-op (directive MAJ-7).
             $task_id = $this->engine->create_task([
                 'task_type'      => $task_type,
                 'payload'        => $template,
@@ -367,6 +370,9 @@ class MealsDB_Task_Rules {
                 'source_rule_id' => (int) $rule['rule_id'],
                 'assignee_role'  => $role,
                 'tags'           => $tags,
+                'spawn_key'      => self::build_spawn_key(
+                    (int) $rule['rule_id'], null, $next_run_date, $task_type
+                ),
             ]);
             if ($task_id > 0) {
                 $created++;
@@ -396,7 +402,15 @@ class MealsDB_Task_Rules {
             }
             $payload = self::apply_placeholders($template, $data_row);
 
-            // Per-row overrides for related entity, assignee, etc.
+            $related_entity_id = isset($data_row['__related_entity_id'])
+                ? (int) $data_row['__related_entity_id']
+                : null;
+
+            // Per-row overrides for related entity, assignee, etc. The
+            // spawn_key carries the entity id so dedup is PER-ENTITY: a re-run
+            // before the underlying query result changes re-spawns the same
+            // (rule, entity, date) rows, all rejected — while a NEW matching
+            // entity on a later run still gets its task (directive MAJ-7).
             $task_id = $this->engine->create_task([
                 'task_type'           => $task_type,
                 'payload'             => $payload,
@@ -405,7 +419,10 @@ class MealsDB_Task_Rules {
                 'assignee_role'       => $role,
                 'tags'                => $tags,
                 'related_entity_type' => isset($data_row['__related_entity_type']) ? (string) $data_row['__related_entity_type'] : null,
-                'related_entity_id'   => isset($data_row['__related_entity_id']) ? (int) $data_row['__related_entity_id'] : null,
+                'related_entity_id'   => $related_entity_id,
+                'spawn_key'           => self::build_spawn_key(
+                    (int) $rule['rule_id'], $related_entity_id, $next_run_date, $task_type
+                ),
             ]);
             if ($task_id > 0) {
                 $created++;
@@ -413,6 +430,26 @@ class MealsDB_Task_Rules {
         }
 
         return $created;
+    }
+
+    /**
+     * Build a deterministic spawn-identity key for a rule-spawned task
+     * (directive MAJ-7). Shape: '<rule_id>:<entity_id|->:<next_run_date>:<task_type>'.
+     *
+     * The literal '-' placeholder for a NULL entity (SPAWN_FIXED) is what
+     * makes the unique index dedup fixed-spawn rows: a composite UNIQUE over
+     * the nullable related_entity_id column would NOT, because MySQL treats
+     * every NULL as distinct. Returning a stable non-NULL string keeps both
+     * FIXED and QUERY rules on one dedup mechanism.
+     */
+    public static function build_spawn_key(int $rule_id, ?int $entity_id, string $next_run_date, string $task_type): string {
+        return sprintf(
+            '%d:%s:%s:%s',
+            $rule_id,
+            $entity_id !== null ? (string) $entity_id : '-',
+            $next_run_date,
+            $task_type
+        );
     }
 
     /**

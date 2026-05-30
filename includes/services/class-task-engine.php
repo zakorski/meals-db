@@ -94,6 +94,16 @@ class MealsDB_Task_Engine {
 
         $tags = isset($args['tags']) && is_array($args['tags']) ? array_values($args['tags']) : null;
 
+        // Spawn idempotency key (directive MAJ-7). Only rule-spawned tasks
+        // pass one; manually-created tasks leave it NULL and are NEVER
+        // deduped (the unique index ignores NULLs). A non-empty key makes a
+        // duplicate spawn — from an overlapping/re-triggered cron pass, or a
+        // crash between spawn and the rule's next_run_at advance — a no-op
+        // rejected by the DB rather than a duplicate row.
+        $spawn_key = isset($args['spawn_key']) && $args['spawn_key'] !== ''
+            ? (string) $args['spawn_key']
+            : null;
+
         $row = [
             'task_type'           => $task_type,
             'status'              => self::STATUS_PENDING,
@@ -107,12 +117,21 @@ class MealsDB_Task_Engine {
             'urgency'             => $urgency,
             'tags'                => $tags !== null ? self::encode_json($tags) : null,
             'deferral_count'      => 0,
+            'spawn_key'           => $spawn_key,
         ];
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::TASKS);
 
         $result = $this->wpdb->insert($table, $row);
         if ($result === false) {
+            // A duplicate spawn_key is the unique index doing its job: the
+            // task was already spawned for this (rule, entity, date, type).
+            // Treat it as an idempotent success (skip, return 0) — NOT a
+            // failure, and crucially NOT an error_log line the cron would
+            // count against the run. Any OTHER insert failure is a real error.
+            if ($spawn_key !== null && self::is_duplicate_key_error($this->wpdb->last_error)) {
+                return 0;
+            }
             error_log('[MealsDB Task Engine] create_task insert failed: ' . $this->wpdb->last_error);
             return 0;
         }
@@ -523,6 +542,23 @@ class MealsDB_Task_Engine {
         }
 
         return $row;
+    }
+
+    /**
+     * Detect a MySQL duplicate-key error from a $wpdb->last_error string.
+     *
+     * Used by create_task to recognise a rejected duplicate spawn_key
+     * (directive MAJ-7) and treat it as an idempotent no-op. Matches on the
+     * driver's "Duplicate entry" wording (error 1062) — the same signal both
+     * mysqli and the PDO-backed wpdb surface — so we don't misclassify an
+     * unrelated insert failure as a dedup hit.
+     */
+    private static function is_duplicate_key_error(?string $error): bool {
+        if ($error === null || $error === '') {
+            return false;
+        }
+        return stripos($error, 'Duplicate entry') !== false
+            || stripos($error, '1062') !== false;
     }
 
     /**
