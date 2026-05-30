@@ -142,6 +142,12 @@ add_action('plugins_loaded', function () {
     MealsDB_Log_Retention::register_hooks();
     MealsDB_Cron_Status_Page::init();
 
+    // Directive ITEM1-DERIVED — nightly derived-value integrity check.
+    // Runs ~03:30 (after the 03:00 allocation sync, before the 04:00 daily
+    // report). Flags drifted next_*_date / delivery_day values as degraded
+    // trunk events; auto-correct is per-field opt-in and OFF by default.
+    MealsDB_Derived_Value_Audit::init();
+
     // Directive STR-LOG — central event-log trunk. The Event Log
     // dashboard (manage_options) reads meals_event_log + meals_audit_log;
     // the digest sweeps failed/degraded events at ~05:00 and emails a
@@ -543,6 +549,7 @@ function meals_db_check_requirements() {
  *   - mealsdb_daily_report            (class-daily-report.php)
  *   - mealsdb_log_retention           (class-log-retention.php)
  *   - mealsdb_event_digest            (class-event-digest.php)
+ *   - mealsdb_derived_value_audit     (class-derived-value-audit.php)
  *
  * The original handler only cleared the first one; the second was
  * orphaned and would re-fire daily on a deactivated install.
@@ -554,6 +561,7 @@ register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook('mealsdb_daily_report');
     wp_clear_scheduled_hook('mealsdb_log_retention');
     wp_clear_scheduled_hook('mealsdb_event_digest');
+    wp_clear_scheduled_hook('mealsdb_derived_value_audit');
 });
 
 // Register the plugin update checker against the GitHub repository.
