@@ -123,6 +123,7 @@ function mealsdb_uninstall_cleanup_current_site(): void {
         'mealsdb_daily_report',
         'mealsdb_log_retention',
         'mealsdb_event_digest',
+        'mealsdb_derived_value_audit',
     ];
 
     foreach ($plugin_cron_hooks as $hook) {
@@ -141,6 +142,8 @@ function mealsdb_uninstall_cleanup_current_site(): void {
     delete_option('mealsdb_event_digest_min_severity');
     // Directive DEFINITIONS-1 operator-editable program rates.
     delete_option('mealsdb_rate_definitions');
+    // Directive ITEM1-DERIVED per-field auto-correct toggles.
+    delete_option('mealsdb_derived_autocorrect');
 
     // Plugin transients — caches that would otherwise linger as stale
     // wp_options rows after the tables they describe are gone.

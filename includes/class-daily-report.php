@@ -58,6 +58,7 @@ class MealsDB_Daily_Report {
         'wp_to_mealsdb_sync'        => 'WP→MealsDB Sync',
         'nightly_allocation_sync'   => 'Nightly Allocation Sync',
         'task_cron'                 => 'Task Cron',
+        'derived_value_audit'       => 'Derived Value Integrity',
         'daily_report'              => 'Daily Report (this job)',
     ];
 

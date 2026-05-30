@@ -259,6 +259,19 @@ class MealsDB_Ajax_Settings {
             }
         }
 
+        // Save per-field derived-value auto-correct toggles (directive
+        // ITEM1-DERIVED). A present, unchecked checkbox submits nothing, so a
+        // missing key means OFF. Only the known in-scope fields are honoured —
+        // an unexpected POST key can't enable correction for some other column.
+        $submitted_autocorrect = isset( $_POST['derived_autocorrect'] ) && is_array( $_POST['derived_autocorrect'] )
+            ? $_POST['derived_autocorrect']
+            : [];
+        $autocorrect = [];
+        foreach ( MealsDB_Derived_Value_Check::FIELDS as $field ) {
+            $autocorrect[ $field ] = empty( $submitted_autocorrect[ $field ] ) ? 0 : 1;
+        }
+        update_option( MealsDB_Derived_Value_Audit::AUTOCORRECT_OPTION, $autocorrect, false );
+
         // Force config reload on next request
         MealsDB_Config::reset();
 

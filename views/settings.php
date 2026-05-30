@@ -194,6 +194,45 @@ if ( $has_enc_key ) {
         </table>
 
 
+        <h2><?php echo esc_html__( 'Derived Value Integrity', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'A nightly check recomputes each active client\'s Next Order Date, Next Delivery Date, and Delivery Day from their schedule and flags any that have drifted (e.g. a frequency was changed without the date being recalculated). Flagged drift is reported on the Event Log as a degraded event — nothing is overwritten by default. Enable auto-correct per field ONLY if you never hand-set that value to something the schedule would not produce; an enabled field is silently rewritten to the computed value each night (the change is recorded in the audit log).', 'meals-db' ); ?>
+        </p>
+        <?php
+        $derived_autocorrect = get_option( 'mealsdb_derived_autocorrect', [] );
+        if ( ! is_array( $derived_autocorrect ) ) {
+            $derived_autocorrect = [];
+        }
+        $derived_fields = [
+            'next_order_date'    => esc_html__( 'Next Order Date', 'meals-db' ),
+            'next_delivery_date' => esc_html__( 'Next Delivery Date', 'meals-db' ),
+            'delivery_day'       => esc_html__( 'Delivery Day', 'meals-db' ),
+        ];
+        ?>
+        <table class="form-table">
+            <tbody>
+                <tr>
+                    <th scope="row"><?php echo esc_html__( 'Auto-correct drift', 'meals-db' ); ?></th>
+                    <td>
+                        <?php foreach ( $derived_fields as $field => $label ) : ?>
+                            <label style="display:block; margin-bottom:4px;">
+                                <input type="checkbox"
+                                       name="derived_autocorrect[<?php echo esc_attr( $field ); ?>]"
+                                       value="1" <?php checked( ! empty( $derived_autocorrect[ $field ] ) ); ?> />
+                                <?php echo $label; // already escaped above ?>
+                                <?php if ( $field === 'delivery_day' ) : ?>
+                                    <em><?php echo esc_html__( '(not recommended — zone overrides are legitimate)', 'meals-db' ); ?></em>
+                                <?php endif; ?>
+                            </label>
+                        <?php endforeach; ?>
+                        <p class="description">
+                            <?php echo esc_html__( 'Leave all unchecked (the default) to flag-only. Flagging is always safe; auto-correct overwrites operator-edited values.', 'meals-db' ); ?>
+                        </p>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
         <p class="submit">
             <button type="submit" class="button button-primary" id="mealsdb-save-settings">
                 <?php echo esc_html__( 'Save Settings', 'meals-db' ); ?>
