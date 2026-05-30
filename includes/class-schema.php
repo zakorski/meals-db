@@ -396,6 +396,19 @@ class MealsDB_Schema {
                     'urgency'             => "ENUM('routine','follow_up','escalated') NOT NULL DEFAULT 'routine'",
                     'tags'                => 'JSON NULL',
                     'deferral_count'      => 'INT NOT NULL DEFAULT 0',
+                    // Spawn idempotency key (directive MAJ-7). Deterministic
+                    // identity of a rule-spawned task:
+                    //   '<rule_id>:<entity_id|->:<next_run_date>:<task_type>'
+                    // (the literal '-' stands in for a NULL related_entity_id
+                    // so SPAWN_FIXED tasks dedup on a stable NON-NULL key — a
+                    // composite UNIQUE over the nullable related_entity_id
+                    // column would NOT, because MySQL treats every NULL as
+                    // distinct). NULL here is deliberate: manually-created
+                    // tasks leave it NULL and are NEVER deduped (an operator
+                    // raising two ad-hoc tasks is legitimate), and MySQL UNIQUE
+                    // ignores NULLs, so any number of NULL rows coexist. Only
+                    // rule-spawned tasks set it; see MealsDB_Task_Rules::build_spawn_key.
+                    'spawn_key'           => 'VARCHAR(191) NULL',
                     'completed_at'        => 'DATETIME NULL',
                     'completed_by'        => 'BIGINT UNSIGNED NULL',
                     'created_at'          => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
@@ -427,6 +440,30 @@ class MealsDB_Schema {
                         'name'    => 'idx_parent',
                         'type'    => 'INDEX',
                         'columns' => ['parent_task_id'],
+                    ],
+                    // Spawn idempotency (directive MAJ-7). The unique key is
+                    // the REAL dedup guarantee — a re-run or overlapping cron
+                    // pass that re-spawns the same (rule, entity, date, type)
+                    // is rejected by the database, not by hoping the
+                    // spawn->advance timing lines up. create_task treats the
+                    // resulting duplicate-key error as an idempotent no-op.
+                    //
+                    // UPGRADE-PATH CAVEAT (verified against class-schema-sync,
+                    // same as uniq_dedup above): this index is created only on
+                    // the FRESH-INSTALL CREATE TABLE path. MealsDB_Schema_Sync's
+                    // additive upgrade adds the spawn_key COLUMN to an existing
+                    // table but does NOT add composite indexes from this array,
+                    // so an already-deployed install needs a manual
+                    //   ALTER TABLE <prefix>meals_tasks
+                    //     ADD UNIQUE KEY uniq_spawn_key (spawn_key);
+                    // to activate dedup. Until then create_task's insert
+                    // succeeds for duplicates (no worse than pre-MAJ-7). The
+                    // launch is a fresh install (operator confirmed no live
+                    // data), so CREATE TABLE applies it cleanly.
+                    [
+                        'name'    => 'uniq_spawn_key',
+                        'type'    => 'UNIQUE',
+                        'columns' => ['spawn_key'],
                     ],
                 ],
                 // NOTE: Referential integrity for source_rule_id and
