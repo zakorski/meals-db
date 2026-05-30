@@ -108,22 +108,44 @@ try {
     assert_true(false, 'retention run() should not throw: ' . $e->getMessage());
 }
 
-// STR-LOG trunk: retention now prunes a single table (meals_event_log)
-// in 4 passes — three severity bands plus the aged degraded/failed pass.
-assert_equal(4, count($wpdb->deletes), 'retention issued 4 DELETEs (3 severity bands + unresolved pass)');
+// STR-LOG trunk: retention prunes the trunk (meals_event_log) in 4 passes
+// — three severity bands plus the aged degraded/failed pass. Directive
+// MAJ-2 adds ONE MORE pass for meals_allocation_errors, for 5 total.
+assert_equal(5, count($wpdb->deletes), 'retention issued 5 DELETEs (3 severity bands + unresolved + allocation_errors)');
 
-// Every pass must be bounded by LIMIT and target the trunk, otherwise a
-// giant backlog could lock the table for seconds.
+// Every pass must be bounded by LIMIT (a giant backlog could otherwise
+// lock the table for seconds) and target one of the two pruned tables.
 foreach ($wpdb->deletes as $i => $sql) {
     assert_true(
         preg_match('/LIMIT\s+\d+/i', $sql) === 1,
         sprintf('DELETE #%d includes LIMIT clause', $i)
     );
     assert_true(
-        stripos($sql, 'meals_event_log') !== false,
-        sprintf('DELETE #%d targets the event_log trunk', $i)
+        stripos($sql, 'meals_event_log') !== false
+            || stripos($sql, 'meals_allocation_errors') !== false,
+        sprintf('DELETE #%d targets the event_log trunk or allocation_errors', $i)
     );
 }
+
+// MAJ-2: exactly one pass prunes allocation_errors, bounded, and BY
+// last_seen_at (never first_seen_at — a recurring error stays active).
+$alloc_deletes = array_values(array_filter($wpdb->deletes, function ($sql) {
+    return stripos($sql, 'meals_allocation_errors') !== false;
+}));
+assert_equal(1, count($alloc_deletes), 'exactly one allocation_errors prune pass');
+$alloc_sql = $alloc_deletes[0] ?? '';
+assert_true(
+    preg_match('/LIMIT\s+\d+/i', $alloc_sql) === 1,
+    'allocation_errors DELETE is bounded by LIMIT'
+);
+assert_true(
+    stripos($alloc_sql, 'last_seen_at') !== false,
+    'allocation_errors prune keys on last_seen_at'
+);
+assert_true(
+    stripos($alloc_sql, 'first_seen_at') === false,
+    'allocation_errors prune does NOT key on first_seen_at (recurring errors stay active)'
+);
 
 // No pass may ever delete a 'running' row (hang detection). The band
 // passes exclude it explicitly; the unresolved pass targets only

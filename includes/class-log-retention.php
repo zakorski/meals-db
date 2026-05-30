@@ -67,9 +67,17 @@ class MealsDB_Log_Retention {
             // Aged degraded/failed (any severity), excluding running.
             $deleted += self::prune_unresolved(self::LONG_DAYS);
 
+            // Allocation errors (directive MAJ-2). Low-volume,
+            // investigation-relevant — match the LONG band (1yr), pruned by
+            // last_seen_at so a still-recurring spillover (old first_seen,
+            // recent last_seen) survives; only errors that stopped recurring
+            // (resolved-by-absence) age out.
+            $deleted_alloc = self::prune_allocation_errors(self::LONG_DAYS);
+
             MealsDB_Job_Logger::finish($log_id, [
-                'records_processed' => $deleted,
-                'event_log_deleted' => $deleted,
+                'records_processed'        => $deleted + $deleted_alloc,
+                'event_log_deleted'        => $deleted,
+                'allocation_errors_deleted' => $deleted_alloc,
             ]);
         } catch (\Throwable $e) {
             MealsDB_Job_Logger::fail($log_id, $e->getMessage());
@@ -131,6 +139,40 @@ class MealsDB_Log_Retention {
             $cutoff,
             MealsDB_Event_Log::OUTCOME_DEGRADED,
             MealsDB_Event_Log::OUTCOME_FAILED,
+            self::MAX_ROWS_PER_PASS
+        );
+        $result = $wpdb->query($sql);
+        return $result === false ? 0 : (int) $result;
+    }
+
+    /**
+     * Prune aged allocation_errors (directive MAJ-2). Unlike the event-log
+     * trunk this table has no severity band — it is uniformly low-volume and
+     * investigation-relevant, so it uses the long window.
+     *
+     * Pruned by last_seen_at, NEVER first_seen_at: a long-running recurring
+     * spillover has an OLD first_seen but a RECENT last_seen and is still
+     * active — keep it. Only an error that STOPPED recurring (its last_seen
+     * has aged past the window — resolved-by-absence) is deleted.
+     *
+     * Legacy rows written before the MAJ-2 schema bump may have NULL
+     * timestamps; COALESCE down to created_at then a floor so they compare
+     * meaningfully and eventually age out rather than living forever.
+     *
+     * Bounded by the same LIMIT as the trunk passes so a backlog can't lock
+     * the table for seconds during a checkout-triggered hook.
+     */
+    private static function prune_allocation_errors(int $days): int {
+        global $wpdb;
+
+        $table  = MealsDB_DB::get_table_name(MealsDB_Tables::ALLOCATION_ERRORS);
+        $cutoff = gmdate('Y-m-d H:i:s', time() - ($days * 86400));
+
+        $sql = $wpdb->prepare(
+            "DELETE FROM `{$table}`
+             WHERE COALESCE(last_seen_at, created_at, '1970-01-01 00:00:00') < %s
+             LIMIT %d",
+            $cutoff,
             self::MAX_ROWS_PER_PASS
         );
         $result = $wpdb->query($sql);

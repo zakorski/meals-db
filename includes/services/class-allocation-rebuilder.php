@@ -566,16 +566,34 @@ class MealsDB_Allocation_Rebuilder {
         int $client_id, string $billing_month, int $wc_order_id,
         int $mains_unplaced, int $sides_unplaced, string $message
     ): void {
+        // Upsert on the dedup key (directive MAJ-2). The nightly rebuilder
+        // re-processes dirty months, so a still-unresolved spillover on the
+        // same (client, month, order, type) used to write a fresh row every
+        // run — after a week of an unresolved spillover there were 7
+        // identical rows burying the signal. We now bump occurrence_count and
+        // refresh last_seen_at + the latest figures/message instead.
+        // first_seen_at is written ONLY on the initial INSERT (it is omitted
+        // from the UPDATE clause), so a long-running error keeps its true
+        // first occurrence while last_seen_at advances. Relies on the
+        // uniq_dedup UNIQUE index added in MealsDB_Schema.
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::ALLOCATION_ERRORS);
-        $this->wpdb->insert($table, [
-            'client_id'      => $client_id,
-            'billing_month'  => $billing_month,
-            'wc_order_id'    => $wc_order_id,
-            'error_type'     => 'multi_month_spillover',
-            'mains_unplaced' => $mains_unplaced,
-            'sides_unplaced' => $sides_unplaced,
-            'message'        => $message,
-        ]);
+        $now   = gmdate('Y-m-d H:i:s');
+        $sql = $this->wpdb->prepare(
+            "INSERT INTO `{$table}`
+                (client_id, billing_month, wc_order_id, error_type,
+                 mains_unplaced, sides_unplaced, message,
+                 occurrence_count, first_seen_at, last_seen_at)
+             VALUES (%d, %s, %d, %s, %d, %d, %s, 1, %s, %s)
+             ON DUPLICATE KEY UPDATE
+                mains_unplaced   = VALUES(mains_unplaced),
+                sides_unplaced   = VALUES(sides_unplaced),
+                message          = VALUES(message),
+                occurrence_count = occurrence_count + 1,
+                last_seen_at     = VALUES(last_seen_at)",
+            $client_id, $billing_month, $wc_order_id, 'multi_month_spillover',
+            $mains_unplaced, $sides_unplaced, $message, $now, $now
+        );
+        $this->wpdb->query($sql);
     }
 
     // =====================================================================
