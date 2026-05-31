@@ -5,6 +5,7 @@ MealsDB_Permissions::enforce();
 
 // On submission, validate and save
 $errors = [];
+$warnings = [];
 $success = false;
 $form_values = [];
 $resumed_draft_id = 0;
@@ -40,6 +41,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$is_resume) {
         $validation = MealsDB_Client_Form::validate($_POST);
         $form_values = $validation['sanitized'] ?? $form_values;
+
+        // Non-blocking dedup warnings (directive GUI-SAVE-INDEX Part B): a
+        // duplicate individual_id / requisition_id is surfaced — naming the
+        // other client — but never blocks the save. Captured here so it renders
+        // alongside the success or error notice.
+        $warnings = $validation['warnings'] ?? [];
 
         $persist_failed_submission = function () use (&$form_values, &$resumed_draft_id, &$errors, &$draft_saved_notice) {
             $draft_id_for_retry = $resumed_draft_id > 0 ? $resumed_draft_id : null;

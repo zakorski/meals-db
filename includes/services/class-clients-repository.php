@@ -716,6 +716,58 @@ class MealsDB_Clients_Repository {
     }
 
     /**
+     * Return the client_id of the first row whose $column equals $value, or null.
+     *
+     * Generalises find_client_id_by_wp_user for the deterministic-index dedup
+     * WARNING (directive GUI-SAVE-INDEX Part B). individual_id_index /
+     * requisition_id_index carry NO DB-level unique constraint — a dual-program
+     * enrollment legitimately shares a government identifier — but the hash
+     * column still lets the form NAME a prior client sharing the identifier so
+     * the operator can confirm the duplicate is intentional.
+     *
+     * $column is supplied by the form from its fixed deterministic_index_map (a
+     * known `*_index` column), never from user input; it is backtick-escaped
+     * here defensively. $value is the deterministic hash, bound via prepare().
+     *
+     * @param string   $column      Whitelisted index column name.
+     * @param mixed    $value       Value (deterministic hash) to match.
+     * @param int|null $exclude_id  Client to exclude (the one being edited).
+     * @return int|null
+     */
+    public function find_client_id_by_column(string $column, $value, ?int $exclude_id = null): ?int {
+        global $wpdb;
+
+        if (!$this->ensure_table_name()) {
+            error_log('[MealsDB Clients Repository] Database connection unavailable when looking up index column.');
+            return null;
+        }
+
+        try {
+            $escaped_column = str_replace('`', '``', $column);
+
+            if ($exclude_id !== null) {
+                $sql = $wpdb->prepare(
+                    sprintf('SELECT client_id FROM `%s` WHERE `%s` = %%s AND client_id <> %%d ORDER BY client_id ASC LIMIT 1', $this->escape_table_name(), $escaped_column),
+                    $value,
+                    $exclude_id
+                );
+            } else {
+                $sql = $wpdb->prepare(
+                    sprintf('SELECT client_id FROM `%s` WHERE `%s` = %%s ORDER BY client_id ASC LIMIT 1', $this->escape_table_name(), $escaped_column),
+                    $value
+                );
+            }
+
+            $id = $wpdb->get_var($sql);
+
+            return ($id !== null && (int) $id > 0) ? (int) $id : null;
+        } catch (Throwable $e) {
+            error_log('[MealsDB Clients Repository] Exception while looking up index column ' . $column . ': ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Return every wp_user_id already present in meals_clients so the
      * backfill can diff against the candidate set without N round-trips.
      *
