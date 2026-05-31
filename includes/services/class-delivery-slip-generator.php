@@ -363,6 +363,16 @@ class MealsDB_Delivery_Slip_Generator {
             $occurrence = self::delivery_occurrence_for_order($created, $client);
             // Y-m-d strings compare correctly with lexical >=/<=.
             if ($occurrence !== null && $occurrence >= $start_date && $occurrence <= $end_date) {
+                // Carry the computed occurrence onto the order so the slip
+                // prints the DELIVERY date, not the creation date. Without
+                // this, an order-ahead order (created 2026-05-15, delivered
+                // 2026-05-28) is correctly INCLUDED by the filter above but
+                // resolve_delivery_date() falls back to date_created_gmt and
+                // prints 2026-05-15 — re-introducing out-of-range dates on the
+                // slip after we just filtered them out. An explicit
+                // _delivery_date order meta still wins over this computed
+                // value (see resolve_delivery_date()).
+                $order['delivery_occurrence'] = $occurrence;
                 $matched[] = $order;
             }
         }
