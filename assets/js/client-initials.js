@@ -390,7 +390,7 @@
             const staff = isClientStaff();
             if (!staff && !initialsIsValid) {
                 event.preventDefault();
-                window.alert('Please validate initials before saving.');
+                MealsDBNotice('error', 'Please validate initials before saving.');
                 const text = messages.required || 'Please validate the initials before submitting.';
                 setMessage('error', text);
                 $initialsInput.trigger('focus');

@@ -125,11 +125,11 @@
                     // Reload into the now read-only view / refreshed list.
                     window.location.reload();
                 } else {
-                    window.alert((resp && resp.data && resp.data.message) || i18n.genericErr);
+                    MealsDBNotice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
                     $el.prop('disabled', false);
                 }
             }).fail(function () {
-                window.alert(i18n.genericErr);
+                MealsDBNotice('error', i18n.genericErr);
                 $el.prop('disabled', false);
             });
         });
@@ -138,7 +138,16 @@
     function revert($cell, message) {
         var prior = $cell.data('prior');
         $cell.val(prior === undefined ? '' : prior);
-        window.alert(message);
+        // Render the validation/error message right AT the edited cell (directive
+        // GUI-NOTICES) so per-field errors — e.g. the "Value must be a non-negative
+        // number" case the test agent couldn't read out of a native alert — appear
+        // where Janet is editing, not only at the top of the page. Reuse a single
+        // adjacent holder per cell so repeated bad edits don't stack notices.
+        var $holder = $cell.nextAll('.mealsdb-cell-notice').first();
+        if (!$holder.length) {
+            $holder = $('<div>', { 'class': 'mealsdb-cell-notice' }).insertAfter($cell);
+        }
+        MealsDBNotice('error', message, { $target: $holder });
     }
 
     function bumpEditCount() {
