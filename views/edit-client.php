@@ -4,6 +4,7 @@ defined('ABSPATH') || exit;
 MealsDB_Permissions::enforce();
 
 $errors = [];
+$warnings = [];
 $success = false;
 $form_values = [];
 $client_id = isset($_GET['client_id']) ? intval($_GET['client_id']) : 0;
@@ -31,6 +32,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $form_values = MealsDB_Client_Form::prepare_form_defaults($_POST);
     $validation = MealsDB_Client_Form::validate($_POST, $client_id);
     $form_values = $validation['sanitized'] ?? $form_values;
+
+    // Non-blocking dedup warnings (directive GUI-SAVE-INDEX Part B): a duplicate
+    // individual_id / requisition_id naming the other client, surfaced but not
+    // blocked. Rendered alongside the success/error notice.
+    $warnings = $validation['warnings'] ?? [];
 
     if ($validation['valid']) {
         $updated = MealsDB_Client_Form::update($client_id, $_POST);

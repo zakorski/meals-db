@@ -21,3 +21,20 @@ if (!empty($success)) :
         </ul>
     </div>
 <?php endif;
+
+// Non-blocking warnings (directive GUI-SAVE-INDEX Part B): a duplicate
+// individual_id / requisition_id is a legitimate dual-program enrollment, so it
+// is surfaced — naming the other client — alongside any success/error notice
+// rather than blocking the save.
+if (!empty($warnings)) :
+    $warnings_list = is_array($warnings) ? $warnings : array($warnings);
+    ?>
+    <div class="notice notice-warning">
+        <p><strong><?php echo esc_html__('Please confirm:', 'meals-db'); ?></strong></p>
+        <ul>
+            <?php foreach ($warnings_list as $warning) : ?>
+                <li><?php echo esc_html($warning); ?></li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+<?php endif;

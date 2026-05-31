@@ -143,6 +143,41 @@ class MealsDB_Client_Form {
     ];
 
     /**
+     * Deterministic index columns that still carry a hard DB-level UNIQUE
+     * constraint.
+     *
+     * Directive GUI-SAVE-INDEX (operator decision): individual_id_index and
+     * requisition_id_index are DELIBERATELY excluded. A person legitimately
+     * enrolled in two programs (audit MAJ-1 — a dual SDNB/Veteran recipient,
+     * or a government client buying extra meals personally) shares a single
+     * government identifier, so a hard UNIQUE constraint would block a real,
+     * rare-but-valid case. Worse, on migrated data that already contains such
+     * duplicates, CREATE UNIQUE INDEX fails (MySQL errno 1062) — which used to
+     * fail-CLOSED and abort EVERY client save (create AND edit), the actual
+     * cause of the "Database error occurred." on staging. Those two columns are
+     * dedup-WARNED at data entry instead (see collect_unique_field_warnings):
+     * the hash COLUMN is still populated for fast lookup; only the DB-level
+     * constraint is dropped. vet_health_card / delivery_initials keep theirs.
+     */
+    private static $hard_unique_index_columns = [
+        'vet_health_card_index',
+        'delivery_initials_index',
+    ];
+
+    /**
+     * Unique fields enforced as a non-blocking WARNING rather than a hard error.
+     *
+     * Directive GUI-SAVE-INDEX Part B: a matching individual_id / requisition_id
+     * is surfaced to the operator (naming the other client) but the save is
+     * allowed to proceed — the dual-program case is legitimate. Mirrors the
+     * warn-not-block posture of the WP-user "already linked to client #N" check.
+     */
+    private static $warn_only_unique_fields = [
+        'individual_id',
+        'requisition_id',
+    ];
+
+    /**
      * Default values for required columns when inserting new clients.
      *
      * These MUST be DB-side column names. apply_insert_defaults() runs in
@@ -519,12 +554,19 @@ class MealsDB_Client_Form {
             }
         }
 
-        // Unique field checks
+        // Unique field checks. check_unique_fields() now returns HARD conflicts
+        // only (vet_health_card / delivery_initials). individual_id and
+        // requisition_id duplicates are non-blocking WARNINGS per directive
+        // GUI-SAVE-INDEX Part B (dual-program enrollments legitimately share a
+        // government ID), collected separately and surfaced without failing
+        // validation.
         $conflicts = self::check_unique_fields($sanitized, $ignore_client_id);
         if (!empty($conflicts)) {
             $error_details['duplicates'] = $conflicts;
             $errors = array_merge($errors, $conflicts);
         }
+
+        $warnings = self::collect_unique_field_warnings($sanitized, $ignore_client_id);
 
         $summary_parts = [];
         if (!empty($error_details['missing_required'])) {
@@ -558,6 +600,7 @@ class MealsDB_Client_Form {
         return [
             'valid' => empty($errors),
             'errors' => $errors,
+            'warnings' => $warnings,
             'sanitized' => $sanitized,
             'error_summary' => $error_summary,
             'error_details' => $error_details,
@@ -832,7 +875,14 @@ class MealsDB_Client_Form {
 
         $encrypted = $sanitized;
         if (!self::ensure_index_columns_exist()) {
+            // Part C: this is now reached ONLY when a hash COLUMN is structurally
+            // unavailable — a genuine failure, distinct from the (non-fatal)
+            // unique-constraint case. Give the operator a clear, attributed
+            // message instead of the bare "Database error occurred.", and make
+            // the abort visible on the Event Log.
             error_log('[MealsDB] Save aborted: deterministic index columns are unavailable.');
+            self::$last_save_error = __('Could not save: a database index column could not be prepared — please contact support.', 'meals-db');
+            self::record_index_save_abort('save.index_columns_unavailable', 'Client create aborted: deterministic index columns could not be ensured.');
             return false;
         }
 
@@ -1049,7 +1099,12 @@ class MealsDB_Client_Form {
 
         $encrypted = $sanitized;
         if (!self::ensure_index_columns_exist()) {
+            // Part C: genuine structural failure only (a hash column could not
+            // be created), not the non-fatal unique-constraint case. Attributed
+            // message + Event-Log entry rather than a bare DB error.
             error_log('[MealsDB] Update aborted: deterministic index columns are unavailable.');
+            self::$last_save_error = __('Could not save: a database index column could not be prepared — please contact support.', 'meals-db');
+            self::record_index_save_abort('update.index_columns_unavailable', 'Client edit aborted: deterministic index columns could not be ensured.');
             return false;
         }
 
@@ -1472,6 +1527,14 @@ class MealsDB_Client_Form {
                 continue;
             }
 
+            // individual_id / requisition_id are warn-not-block (directive
+            // GUI-SAVE-INDEX Part B): a duplicate is a legitimate dual-program
+            // enrollment, surfaced via collect_unique_field_warnings() rather
+            // than blocked here. Skip them so they never become a hard error.
+            if (in_array($field, self::$warn_only_unique_fields, true)) {
+                continue;
+            }
+
             $value = $data[$field];
             if ($value === '' || $value === null) {
                 continue;
@@ -1503,6 +1566,74 @@ class MealsDB_Client_Form {
         }
 
         return $errors;
+    }
+
+    /**
+     * Collect non-blocking duplicate WARNINGS for the warn-only unique fields
+     * (individual_id / requisition_id).
+     *
+     * Directive GUI-SAVE-INDEX Part B: a person enrolled in two programs
+     * (audit MAJ-1) legitimately shares a government identifier, so a match is
+     * surfaced — naming the other client so the operator can confirm a
+     * deliberate dual-program enrollment — but it NEVER blocks the save. This
+     * mirrors the WP-user "already linked to client #N" posture. The lookup
+     * uses the deterministic hash COLUMN, which works with or without a DB-level
+     * UNIQUE constraint (those two columns deliberately carry none).
+     *
+     * @param array    $data       Sanitized, DB-vocabulary form data.
+     * @param int|null $exclude_id Client being edited (excluded from the match).
+     * @return string[] Human-readable warnings (empty when no collision).
+     */
+    private static function collect_unique_field_warnings(array $data, ?int $exclude_id = null): array {
+        global $wpdb;
+        if (!$wpdb) {
+            return [];
+        }
+
+        // The hash columns must exist for the lookup; ensure_index_columns_exist
+        // returns true as long as they do (a missing DB-level unique constraint
+        // is no longer fatal — Part A). If even the columns can't be ensured,
+        // skip the warning silently rather than blocking data entry.
+        if (!self::ensure_index_columns_exist()) {
+            return [];
+        }
+
+        $warnings = [];
+        $repository = new MealsDB_Clients_Repository();
+
+        foreach (self::$warn_only_unique_fields as $field) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+
+            $value = $data[$field];
+            if (is_string($value)) {
+                $value = trim($value);
+            }
+            if ($value === '' || $value === null) {
+                continue;
+            }
+
+            $indexColumn = self::$deterministic_index_map[$field] ?? null;
+            if ($indexColumn === null) {
+                continue;
+            }
+
+            $hash = self::deterministic_hash((string) $value);
+            $other_id = $repository->find_client_id_by_column($indexColumn, $hash, $exclude_id);
+
+            if ($other_id !== null) {
+                $label = self::get_field_label($field);
+                $warnings[] = sprintf(
+                    /* translators: 1: field label (e.g. "Individual ID"); 2: the other client's ID. */
+                    __('Heads up: another client already has this %1$s — client #%2$d. This is allowed for a deliberate dual-program enrollment (one person in two programs); double-check this is intentional.', 'meals-db'),
+                    $label,
+                    (int) $other_id
+                );
+            }
+        }
+
+        return $warnings;
     }
 
     /**
@@ -1861,9 +1992,28 @@ class MealsDB_Client_Form {
     }
 
     /**
-     * Ensure the deterministic index columns exist on the meals_clients table.
+     * Ensure the deterministic index COLUMNS exist on the meals_clients table.
      *
-     * @return bool
+     * Directive GUI-SAVE-INDEX Part A — robustness posture. The deterministic
+     * index exists for DEDUP DETECTION, not as a hard gate on every write. So
+     * this method now draws a sharp line:
+     *
+     *   - The hash COLUMNS must exist (save()/update() write the hash VALUE into
+     *     them; the dedup lookup reads them). A column that genuinely cannot be
+     *     created is the ONLY condition that returns false and aborts a save.
+     *   - The DB-level UNIQUE *constraint* is best-effort. An inability to build
+     *     it (duplicate data → MySQL errno 1062), drop a stale one, or rebuild a
+     *     non-unique one is logged as a degraded Event-Log warning and the save
+     *     PROCEEDS. The dedup *check* (find-by-index) works on the column with or
+     *     without the constraint; only the hard guarantee is absent.
+     *
+     * Previously a failed CREATE UNIQUE INDEX set $allEnsured = false and this
+     * returned false, fail-CLOSING every client save — the staging root cause,
+     * where individual_id_index / requisition_id_index carried genuine migrated
+     * duplicates (a dual-program person) so the unique index could never build.
+     *
+     * @return bool True when the hash columns are usable (save may proceed);
+     *              false only when a hash column is structurally unavailable.
      */
     private static function ensure_index_columns_exist(): bool {
         if (empty(self::$deterministic_index_map)) {
@@ -1880,8 +2030,11 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        $allEnsured = true;
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+
+        // HARD requirement: every hash COLUMN must exist. This is the only
+        // failure that aborts a save.
+        $columns_ok = true;
 
         foreach (self::$deterministic_index_map as $indexColumn) {
             // INFORMATION_SCHEMA with both identifiers bound as %s. The
@@ -1900,7 +2053,7 @@ class MealsDB_Client_Form {
 
             if (!$columnExists && $wpdb->last_error !== '') {
                 error_log('[MealsDB] Failed to inspect deterministic index column: ' . $wpdb->last_error);
-                $allEnsured = false;
+                $columns_ok = false;
                 continue;
             }
 
@@ -1908,80 +2061,169 @@ class MealsDB_Client_Form {
                 $addColumnSql = "ALTER TABLE `{$clients_table}` ADD COLUMN `{$indexColumn}` CHAR(64) NULL";
                 if ($wpdb->query($addColumnSql) === false) {
                     error_log('[MealsDB] Failed to add deterministic index column: ' . $wpdb->last_error);
-                    $allEnsured = false;
+                    $columns_ok = false;
                     continue;
                 }
-                $columnExists = true;
             }
 
-            $indexName = 'unique_' . $indexColumn;
-            $escapedIndex = $wpdb->_real_escape($indexName);
-
-            $legacyIndexName = 'idx_' . $indexColumn;
-            $escapedLegacy = $wpdb->_real_escape($legacyIndexName);
-
-            $legacyIndexRows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedLegacy}'", ARRAY_A);
-            $legacyIndexExists = is_array($legacyIndexRows) && count($legacyIndexRows) > 0;
-
-            if ($legacyIndexExists) {
-                $dropResult = $wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$legacyIndexName}`");
-                if ($dropResult === false) {
-                    // Check if the error is "index doesn't exist" (errno 1091) by inspecting last_error
-                    if (strpos($wpdb->last_error, '1091') === false) {
-                        error_log('[MealsDB] Failed to drop legacy deterministic index: ' . $wpdb->last_error);
-                        $allEnsured = false;
-                    }
-                }
-            }
-
-            $indexExists = false;
-            $indexIsUnique = false;
-            $indexRows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedIndex}'", ARRAY_A);
-            if (is_array($indexRows)) {
-                foreach ($indexRows as $row) {
-                    $indexExists = true;
-                    if (isset($row['Non_unique']) && intval($row['Non_unique']) === 0) {
-                        $indexIsUnique = true;
-                        break;
-                    }
-                }
+            // BEST-EFFORT from here: the UNIQUE *constraint* is a data-integrity
+            // nicety, never a gate on data entry (Part A). Index-management
+            // problems degrade to a logged warning; the save still runs.
+            if (in_array($indexColumn, self::$hard_unique_index_columns, true)) {
+                self::ensure_unique_index_constraint($clients_table, $indexColumn);
             } else {
-                error_log('[MealsDB] Failed to inspect deterministic index status: ' . $wpdb->last_error);
-                $allEnsured = false;
-                continue;
-            }
-
-            if ($indexExists && !$indexIsUnique) {
-                if ($wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$indexName}`") === false) {
-                    error_log('[MealsDB] Failed to drop non-unique deterministic index: ' . $wpdb->last_error);
-                    $allEnsured = false;
-                } else {
-                    $indexExists = false;
-                }
-            }
-
-            if (!$indexExists) {
-                $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON `{$clients_table}` (`{$indexColumn}`)";
-                if ($wpdb->query($createIndexSql) === false) {
-                    // ignore duplicate index error (1061)
-                    if (strpos($wpdb->last_error, '1061') === false) {
-                        error_log('[MealsDB] Failed to create deterministic index: ' . $wpdb->last_error);
-                        $allEnsured = false;
-                    }
-                }
-                [$indexExists, $indexIsUnique] = self::deterministic_index_status($indexName);
-                if (!$indexExists || !$indexIsUnique) {
-                    $allEnsured = false;
-                }
+                // Part B: individual_id_index / requisition_id_index must NOT
+                // carry a hard UNIQUE constraint (dual-program enrollments
+                // legitimately collide). Retire any stray one so a duplicate can
+                // be inserted; duplicates are caught by an entry-time warning.
+                self::drop_index_if_present($clients_table, $indexColumn);
             }
         }
 
-        if ($allEnsured && self::backfill_deterministic_indexes()) {
-            self::$indexes_ensured = true;
-            return true;
+        if (!$columns_ok) {
+            // A real, structural problem the save cannot work around. The
+            // save()/update() call sites translate this into an attributed
+            // message and emit the failed Event-Log entry (Part C).
+            return false;
         }
 
-        return false;
+        // Populate any empty hash columns from existing rows. Best-effort: a
+        // failure here is a data-quality issue (logged inside), not a reason to
+        // block the current save.
+        self::backfill_deterministic_indexes();
+
+        self::$indexes_ensured = true;
+        return true;
+    }
+
+    /**
+     * Best-effort establishment of a UNIQUE constraint on a deterministic index
+     * column. Directive GUI-SAVE-INDEX Part A: NEVER aborts a save — any DDL
+     * failure (errno 1062 duplicate data, drop/rebuild errors) is recorded as a
+     * degraded Event-Log warning and the save proceeds without the constraint.
+     */
+    private static function ensure_unique_index_constraint(string $clients_table, string $indexColumn): void {
+        global $wpdb;
+
+        $indexName = 'unique_' . $indexColumn;
+
+        // Retire any legacy non-unique index left over from earlier schema.
+        $legacyIndexName = 'idx_' . $indexColumn;
+        $escapedLegacy = $wpdb->_real_escape($legacyIndexName);
+        $legacyIndexRows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedLegacy}'", ARRAY_A);
+        if (is_array($legacyIndexRows) && count($legacyIndexRows) > 0) {
+            if ($wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$legacyIndexName}`") === false
+                && strpos($wpdb->last_error, '1091') === false) {
+                self::record_index_event(
+                    'index.legacy_drop_failed',
+                    'Could not drop legacy deterministic index ' . $legacyIndexName . '; continuing.',
+                    $indexColumn
+                );
+            }
+        }
+
+        [$indexExists, $indexIsUnique] = self::deterministic_index_status($indexName);
+
+        if ($indexExists && !$indexIsUnique) {
+            if ($wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$indexName}`") === false) {
+                // Leave the existing (non-unique) index in place; the save still
+                // proceeds and the hash column is still populated.
+                self::record_index_event(
+                    'index.nonunique_drop_failed',
+                    'Could not drop non-unique deterministic index ' . $indexName . '; continuing without rebuild.',
+                    $indexColumn
+                );
+                return;
+            }
+            $indexExists = false;
+        }
+
+        if (!$indexExists) {
+            $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON `{$clients_table}` (`{$indexColumn}`)";
+            if ($wpdb->query($createIndexSql) === false && strpos($wpdb->last_error, '1061') === false) {
+                // errno 1062 (duplicate data) is the staging case: genuine
+                // duplicate values among migrated clients. Per Part A this is a
+                // WARNING, not a save-killer — the hash column still populates
+                // and the dedup lookup works without the constraint.
+                self::record_index_event(
+                    'index.unique_build_failed',
+                    'Could not establish UNIQUE index ' . $indexName . '; continuing without the DB constraint.',
+                    $indexColumn
+                );
+            }
+        }
+    }
+
+    /**
+     * Drop a deterministic index (unique_* and the legacy idx_* shadow) from a
+     * column that must NOT carry a hard UNIQUE constraint. Directive
+     * GUI-SAVE-INDEX Part B — applies to individual_id_index /
+     * requisition_id_index so a legitimate dual-program duplicate can be
+     * inserted. Best-effort: a failed drop degrades to a logged warning.
+     */
+    private static function drop_index_if_present(string $clients_table, string $indexColumn): void {
+        global $wpdb;
+
+        foreach (['unique_' . $indexColumn, 'idx_' . $indexColumn] as $indexName) {
+            $escaped = $wpdb->_real_escape($indexName);
+            $rows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escaped}'", ARRAY_A);
+            if (is_array($rows) && count($rows) > 0) {
+                if ($wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$indexName}`") === false
+                    && strpos($wpdb->last_error, '1091') === false) {
+                    self::record_index_event(
+                        'index.constraint_drop_failed',
+                        'Could not drop unwanted unique index ' . $indexName . ' (allow-and-warn column); continuing.',
+                        $indexColumn
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Emit a degraded Event-Log entry for a deterministic-index management
+     * problem. Directive GUI-SAVE-INDEX Part C: index-constraint degradations
+     * must be visible on the Event Log, not just debug.log. Fail-safe — never
+     * throws (MealsDB_Event_Log::record swallows its own write failures).
+     */
+    private static function record_index_event(string $event, string $message, string $indexColumn): void {
+        error_log('[MealsDB] ' . $message . ' (' . $indexColumn . '): ' . (isset($GLOBALS['wpdb']) ? $GLOBALS['wpdb']->last_error : ''));
+
+        if (!class_exists('MealsDB_Event_Log')) {
+            return;
+        }
+
+        MealsDB_Event_Log::record([
+            'severity'  => 'warning',
+            'category'  => 'clients',
+            'subsystem' => 'client_form_index',
+            'event'     => $event,
+            'outcome'   => 'degraded',
+            'message'   => $message,
+            'context'   => ['column' => $indexColumn],
+        ]);
+    }
+
+    /**
+     * Emit a failed Event-Log entry when a client save genuinely aborts because
+     * the deterministic index COLUMNS could not be ensured. Directive
+     * GUI-SAVE-INDEX Part C — a real abort (distinct from the degraded
+     * constraint path) should surface on the Event Log, not only debug.log.
+     * Fail-safe — never throws.
+     */
+    private static function record_index_save_abort(string $event, string $message): void {
+        if (!class_exists('MealsDB_Event_Log')) {
+            return;
+        }
+
+        MealsDB_Event_Log::record([
+            'severity'  => 'error',
+            'category'  => 'clients',
+            'subsystem' => 'client_form_index',
+            'event'     => $event,
+            'outcome'   => 'failed',
+            'message'   => $message,
+        ]);
     }
 
     /**
