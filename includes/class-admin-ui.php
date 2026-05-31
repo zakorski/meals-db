@@ -496,6 +496,9 @@ class MealsDB_Admin_UI {
                     'validated'      => __('Confirmed:', 'meals-db'),
                     'notFound'       => __('No WordPress user with that ID.', 'meals-db'),
                     'alreadyLinked'  => __('already linked to client #', 'meals-db'),
+                    // Shown when the WP user is linked to the client currently being edited: a
+                    // correct, expected self-link, so the wording reassures rather than alarms.
+                    'alreadyLinkedSelf' => __('already linked to this client', 'meals-db'),
                     'validateFirst'  => __('Validate the WordPress User ID before pulling data.', 'meals-db'),
                     'pulling'        => __('Loading data from the WordPress user…', 'meals-db'),
                     'populated'      => __('Populated', 'meals-db'),
@@ -1237,6 +1240,52 @@ class MealsDB_Admin_UI {
                 <?php
             },
             static function (array $client) {
+                // WordPress User ID moves to second position (directly after Client Type) per
+                // directive GUI-IDENTITY-ORDER. Validate / Pull Data buttons, ids, and required
+                // status are unchanged — only the row's position in the group changed.
+                ?>
+                <tr data-client-type="sdnb,veteran,private" data-required-for="sdnb,veteran,private">
+                    <th>
+                        <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID *', 'meals-db'); ?></label>
+                        <span class="description"><?php esc_html_e('Every client links to an existing WordPress user. Enter the ID, then Validate to confirm the person and (optionally) Pull Data to auto-fill the form.', 'meals-db'); ?></span>
+                    </th>
+                    <td>
+                        <div class="mealsdb-wp-user-tools">
+                            <input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" required data-base-required="1" value="<?php echo esc_attr($client['wordpress_user_id'] ?? ''); ?>" />
+                            <div class="mealsdb-wp-user-buttons">
+                                <button type="button" class="button" id="mealsdb-validate-wp-user"><?php esc_html_e('Validate', 'meals-db'); ?></button>
+                                <button type="button" class="button" id="mealsdb-pull-wp-user" disabled><?php esc_html_e('Pull Data', 'meals-db'); ?></button>
+                            </div>
+                            <div id="wp-user-validation-status"></div>
+                            <div class="mealsdb-wp-user-message" aria-live="polite"></div>
+                        </div>
+                    </td>
+                </tr>
+                <?php
+            },
+            static function (array $client) use ($client_id) {
+                // Read-only display of the auto-increment primary key (directive
+                // GUI-IDENTITY-ORDER). Intentionally NOT an input or named field: the hidden
+                // client_id input on the form (emitted only in edit mode) is the sole carrier on
+                // the save path, so the PK can never be POSTed or user-altered here. On Add
+                // ($client_id === 0) a muted placeholder keeps the row's position consistent with
+                // the Edit form.
+                ?>
+                <tr data-client-type="sdnb,veteran,private">
+                    <th><label><?php esc_html_e('Client ID', 'meals-db'); ?></label></th>
+                    <td>
+                        <?php
+                        if ($client_id > 0) {
+                            echo '<span class="mealsdb-client-id-display">#' . esc_html((string) $client_id) . '</span>';
+                        } else {
+                            echo '<span class="description">' . esc_html__('(assigned when saved)', 'meals-db') . '</span>';
+                        }
+                        ?>
+                    </td>
+                </tr>
+                <?php
+            },
+            static function (array $client) {
                 ?>
                 <tr>
                     <th><label for="first_name"><?php esc_html_e('First Name *', 'meals-db'); ?></label></th>
@@ -1257,27 +1306,6 @@ class MealsDB_Admin_UI {
                 <tr>
                     <th><label for="client_email"><?php esc_html_e('Client Email', 'meals-db'); ?></label></th>
                     <td><input type="email" name="client_email" id="client_email" class="regular-text" data-base-required="1" value="<?php echo esc_attr($client['client_email'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr data-client-type="sdnb,veteran,private" data-required-for="sdnb,veteran,private">
-                    <th>
-                        <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID *', 'meals-db'); ?></label>
-                        <span class="description"><?php esc_html_e('Every client links to an existing WordPress user. Enter the ID, then Validate to confirm the person and (optionally) Pull Data to auto-fill the form.', 'meals-db'); ?></span>
-                    </th>
-                    <td>
-                        <div class="mealsdb-wp-user-tools">
-                            <input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" required data-base-required="1" value="<?php echo esc_attr($client['wordpress_user_id'] ?? ''); ?>" />
-                            <div class="mealsdb-wp-user-buttons">
-                                <button type="button" class="button" id="mealsdb-validate-wp-user"><?php esc_html_e('Validate', 'meals-db'); ?></button>
-                                <button type="button" class="button" id="mealsdb-pull-wp-user" disabled><?php esc_html_e('Pull Data', 'meals-db'); ?></button>
-                            </div>
-                            <div id="wp-user-validation-status"></div>
-                            <div class="mealsdb-wp-user-message" aria-live="polite"></div>
-                        </div>
-                    </td>
                 </tr>
                 <?php
             },

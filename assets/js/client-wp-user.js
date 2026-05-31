@@ -72,13 +72,22 @@
             $message.text(text);
         };
 
-        var setValidated = function (id, name, alreadyLinked) {
+        var setValidated = function (id, name, alreadyLinked, alreadyLinkedSelf) {
             validatedId = id;
             $form.data('mealsdbWpUserValidated', id);
             $pullBtn.prop('disabled', false);
             ensureStyles();
             var html = '<span class="mealsdb-valid-check">✔ ' + escapeHtml(name) + '</span>';
-            if (alreadyLinked) {
+            // Prefer the server's explicit self-link flag; fall back to comparing the current
+            // client_id the form already knows. A self-link is correct and expected, so it reads
+            // as reassuring (a check, not a warning); a link to a DIFFERENT client is the real
+            // dual-use warning and keeps the "#N" form.
+            var isSelfLink = alreadyLinkedSelf === true ||
+                (alreadyLinked && currentClientId() && alreadyLinked === currentClientId());
+            if (isSelfLink) {
+                html += ' <span class="mealsdb-valid-check">'
+                    + (messages.alreadyLinkedSelf || 'already linked to this client') + '</span>';
+            } else if (alreadyLinked) {
                 html += ' <span class="mealsdb-warn-flag">⚠ '
                     + (messages.alreadyLinked || 'already linked to client #') + alreadyLinked + '</span>';
             }
@@ -107,6 +116,13 @@
                 return 0;
             }
             var n = parseInt(raw, 10);
+            return (isNaN(n) || n <= 0) ? 0 : n;
+        };
+
+        // The client currently being edited. The hidden client_id input carries it on the Edit
+        // form; it's absent/0 on the Add form, where there is no "current" client to be "this".
+        var currentClientId = function () {
+            var n = parseInt(($('input[name="client_id"]').val() || '').toString().trim(), 10);
             return (isNaN(n) || n <= 0) ? 0 : n;
         };
 
@@ -140,10 +156,10 @@
                 url: ajaxUrl,
                 method: 'POST',
                 dataType: 'json',
-                data: { action: 'mealsdb_validate_wp_user', nonce: nonce, wp_user_id: id }
+                data: { action: 'mealsdb_validate_wp_user', nonce: nonce, wp_user_id: id, client_id: currentClientId() }
             }).done(function (response) {
                 if (response && response.success && response.data) {
-                    setValidated(id, response.data.name || ('#' + id), response.data.already_linked || null);
+                    setValidated(id, response.data.name || ('#' + id), response.data.already_linked || null, response.data.already_linked_self === true);
                     setMessage('success', (messages.validated || 'Confirmed:') + ' ' + (response.data.name || ('#' + id)));
                 } else {
                     resetValidated();

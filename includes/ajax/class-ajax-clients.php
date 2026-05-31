@@ -56,12 +56,20 @@ class MealsDB_Ajax_Clients {
                 wp_send_json_error(['message' => __('No WordPress user with that ID.', 'meals-db')]);
             }
 
+            // Optional current client_id: present on the Edit form, 0/absent on Add. We use it
+            // to distinguish a (correct, expected) self-link from a real dual-use warning, so the
+            // operator isn't alarmed by a client linked to its own WP user.
+            $current_client_id = isset($_POST['client_id']) ? absint(wp_unslash($_POST['client_id'])) : 0;
+
             $existing = MealsDB_Clients_Repository::find_client_id_by_wp_user($uid);
+            $is_self  = ($existing && $current_client_id && (int) $existing === $current_client_id);
 
             wp_send_json_success([
                 'wp_user_id'     => $uid,
                 'name'           => self::resolve_billing_name($uid, $user),
                 'already_linked' => $existing ? (int) $existing : null,
+                // True when the WP user is linked to the client currently being edited.
+                'already_linked_self' => $is_self,
             ]);
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Ajax] validate_wp_user failed: ' . $e->getMessage());
