@@ -1811,7 +1811,29 @@ class MealsDB_Client_Form {
      * @return string
      */
     private static function deterministic_hash(string $value): string {
+        // Single source of truth: route through MealsDB_Encryption::create_index
+        // so the form's index writes/queries use the SAME version (v1 bare-SHA256
+        // or v2 keyed-HMAC, gated by index_format_is_v2) as the consolidated
+        // importer and the harden migrator. Keeping a private copy of the hash
+        // here would silently diverge the moment the keyed-index flag flips
+        // (STR-10a) — exactly the dual-maintenance trap CLAUDE.md warns about.
+        if (class_exists('MealsDB_Encryption')) {
+            return MealsDB_Encryption::create_index($value);
+        }
+        // Fallback only for contexts where the encryption class isn't loaded
+        // (the v2 path can't be active without it, so v1 is the correct shape).
         return hash('sha256', strtolower(trim($value)));
+    }
+
+    /**
+     * Expose the deterministic index map (source column => `*_index` column)
+     * so the encryption harden migrator can recompute every index from the
+     * same authoritative mapping the form writes through. Read-only copy.
+     *
+     * @return array<string, string>
+     */
+    public static function deterministic_index_map(): array {
+        return self::$deterministic_index_map;
     }
 
     /**
