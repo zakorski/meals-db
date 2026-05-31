@@ -7,9 +7,13 @@
  * - Edit client form
  * - CSV import process
  *
- * Implements address-based duplicate checking - allows multiple clients
- * to share the same delivery initials IF they are being delivered to
- * the same physical address.
+ * Delivery initials are a GENERATED unique code (a 3-letter space). They are
+ * GLOBALLY UNIQUE — period (operator decision, directive GUI-INITIALS). An
+ * earlier model treated initials as a person's actual initials and allowed two
+ * clients to share a code if they were delivered to the same physical address;
+ * that same-address exception has been removed. The hard UNIQUE index on
+ * `delivery_initials` is the source of truth and the application now agrees
+ * with it.
  *
  * @package MealsDB
  * @since 1.0.223
@@ -35,18 +39,23 @@ class MealsDB_Initials_Validator {
 	);
 
 	/**
-	 * Validate delivery initials
+	 * Validate delivery initials.
 	 *
-	 * @param string          $initials The initials to validate.
-	 * @param array|object    $client_data Client data including address fields.
-	 * @param int|null        $current_client_id Client ID when editing (exclude from duplicate check).
-	 * @return array ['valid' => bool, 'error' => string, 'shared' => bool, 'sharing_with' => array]
+	 * Initials are globally unique: any code already used by ANOTHER client is
+	 * invalid, full stop. There is no same-address sharing exception.
+	 *
+	 * @param string       $initials The initials to validate.
+	 * @param array|object $client_data Accepted for backward compatibility with
+	 *                                  callers that still pass client/address
+	 *                                  fields; no longer used (the sharing
+	 *                                  exception it fed was removed).
+	 * @param int|null     $current_client_id Client ID when editing (exclude from duplicate check).
+	 * @return array ['valid' => bool, 'error' => string, 'shared' => false]
 	 */
-	public static function validate($initials, $client_data, $current_client_id = null) {
-		// Convert to array if object
-		if (is_object($client_data)) {
-			$client_data = (array) $client_data;
-		}
+	public static function validate($initials, $client_data = array(), $current_client_id = null) {
+		// $client_data is intentionally ignored — see the class docblock. It is
+		// kept in the signature so existing callers don't have to change.
+		unset($client_data);
 
 		// Step 1: Format validation - must be exactly 3 letters
 		$initials_upper = strtoupper(trim($initials));
@@ -67,7 +76,8 @@ class MealsDB_Initials_Validator {
 			);
 		}
 
-		// Step 3: Check if initials are already in use
+		// Step 3: Global uniqueness. Any OTHER client already holding this code
+		// makes it invalid — there is no address escape hatch.
 		$existing_clients = self::get_clients_with_initials($initials_upper);
 
 		// Remove current client from check (when editing)
@@ -77,7 +87,6 @@ class MealsDB_Initials_Validator {
 			});
 		}
 
-		// If no other clients use these initials, we're good
 		if (empty($existing_clients)) {
 			return array(
 				'valid'   => true,
@@ -85,60 +94,14 @@ class MealsDB_Initials_Validator {
 			);
 		}
 
-		// Step 4: If initials ARE in use, check if delivery addresses match
-		$new_address = self::normalize_delivery_address($client_data);
-
-		// Check if we have a valid address to compare
-		if (self::is_address_empty($new_address)) {
-			// No valid address provided - cannot validate address-based sharing
-			$names = array_map(function($c) {
-				return trim($c['first_name'] . ' ' . $c['last_name']);
-			}, $existing_clients);
-
-			return array(
-				'valid'   => false,
-				'error'   => sprintf(
-					__('Initials already in use by: %s. Please provide a delivery address to verify if sharing is allowed.', 'meals-db'),
-					implode(', ', $names)
-				),
-				'shared'  => false,
-			);
-		}
-
-		// Compare addresses with existing clients
-		$sharing_with = array();
-		$different_addresses = array();
-
-		foreach ($existing_clients as $existing_client) {
-			$existing_address = self::normalize_delivery_address($existing_client);
-
-			if (self::addresses_match($new_address, $existing_address)) {
-				// Same address - initials can be shared
-				$sharing_with[] = $existing_client;
-			} else {
-				// Different address - conflict
-				$different_addresses[] = $existing_client;
-			}
-		}
-
-		// If ALL existing clients with these initials are at the same address, allow sharing
-		if (empty($different_addresses)) {
-			return array(
-				'valid'       => true,
-				'shared'      => true,
-				'sharing_with' => $sharing_with,
-			);
-		}
-
-		// Different addresses - initials must be unique
 		$names = array_map(function($c) {
 			return trim($c['first_name'] . ' ' . $c['last_name']);
-		}, $different_addresses);
+		}, $existing_clients);
 
 		return array(
 			'valid'   => false,
 			'error'   => sprintf(
-				__('Initials already in use by: %s at different address(es)', 'meals-db'),
+				__('Initials already in use by: %s', 'meals-db'),
 				implode(', ', $names)
 			),
 			'shared'  => false,
@@ -150,19 +113,14 @@ class MealsDB_Initials_Validator {
 	 *
 	 * Attempts to create initials based on name, checking against:
 	 * - Profanity list
-	 * - Existing clients (allows if same address)
+	 * - Existing clients (must be globally unique)
 	 *
 	 * @param string       $first_name Client's first name.
 	 * @param string       $last_name Client's last name.
-	 * @param array|object $client_data Client address data.
+	 * @param array|object $client_data Unused (kept for signature compatibility).
 	 * @return string|false 3-letter initials or false if unable to generate.
 	 */
 	public static function generate($first_name, $last_name, $client_data = array()) {
-		// Convert to array if object
-		if (is_object($client_data)) {
-			$client_data = (array) $client_data;
-		}
-
 		$first = strtoupper(substr(trim($first_name), 0, 1));
 		$last = strtoupper(substr(trim($last_name), 0, 3));
 
@@ -193,7 +151,7 @@ class MealsDB_Initials_Validator {
 		// Try each pattern
 		foreach ($patterns as $pattern) {
 			if (strlen($pattern) === 3) {
-				$validation = self::validate($pattern, $client_data, null);
+				$validation = self::validate($pattern, array(), null);
 				if ($validation['valid']) {
 					return $pattern;
 				}
@@ -211,113 +169,20 @@ class MealsDB_Initials_Validator {
 			if (isset($existing[$random])) {
 				continue;
 			}
-			$validation = self::validate($random, $client_data, null);
+			$validation = self::validate($random, array(), null);
 			if ($validation['valid']) {
 				return $random;
 			}
 		}
 
-		// Unable to generate
+		// Unable to generate after $max_attempts random tries. The caller
+		// surfaces this as a clear on-page "could not find an unused code,
+		// retry" message — at ~17,500 usable combinations this only realistically
+		// happens when the namespace is nearly full, which is itself worth
+		// surfacing as an early warning.
 		return false;
 	}
 
-	/**
-	 * Normalize delivery address for comparison
-	 *
-	 * Uses delivery address fields if present, otherwise falls back to primary address.
-	 * Handles both form field names and database column names.
-	 *
-	 * @param array $client_data Client data with address fields.
-	 * @return array Normalized address array.
-	 */
-	private static function normalize_delivery_address($client_data) {
-		// Use delivery address if present, otherwise use primary address
-		// Handle both form field names (address_street_name) and DB column names (street_name)
-
-		// Street name (now contains full address including street number and unit)
-		$street_name = !empty($client_data['delivery_address_street_name'])
-			? $client_data['delivery_address_street_name']
-			: (!empty($client_data['delivery_street_name'])
-				? $client_data['delivery_street_name']
-				: (!empty($client_data['address_street_name'])
-					? $client_data['address_street_name']
-					: ($client_data['street_name'] ?? '')));
-
-		// City
-		$city = !empty($client_data['delivery_address_city'])
-			? $client_data['delivery_address_city']
-			: (!empty($client_data['delivery_city'])
-				? $client_data['delivery_city']
-				: (!empty($client_data['address_city'])
-					? $client_data['address_city']
-					: ($client_data['city'] ?? '')));
-
-		// Postal code. Accept multiple key names because callers use
-		// different vocabularies:
-		//   - 'delivery_address_postal' / 'address_postal' — form-side
-		//     (MealsDB_Client_Form::$db_columns, what the form actually
-		//     posts; the AJAX handler get_client_data_from_request
-		//     now passes these through unchanged).
-		//   - 'delivery_address_postal_code' / 'address_postal_code' —
-		//     legacy AJAX form (kept for backwards compatibility).
-		//   - 'delivery_postal_code' / 'postal_code' — DB-side raw
-		//     column names (when callers pass a $wpdb row directly).
-		// The validator should not care which the caller used.
-		$postal = !empty($client_data['delivery_address_postal'])
-			? $client_data['delivery_address_postal']
-			: (!empty($client_data['delivery_address_postal_code'])
-				? $client_data['delivery_address_postal_code']
-				: (!empty($client_data['delivery_postal_code'])
-					? $client_data['delivery_postal_code']
-					: (!empty($client_data['address_postal'])
-						? $client_data['address_postal']
-						: (!empty($client_data['address_postal_code'])
-							? $client_data['address_postal_code']
-							: ($client_data['postal_code'] ?? '')))));
-
-		return array(
-			'street_name'   => trim(strtolower((string) $street_name)),
-			'city'          => trim(strtolower((string) $city)),
-			'postal'        => self::normalize_postal($postal),
-		);
-	}
-
-	/**
-	 * Normalize postal code
-	 *
-	 * Removes spaces, dashes, and converts to lowercase.
-	 *
-	 * @param string $postal Postal code.
-	 * @return string Normalized postal code.
-	 */
-	private static function normalize_postal($postal) {
-		// Remove spaces, dashes, convert to lowercase
-		return strtolower(preg_replace('/[\s\-]/', '', (string) $postal));
-	}
-
-	/**
-	 * Check if two addresses match
-	 *
-	 * All fields must match for addresses to be considered the same.
-	 *
-	 * @param array $addr1 First normalized address.
-	 * @param array $addr2 Second normalized address.
-	 * @return bool True if addresses match.
-	 */
-	private static function addresses_match($addr1, $addr2) {
-		return $addr1['street_name'] === $addr2['street_name']
-			&& $addr1['city'] === $addr2['city']
-			&& $addr1['postal'] === $addr2['postal'];
-	}
-
-	/**
-	 * Check if address is empty
-	 *
-	 * An address is considered empty if it lacks essential fields.
-	 *
-	 * @param array $address Normalized address.
-	 * @return bool True if address is empty.
-	 */
 	/**
 	 * Bulk-load all initials currently in use, keyed for O(1) lookup.
 	 *
@@ -346,26 +211,6 @@ class MealsDB_Initials_Validator {
 		return $set;
 	}
 
-	private static function is_address_empty($address) {
-		// Require street_name + city + postal for a "non-empty"
-		// address. Allowing a missing postal would let two unrelated
-		// houses on the same street+city share initials despite having
-		// different postals; treating that as "empty" forces the
-		// uniqueness check to assign independent initials.
-		//
-		// NOTE: the key is `postal`, not `postal_code`, because
-		// normalize_delivery_address() returns the normalised array
-		// with that shorter key. The original code checked
-		// `$address['postal_code']` which never existed on a
-		// normalised array, so is_address_empty() always returned
-		// true and address-based initials sharing was silently dead:
-		// every legitimately-shared household received the "please
-		// provide a delivery address" error even when they had one.
-		return empty($address['street_name'])
-			|| empty($address['city'])
-			|| empty($address['postal']);
-	}
-
 	/**
 	 * Check if initials are profane
 	 *
@@ -380,7 +225,7 @@ class MealsDB_Initials_Validator {
 	 * Get all clients with specific initials
 	 *
 	 * @param string $initials Initials to search for.
-	 * @return array Array of client data.
+	 * @return array Array of client data (id, first_name, last_name).
 	 */
 	private static function get_clients_with_initials($initials) {
 		global $wpdb;
@@ -390,14 +235,7 @@ class MealsDB_Initials_Validator {
 			"SELECT
 				client_id as id,
 				first_name,
-				last_name,
-				delivery_initials,
-				delivery_street_name,
-				delivery_city,
-				delivery_postal_code,
-				street_name,
-				city,
-				postal_code
+				last_name
 			FROM `{$clients_table}`
 			WHERE delivery_initials = %s",
 			$initials

@@ -146,34 +146,6 @@
             return parsed;
         };
 
-        const getAddressData = () => {
-            // The form fields are named address_postal / delivery_address_postal
-            // (see render_client_form). The original *_postal_code names
-            // never matched anything in the DOM, so the postal code never
-            // contributed to the duplicate-detection check.
-            const addressFields = [
-                'address_street_name',
-                'address_city',
-                'address_postal',
-                'delivery_address_street_name',
-                'delivery_address_city',
-                'delivery_address_postal'
-            ];
-
-            const data = {};
-            addressFields.forEach(field => {
-                const $field = $form.find(`[name="${field}"]`);
-                if ($field.length > 0) {
-                    const value = $field.val();
-                    if (value) {
-                        data[field] = value;
-                    }
-                }
-            });
-
-            return data;
-        };
-
         const getClientNames = () => {
             return {
                 first_name: $form.find('[name="first_name"]').val() || '',
@@ -235,13 +207,11 @@
                 setMessage(null, '');
             }
 
-            // Collect address data for address-based validation
             const requestData = {
                 action: 'mealsdb_validate_initials',
                 nonce: nonces.validate,
                 code: value,
-                client_id: getClientId(),
-                ...getAddressData()
+                client_id: getClientId()
             };
 
             validationRequest = $.ajax({
@@ -257,12 +227,7 @@
                     if (suppressMessages) {
                         setMessage(null, '');
                     } else {
-                        // Show special message if initials are shared at same address
-                        if (response.shared && response.message) {
-                            setMessage('success', response.message);
-                        } else {
-                            setMessage('success', messages.success || 'Initials are valid.');
-                        }
+                        setMessage('success', messages.success || 'Initials are valid.');
                     }
                 } else {
                     const fallbackMessage = messages.invalid || 'These initials are invalid or already in use.';
@@ -303,14 +268,14 @@
             toggleButtons(true);
             setMessage(null, '');
 
-            // Collect client data for better generation
+            // Send the client's name so the generator can seed name-based
+            // candidate patterns before falling back to a random search.
             const names = getClientNames();
             const requestData = {
                 action: 'mealsdb_generate_initials',
                 nonce: nonces.generate,
                 first_name: names.first_name,
-                last_name: names.last_name,
-                ...getAddressData()
+                last_name: names.last_name
             };
 
             $.ajax({
