@@ -884,7 +884,11 @@ run_test('save omits empty wordpress user id values', function () {
 
 run_test('sdnb client save populates defaults for required database columns', function () {
     reset_index_flag();
-    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    // DB-side column names: apply_insert_defaults runs AFTER map_form_to_db, so
+    // the defaults are the real columns (client_phone_1 / postal_code), not the
+    // form-side names. Asserting the form-side names here previously locked in
+    // the phantom-column bug fixed by directive GUI-F3F5.
+    $requiredColumns = ['client_email', 'client_phone_1', 'postal_code'];
     $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
     set_db_connection($conn);
 
@@ -921,8 +925,8 @@ run_test('sdnb client save populates defaults for required database columns', fu
         throw new Exception('Client email should default to an empty string when not provided.');
     }
 
-    if ($conn->lastInsert['address_postal'] !== '') {
-        throw new Exception('Address postal should default to an empty string when not provided.');
+    if ($conn->lastInsert['postal_code'] !== '') {
+        throw new Exception('Postal code should default to an empty string when not provided.');
     }
 
     set_db_connection(null);
@@ -930,7 +934,7 @@ run_test('sdnb client save populates defaults for required database columns', fu
 
 run_test('private client submission succeeds with all fields populated', function () {
     reset_index_flag();
-    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    $requiredColumns = ['client_email', 'client_phone_1', 'postal_code']; // DB-side (GUI-F3F5)
     $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
     set_db_connection($conn);
 
@@ -1009,7 +1013,7 @@ run_test('private client submission succeeds with all fields populated', functio
 
 run_test('sdnb client submission succeeds with all fields populated', function () {
     reset_index_flag();
-    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    $requiredColumns = ['client_email', 'client_phone_1', 'postal_code']; // DB-side (GUI-F3F5)
     $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
     set_db_connection($conn);
 
@@ -1089,7 +1093,7 @@ run_test('sdnb client submission succeeds with all fields populated', function (
 
 run_test('veteran client submission succeeds with all fields populated', function () {
     reset_index_flag();
-    $requiredColumns = ['client_email', 'phone_primary', 'address_postal'];
+    $requiredColumns = ['client_email', 'client_phone_1', 'postal_code']; // DB-side (GUI-F3F5)
     $conn = new StubMysqli([], ['individual_id_index', 'requisition_id_index', 'vet_health_card_index', 'delivery_initials_index'], ['idx_individual_id_index', 'idx_requisition_id_index', 'idx_vet_health_card_index', 'idx_delivery_initials_index'], [], $requiredColumns);
     set_db_connection($conn);
 

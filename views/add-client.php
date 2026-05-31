@@ -67,7 +67,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $form_values = [];
                 $resumed_draft_id = 0;
             } else {
-                $errors[] = 'Database error occurred.';
+                // Field-attributed message when the repository identified the
+                // offending column (directive GUI-F3F5 STEP 3); generic
+                // fallback otherwise. The raw $wpdb error stays in the log.
+                $save_error = MealsDB_Client_Form::last_save_error();
+                $errors[] = $save_error !== '' ? $save_error : __('Database error occurred.', 'meals-db');
                 $persist_failed_submission();
             }
         } else {

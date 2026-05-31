@@ -143,12 +143,21 @@ class MealsDB_Client_Form {
     ];
 
     /**
-     * Default values for non-nullable columns when inserting new clients.
+     * Default values for required columns when inserting new clients.
+     *
+     * These MUST be DB-side column names. apply_insert_defaults() runs in
+     * save() *after* map_form_to_db() (which renames phone_primary ->
+     * client_phone_1, address_postal -> postal_code), so keying this map on
+     * the form-side names was a real bug (directive GUI-F3F5): the form-side
+     * keys were always absent post-mapping, so the defaults were injected as
+     * PHANTOM columns (`phone_primary`, `address_postal`) that do not exist in
+     * meals_clients. Every GUI create then failed at $wpdb->insert while edit
+     * — which never calls apply_insert_defaults — worked. Keep these DB-side.
      */
     private static $insert_required_defaults = [
         'client_email'   => '',
-        'phone_primary'  => '',
-        'address_postal' => '',
+        'client_phone_1' => '',
+        'postal_code'    => '',
     ];
 
     /**
@@ -316,6 +325,19 @@ class MealsDB_Client_Form {
             $record_format_error('alt_contact_phone_secondary', 'Alternate contact phone #2 must be in (###)-###-#### format.');
         }
 
+        // Province — must be a 2-letter Canadian code (sanitize already
+        // normalises known full names to their code; anything left that is not
+        // a recognised code is rejected here with a named field error instead
+        // of overflowing VARCHAR(10) at insert. Directive GUI-F3F5.
+        foreach (['address_province', 'delivery_address_province'] as $province_field) {
+            if (!empty($sanitized[$province_field]) && !self::is_valid_province_code($sanitized[$province_field])) {
+                $record_format_error(
+                    $province_field,
+                    sprintf('%s must be a 2-letter province code (e.g. NB).', self::get_field_label($province_field))
+                );
+            }
+        }
+
         // Email
         if (!empty($sanitized['client_email']) && !filter_var($sanitized['client_email'], FILTER_VALIDATE_EMAIL)) {
             $record_format_error('client_email', 'Invalid client email address.');
@@ -467,6 +489,18 @@ class MealsDB_Client_Form {
             'delivery_postal' => 20,
             'individual_id' => 50,
             'requisition_id' => 50,
+            // Phone + province were previously unmapped, so an over-long
+            // value slipped past validation and only failed at $wpdb->insert
+            // with a generic "Database error occurred." (directive GUI-F3F5).
+            // The phone *format* rule below also catches over-long phones, but
+            // listing them here gives a length-attributed message for the
+            // length case and matches the column widths exactly.
+            'phone_primary' => 20,
+            'phone_secondary' => 20,
+            'alt_contact_phone_primary' => 20,
+            'alt_contact_phone_secondary' => 20,
+            'address_province' => 10,
+            'delivery_address_province' => 10,
         ];
 
         foreach ($max_lengths as $field => $max) {
@@ -670,6 +704,24 @@ class MealsDB_Client_Form {
             'customer_comments' => 5000, // DB-side alias
             'individual_id'     => 50,
             'requisition_id'    => 50,
+            // Phone / province: these reach save()/update() under BOTH their
+            // form-side and DB-side names depending on whether mapping has run
+            // yet. List both so the pre-encryption fast-fail catches an
+            // over-long value before it overflows its column at $wpdb->insert
+            // (directive GUI-F3F5: province "New Brunswick" overflowed
+            // VARCHAR(10); an unclamped phone overflows VARCHAR(20)).
+            'phone_primary'             => 20,
+            'phone_secondary'           => 20,
+            'alt_contact_phone_primary' => 20,
+            'alt_contact_phone_secondary' => 20,
+            'client_phone_1'            => 20,
+            'client_phone_2'            => 20,
+            'alternate_contact_phone_1' => 20,
+            'alternate_contact_phone_2' => 20,
+            'address_province'          => 10,
+            'delivery_address_province' => 10,
+            'province'                  => 10,
+            'delivery_province'         => 10,
         ];
         foreach ($max_lengths as $field => $max) {
             if (!array_key_exists($field, $row)) {
@@ -801,9 +853,74 @@ class MealsDB_Client_Form {
             return false;
         }
 
+        self::$last_save_error = '';
+
         $repository = new MealsDB_Clients_Repository();
 
-        return $repository->create_client($encrypted);
+        $created = $repository->create_client($encrypted);
+        if (!$created) {
+            // Translate the failing DB column (if the repository identified one)
+            // into a field-attributed, non-leaky message so the Add-New view can
+            // tell the operator WHICH field to fix instead of "Database error
+            // occurred." The raw $wpdb error stays in the log only. GUI-F3F5.
+            self::$last_save_error = self::describe_write_failure(
+                MealsDB_Clients_Repository::last_failed_column()
+            );
+        }
+
+        return $created;
+    }
+
+    /**
+     * Most recent save() failure message, field-attributed where possible.
+     *
+     * Empty string when the last save succeeded or no message was produced.
+     * Consumed by views/add-client.php. Directive GUI-F3F5 STEP 3.
+     *
+     * @var string
+     */
+    private static $last_save_error = '';
+
+    /**
+     * Return the field-attributed message for the most recent failed save().
+     */
+    public static function last_save_error(): string {
+        return self::$last_save_error;
+    }
+
+    /**
+     * Build a user-facing, non-leaky message for a failed client insert.
+     *
+     * Maps the offending DB column to its form-field label so the operator
+     * knows which field to correct. Falls back to a generic message when the
+     * column is unknown. Never includes the raw $wpdb error. GUI-F3F5 STEP 3.
+     */
+    private static function describe_write_failure(?string $db_column): string {
+        if ($db_column === null || $db_column === '') {
+            return __('Database error occurred while saving the client.', 'meals-db');
+        }
+
+        // DB column -> form field, so we can reuse the existing field labels.
+        $db_to_form = [
+            'client_phone_1'            => 'phone_primary',
+            'client_phone_2'            => 'phone_secondary',
+            'alternate_contact_phone_1' => 'alt_contact_phone_primary',
+            'alternate_contact_phone_2' => 'alt_contact_phone_secondary',
+            'province'                  => 'address_province',
+            'delivery_province'         => 'delivery_address_province',
+            'postal_code'               => 'address_postal',
+            'delivery_postal_code'      => 'delivery_address_postal',
+            'customer_comments'         => 'client_comments',
+        ];
+
+        $form_field = $db_to_form[$db_column] ?? $db_column;
+        $label = self::get_field_label($form_field, $form_field);
+
+        return sprintf(
+            /* translators: %s: the form field that caused the save to fail. */
+            __('Could not save: the value for "%s" is invalid or too long. Please check that field and try again.', 'meals-db'),
+            $label
+        );
     }
 
     /**
@@ -1419,6 +1536,19 @@ class MealsDB_Client_Form {
                 $value = preg_replace('/^zone\s*/i', '', $value);
                 $value = strtoupper($value);
                 break;
+            case 'address_province':
+            case 'delivery_address_province':
+                // Province is a VARCHAR(10) holding a 2-letter code. Operators
+                // typing a full name ("New Brunswick") overflowed the column
+                // and the create failed with a generic DB error (directive
+                // GUI-F3F5). Normalise here — in sanitize, which both
+                // validate() and save() funnel through — so the same value is
+                // checked and stored: map known full names to their code,
+                // otherwise uppercase/trim. An unmappable value is left as-is
+                // for validate() to reject with a named field error; the
+                // length bound still fail-safes save() against an overflow.
+                $value = self::normalize_province_code($value);
+                break;
             case 'client_email':
             case 'social_worker_email':
             case 'alt_contact_email':
@@ -1475,6 +1605,70 @@ class MealsDB_Client_Form {
         }
 
         return $value;
+    }
+
+    /**
+     * Canadian province / territory 2-letter codes (the only valid contents of
+     * the VARCHAR(10) province columns).
+     */
+    private static $province_codes = [
+        'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT',
+    ];
+
+    /**
+     * Normalise a province input to its 2-letter code.
+     *
+     * Maps a known full name (or common variant) to its code and uppercases
+     * a value that is already a code. An unrecognised value is returned
+     * trimmed/uppercased so validate() can reject it with a named error and
+     * the length bound can still catch an overflow. See directive GUI-F3F5.
+     */
+    private static function normalize_province_code(string $value): string {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        $upper = strtoupper($trimmed);
+
+        if (in_array($upper, self::$province_codes, true)) {
+            return $upper;
+        }
+
+        // Collapse internal whitespace so "NEW  BRUNSWICK" matches.
+        $key = preg_replace('/\s+/', ' ', $upper);
+
+        $name_to_code = [
+            'NEWFOUNDLAND AND LABRADOR' => 'NL',
+            'NEWFOUNDLAND'              => 'NL',
+            'LABRADOR'                  => 'NL',
+            'PRINCE EDWARD ISLAND'      => 'PE',
+            'NOVA SCOTIA'               => 'NS',
+            'NEW BRUNSWICK'             => 'NB',
+            'QUEBEC'                    => 'QC',
+            'QUÉBEC'                    => 'QC',
+            'ONTARIO'                   => 'ON',
+            'MANITOBA'                  => 'MB',
+            'SASKATCHEWAN'              => 'SK',
+            'ALBERTA'                   => 'AB',
+            'BRITISH COLUMBIA'          => 'BC',
+            'YUKON'                     => 'YT',
+            'NORTHWEST TERRITORIES'     => 'NT',
+            'NUNAVUT'                   => 'NU',
+        ];
+
+        if (isset($name_to_code[$key])) {
+            return $name_to_code[$key];
+        }
+
+        return $upper;
+    }
+
+    /**
+     * Whether a value is a recognised Canadian province / territory code.
+     */
+    private static function is_valid_province_code(string $value): bool {
+        return in_array(strtoupper(trim($value)), self::$province_codes, true);
     }
 
     /**
