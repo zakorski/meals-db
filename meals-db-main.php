@@ -9,8 +9,9 @@
  * GitHub Plugin URI: zakorski/meals-db
  * Primary Branch: main
  * License: GPL-3.0-or-later
- * Requires PHP: 7.4
- * Requires at least: 5.8
+ * Requires PHP: 8.2
+ * Requires at least: 7.0
+ * Tested up to: 7.0
  *
  * This plugin is licensed under the GNU General Public License v3.0 or later.
  */
@@ -470,8 +471,13 @@ register_activation_hook(__FILE__, 'meals_db_check_requirements');
 function meals_db_check_requirements() {
     global $wp_version;
 
-    $required_php_version = '7.4';
-    $required_wp_version = '5.8';
+    // Match the real deployment floor (PHP 8.2 / WP 7.0). The plugin USES 8.x
+    // language features (typed properties, match, \Throwable in cron handlers),
+    // so refuse cleanly at activation rather than fataling at runtime on an
+    // interpreter too old to parse the code. Keep in sync with the plugin
+    // header above and composer.json (STR-9).
+    $required_php_version = '8.2';
+    $required_wp_version = '7.0';
 
     if (version_compare(PHP_VERSION, $required_php_version, '<')) {
         deactivate_plugins(plugin_basename(__FILE__));
