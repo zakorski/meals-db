@@ -39,6 +39,18 @@ class MealsDB_Clients_Repository {
     private static $logged_unknown_signatures = [];
 
     /**
+     * The DB column named by the most recent failed write, if one could be
+     * parsed from $wpdb->last_error. Lets the form/UI surface a field-attributed
+     * message instead of a generic "Database error occurred." (directive
+     * GUI-F3F5 STEP 3). NULL when the last write succeeded or no column could
+     * be identified. The raw $wpdb error is never stored here — only the column
+     * name — so this carries no schema detail beyond the offending field.
+     *
+     * @var string|null
+     */
+    private static $last_failed_column = null;
+
+    /**
      * Create a new repository instance.
      *
      * @param mixed $connection Ignored. Retained for backward compatibility.
@@ -164,11 +176,37 @@ class MealsDB_Clients_Repository {
             return false;
         }
 
+        self::$last_failed_column = null;
+
         try {
             $result = $wpdb->insert($this->table_name, $data);
 
             if ($result === false) {
-                error_log('[MealsDB Clients Repository] Failed to execute client insert: ' . ($wpdb->last_error ?: 'unknown error'));
+                $last = $wpdb->last_error ?: 'unknown error';
+                error_log('[MealsDB Clients Repository] Failed to execute client insert: ' . $last);
+
+                // Parse (never echo) the offending column so save()/the view can
+                // attribute the failure to a field. Directive GUI-F3F5 STEP 3.
+                self::$last_failed_column = self::parse_failed_column($last);
+
+                // Downgraded GUI-F3F5 STEP 1 diagnostic: name the offending
+                // value's SHAPE (length + base64-ish flag) without logging raw
+                // PII, so a future reproduction distinguishes "plaintext too
+                // long" from "misrouted ciphertext" without a code change.
+                if (self::$last_failed_column !== null && array_key_exists(self::$last_failed_column, $data)) {
+                    $val = $data[self::$last_failed_column];
+                    if (is_string($val)) {
+                        $len = strlen($val);
+                        $looks_b64 = (bool) preg_match('/^[A-Za-z0-9+\/=]{40,}$/', $val);
+                        error_log(sprintf(
+                            '[MealsDB Clients Repository] insert field shape: %s len=%d b64ish=%s',
+                            self::$last_failed_column,
+                            $len,
+                            $looks_b64 ? 'yes' : 'no'
+                        ));
+                    }
+                }
+
                 return false;
             }
 
@@ -177,6 +215,44 @@ class MealsDB_Clients_Repository {
             error_log('[MealsDB Clients Repository] Exception while creating client: ' . $e->getMessage());
             return false;
         }
+    }
+
+    /**
+     * Return the DB column named by the most recent failed write, or null.
+     *
+     * Only the column name is exposed — never the raw $wpdb error, which can
+     * leak schema detail. Callers translate the column to a user-facing,
+     * field-attributed message. Directive GUI-F3F5 STEP 3.
+     */
+    public static function last_failed_column(): ?string {
+        return self::$last_failed_column;
+    }
+
+    /**
+     * Extract the offending column name from a $wpdb / MySQL error string.
+     *
+     * Handles the common shapes wpdb produces for a rejected value:
+     *   - "Processing the value for the following field failed: <col>. ..."
+     *   - "Data too long for column '<col>' ..."
+     *   - "Column '<col>' cannot be null"
+     *   - "Unknown column '<col>' in 'field list'"
+     * Returns null when no column can be identified.
+     */
+    private static function parse_failed_column(string $error): ?string {
+        $patterns = [
+            '/following field failed:\s*`?([A-Za-z0-9_]+)`?/i',
+            '/Data too long for column\s+\'([A-Za-z0-9_]+)\'/i',
+            "/Column '([A-Za-z0-9_]+)' cannot be null/i",
+            "/Unknown column '([A-Za-z0-9_]+)'/i",
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $error, $m)) {
+                return $m[1];
+            }
+        }
+
+        return null;
     }
 
     /**
