@@ -125,7 +125,20 @@ class MealsDB_Encryption_Migrator {
                 }
 
                 foreach ($rows as $raw) {
-                    $kind = MealsDB_Encryption::classify_payload((string) $raw);
+                    $value = (string) $raw;
+                    $kind  = MealsDB_Encryption::classify_payload($value);
+                    // classify_payload() is purely structural and calls anything
+                    // >= 49 bytes 'new'. A long pre-HMAC legacy value (IV +
+                    // multi-block ciphertext, e.g. a lengthy diet_concerns /
+                    // customer_comments) also clears 49 bytes, so confirm a 'new'
+                    // verdict against an actual HMAC. If it doesn't authenticate,
+                    // it's really legacy (or corrupt) and MUST be counted as such
+                    // — otherwise the admin notice would report "0 legacy" and
+                    // invite disabling the legacy read path, locking these rows
+                    // out (the very thing run_full_harden exists to prevent).
+                    if ($kind === 'new' && !MealsDB_Encryption::is_authenticated_payload($value)) {
+                        $kind = 'legacy';
+                    }
                     $report[$col][$kind]++;
                 }
 

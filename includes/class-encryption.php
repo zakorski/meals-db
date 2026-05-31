@@ -235,67 +235,101 @@ class MealsDB_Encryption {
             throw new Exception('Invalid base64 encoding.');
         }
 
-        // The cipher key actually used to decrypt depends on which format the
-        // stored value is in (see the three branches below). Resolved per-branch.
-        $decrypt_key = $cipher_key;
+        $len = strlen($data);
 
-        // Check if this is new format with HMAC (min 49 bytes: HMAC(32) + IV(16) + ciphertext(1+))
-        if (strlen($data) >= 49) {
-            // New format with HMAC.
+        // Authenticated (new) format: HMAC(32) + IV(16) + ciphertext. We try
+        // this whenever the length COULD fit it (>= 49). But length alone is
+        // ambiguous: a pre-HMAC legacy value (IV + ciphertext, no HMAC) whose
+        // plaintext spans several AES blocks is ALSO >= 49 bytes — e.g. a long
+        // diet_concerns / customer_comments. So a failed HMAC here does NOT
+        // prove corruption; the bytes may be a long legacy value wearing the
+        // same length. On HMAC miss we therefore FALL THROUGH to the legacy
+        // interpretation over the same bytes instead of throwing. (Previously
+        // this threw 'Data integrity check failed.' and made run_full_harden()
+        // unable to decrypt/migrate those rows, blocking the v2 flip.)
+        if ($len >= 49) {
             $hmac = substr($data, 0, 32);
             $iv = substr($data, 32, 16);
             $ciphertext = substr($data, 48);
 
-            // Verify HMAC before decryption (prevents padding oracle attacks).
             // STR-10b transition: prefer the split-key MAC (current format). A
             // value still authenticated under the OLD shared master key verifies
             // only in the fallback branch — decrypt it with the master key and
-            // let the migrator rewrite it to split-key format. Two constant-time
+            // let the migrator rewrite it to split-key format. Constant-time
             // comparisons; no oracle is leaked because we never decrypt on a MAC
-            // miss.
+            // miss (we only reinterpret as the unauthenticated legacy layout,
+            // which carries its own documented padding-oracle caveat below).
             $split_hmac = hash_hmac('sha256', $iv . $ciphertext, $mac_key, true);
             if (hash_equals($split_hmac, $hmac)) {
-                $decrypt_key = $cipher_key;
-            } else {
-                $legacy_hmac = hash_hmac('sha256', $iv . $ciphertext, $master, true);
-                if (!hash_equals($legacy_hmac, $hmac)) {
-                    throw new Exception('Data integrity check failed.');
-                }
-                self::log_shared_key_decrypt_use();
-                $decrypt_key = $master;
+                return self::cbc_decrypt($ciphertext, $cipher_key, $iv);
             }
-        } elseif (strlen($data) >= 17) {
-            // Legacy format without HMAC. Decryption proceeds without
-            // integrity verification, which is the classic Vaudenay
-            // padding-oracle setup against AES-CBC. Refuse this branch
-            // entirely once the operator has confirmed via the encryption
-            // migrator that no legacy payloads remain in the database.
-            // These pre-date subkey derivation: they were encrypted with the
-            // master key directly.
+
+            $legacy_hmac = hash_hmac('sha256', $iv . $ciphertext, $master, true);
+            if (hash_equals($legacy_hmac, $hmac)) {
+                self::log_shared_key_decrypt_use();
+                return self::cbc_decrypt($ciphertext, $master, $iv);
+            }
+
+            // Neither authenticated interpretation verified. If legacy reads are
+            // administratively disabled we cannot reinterpret these bytes, so
+            // this really is corrupt — preserve the original error.
+            if (self::legacy_decrypt_disabled()) {
+                throw new Exception('Data integrity check failed.');
+            }
+            // else: fall through to the legacy IV+ciphertext attempt below.
+        }
+
+        // Legacy format without HMAC: IV(16) + ciphertext(rest), encrypted under
+        // the master key directly (pre-dates subkey derivation). Decryption here
+        // proceeds without integrity verification — the classic Vaudenay
+        // padding-oracle setup against AES-CBC — so refuse this branch once the
+        // operator has confirmed via run_full_harden() that no legacy payloads
+        // remain. Reached for SHORT legacy values (17..48 bytes) AND for LONG
+        // legacy values that failed the authenticated checks above.
+        if ($len >= 17) {
             if (self::legacy_decrypt_disabled()) {
                 throw new Exception('Legacy encrypted payload rejected: legacy decryption is disabled.');
             }
 
-            self::log_legacy_decrypt_use();
             $iv = substr($data, 0, 16);
             $ciphertext = substr($data, 16);
-            $decrypt_key = $master;
-        } else {
-            throw new Exception('Invalid encrypted payload.');
+            $plaintext = openssl_decrypt(
+                $ciphertext,
+                'aes-256-cbc',
+                $master,
+                OPENSSL_RAW_DATA,
+                $iv
+            );
+
+            if ($plaintext === false) {
+                // Every interpretation is now exhausted (the >= 49 authenticated
+                // HMAC checks above, and this legacy layout) — the value is
+                // genuinely unreadable.
+                throw new Exception('Data integrity check failed.');
+            }
+
+            self::log_legacy_decrypt_use();
+            return $plaintext;
         }
 
-        $plaintext = openssl_decrypt(
-            $ciphertext,
-            'aes-256-cbc',
-            $decrypt_key,
-            OPENSSL_RAW_DATA,
-            $iv
-        );
+        throw new Exception('Invalid encrypted payload.');
+    }
 
+    /**
+     * AES-256-CBC raw decrypt, throwing on failure. Shared by the authenticated
+     * decrypt branches (split-key and shared-key) so the openssl call and its
+     * error handling live in one place.
+     *
+     * @param string $ciphertext Raw ciphertext bytes.
+     * @param string $key        Raw 32-byte key.
+     * @param string $iv         Raw 16-byte IV.
+     * @return string
+     */
+    private static function cbc_decrypt(string $ciphertext, string $key, string $iv): string {
+        $plaintext = openssl_decrypt($ciphertext, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv);
         if ($plaintext === false) {
             throw new Exception('Decryption failed.');
         }
-
         return $plaintext;
     }
 
@@ -380,6 +414,49 @@ class MealsDB_Encryption {
             return false;
         }
         return hash_equals($expected, $hmac);
+    }
+
+    /**
+     * Whether a stored value is authenticated under EITHER the split MAC subkey
+     * (STR-10b current format) or the legacy shared master key.
+     *
+     * Key-aware companion to is_split_key_payload(). Used to disambiguate the
+     * length-overlap that classify_payload() (purely structural) cannot resolve:
+     * a long pre-HMAC legacy value (IV + multi-block ciphertext) is >= 49 bytes
+     * and so looks structurally 'new', but no HMAC over it will verify. Anything
+     * that does NOT authenticate here, despite being long enough, is really a
+     * legacy or corrupt value — which is exactly what inventory() must count as
+     * legacy so the operator is not told it's safe to disable the legacy read
+     * path while such rows still exist (that would lock them out).
+     *
+     * Fail-safe: if the key is unavailable (so no MAC can be computed) this
+     * returns false, biasing toward "treat as legacy" rather than risking a
+     * premature legacy-disable.
+     *
+     * @param string $value Raw column value.
+     * @return bool
+     */
+    public static function is_authenticated_payload(string $value): bool {
+        if ($value === '') {
+            return false;
+        }
+        $data = base64_decode($value, true);
+        if ($data === false || strlen($data) < 49) {
+            return false;
+        }
+        $hmac = substr($data, 0, 32);
+        $iv = substr($data, 32, 16);
+        $ciphertext = substr($data, 48);
+        try {
+            $split = hash_hmac('sha256', $iv . $ciphertext, self::mac_key(), true);
+            if (hash_equals($split, $hmac)) {
+                return true;
+            }
+            $shared = hash_hmac('sha256', $iv . $ciphertext, self::get_key(), true);
+            return hash_equals($shared, $hmac);
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**

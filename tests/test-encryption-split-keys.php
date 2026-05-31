@@ -20,6 +20,16 @@ MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 
 if (!function_exists('__')) { function __(string $t, string $d = 'default') { return $t; } }
 
+// Toggleable option store: lets us exercise both the transition state (legacy
+// reads enabled) and the hardened state (legacy disabled). Defaults to empty so
+// index_format_is_v2() and legacy_decrypt_disabled() both read false.
+$GLOBALS['__opts'] = [];
+if (!function_exists('get_option')) {
+    function get_option(string $name, $default = false) {
+        return array_key_exists($name, $GLOBALS['__opts']) ? $GLOBALS['__opts'][$name] : $default;
+    }
+}
+
 // 32-byte master key, base64 with the required 'base64:' prefix.
 $master_bytes = str_repeat("\x2b", 32);
 if (!defined('MEALS_DB_KEY')) {
@@ -61,13 +71,33 @@ assert_false(hash_equals($master_mac, $stored_mac), 'T-1: split-key MAC is NOT t
 $tampered_raw = $raw;
 $tampered_raw[60] = ($tampered_raw[60] === "\x00") ? "\x01" : "\x00"; // flip a ciphertext byte
 $tampered = base64_encode($tampered_raw);
-$threw = false;
+
+// Transition state (legacy reads enabled): the strong guarantee is that a
+// tampered authenticated value never decrypts to the ORIGINAL plaintext. It may
+// throw on the failed HMAC, or — because length alone can't tell a tampered
+// new-format value from a long legacy one — fall through to the legacy layout
+// and yield garbage; either way it must not return the original. (Asserting a
+// throw here would be probabilistic on the legacy padding check.)
+$tamper_out = null;
+$tamper_threw = false;
+try {
+    $tamper_out = MealsDB_Encryption::decrypt($tampered);
+} catch (\Throwable $e) {
+    $tamper_threw = true;
+}
+assert_true($tamper_threw || $tamper_out !== $plain, 'T-2: tampered value never decrypts to the original plaintext (legacy enabled)');
+
+// Hardened state (legacy reads disabled, post-migration): the authenticated
+// path is strict — a tampered split-key value MUST throw, no legacy fall-through.
+$GLOBALS['__opts']['mealsdb_legacy_decrypt_disabled'] = true;
+$strict_threw = false;
 try {
     MealsDB_Encryption::decrypt($tampered);
 } catch (\Throwable $e) {
-    $threw = (strpos($e->getMessage(), 'integrity') !== false);
+    $strict_threw = (strpos($e->getMessage(), 'integrity') !== false);
 }
-assert_true($threw, 'T-2: a flipped ciphertext byte fails the split-key HMAC');
+assert_true($strict_threw, 'T-2: tampered value throws an integrity error when legacy is disabled');
+$GLOBALS['__opts'] = []; // restore: later T-4 cases need legacy reads enabled
 
 // ---------------------------------------------------------------------------
 // T-3 — keyed index (create_index_v2).
@@ -108,6 +138,30 @@ $pre_iv = random_bytes(16);
 $pre_ct = openssl_encrypt('pre-hmac legacy', 'aes-256-cbc', $master, OPENSSL_RAW_DATA, $pre_iv);
 $pre_value = base64_encode($pre_iv . $pre_ct);
 assert_equal('pre-hmac legacy', MealsDB_Encryption::decrypt($pre_value), 'T-4: pre-HMAC legacy value still decrypts (no lock-out)');
+
+// ---------------------------------------------------------------------------
+// T-4b — LONG pre-HMAC legacy value (regression): a legacy IV+CT whose
+// plaintext spans several AES blocks is >= 49 raw bytes, so it collides with
+// the authenticated-format length. decrypt() must NOT treat the first 32 bytes
+// as an HMAC and give up — it must fall through to the legacy IV+CT layout.
+// Realistic case: a long diet_concerns / customer_comments.
+// ---------------------------------------------------------------------------
+$long_plain = str_repeat('Severe nut allergy; avoid all tree nuts and peanuts. ', 4); // ~210 chars, many blocks
+$long_iv = random_bytes(16);
+$long_ct = openssl_encrypt($long_plain, 'aes-256-cbc', $master, OPENSSL_RAW_DATA, $long_iv);
+$long_legacy = base64_encode($long_iv . $long_ct);
+
+assert_true(strlen(base64_decode($long_legacy)) >= 49, 'T-4b: long legacy value is >= 49 raw bytes (collides with new-format length)');
+assert_equal('new', MealsDB_Encryption::classify_payload($long_legacy), 'T-4b: structural classify is ambiguous (reports new)');
+assert_false(MealsDB_Encryption::is_authenticated_payload($long_legacy), 'T-4b: but it does NOT authenticate (no valid HMAC)');
+assert_false(MealsDB_Encryption::is_split_key_payload($long_legacy), 'T-4b: and it is not split-key (migrator will convert it)');
+assert_equal($long_plain, MealsDB_Encryption::decrypt($long_legacy), 'T-4b: long legacy value decrypts via the fall-through, not a throw');
+
+// A genuine split-key value of the same length still authenticates (the
+// fall-through must not weaken integrity for real new-format values).
+$long_new = MealsDB_Encryption::encrypt($long_plain);
+assert_true(MealsDB_Encryption::is_authenticated_payload($long_new), 'T-4b: a real split-key value of similar length authenticates');
+assert_equal($long_plain, MealsDB_Encryption::decrypt($long_new), 'T-4b: real split-key value round-trips');
 
 // ---------------------------------------------------------------------------
 // Output

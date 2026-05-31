@@ -106,6 +106,20 @@ class HardenFakeWpdb {
         return false;
     }
 
+    public function get_col($query, $col = 0) {
+        // inventory() builds: SELECT `<column>` AS v FROM ... LIMIT %d OFFSET %d
+        // (column baked in via sprintf; LIMIT/OFFSET bound through prepare()).
+        if (!preg_match('/SELECT `([^`]+)` AS v/i', $query, $m)) {
+            return [];
+        }
+        $column = $m[1];
+        $limit  = (int) ($this->lastArgs[0] ?? PHP_INT_MAX);
+        $offset = (int) ($this->lastArgs[1] ?? 0);
+        usort($this->rows, fn($a, $b) => $a['client_id'] <=> $b['client_id']);
+        $slice = array_slice($this->rows, $offset, $limit);
+        return array_map(fn($r) => $r[$column] ?? null, $slice);
+    }
+
     public function query($sql) { return true; } // transactions are no-ops here
 
     public function find($cid) {
@@ -128,12 +142,22 @@ function assert_equal($expected, $actual, string $label) {
 function assert_true($c, string $l) { assert_equal(true, (bool) $c, $l); }
 function assert_false($c, string $l) { assert_equal(false, (bool) $c, $l); }
 
-// Build a legacy SHARED-KEY value (the pre-STR-10b on-disk format).
+// Build a legacy SHARED-KEY value (the pre-STR-10b on-disk format: HMAC'd and
+// encrypted under the single master key).
 function legacy_shared_value(string $plain, string $master): string {
     $iv  = random_bytes(16);
     $ct  = openssl_encrypt($plain, 'aes-256-cbc', $master, OPENSSL_RAW_DATA, $iv);
     $mac = hash_hmac('sha256', $iv . $ct, $master, true);
     return base64_encode($mac . $iv . $ct);
+}
+
+// Build a pre-HMAC legacy value (IV + ciphertext, no HMAC). With a long
+// plaintext this is >= 49 bytes and collides with the authenticated length —
+// the regression case that must still migrate.
+function legacy_prehmac_value(string $plain, string $master): string {
+    $iv = random_bytes(16);
+    $ct = openssl_encrypt($plain, 'aes-256-cbc', $master, OPENSSL_RAW_DATA, $iv);
+    return base64_encode($iv . $ct);
 }
 
 // Column set the harden SELECT expects to exist on each row.
@@ -162,9 +186,15 @@ $INIT1 = 'JAD';
 
 $db = new HardenFakeWpdb();
 
+// A long free-text comment stored as a pre-HMAC legacy value (multi-block →
+// >= 49 bytes). This is the regression payload: before the fix, harden could
+// not decrypt it and the run aborted, blocking v2 activation.
+$LONG_COMMENT = str_repeat('No dairy, no shellfish; deliver to side door after 4pm. ', 4);
+
 $r1 = blank_row(1);
 $r1['individual_id']           = legacy_shared_value($ID1, $master_bytes);
 $r1['individual_id_index']     = MealsDB_Encryption::create_index_v1($ID1); // v1 hash on disk
+$r1['customer_comments']       = legacy_prehmac_value($LONG_COMMENT, $master_bytes);
 $r1['delivery_initials']       = $INIT1;
 $r1['delivery_initials_index'] = MealsDB_Encryption::create_index_v1($INIT1);
 
@@ -178,6 +208,13 @@ $GLOBALS['wpdb'] = $db;
 // Pre-condition sanity.
 assert_false(MealsDB_Encryption::is_split_key_payload($db->find(1)['individual_id']), 'pre: row1 is shared-key, not split');
 assert_false(MealsDB_Encryption::index_format_is_v2(), 'pre: index format is still v1');
+
+// inventory() must count the LONG pre-HMAC customer_comments as legacy, NOT as
+// 'new' — otherwise the admin notice would invite disabling the legacy path and
+// lock the row out. This is the reclassification guard.
+$inv = MealsDB_Encryption_Migrator::inventory();
+assert_equal(1, $inv['customer_comments']['legacy'], 'pre: long pre-HMAC comment is counted legacy (not new)');
+assert_equal(0, $inv['customer_comments']['new'], 'pre: long pre-HMAC comment is NOT miscounted as new');
 
 // ---------------------------------------------------------------------------
 // T-5 — run the harden pass: convert blobs to split-key AND indexes to v2.
@@ -194,6 +231,16 @@ assert_true($res['index_v2_activated'], 'T-5: v2 index format activated after a 
 $row1 = $db->find(1);
 assert_true(MealsDB_Encryption::is_split_key_payload($row1['individual_id']), 'T-5: row1 blob is now split-key');
 assert_equal($ID1, MealsDB_Encryption::decrypt($row1['individual_id']), 'T-5: row1 blob still decrypts to original');
+
+// Regression: the LONG pre-HMAC comment migrated too — it is now split-key and
+// decrypts back to the original multi-block plaintext.
+assert_true(MealsDB_Encryption::is_split_key_payload($row1['customer_comments']), 'T-5: long legacy comment is now split-key');
+assert_equal($LONG_COMMENT, MealsDB_Encryption::decrypt($row1['customer_comments']), 'T-5: long legacy comment decrypts to original after migration');
+
+// And inventory is now clean for that column (no legacy left) — only NOW would
+// it be safe to disable the legacy read path.
+$inv2 = MealsDB_Encryption_Migrator::inventory();
+assert_equal(0, $inv2['customer_comments']['legacy'], 'T-5: no legacy comments remain post-migration');
 
 // Indexes are now v2 (keyed HMAC), not the old v1 bare hash.
 assert_equal(MealsDB_Encryption::create_index_v2($ID1), $row1['individual_id_index'], 'T-5: row1 index recomputed to v2');
