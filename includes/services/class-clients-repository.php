@@ -207,6 +207,25 @@ class MealsDB_Clients_Repository {
                     }
                 }
 
+                // STR-LOG (directive GUI-F3F5-v2 STEP 4): a failed CORE write was
+                // previously visible only in the PHP error_log, so the re-test's
+                // Event Log (filtered error/critical) showed nothing for a
+                // client-create DB failure. Surface it on the operational trunk
+                // so insert failures are auditable on the dashboard/digest. Only
+                // the offending COLUMN name travels in context — never the raw
+                // value (PII) and never the raw $wpdb error (schema detail).
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity'  => 'error',
+                        'category'  => 'client',
+                        'subsystem' => 'clients_repository',
+                        'event'     => 'client.create.db_error',
+                        'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message'   => 'Client INSERT was rejected by the database.',
+                        'context'   => ['last_failed_column' => self::$last_failed_column],
+                    ]);
+                }
+
                 return false;
             }
 
@@ -308,11 +327,18 @@ class MealsDB_Clients_Repository {
             return false;
         }
 
+        self::$last_failed_column = null;
+
         try {
             $result = $wpdb->update($this->table_name, $data, ['client_id' => $client_id]);
 
             if ($result === false) {
-                error_log('[MealsDB Clients Repository] Failed to execute client update: ' . ($wpdb->last_error ?: 'unknown error'));
+                $last = $wpdb->last_error ?: 'unknown error';
+                error_log('[MealsDB Clients Repository] Failed to execute client update: ' . $last);
+                // Parse (never echo) the offending column so the edit view can
+                // attribute the failure to a field, mirroring create_client.
+                // Directive GUI-F3F5 STEP 3.
+                self::$last_failed_column = self::parse_failed_column($last);
                 return false;
             }
 
@@ -659,6 +685,34 @@ class MealsDB_Clients_Repository {
         ), ARRAY_A);
 
         return is_array($row) ? $row : null;
+    }
+
+    /**
+     * Return the client_id of the (first) meals_clients row linked to a given
+     * WordPress user, or null when none exists.
+     *
+     * Used by the Validate endpoint (directive GUI-F3F5-v2) to flag — but never
+     * hard-block — creating a second client for a WP user that already has one.
+     * Per audit MAJ-1, a shared wp_user_id is RARE BUT LEGITIMATE (a dual
+     * SDNB/Veteran recipient, or a government client buying extra meals
+     * personally), so this is informational only. Lightweight (selects the PK
+     * alone) versus get_by_wp_user_id which pulls the full encrypted row.
+     */
+    public static function find_client_id_by_wp_user(int $wp_user_id): ?int {
+        global $wpdb;
+        if ($wp_user_id <= 0 || !($wpdb instanceof wpdb)) {
+            return null;
+        }
+
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $escaped = str_replace('`', '``', $table);
+
+        $id = $wpdb->get_var($wpdb->prepare(
+            "SELECT client_id FROM `{$escaped}` WHERE wp_user_id = %d ORDER BY client_id ASC LIMIT 1",
+            $wp_user_id
+        ));
+
+        return ($id !== null && (int) $id > 0) ? (int) $id : null;
     }
 
     /**

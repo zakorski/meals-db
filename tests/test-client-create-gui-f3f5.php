@@ -56,6 +56,24 @@ if (!function_exists('sanitize_textarea_field')) {
     function sanitize_textarea_field($v) { return trim((string) $v); }
 }
 
+// WP-user existence stub for directive GUI-F3F5-v2. save()/update() now require
+// wordpress_user_id to name an EXISTING WP user; the form verifies via
+// get_userdata. Treat the IDs in $GLOBALS['mealsdb_known_wp_users'] as real and
+// everything else as nonexistent so the create path can be exercised both ways.
+if (!class_exists('WP_User')) { class WP_User { public $ID = 0; } }
+$GLOBALS['mealsdb_known_wp_users'] = [500, 777];
+if (!function_exists('get_userdata')) {
+    function get_userdata($id) {
+        $id = (int) $id;
+        if (!in_array($id, $GLOBALS['mealsdb_known_wp_users'] ?? [], true)) {
+            return false;
+        }
+        $u = new WP_User();
+        $u->ID = $id;
+        return $u;
+    }
+}
+
 // $wpdb stub: records insert()/update() payloads and can be flipped to fail an
 // insert (with a chosen last_error) to exercise the STEP-3 attribution path.
 if (!class_exists('wpdb')) { class wpdb {} }
@@ -127,6 +145,9 @@ function valid_private_payload(array $overrides = []): array {
         'payment_method'      => 'Cheque',
         'delivery_initials'   => 'ACL',
         'client_email'        => 'alex@example.com',
+        // GUI-F3F5-v2: every client links to an existing WP user. 500 is in the
+        // get_userdata stub's known set above.
+        'wordpress_user_id'   => '500',
     ], $overrides);
 }
 
@@ -211,6 +232,59 @@ $parse->setAccessible(true);
 check($parse->invoke(null, "Data too long for column 'province' at row 1") === 'province', 'parses "Data too long for column" shape');
 check($parse->invoke(null, "Unknown column 'phone_primary' in 'field list'") === 'phone_primary', 'parses "Unknown column" shape');
 check($parse->invoke(null, 'some unrelated error') === null, 'returns null when no column is identifiable');
+
+// ---------------------------------------------------------------------------
+// GUI-F3F5-v2 T-5: create REQUIRES a validated WP user. A blank
+// wordpress_user_id is a named field error with NO insert attempted and NO
+// raw "Database error occurred." (the actual root-cause fix).
+// ---------------------------------------------------------------------------
+$wpdb->failInsert = false;
+$wpdb->lastInsert = null;
+$savedBlank = MealsDB_Client_Form::save(valid_private_payload(['wordpress_user_id' => '']));
+check($savedBlank === false, 'create with blank WP user returns false (no userless client)');
+check($wpdb->lastInsert === null, 'create with blank WP user attempts NO insert');
+$blankMsg = MealsDB_Client_Form::last_save_error();
+check(stripos($blankMsg, 'WordPress User ID') !== false, 'blank WP user yields a named WordPress-User-ID error: ' . $blankMsg);
+check(stripos($blankMsg, 'Database error') === false, 'blank WP user does NOT surface "Database error occurred."');
+
+// T-8: a syntactically-valid but NONEXISTENT id (bypassing the Validate button)
+// is rejected server-side with a named error — never a raw DB failure.
+$wpdb->lastInsert = null;
+$savedGhost = MealsDB_Client_Form::save(valid_private_payload(['wordpress_user_id' => '999999']));
+check($savedGhost === false, 'create with nonexistent WP user returns false');
+check($wpdb->lastInsert === null, 'create with nonexistent WP user attempts NO insert');
+check(stripos(MealsDB_Client_Form::last_save_error(), '999999') !== false, 'nonexistent WP user error names the offending id');
+
+// A non-numeric id is rejected too (not just blank/nonexistent).
+$wpdb->lastInsert = null;
+$savedBad = MealsDB_Client_Form::save(valid_private_payload(['wordpress_user_id' => 'abc']));
+check($savedBad === false, 'create with non-numeric WP user returns false');
+
+// T-5 positive: WITH a valid existing WP user the client persists and the
+// insert carries wp_user_id (DB-side), never the form-side name.
+$wpdb->lastInsert = null;
+$savedOk = MealsDB_Client_Form::save(valid_private_payload(['wordpress_user_id' => '777']));
+check($savedOk === true, 'create WITH a valid WP user persists (F-R1)');
+check((int) ($wpdb->lastInsert['wp_user_id'] ?? 0) === 777, 'insert carries wp_user_id (DB-side) = 777');
+check(!array_key_exists('wordpress_user_id', $wpdb->lastInsert ?? []), 'insert has no form-side wordpress_user_id column');
+
+// T-6: update enforces the WP user identically — a blank wordpress_user_id on
+// update is a named error (NOT a silent null), and a present valid id is fine.
+$wpdb->lastUpdate = null;
+$updBlank = MealsDB_Client_Form::update(7, valid_private_payload(['wordpress_user_id' => '']));
+check($updBlank === false, 'update with blank WP user returns false (parity with create)');
+check(stripos(MealsDB_Client_Form::last_save_error(), 'WordPress User ID') !== false, 'update blank WP user yields a named error');
+
+$wpdb->lastUpdate = null;
+$updOk = MealsDB_Client_Form::update(7, valid_private_payload(['wordpress_user_id' => '500']));
+check($updOk === true, 'update WITH a valid WP user succeeds');
+check((int) ($wpdb->lastUpdate['wp_user_id'] ?? 0) === 500, 'update carries wp_user_id (DB-side) = 500');
+
+// A partial update that does NOT touch wordpress_user_id is NOT forced to
+// resupply it (the existing row already carries a valid link).
+$wpdb->lastUpdate = null;
+$updPartial = MealsDB_Client_Form::update(7, ['first_name' => 'Renamed', 'delivery_initials' => 'RNM']);
+check($updPartial === true, 'partial update without wordpress_user_id still succeeds');
 
 // ---------------------------------------------------------------------------
 if (!empty($failures)) {

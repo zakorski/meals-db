@@ -41,7 +41,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $form_values = $refreshed;
             }
         } else {
-            $errors[] = __('Database error occurred.', 'meals-db');
+            // Field-attributed message when update() identified the offending
+            // field (e.g. a missing/invalid WordPress User ID under directive
+            // GUI-F3F5-v2, or a column the repository named); generic fallback
+            // otherwise. The raw $wpdb error stays in the log.
+            $save_error = MealsDB_Client_Form::last_save_error();
+            $errors[] = $save_error !== '' ? $save_error : __('Database error occurred.', 'meals-db');
         }
     } else {
         $errors = $validation['errors'];

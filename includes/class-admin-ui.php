@@ -474,6 +474,46 @@ class MealsDB_Admin_UI {
             true
         );
 
+        // WP-user anchor (Validate + Pull Data) — only on the Add/Edit Client
+        // views, where the WP-User-ID field renders. Directive GUI-F3F5-v2.
+        if ($tab === 'add' || ($tab === 'clients' && $action === 'edit')) {
+            $wp_user_script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/client-wp-user.js';
+            $wp_user_script_version = file_exists($wp_user_script_path) ? filemtime($wp_user_script_path) : MEALS_DB_VERSION;
+            wp_enqueue_script(
+                'mealsdb-client-wp-user',
+                MEALS_DB_PLUGIN_URL . 'assets/js/client-wp-user.js',
+                ['jquery', 'mealsdb-admin', $notice_handle],
+                $wp_user_script_version,
+                true
+            );
+
+            $wp_user_data = [
+                'ajaxUrl'  => admin_url('admin-ajax.php'),
+                'nonce'    => wp_create_nonce('mealsdb_nonce'),
+                'messages' => [
+                    'enterId'        => __('Enter a positive WordPress User ID.', 'meals-db'),
+                    'validating'     => __('Validating…', 'meals-db'),
+                    'validated'      => __('Confirmed:', 'meals-db'),
+                    'notFound'       => __('No WordPress user with that ID.', 'meals-db'),
+                    'alreadyLinked'  => __('already linked to client #', 'meals-db'),
+                    'validateFirst'  => __('Validate the WordPress User ID before pulling data.', 'meals-db'),
+                    'pulling'        => __('Loading data from the WordPress user…', 'meals-db'),
+                    'populated'      => __('Populated', 'meals-db'),
+                    'populatedFields' => __('fields from WP user', 'meals-db'),
+                    'fieldsLower'    => __('fields.', 'meals-db'),
+                    'reviewSave'     => __('review and save.', 'meals-db'),
+                    'pullFailed'     => __('Unable to load data from the WordPress user.', 'meals-db'),
+                    'requiredOnSave' => __('A WordPress User ID is required. Use Validate to confirm it.', 'meals-db'),
+                    'error'          => __('An unexpected error occurred. Please try again.', 'meals-db'),
+                ],
+            ];
+            wp_add_inline_script(
+                'mealsdb-client-wp-user',
+                'window.mealsdbWpUser = ' . wp_json_encode($wp_user_data) . ';',
+                'before'
+            );
+        }
+
         $mealsdb_data = [
             'nonce'   => wp_create_nonce('mealsdb_nonce'),
             'ajaxUrl' => admin_url('admin-ajax.php'),
@@ -1222,12 +1262,22 @@ class MealsDB_Admin_UI {
             },
             static function (array $client) {
                 ?>
-                <tr data-client-type="sdnb,veteran,private">
+                <tr data-client-type="sdnb,veteran,private" data-required-for="sdnb,veteran,private">
                     <th>
-                        <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID', 'meals-db'); ?></label>
-                        <span class="description"><?php esc_html_e('Optional link to the matching WordPress user account.', 'meals-db'); ?></span>
+                        <label for="wordpress_user_id"><?php esc_html_e('WordPress User ID *', 'meals-db'); ?></label>
+                        <span class="description"><?php esc_html_e('Every client links to an existing WordPress user. Enter the ID, then Validate to confirm the person and (optionally) Pull Data to auto-fill the form.', 'meals-db'); ?></span>
                     </th>
-                    <td><input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" value="<?php echo esc_attr($client['wordpress_user_id'] ?? ''); ?>" /></td>
+                    <td>
+                        <div class="mealsdb-wp-user-tools">
+                            <input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" required data-base-required="1" value="<?php echo esc_attr($client['wordpress_user_id'] ?? ''); ?>" />
+                            <div class="mealsdb-wp-user-buttons">
+                                <button type="button" class="button" id="mealsdb-validate-wp-user"><?php esc_html_e('Validate', 'meals-db'); ?></button>
+                                <button type="button" class="button" id="mealsdb-pull-wp-user" disabled><?php esc_html_e('Pull Data', 'meals-db'); ?></button>
+                            </div>
+                            <div id="wp-user-validation-status"></div>
+                            <div class="mealsdb-wp-user-message" aria-live="polite"></div>
+                        </div>
+                    </td>
                 </tr>
                 <?php
             },

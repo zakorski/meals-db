@@ -807,8 +807,22 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        if (array_key_exists('wordpress_user_id', $sanitized) && $sanitized['wordpress_user_id'] === '') {
-            unset($sanitized['wordpress_user_id']);
+        // GUI-F3F5-v2 (was the ROOT cause of "Database error occurred." on
+        // create): meals_clients.wp_user_id is BIGINT UNSIGNED NOT NULL with no
+        // default — every client links to an existing WordPress user. The old
+        // code silently UNSET a blank wordpress_user_id here, omitting the
+        // column from the INSERT, which MySQL then rejected as a raw DB error
+        // (the operator only saw "Database error occurred." and a stranded
+        // draft). Validate the linkage authoritatively at save time — never
+        // trusting the form's Validate button — and turn a missing / malformed
+        // / nonexistent user into a named field error instead. create() and
+        // update() now enforce this identically (removes the prior
+        // unset-vs-null divergence).
+        $wp_user_error = self::validate_wp_user_link($sanitized['wordpress_user_id'] ?? null);
+        if ($wp_user_error !== '') {
+            self::$last_save_error = $wp_user_error;
+            error_log('[MealsDB] Save aborted: ' . $wp_user_error);
+            return false;
         }
 
         // Map form field names to database column names
@@ -924,6 +938,56 @@ class MealsDB_Client_Form {
     }
 
     /**
+     * Validate that a (form-side) wordpress_user_id links to a real WP user.
+     *
+     * Returns '' when the value is a positive integer naming an existing
+     * WordPress user; otherwise a user-facing, field-attributed message
+     * explaining what to fix. This is the authoritative server-side gate for
+     * the create/update WP-user requirement (directive GUI-F3F5-v2 STEP 3):
+     * it runs at save time and does NOT trust the form's Validate button, so a
+     * blank, malformed, or syntactically-valid-but-nonexistent ID submitted
+     * directly can never reach the NOT NULL insert as a raw DB failure.
+     *
+     * The get_userdata() existence check is guarded with function_exists so the
+     * form can load in non-WP contexts (WP-CLI, test fixtures); where the WP
+     * user API is unavailable the integer shape is still enforced.
+     *
+     * @param mixed $value Raw form-side value (string from $_POST, or null).
+     */
+    private static function validate_wp_user_link($value): string {
+        $raw = is_string($value) ? trim($value) : (is_scalar($value) ? trim((string) $value) : '');
+        $label = self::get_field_label('wordpress_user_id', 'WordPress User ID');
+
+        if ($raw === '' || !ctype_digit($raw) || (int) $raw <= 0) {
+            return sprintf(
+                /* translators: %s: the WordPress User ID field label. */
+                __('Could not save: %s is required and must link to an existing WordPress user. Use "Validate" to confirm the ID before saving.', 'meals-db'),
+                $label
+            );
+        }
+
+        $uid = (int) $raw;
+
+        if (function_exists('get_userdata')) {
+            $user = get_userdata($uid);
+            // Accept a real WP_User, or any object exposing a positive ID (test
+            // fixtures stub get_userdata without the full WP_User class). A
+            // false/null return means no such user.
+            $exists = ($user instanceof WP_User)
+                || (is_object($user) && isset($user->ID) && (int) $user->ID > 0);
+            if (!$exists) {
+                return sprintf(
+                    /* translators: %d: the WordPress User ID that was not found. */
+                    __('Could not save: no WordPress user has ID %d. Use "Validate" to confirm the ID before saving.', 'meals-db'),
+                    $uid
+                );
+            }
+        }
+
+        return '';
+    }
+
+    /**
      * Update an existing client record.
      *
      * @param int   $client_id
@@ -963,8 +1027,21 @@ class MealsDB_Client_Form {
             return false;
         }
 
-        if (array_key_exists('wordpress_user_id', $sanitized) && $sanitized['wordpress_user_id'] === '') {
-            $sanitized['wordpress_user_id'] = null;
+        // GUI-F3F5-v2: enforce the WP-user linkage on update exactly as create
+        // does. The old code set a blank wordpress_user_id to null here — both
+        // wrong for a NOT NULL column and divergent from create's unset. A
+        // client must always link to a real WP user, so a blank/invalid/
+        // nonexistent value is a named field error, not a silent null. Only
+        // gate when the field is actually present in the submission: a partial
+        // update that doesn't touch wordpress_user_id must not be forced to
+        // resupply it (the existing row already carries a valid link).
+        if (array_key_exists('wordpress_user_id', $sanitized)) {
+            $wp_user_error = self::validate_wp_user_link($sanitized['wordpress_user_id']);
+            if ($wp_user_error !== '') {
+                self::$last_save_error = $wp_user_error;
+                error_log('[MealsDB] Update aborted: ' . $wp_user_error);
+                return false;
+            }
         }
 
         // Map form field names to database column names
@@ -1017,9 +1094,21 @@ class MealsDB_Client_Form {
             return false;
         }
 
+        self::$last_save_error = '';
+
         $repository = new MealsDB_Clients_Repository();
 
-        return $repository->update_client($client_id, $encrypted);
+        $updated = $repository->update_client($client_id, $encrypted);
+        if (!$updated) {
+            // Field-attributed message where the repository named the offending
+            // column (directive GUI-F3F5 STEP 3), so the edit view can tell the
+            // operator which field to fix instead of "Database error occurred."
+            self::$last_save_error = self::describe_write_failure(
+                MealsDB_Clients_Repository::last_failed_column()
+            );
+        }
+
+        return $updated;
     }
 
     /**
@@ -1669,6 +1758,19 @@ class MealsDB_Client_Form {
      */
     private static function is_valid_province_code(string $value): bool {
         return in_array(strtoupper(trim($value)), self::$province_codes, true);
+    }
+
+    /**
+     * Public passthrough to the canonical province normaliser.
+     *
+     * MealsDB_WP_User_Mapper (the Pull-Data path, directive GUI-F3F5-v2) needs
+     * to normalise a WP user's billing_state to the same 2-letter code the
+     * form stores, and the rule must not drift from validate()/save(). Rather
+     * than reimplement the mapping there, expose the single source of truth
+     * (normalize_province_code) so both callers stay in sync (STR-1 lesson).
+     */
+    public static function to_province_code(string $value): string {
+        return self::normalize_province_code($value);
     }
 
     /**
