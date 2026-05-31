@@ -252,6 +252,36 @@ tr[data-ignored="true"] {
     color: #842029;
 }
 
+/* WP-user anchor tools (Validate + Pull Data) — directive GUI-F3F5-v2.
+   Mirrors the initials-tools layout for visual consistency. */
+.mealsdb-wp-user-tools {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 400px;
+}
+
+.mealsdb-wp-user-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.mealsdb-wp-user-message {
+    font-weight: 600;
+}
+
+.mealsdb-wp-user-message.is-success {
+    color: #0f5132;
+}
+
+.mealsdb-wp-user-message.is-error {
+    color: #842029;
+}
+
+.mealsdb-wp-user-message.is-warning {
+    color: #b26200;
+}
+
 /* -----------------------------
    Client Table Modal
 ------------------------------ */

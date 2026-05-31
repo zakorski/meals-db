@@ -21,6 +21,130 @@ class MealsDB_Ajax_Clients {
         add_action('wp_ajax_mealsdb_activate_client', [self::class, 'activate_client']);
         add_action('wp_ajax_mealsdb_deactivate_client', [self::class, 'deactivate_client']);
         add_action('wp_ajax_mealsdb_delete_client', [self::class, 'delete_client']);
+        // GUI-F3F5-v2: anchor client creation to a validated WP user.
+        add_action('wp_ajax_mealsdb_validate_wp_user', [self::class, 'validate_wp_user']);
+        add_action('wp_ajax_mealsdb_pull_wp_user_data', [self::class, 'pull_wp_user_data']);
+    }
+
+    /**
+     * Validate that a WordPress User ID maps to a real user, echoing the
+     * user's billing name so the operator can visually confirm the right
+     * person before linking. Read-only. Directive GUI-F3F5-v2 STEP 1a.
+     *
+     * Also reports whether that WP user is ALREADY linked to a client — a
+     * warning, not a block: per audit MAJ-1 a shared wp_user_id is rare but
+     * legitimate (dual SDNB/Veteran recipient, or a govt client buying extra
+     * meals personally), so the operator is informed rather than stopped.
+     */
+    public static function validate_wp_user(): void {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meals-db')]);
+        }
+
+        self::enforce_lookup_rate_limit();
+
+        $uid = isset($_POST['wp_user_id']) ? absint(wp_unslash($_POST['wp_user_id'])) : 0;
+        if ($uid <= 0) {
+            wp_send_json_error(['message' => __('Enter a positive WordPress User ID.', 'meals-db')]);
+        }
+
+        try {
+            $user = get_userdata($uid);
+            if (!$user instanceof WP_User) {
+                wp_send_json_error(['message' => __('No WordPress user with that ID.', 'meals-db')]);
+            }
+
+            $existing = MealsDB_Clients_Repository::find_client_id_by_wp_user($uid);
+
+            wp_send_json_success([
+                'wp_user_id'     => $uid,
+                'name'           => self::resolve_billing_name($uid, $user),
+                'already_linked' => $existing ? (int) $existing : null,
+            ]);
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Ajax] validate_wp_user failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to validate the WordPress user.', 'meals-db')]);
+        }
+    }
+
+    /**
+     * Pull a validated WP user's identity/contact/address/preference usermeta
+     * and return a form-field map the client form drops into its inputs, so the
+     * operator isn't re-typing data that already exists on the WP user. Reuses
+     * the migration's proven mapping via MealsDB_WP_User_Mapper (no drift).
+     * Directive GUI-F3F5-v2 STEP 1b.
+     */
+    public static function pull_wp_user_data(): void {
+        check_ajax_referer('mealsdb_nonce', 'nonce');
+
+        if (!MealsDB_Permissions::can_access_plugin()) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meals-db')]);
+        }
+
+        self::enforce_lookup_rate_limit();
+
+        $uid = isset($_POST['wp_user_id']) ? absint(wp_unslash($_POST['wp_user_id'])) : 0;
+        if ($uid <= 0) {
+            wp_send_json_error(['message' => __('Enter a positive WordPress User ID.', 'meals-db')]);
+        }
+
+        try {
+            $user = get_userdata($uid);
+            if (!$user instanceof WP_User) {
+                wp_send_json_error(['message' => __('No WordPress user with that ID.', 'meals-db')]);
+            }
+
+            $fields = MealsDB_WP_User_Mapper::map_usermeta_to_client_fields($uid);
+
+            wp_send_json_success([
+                'wp_user_id' => $uid,
+                'name'       => self::resolve_billing_name($uid, $user),
+                'fields'     => $fields,
+                'count'      => count($fields),
+            ]);
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Ajax] pull_wp_user_data failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to load data from the WordPress user.', 'meals-db')]);
+        }
+    }
+
+    /**
+     * Resolve a WP user's display name for inline confirmation: billing name
+     * first (the operator's choice), then the WP account name, then the
+     * display name. Mirrors the migration's name resolution.
+     */
+    private static function resolve_billing_name(int $uid, WP_User $user): string {
+        $first = (string) get_user_meta($uid, 'billing_first_name', true);
+        if ($first === '') {
+            $first = (string) ($user->first_name ?? '');
+        }
+        $last = (string) get_user_meta($uid, 'billing_last_name', true);
+        if ($last === '') {
+            $last = (string) ($user->last_name ?? '');
+        }
+        $name = trim($first . ' ' . $last);
+        if ($name === '') {
+            $name = (string) ($user->display_name ?? '');
+        }
+        return $name;
+    }
+
+    /**
+     * Rate-limit the read-only WP-user lookup endpoints. Uses the client_search
+     * bucket (a read bucket, 100/hour) rather than the client_modify mutate
+     * bucket, since Validate/Pull only READ WP user data during data entry and
+     * a hand-entry session may legitimately fire several lookups.
+     */
+    private static function enforce_lookup_rate_limit(): void {
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('client_search')) {
+            wp_send_json_error(
+                ['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')],
+                429
+            );
+        }
     }
 
     /**
