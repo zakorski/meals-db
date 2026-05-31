@@ -19,11 +19,11 @@
                 successCb(resp.data);
             } else {
                 var msg = (resp.data && resp.data.message) ? resp.data.message : 'Unknown error';
-                if (errorCb) errorCb(msg); else alert('Error: ' + msg);
+                if (errorCb) errorCb(msg); else MealsDBNotice('error', 'Error: ' + msg);
             }
         }).fail(function (xhr) {
             var msg = 'Network error (' + xhr.status + ')';
-            if (errorCb) errorCb(msg); else alert(msg);
+            if (errorCb) errorCb(msg); else MealsDBNotice('error', msg);
         });
     }
 
@@ -123,7 +123,7 @@
                 successCb(resp.data);
             } else {
                 var msg = (resp.data && resp.data.message) ? resp.data.message : 'Unknown error';
-                if (errorCb) errorCb(msg); else alert('Error: ' + msg);
+                if (errorCb) errorCb(msg); else MealsDBNotice('error', 'Error: ' + msg);
             }
         }).fail(function (xhr) {
             if (errorCb) errorCb('Network error (' + xhr.status + ')');

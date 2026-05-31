@@ -37,6 +37,36 @@ class MealsDB_Admin_UI {
     }
 
     /**
+     * Register the shared on-page notice helper (directive GUI-NOTICES).
+     *
+     * `meals-notice.js` exposes window.MealsDBNotice — the single renderer that
+     * the plugin's admin scripts use INSTEAD of native window.alert() for
+     * informational errors/successes. It is registered (not unconditionally
+     * enqueued) so that any script declaring it as a dependency pulls it in
+     * automatically; WP loads a registered dependency on demand. Static + guarded
+     * so the three separate enqueue contexts (main admin, migration page, invoice
+     * draft page) can each call it without double-registering.
+     *
+     * @return string The registered script handle, for use as a dependency.
+     */
+    public static function register_notice_script(): string {
+        $handle = 'meals-db-notice';
+        if (!wp_script_is($handle, 'registered')) {
+            $notice_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/meals-notice.js';
+            $notice_version = file_exists($notice_path) ? filemtime($notice_path) : MEALS_DB_VERSION;
+            wp_register_script(
+                $handle,
+                MEALS_DB_PLUGIN_URL . 'assets/js/meals-notice.js',
+                ['jquery'],
+                $notice_version,
+                true
+            );
+        }
+
+        return $handle;
+    }
+
+    /**
      * Register admin hooks for menus and assets.
      */
     public function register_hooks(): void {
@@ -387,12 +417,17 @@ class MealsDB_Admin_UI {
             );
         }
 
+        // Shared on-page notice helper (directive GUI-NOTICES). Registered here so
+        // the admin scripts below can declare it as a dependency; it supplies
+        // window.MealsDBNotice in place of native alert() popups.
+        $notice_handle = self::register_notice_script();
+
         $script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/admin.js';
         $script_version = file_exists($script_path) ? filemtime($script_path) : MEALS_DB_VERSION;
         wp_enqueue_script(
             'mealsdb-admin',
             MEALS_DB_PLUGIN_URL . 'assets/js/admin.js',
-            ['jquery', 'jquery-ui-datepicker'],
+            ['jquery', 'jquery-ui-datepicker', $notice_handle],
             $script_version,
             true
         );
@@ -414,7 +449,7 @@ class MealsDB_Admin_UI {
         wp_enqueue_script(
             'mealsdb-client-actions',
             MEALS_DB_PLUGIN_URL . 'assets/js/client-actions.js',
-            ['jquery', 'mealsdb-admin'],
+            ['jquery', 'mealsdb-admin', $notice_handle],
             $client_actions_version,
             true
         );
@@ -434,7 +469,7 @@ class MealsDB_Admin_UI {
         wp_enqueue_script(
             'mealsdb-client-initials',
             MEALS_DB_PLUGIN_URL . 'assets/js/client-initials.js',
-            ['jquery', 'mealsdb-admin', 'mealsdb-client-type-logic'],
+            ['jquery', 'mealsdb-admin', 'mealsdb-client-type-logic', $notice_handle],
             $initials_script_version,
             true
         );

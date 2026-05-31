@@ -101,7 +101,7 @@
             }
 
             if (!ajaxEndpoint || !ajaxNonce) {
-                window.alert(deleteErrorMessage);
+                MealsDBNotice('error', deleteErrorMessage);
                 return;
             }
 
@@ -122,11 +122,11 @@
                     const errorMessage = response && response.data && response.data.message
                         ? response.data.message
                         : deleteErrorMessage;
-                    window.alert(errorMessage);
+                    MealsDBNotice('error', errorMessage);
                     updateConfirmState();
                 }
             }).fail(function () {
-                window.alert(deleteErrorMessage);
+                MealsDBNotice('error', deleteErrorMessage);
                 updateConfirmState();
             });
         });

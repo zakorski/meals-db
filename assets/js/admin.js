@@ -61,10 +61,10 @@ jQuery(document).ready(function($) {
                     const errorMessage = response && response.data && response.data.message
                         ? response.data.message
                         : toggleErrorMessage;
-                    window.alert(errorMessage);
+                    MealsDBNotice('error', errorMessage);
                 }
             }).fail(function () {
-                window.alert(toggleErrorMessage);
+                MealsDBNotice('error', toggleErrorMessage);
             }).always(function () {
                 setBusyState($button, false);
             });
@@ -234,10 +234,10 @@ jQuery(document).ready(function($) {
                 }
 
                 const message = res.data && res.data.message ? res.data.message : 'Draft saved!';
-                alert(message);
+                MealsDBNotice('success', message);
             } else {
                 const error = res.data && res.data.message ? res.data.message : 'Failed to save draft.';
-                alert(error);
+                MealsDBNotice('error', error);
             }
         });
     });
@@ -269,10 +269,10 @@ jQuery(document).ready(function($) {
             value: value
         }, function (res) {
             if (res.success) {
-                alert('Synced: ' + field);
+                MealsDBNotice('success', 'Synced: ' + field);
                 $row.fadeOut();
             } else {
-                alert('Sync failed.');
+                MealsDBNotice('error', 'Sync failed.');
             }
         });
     });
@@ -301,7 +301,7 @@ jQuery(document).ready(function($) {
             : null;
 
         if (!Number.isInteger(clientId) || clientId <= 0 || !Number.isInteger(wpUserId) || wpUserId <= 0) {
-            alert('Invalid link request.');
+            MealsDBNotice('error', 'Invalid link request.');
             return;
         }
 
@@ -325,10 +325,10 @@ jQuery(document).ready(function($) {
                 return;
             } else {
                 const errorMessage = res && res.data && res.data.message ? res.data.message : 'Failed to link client.';
-                alert(errorMessage);
+                MealsDBNotice('error', errorMessage);
             }
         }).fail(function () {
-            alert('Failed to link client.');
+            MealsDBNotice('error', 'Failed to link client.');
         }).always(function () {
             $button.prop('disabled', false);
         });
@@ -413,7 +413,7 @@ jQuery(document).ready(function($) {
             if (res.success) {
                 // Optional: toast or fade
             } else {
-                alert('Ignore action failed.');
+                MealsDBNotice('error', 'Ignore action failed.');
             }
         });
     });
@@ -508,7 +508,15 @@ jQuery(document).ready(function($) {
 
         refreshPullButtonState();
 
+        // Delegates to the shared MealsDBNotice renderer (directive GUI-NOTICES),
+        // pinning the updates page's own $status element as the target so this
+        // page looks unchanged. Falls back to the old inline rendering if the
+        // shared helper somehow isn't loaded.
         const showNotice = (level, message) => {
+            if (typeof window.MealsDBNotice === 'function') {
+                window.MealsDBNotice(level, message, { $target: $status });
+                return;
+            }
             const classes = ['notice-info', 'notice-success', 'notice-error', 'notice-warning'];
             $status.removeClass(classes.join(' '));
             let className = 'notice-info';

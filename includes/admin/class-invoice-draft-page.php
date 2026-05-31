@@ -61,10 +61,14 @@ class MealsDB_Invoice_Draft_Page {
             return;
         }
 
+        // Shared on-page notice helper (directive GUI-NOTICES) — supplies
+        // window.MealsDBNotice for the draft grid's validation/finalize messages.
+        $notice_handle = MealsDB_Admin_UI::register_notice_script();
+
         wp_enqueue_script(
             'mealsdb-invoice-draft-js',
             plugins_url('assets/js/invoice-draft.js', dirname(dirname(__FILE__))),
-            ['jquery'],
+            ['jquery', $notice_handle],
             defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false,
             true
         );
