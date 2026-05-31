@@ -286,6 +286,48 @@ class MealsDB_Migration_Consolidated {
                 continue;
             }
 
+            // STR-8 / H1: surface SILENT zone/area mis-derivation. Both fields
+            // come from hardcoded string maps whose miss-case is a quiet null
+            // (NOT a loud skip like an unrecognized customer_group). A null
+            // delivery_area_zone flows into is_rural_zone() (billing rate) and
+            // the delivery routing; a null delivery_area_name leaves the whole
+            // area->day->next_delivery_date cascade with no input. Emit the
+            // same greppable `degraded` trunk event the diet/comments drop now
+            // does, naming the user and the unmatched source value, so a
+            // migrated-but-wrong client is visible instead of silently billed
+            // at the wrong rate. Veterans intentionally map to a null zone
+            // (zone_map['veterans'] => null), so they are excluded.
+            if (class_exists('MealsDB_Event_Log')) {
+                if ($client_type !== 'Veteran' && $zone === null) {
+                    MealsDB_Event_Log::record([
+                        'severity'    => 'warning',
+                        'category'    => 'migration',
+                        'subsystem'   => 'migration_consolidated',
+                        'event'       => 'derive_zone.unmatched',
+                        'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message'     => sprintf(
+                            'service_centre_charged "%s" did not match zone_map; delivery_area_zone left NULL (wrong rate/route risk).',
+                            (string) $sc_raw
+                        ),
+                        'entity_type' => 'user',
+                        'entity_id'   => (int) $uid,
+                        'context'     => ['service_centre_charged' => (string) $sc_raw, 'client_type' => $client_type],
+                    ]);
+                }
+                if ($delivery_area_name === null || $delivery_area_name === '') {
+                    MealsDB_Event_Log::record([
+                        'severity'    => 'warning',
+                        'category'    => 'migration',
+                        'subsystem'   => 'migration_consolidated',
+                        'event'       => 'derive_area.missing',
+                        'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message'     => 'billing_address_2 (delivery_area_name) was empty; no delivery area -> no derivable delivery day.',
+                        'entity_type' => 'user',
+                        'entity_id'   => (int) $uid,
+                    ]);
+                }
+            }
+
             $initials = MealsDB_Initials_Validator::generate($first, $last, []);
             if ($initials === false) {
                 $initials = '';
