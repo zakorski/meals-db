@@ -204,6 +204,11 @@ if (!class_exists('PdfSlipFakeClientQuery')) {
             // is covered by tests/test-slips-delivery-date.php.
             return $this->orders;
         }
+        public function get_orders_for_delivery_range(array $clients, string $start_date, string $end_date): array {
+            // Both slip paths now flow through here (GUI-SLIP-RANGE); the
+            // occurrence filtering itself is covered by the dedicated tests.
+            return $this->orders;
+        }
         public function get_orders_for_range(array $wp_user_ids, string $start_date, string $end_date): array {
             return $this->orders;
         }

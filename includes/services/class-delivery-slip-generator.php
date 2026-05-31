@@ -157,10 +157,15 @@ class MealsDB_Delivery_Slip_Generator {
         $table        = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $placeholders = implode(',', array_fill(0, count($zone_names), '%s'));
 
+        // delivery_day + delivery_frequency are required so the zone/range
+        // slip can map each order to its delivery occurrence (GUI-SLIP-RANGE);
+        // omitting them would leave the occurrence filter with a blank cadence
+        // and silently drop every order.
         $sql = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
-                    client_type, delivery_fee, payment_method
+                    client_type, delivery_fee, payment_method,
+                    delivery_day, delivery_frequency
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN ({$placeholders})",
             ...$zone_names
@@ -196,11 +201,14 @@ class MealsDB_Delivery_Slip_Generator {
         $table        = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $placeholders = implode(',', array_fill(0, count($zone_names), '%s'));
 
+        // delivery_day + delivery_frequency drive the delivery-occurrence
+        // filter for the zone/range slip (GUI-SLIP-RANGE).
         $sql = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
-                    client_contribution, payment_method, client_type
+                    client_contribution, payment_method, client_type,
+                    delivery_day, delivery_frequency
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN ({$placeholders})",
             ...$zone_names
@@ -269,19 +277,60 @@ class MealsDB_Delivery_Slip_Generator {
      * @return array<int, array<string, mixed>> Orders (with items) due on $delivery_date.
      */
     public function get_orders_for_delivery_date(array $clients, string $delivery_date): array {
+        // Single-date is just the degenerate range [D, D]. Both slip paths
+        // share get_orders_for_delivery_range() so the occurrence filter can
+        // never drift between them again (that divergence was GUI-SLIP-RANGE:
+        // MAJ-6 fixed the single-date path but left the range path on the raw
+        // creation-date query).
+        return $this->get_orders_for_delivery_range($clients, $delivery_date, $delivery_date);
+    }
+
+    /**
+     * Fetch WC HPOS orders (with items) whose DELIVERY occurrence falls within
+     * [$start_date, $end_date] inclusive (GUI-SLIP-RANGE, generalising MAJ-6).
+     *
+     * This is the shared selection used by BOTH slip paths — the single-date
+     * slip (range [D, D]) and the by-zone/date-range slip. The semantics are
+     * "orders DELIVERED within the range," NOT "orders CREATED within the
+     * range": a packer/driver slip is about what ships on a given day, so an
+     * order placed ahead of its delivery day must land on the slip for the day
+     * it is delivered, regardless of when it was created.
+     *
+     * The previous by-zone path (get_orders_for_range) selected on
+     * date_created_gmt with no occurrence filter, so a range slip pulled every
+     * order CREATED in the window and printed each order's own (scattered)
+     * delivery date — the pre-MAJ-6 bug, still live on the range path. This
+     * routes the range path through the same delivery_occurrence_for_order()
+     * test the single-date path uses.
+     *
+     * @param array<int, array<string, mixed>> $clients    Clients keyed by wp_user_id
+     *                                                      (must carry delivery_day +
+     *                                                      delivery_frequency).
+     * @param string                           $start_date Y-m-d range start (inclusive).
+     * @param string                           $end_date   Y-m-d range end (inclusive).
+     * @return array<int, array<string, mixed>> Orders (with items) delivered in the range.
+     */
+    public function get_orders_for_delivery_range(array $clients, string $start_date, string $end_date): array {
         if (empty($clients)) {
             return [];
         }
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery_date)) {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $start_date)
+            || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $end_date)) {
+            return [];
+        }
+        if ($start_date > $end_date) {
             return [];
         }
 
         // An order delivered on D was created within (D - frequency*7, D]:
         // either in D's own week (weekday still upcoming) or up to one full
-        // cycle earlier (weekday already passed when it was placed). Fetch a
-        // creation-date window wide enough to cover the largest frequency
-        // among the selected clients; the per-order occurrence filter below
-        // is authoritative, so a generous window only costs a few extra rows.
+        // cycle earlier (weekday already passed when it was placed). For a
+        // range, the earliest in-range delivery is $start_date, so widen the
+        // creation-date pre-filter by the largest frequency among the selected
+        // clients RELATIVE TO $start_date; the upper bound stays $end_date
+        // (an order created after its delivery date can't deliver in-range).
+        // The per-order occurrence filter below is authoritative, so a
+        // generous window only costs a few extra candidate rows.
         $max_freq = 1;
         foreach ($clients as $c) {
             $f = isset($c['delivery_frequency']) ? (int) $c['delivery_frequency'] : 1;
@@ -291,13 +340,13 @@ class MealsDB_Delivery_Slip_Generator {
         }
         $window_start = gmdate(
             'Y-m-d',
-            strtotime($delivery_date . ' -' . ($max_freq * 7) . ' days UTC')
+            strtotime($start_date . ' -' . ($max_freq * 7) . ' days UTC')
         );
 
         $candidates = $this->order_query->get_orders_with_items_for_users(
             array_keys($clients),
             $window_start,
-            $delivery_date
+            $end_date
         );
         if (empty($candidates)) {
             return [];
@@ -312,7 +361,8 @@ class MealsDB_Delivery_Slip_Generator {
             }
             $created    = (string) ($order['date_created_gmt'] ?? '');
             $occurrence = self::delivery_occurrence_for_order($created, $client);
-            if ($occurrence !== null && $occurrence === $delivery_date) {
+            // Y-m-d strings compare correctly with lexical >=/<=.
+            if ($occurrence !== null && $occurrence >= $start_date && $occurrence <= $end_date) {
                 $matched[] = $order;
             }
         }
@@ -381,7 +431,14 @@ class MealsDB_Delivery_Slip_Generator {
     }
 
     /**
-     * Fetch WC HPOS orders (with items) for a date range.
+     * Fetch WC HPOS orders (with items) for a CREATION-date range.
+     *
+     * Creation-date basis, retained for genuine creation-date consumers
+     * (reports/reconciliation). Do NOT use this to populate a packer/driver
+     * slip: slips select on the DELIVERY basis via
+     * get_orders_for_delivery_range() — wiring a slip back through this query
+     * is exactly the GUI-SLIP-RANGE bug (orders CREATED in the window printed
+     * with their own scattered delivery dates).
      *
      * @param int[] $wp_user_ids WordPress user IDs.
      */

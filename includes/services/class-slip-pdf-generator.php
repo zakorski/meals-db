@@ -97,16 +97,17 @@ class MealsDB_Slip_PDF_Generator {
         if (empty($clients)) {
             return [];
         }
-        if ($start_date === $end_date) {
-            // Single delivery-date slips: select orders on the DELIVERY basis
-            // (the client's delivery_day + frequency), NOT the order creation
-            // date — see MAJ-6. Pass the full clients map so the occurrence
-            // mapping can read each client's cadence.
-            return $this->client_query->get_orders_for_delivery_date($clients, $start_date);
-        }
-        // Zone mode supplies an explicit creation-date range chosen by the
-        // operator; it keeps the creation-date basis (out of MAJ-6 scope).
-        return $this->client_query->get_orders_for_range(array_keys($clients), $start_date, $end_date);
+        // Both slip paths select on the DELIVERY basis (the client's
+        // delivery_day + frequency), NOT the order creation date. Single-date
+        // is the degenerate range [D, D]; the zone/date-range path is the same
+        // occurrence filter over [start, end]. Routing both through one method
+        // closes GUI-SLIP-RANGE: the range path used to keep the raw
+        // creation-date query (get_orders_for_range), so a Dec-3 range slip
+        // pulled every order CREATED in the window and printed scattered
+        // delivery dates — only MAJ-6's single-date path had the fix. A slip
+        // is about what ships on a day, so an order-ahead order must land on
+        // the slip for the day it is DELIVERED.
+        return $this->client_query->get_orders_for_delivery_range($clients, $start_date, $end_date);
     }
 
     /**
