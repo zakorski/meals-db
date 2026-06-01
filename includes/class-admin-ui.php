@@ -1319,23 +1319,7 @@ class MealsDB_Admin_UI {
             },
             static function (array $client) {
                 ?>
-                <tr data-client-type="sdnb,veteran">
-                    <th><label for="assigned_social_worker"><?php esc_html_e('Social Worker Name', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="assigned_social_worker" id="assigned_social_worker" class="regular-text" value="<?php echo esc_attr($client['assigned_social_worker'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr data-client-type="sdnb,veteran">
-                    <th><label for="social_worker_email"><?php esc_html_e('Social Worker Email Address', 'meals-db'); ?></label></th>
-                    <td><input type="email" name="social_worker_email" id="social_worker_email" class="regular-text" value="<?php echo esc_attr($client['social_worker_email'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr data-client-type="sdnb,veteran">
+                <tr data-client-type="sdnb,veteran,private">
                     <th><label for="birth_date"><?php esc_html_e('Date of Birth', 'meals-db'); ?></label></th>
                     <td><input type="date" name="birth_date" id="birth_date" class="mealsdb-datepicker" value="<?php echo esc_attr($client['birth_date'] ?? ''); ?>" /></td>
                 </tr>
@@ -1343,10 +1327,6 @@ class MealsDB_Admin_UI {
             },
             static function (array $client) {
                 ?>
-                <tr data-client-type="sdnb,veteran" data-required-for="sdnb,veteran">
-                    <th><label for="units"><?php esc_html_e('# of Units *', 'meals-db'); ?></label></th>
-                    <td><input type="number" name="units" id="units" class="small-text" min="1" max="31" data-base-required="1" value="<?php echo esc_attr($client['units'] ?? ''); ?>" /></td>
-                </tr>
                 <tr data-client-type="sdnb,veteran">
                     <th><label for="allowance_mains"><?php esc_html_e('Mains Allowance', 'meals-db'); ?></label></th>
                     <td>
@@ -1513,14 +1493,6 @@ class MealsDB_Admin_UI {
                 </tr>
                 <?php
             },
-            static function (array $client) {
-                ?>
-                <tr>
-                    <th><label for="freezer_capacity"><?php esc_html_e('Freezer Capacity', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="freezer_capacity" id="freezer_capacity" class="regular-text" value="<?php echo esc_attr($client['freezer_capacity'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
             static function (array $client) use ($delivery_day_options, $format_enum_option_label, $delivery_day_value) {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
@@ -1587,8 +1559,24 @@ class MealsDB_Admin_UI {
             },
         ];
 
-        $requisition_fields = [
-            '__attributes' => 'data-client-type="sdnb"',
+        $case_management_fields = [
+            '__attributes' => 'data-client-type="sdnb,veteran"',
+            static function (array $client) {
+                ?>
+                <tr>
+                    <th><label for="assigned_social_worker"><?php esc_html_e('Social Worker Name', 'meals-db'); ?></label></th>
+                    <td><input type="text" name="assigned_social_worker" id="assigned_social_worker" class="regular-text" value="<?php echo esc_attr($client['assigned_social_worker'] ?? ''); ?>" /></td>
+                </tr>
+                <?php
+            },
+            static function (array $client) {
+                ?>
+                <tr>
+                    <th><label for="social_worker_email"><?php esc_html_e('Social Worker Email Address', 'meals-db'); ?></label></th>
+                    <td><input type="email" name="social_worker_email" id="social_worker_email" class="regular-text" value="<?php echo esc_attr($client['social_worker_email'] ?? ''); ?>" /></td>
+                </tr>
+                <?php
+            },
             static function (array $client) use ($requisition_period_value) {
                 ?>
                 <tr>
@@ -1604,6 +1592,10 @@ class MealsDB_Admin_UI {
                 </tr>
                 <?php
             },
+        ];
+
+        $requisition_fields = [
+            '__attributes' => 'data-client-type="sdnb"',
             static function (array $client) {
                 ?>
                 <tr>
@@ -1615,32 +1607,8 @@ class MealsDB_Admin_UI {
             static function (array $client) {
                 ?>
                 <tr>
-                    <th><label for="expected_termination_date"><?php esc_html_e('Expected Termination Date', 'meals-db'); ?></label></th>
-                    <td><input type="date" name="expected_termination_date" id="expected_termination_date" class="mealsdb-datepicker" value="<?php echo esc_attr($client['expected_termination_date'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr>
                     <th><label for="termination_date"><?php esc_html_e('Termination Date', 'meals-db'); ?></label></th>
                     <td><input type="date" name="termination_date" id="termination_date" class="mealsdb-datepicker" value="<?php echo esc_attr($client['termination_date'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr>
-                    <th><label for="initial_renewal_date"><?php esc_html_e('Initial Renewal Termination Date', 'meals-db'); ?></label></th>
-                    <td><input type="date" name="initial_renewal_date" id="initial_renewal_date" class="mealsdb-datepicker" value="<?php echo esc_attr($client['initial_renewal_date'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr>
-                    <th><label for="most_recent_renewal_date"><?php esc_html_e('Most Recent Renewal Termination Date', 'meals-db'); ?></label></th>
-                    <td><input type="date" name="most_recent_renewal_date" id="most_recent_renewal_date" class="mealsdb-datepicker" value="<?php echo esc_attr($client['most_recent_renewal_date'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -1705,44 +1673,6 @@ class MealsDB_Admin_UI {
                 <tr>
                     <th><label for="requisition_id"><?php esc_html_e('Requisition ID', 'meals-db'); ?></label></th>
                     <td><input type="text" name="requisition_id" id="requisition_id" class="regular-text" value="<?php echo esc_attr($client['requisition_id'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
-                <tr>
-                    <th><label for="per_sdnb_req"><?php esc_html_e('Per SDNB Requirement', 'meals-db'); ?></label></th>
-                    <td><textarea name="per_sdnb_req" id="per_sdnb_req" rows="3" class="large-text"><?php echo esc_textarea($client['per_sdnb_req'] ?? ''); ?></textarea></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) use ($service_zone_options, $format_enum_option_label, $service_zone_value) {
-                ?>
-                <tr>
-                    <th><label for="service_zone"><?php esc_html_e('Service Name Zone', 'meals-db'); ?></label></th>
-                    <td>
-                        <select name="service_zone" id="service_zone" class="regular-text">
-                            <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
-                            <?php foreach ($service_zone_options as $option) : ?>
-                                <?php $label = 'Zone ' . $format_enum_option_label($option); ?>
-                                <option value="<?php echo esc_attr($option); ?>" <?php selected($service_zone_value, strtoupper($option)); ?>><?php echo esc_html($label); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </td>
-                </tr>
-                <?php
-            },
-            static function (array $client) use ($meal_type_value) {
-                ?>
-                <tr>
-                    <th><label for="meal_type"><?php esc_html_e('Meal Type', 'meals-db'); ?></label></th>
-                    <td>
-                        <select name="meal_type" id="meal_type">
-                            <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
-                            <option value="main" <?php selected(strtolower($meal_type_value), 'main'); ?>><?php esc_html_e('Main', 'meals-db'); ?></option>
-                            <option value="main+side" <?php selected(strtolower($meal_type_value), 'main+side'); ?>><?php esc_html_e('Main+Side', 'meals-db'); ?></option>
-                        </select>
-                    </td>
                 </tr>
                 <?php
             },
@@ -1829,6 +1759,7 @@ class MealsDB_Admin_UI {
                     <?php
                     self::render_field_group(__('Address', 'meals-db'), $address_fields, $client);
                     self::render_field_group(__('Service & Delivery', 'meals-db'), $service_delivery_fields, $client);
+                    self::render_field_group(__('Case Management', 'meals-db'), $case_management_fields, $client);
                     self::render_field_group(__('Requisition Details (SDNB)', 'meals-db'), $requisition_fields, $client);
                     ?>
                 </div>
