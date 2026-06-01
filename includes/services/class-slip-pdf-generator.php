@@ -779,16 +779,16 @@ HTML;
         // the bottom of the right column via absolute positioning
         // anchored inside the .slip-right relative box.
         return <<<CSS
-@page { size: letter portrait; margin: 0.5in; }
+@page { size: letter landscape; margin: 0.5in; }
 body { font-family: Helvetica, Arial, sans-serif; color: #111; margin: 0; padding: 0; }
-.slip { page-break-after: always; width: 100%; height: 10in; position: relative; }
+.slip { page-break-after: always; width: 100%; height: 7.5in; position: relative; }
 .slip-last { page-break-after: auto; }
 .slip-left { width: 65%; float: left; padding-right: 0.25in; box-sizing: border-box; }
-.slip-right { width: 35%; float: right; padding-left: 0.25in; box-sizing: border-box; border-left: 1px solid #888; height: 10in; position: relative; }
+.slip-right { width: 35%; float: right; padding-left: 0.25in; box-sizing: border-box; border-left: 1px solid #888; height: 7.5in; position: relative; }
 .slip-header h1.name-line { font-size: 24pt; font-weight: bold; margin: 0 0 0.05in 0; }
 .slip-header .zone-order { font-size: 14pt; margin: 0 0 0.05in 0; }
 .slip-header .delivery-date { font-size: 11pt; margin: 0 0 0.15in 0; color: #444; }
-.items-table { width: 100%; border-collapse: collapse; font-size: 10pt; margin-top: 0.15in; }
+.items-table { width: 100%; border-collapse: collapse; font-size: 11pt; margin-top: 0.15in; }
 .items-table th, .items-table td { border: 1px solid #000; padding: 3pt 5pt; text-align: left; }
 .items-table th { background-color: #eee; font-weight: bold; }
 .items-table .sku-col { width: 15%; }
@@ -835,7 +835,7 @@ CSS;
 
         $dompdf = new \Dompdf\Dompdf($options);
         $dompdf->loadHtml($html, 'UTF-8');
-        $dompdf->setPaper('letter', 'portrait');
+        $dompdf->setPaper('letter', 'landscape');
         $dompdf->render();
 
         $output = $dompdf->output();
