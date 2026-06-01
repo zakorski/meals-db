@@ -716,6 +716,41 @@ class MealsDB_Clients_Repository {
     }
 
     /**
+     * Test whether a SPECIFIC client row carries a given wp_user_id.
+     *
+     * Distinct from find_client_id_by_wp_user(), which collapses a shared
+     * wp_user_id to the LOWEST matching client_id. When a WP user is
+     * legitimately shared by several clients (audit MAJ-1: a dual SDNB/Veteran
+     * recipient, or a government client buying extra meals personally), a
+     * self-link check that compares the lowest match to the client being edited
+     * is wrong for every row in the shared set except the first. Ask the direct
+     * question instead — "does THIS client_id have THIS wp_user_id?" — so the
+     * Validate endpoint recognises a client's own WP user as a self-link no
+     * matter where the row sits in the shared set.
+     *
+     * @param int $client_id  The client row to test.
+     * @param int $wp_user_id The WordPress user ID expected on that row.
+     * @return bool True only when that exact client row links to that wp_user_id.
+     */
+    public static function client_has_wp_user(int $client_id, int $wp_user_id): bool {
+        global $wpdb;
+        if ($client_id <= 0 || $wp_user_id <= 0 || !($wpdb instanceof wpdb)) {
+            return false;
+        }
+
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $escaped = str_replace('`', '``', $table);
+
+        $found = $wpdb->get_var($wpdb->prepare(
+            "SELECT client_id FROM `{$escaped}` WHERE client_id = %d AND wp_user_id = %d LIMIT 1",
+            $client_id,
+            $wp_user_id
+        ));
+
+        return $found !== null;
+    }
+
+    /**
      * Return the client_id of the first row whose $column equals $value, or null.
      *
      * Generalises find_client_id_by_wp_user for the deterministic-index dedup

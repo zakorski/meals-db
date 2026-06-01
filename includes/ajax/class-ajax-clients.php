@@ -56,12 +56,26 @@ class MealsDB_Ajax_Clients {
                 wp_send_json_error(['message' => __('No WordPress user with that ID.', 'meals-db')]);
             }
 
+            // Optional current client_id: present on the Edit form, 0/absent on Add. We use it
+            // to distinguish a (correct, expected) self-link from a real dual-use warning, so the
+            // operator isn't alarmed by a client linked to its own WP user.
+            $current_client_id = isset($_POST['client_id']) ? absint(wp_unslash($_POST['client_id'])) : 0;
+
             $existing = MealsDB_Clients_Repository::find_client_id_by_wp_user($uid);
+            // Ask whether the CURRENT client row itself carries this wp_user_id, rather than
+            // whether the lowest match equals it. find_client_id_by_wp_user() collapses a shared
+            // wp_user_id to the lowest client_id, so an equality test would mis-flag every
+            // later client in a legitimately-shared set (audit MAJ-1) as an alarming dual-use
+            // link to a different client instead of recognising its own WP user.
+            $is_self = ($current_client_id > 0)
+                && MealsDB_Clients_Repository::client_has_wp_user($current_client_id, $uid);
 
             wp_send_json_success([
                 'wp_user_id'     => $uid,
                 'name'           => self::resolve_billing_name($uid, $user),
                 'already_linked' => $existing ? (int) $existing : null,
+                // True when the WP user is linked to the client currently being edited.
+                'already_linked_self' => $is_self,
             ]);
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Ajax] validate_wp_user failed: ' . $e->getMessage());
