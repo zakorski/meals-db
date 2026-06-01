@@ -69,7 +69,6 @@ class MealsDB_Client_Form {
         'service_zone',
         'per_sdnb_req',
         'payment_method',
-        'rate',
         'client_contribution',
         'delivery_fee',
         'delivery_day',
@@ -234,7 +233,6 @@ class MealsDB_Client_Form {
         'service_zone'                   => 'Service Zone',
         'per_sdnb_req'                   => 'Per SDNB Requirement',
         'payment_method'                 => 'Payment Method',
-        'rate'                           => 'Rate',
         'client_contribution'            => 'Client Contributions',
         'delivery_fee'                   => 'Delivery Fee',
         'delivery_day'                   => 'Delivery Day',
@@ -487,7 +485,6 @@ class MealsDB_Client_Form {
 
         // Financial field range validation
         $financial_fields = [
-            'rate' => ['min' => 0, 'max' => 10000, 'message' => 'Rate must be between $0 and $10,000.'],
             'client_contribution' => ['min' => 0, 'max' => 1000, 'message' => 'Client contribution must be between $0 and $1,000.'],
             'delivery_fee' => ['min' => 0, 'max' => 100, 'message' => 'Delivery fee must be between $0 and $100.'],
         ];
@@ -635,7 +632,6 @@ class MealsDB_Client_Form {
                 'service_center_charged',
                 'service_id',
                 'requisition_period',
-                'rate',
                 'payment_method',
             ],
             'VETERAN' => [
