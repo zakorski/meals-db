@@ -211,7 +211,7 @@ class MealsDB_Invoice_Generator {
             $allocated_nontax_sides = (int) $s['used_nontax_sides'];
 
             $rate_id       = isset($client['default_rate_id']) ? (int) $client['default_rate_id'] : 0;
-            $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid);
+            $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid, $client['client_type'] ?? '', $client['delivery_area_zone'] ?? null);
 
             // Contribution: sum of product-5675 line items across orders
             // whose meals landed in this billing month for this client.
@@ -545,7 +545,7 @@ class MealsDB_Invoice_Generator {
      */
     private static function collect_vac_client_rows(string $start_date): array {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql = "SELECT client_id, wp_user_id, first_name, last_name, requisition_id,
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, client_type, requisition_id,
                     vet_health_card, requisition_period, client_contribution, default_rate_id,
                     street_name, city, postal_code, client_phone_1,
                     allowance_mains, allowance_sides, individual_id, individual_id_index
@@ -578,7 +578,7 @@ class MealsDB_Invoice_Generator {
      */
     private static function collect_sdnb_legacy_client_rows($zone, string $start_date): array {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql = "SELECT client_id, wp_user_id, first_name, last_name, service_id, requisition_id,
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, client_type, service_id, requisition_id,
                     individual_id, individual_id_index, client_contribution, delivery_area_zone,
                     default_rate_id, allowance_mains, allowance_sides, requisition_period
              FROM `{$clients_table}`
@@ -615,7 +615,7 @@ class MealsDB_Invoice_Generator {
      */
     private static function collect_sdnb_new_portal_client_rows(string $start_date): array {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $sql = "SELECT client_id, wp_user_id, first_name, last_name, sdnb_service_request_id,
+        $sql = "SELECT client_id, wp_user_id, first_name, last_name, client_type, sdnb_service_request_id,
                     client_contribution, default_rate_id, delivery_area_zone
              FROM `{$clients_table}`
              WHERE client_type = %s AND use_legacy_billing = 0

@@ -249,7 +249,7 @@ class MealsDB_WC_Order_Query {
      *
      * @return float
      */
-    public function resolve_rate_for_order(int $rate_id, int $client_id): float {
+    public function resolve_rate_for_order(int $rate_id, int $client_id, string $client_type = '', ?string $zone = null): float {
         global $wpdb;
 
         $rates_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
@@ -275,6 +275,38 @@ class MealsDB_WC_Order_Query {
 
         if (is_array($row) && isset($row['rate'])) {
             return (float) $row['rate'];
+        }
+
+        // No per-client contracted rate -> fall back to the program rate by type/location.
+        return $this->resolve_program_rate($client_type, $zone, $client_id);
+    }
+
+    /**
+     * Program-wide rate fallback when a client has no contracted meals_client_rates row.
+     * SDNB: urban/rural primary-main rate (existing is_rural_zone rule).
+     * Veteran/Private: the per-main rate from MealsDB_Rate_Definitions. These prices are
+     * BORN in Definitions (not WC) and are equal per the operator (see class-rate-definitions
+     * defaults() — 'private_main'), so both types resolve the same 'private_main' key.
+     * Never returns a silent 0 for a recognised type.
+     */
+    private function resolve_program_rate(string $client_type, ?string $zone, int $client_id): float {
+        $type = strtoupper(trim($client_type));
+
+        if ($type === 'SDNB') {
+            $rural = MealsDB_Operational_Constants::is_rural_zone($zone);
+            if ($zone === null || $zone === '') {
+                // Missing zone on an SDNB client defaults to urban — surface it, don't hide it.
+                error_log('[MealsDB Rate] SDNB client ' . $client_id . ' has no delivery_area_zone; defaulting to URBAN rate.');
+            }
+            return MealsDB_Operational_Constants::get_sdnb_main_rate('primary', $rural);
+        }
+
+        // Veteran and Private share the per-main rate. Operator confirmed veteran prices
+        // equal private prices; both are seeded in MealsDB_Rate_Definitions as 'private_main'.
+        // get() returns null only for an unknown key (a caller bug) — fall back to 0.00 then.
+        if ($type === 'VETERAN' || $type === 'PRIVATE') {
+            $main_rate = MealsDB_Rate_Definitions::get('private_main');
+            return $main_rate !== null ? (float) $main_rate : 0.00;
         }
 
         return 0.00;
