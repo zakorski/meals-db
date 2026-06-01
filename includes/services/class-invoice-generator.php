@@ -235,6 +235,19 @@ class MealsDB_Invoice_Generator {
                 $tax_cents   = MealsDB_Money::percent_of($sides_cents, $hst_rate);
             }
 
+            // Suppress zero-activity clients: a client with no mains, no sides
+            // of any kind, and no contribution has nothing to bill this month —
+            // including them produces an empty invoice line/page. Keep any
+            // client with ANY billable activity (a contribution with zero meals
+            // still belongs on the invoice).
+            $has_activity = ($allocated_mains > 0)
+                || ($allocated_tax_sides > 0)
+                || ($allocated_nontax_sides > 0)
+                || ($contribution_cents > 0);
+            if (!$has_activity) {
+                continue;
+            }
+
             $out[$cid] = array_merge($client, [
                 'allocated_mains'        => $allocated_mains,
                 'allocated_sides'        => $allocated_sides,
