@@ -308,11 +308,30 @@ class MealsDB_Invoice_Draft {
      * the per-client-month finalized locks, so it can be edited or regenerated.
      * Audited WITH a reason. manage_options is enforced at the AJAX boundary.
      *
+     * SHARED-LOCK SAFETY (PR #418 review): is_finalized is one row per
+     * (client_id, billing_month) — it is SHARED by every finalized draft that
+     * covers that client-month, and the flow deliberately allows more than one
+     * (generation always makes a NEW draft; finalize treats an already-finalized
+     * month as an idempotent no-op). Clearing the lock unconditionally would
+     * therefore let the rebuilder mutate allocations behind a STILL-finalized
+     * sibling invoice, breaking its immutability. So:
+     *   - If other finalized drafts share any of this draft's clients for the
+     *     month and $cascade is false, we REFUSE (the AJAX layer surfaces a
+     *     confirmation naming the client(s)/month/other invoice and re-calls
+     *     with $cascade=true — operator decision, PR #418).
+     *   - When we DO proceed we un-finalize the target AND (on cascade) the
+     *     conflicting siblings together, then clear each client-month lock only
+     *     if NO finalized draft OUTSIDE the un-finalized set still covers it
+     *     (reference-counted — also handles a transitive third invoice safely).
+     *
      * @param int    $draft_id
-     * @param string $reason  Operator-supplied reason (audited; required).
-     * @return bool  true on success, false if not found / not finalized / failed.
+     * @param string $reason   Operator-supplied reason (audited; required).
+     * @param bool   $cascade  Confirmed sweep of sibling finalized invoices that
+     *                          share a client-month with this draft.
+     * @return bool  true if the target was un-finalized; false if not found /
+     *               not finalized / a refused shared-lock conflict / lost race.
      */
-    public static function unfinalize(int $draft_id, string $reason): bool {
+    public static function unfinalize(int $draft_id, string $reason, bool $cascade = false): bool {
         try {
             $draft = self::get($draft_id);
             if ($draft === null) {
@@ -323,61 +342,215 @@ class MealsDB_Invoice_Draft {
                 return false;
             }
 
-            $payload       = $draft['payload'];
-            $current       = (isset($payload['current']) && is_array($payload['current']))
-                ? $payload['current'] : [];
             $billing_month = (string) ($draft['billing_month'] ?? '');
 
-            // 1) Clear the per-client-month finalized locks (reverse of the
-            //    finalize_month loop). Mirror finalize's client set (payload current).
-            if ($billing_month !== '' && class_exists('MealsDB_Allocation_Engine')) {
+            // Map every finalized draft covering this month → its clients (one
+            // decrypted pass, reused for the conflict gate AND the reference-
+            // counted lock clearing). $has_opaque flags a sibling we could not
+            // decrypt — then we cannot prove a lock is free, so we skip clearing.
+            $has_opaque = false;
+            $map            = self::finalized_client_map($billing_month, $has_opaque);
+            $target_clients = $map[$draft_id]['clients'] ?? self::clients_from_draft($draft);
+
+            // Direct conflicts: OTHER finalized drafts sharing >= 1 client.
+            $conflict_ids = [];
+            foreach ($map as $did => $entry) {
+                if ((int) $did === $draft_id) {
+                    continue;
+                }
+                if (!empty(array_intersect_key($entry['clients'], $target_clients))) {
+                    $conflict_ids[] = (int) $did;
+                }
+            }
+
+            if (!empty($conflict_ids) && !$cascade) {
+                // Clearing would orphan another finalized invoice's lock. Refuse
+                // here (defense in depth for non-AJAX callers); the AJAX layer
+                // turns this into a confirm prompt and re-calls with cascade.
+                return false;
+            }
+
+            // The drafts we will un-finalize: target + (on cascade) the siblings.
+            $set_ids = $cascade ? array_merge([$draft_id], $conflict_ids) : [$draft_id];
+            $set_ids = array_values(array_unique(array_map('intval', $set_ids)));
+
+            // Flip each draft finalized → draft via the guarded UPDATE. The
+            // target MUST flip (else a concurrent change won the race → bail
+            // before touching any lock, so we never half-apply).
+            $flipped = [];
+            foreach ($set_ids as $sid) {
+                if (self::flip_draft_to_editable($sid)) {
+                    $flipped[] = $sid;
+                } elseif ($sid === $draft_id) {
+                    return false;
+                }
+            }
+
+            // Reference-counted lock clearing: clear a client-month lock only if
+            // NO finalized draft other than the ones we just flipped covers it.
+            if (!$has_opaque && $billing_month !== '' && class_exists('MealsDB_Allocation_Engine')) {
+                $flipped_set = array_flip($flipped);
+
+                // Union of clients across every draft we un-finalized (always
+                // include the target's clients, even if the map missed it).
+                $union = $target_clients;
+                foreach ($flipped as $sid) {
+                    if (isset($map[$sid]['clients'])) {
+                        $union += $map[$sid]['clients'];
+                    }
+                }
+
                 $engine = new MealsDB_Allocation_Engine();
-                foreach (array_keys($current) as $client_id) {
-                    $cid = (int) $client_id;
-                    if ($cid > 0) {
+                foreach (array_keys($union) as $cid) {
+                    $cid = (int) $cid;
+                    if ($cid <= 0) {
+                        continue;
+                    }
+                    $still_covered = false;
+                    foreach ($map as $did => $entry) {
+                        if (isset($flipped_set[(int) $did])) {
+                            continue; // these are no longer finalized
+                        }
+                        if (array_key_exists($cid, $entry['clients'])) {
+                            $still_covered = true;
+                            break;
+                        }
+                    }
+                    if (!$still_covered) {
                         $engine->unfinalize_month($cid, $billing_month);
                     }
                 }
             }
 
-            // 2) Restore the draft row to editable `draft`, clearing the
-            //    finalized metadata + the captured output. Guarded WHERE keeps
-            //    the transition atomic (only a still-finalized row flips).
-            global $wpdb;
-            $table = MealsDB_DB::get_table_name(MealsDB_Tables::INVOICE_DRAFTS);
-            $updated = $wpdb->update(
-                $table,
-                [
-                    'status'           => 'draft',
-                    'finalized_by'     => null,
-                    'finalized_at'     => null,
-                    'finalized_output' => null,
-                ],
-                ['draft_id' => $draft_id, 'status' => 'finalized'],
-                ['%s', '%d', '%s', '%s'],
-                ['%d', '%s']
-            );
-            if ($updated === false || (int) $updated === 0) {
-                // Lost race / already changed — treat as refusal.
-                return false;
-            }
-
-            // 3) Audit WITH the reason (committed artifact change → audit log).
+            // Audit each un-finalized draft WITH the reason (committed artifact
+            // change → audit log). Cascaded siblings note the sweep.
             if (class_exists('MealsDB_Logger')) {
-                MealsDB_Logger::log(
-                    'invoice_draft_unfinalized',
-                    $draft_id,
-                    'reason',
-                    'finalized',
-                    (string) $reason
-                );
+                foreach ($flipped as $sid) {
+                    $r = ($sid === $draft_id)
+                        ? (string) $reason
+                        : sprintf('%s [cascade: un-finalized with draft #%d]', (string) $reason, $draft_id);
+                    MealsDB_Logger::log('invoice_draft_unfinalized', $sid, 'reason', 'finalized', $r);
+                }
             }
 
-            return true;
+            return in_array($draft_id, $flipped, true);
         } catch (\Throwable $e) {
             self::log_error('unfinalize', $e);
             return false;
         }
+    }
+
+    /**
+     * The OTHER finalized drafts that would lose a shared client-month lock if
+     * this draft were un-finalized. Each entry:
+     *   ['draft_id'=>int, 'pipeline'=>string, 'billing_month'=>string,
+     *    'shared_clients'=>[client_id => display name]]
+     * Empty when the draft is missing, not finalized, or shares no client with
+     * any sibling. Pure read (used by the AJAX layer to build the confirm prompt).
+     */
+    public static function get_unfinalize_conflicts(int $draft_id): array {
+        try {
+            $draft = self::get($draft_id);
+            if ($draft === null || ($draft['status'] ?? '') !== 'finalized') {
+                return [];
+            }
+            $billing_month  = (string) ($draft['billing_month'] ?? '');
+            $has_opaque     = false;
+            $map            = self::finalized_client_map($billing_month, $has_opaque);
+            $target_clients = $map[$draft_id]['clients'] ?? self::clients_from_draft($draft);
+
+            $out = [];
+            foreach ($map as $did => $entry) {
+                if ((int) $did === $draft_id) {
+                    continue;
+                }
+                $shared = array_intersect_key($entry['clients'], $target_clients);
+                if (!empty($shared)) {
+                    $out[] = [
+                        'draft_id'       => (int) $did,
+                        'pipeline'       => $entry['pipeline'],
+                        'billing_month'  => $billing_month,
+                        'shared_clients' => $shared,
+                    ];
+                }
+            }
+            return $out;
+        } catch (\Throwable $e) {
+            self::log_error('get_unfinalize_conflicts', $e);
+            return [];
+        }
+    }
+
+    /**
+     * Map of every FINALIZED draft covering $billing_month → its metadata +
+     * client set (decrypted). Shape: [draft_id => ['pipeline'=>string,
+     * 'clients'=>[client_id => display name]]]. $has_opaque is set true if a
+     * listed finalized draft could not be decrypted (its coverage is unknown).
+     */
+    private static function finalized_client_map(string $billing_month, bool &$has_opaque = false): array {
+        $map = [];
+        if ($billing_month === '') {
+            return $map;
+        }
+        $rows = self::list(['billing_month' => $billing_month, 'status' => 'finalized']);
+        foreach ($rows as $meta) {
+            $did = (int) ($meta['draft_id'] ?? 0);
+            if ($did <= 0) {
+                continue;
+            }
+            $full = self::get($did);
+            if ($full === null) {
+                // Undecryptable finalized draft — coverage unknown. Caller must
+                // not clear locks it cannot prove are free.
+                $has_opaque = true;
+                continue;
+            }
+            $map[$did] = [
+                'pipeline' => (string) ($meta['pipeline'] ?? ($full['pipeline'] ?? '')),
+                'clients'  => self::clients_from_draft($full),
+            ];
+        }
+        return $map;
+    }
+
+    /** [client_id => display name] from a decrypted draft's `current` rows. */
+    private static function clients_from_draft(array $draft): array {
+        $current = (isset($draft['payload']['current']) && is_array($draft['payload']['current']))
+            ? $draft['payload']['current'] : [];
+        $out = [];
+        foreach ($current as $cid => $row) {
+            $cidi = (int) $cid;
+            if ($cidi <= 0) {
+                continue;
+            }
+            $fn = is_array($row) && isset($row['first_name']) ? trim((string) $row['first_name']) : '';
+            $ln = is_array($row) && isset($row['last_name'])  ? trim((string) $row['last_name'])  : '';
+            $out[$cidi] = trim($fn . ' ' . $ln);
+        }
+        return $out;
+    }
+
+    /**
+     * Guarded status transition finalized → draft, clearing the finalized
+     * metadata + captured output. Returns true only if a still-finalized row
+     * actually flipped (atomic: a lost race / already-changed row affects 0).
+     */
+    private static function flip_draft_to_editable(int $draft_id): bool {
+        global $wpdb;
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::INVOICE_DRAFTS);
+        $updated = $wpdb->update(
+            $table,
+            [
+                'status'           => 'draft',
+                'finalized_by'     => null,
+                'finalized_at'     => null,
+                'finalized_output' => null,
+            ],
+            ['draft_id' => $draft_id, 'status' => 'finalized'],
+            ['%s', '%d', '%s', '%s'],
+            ['%d', '%s']
+        );
+        return $updated !== false && (int) $updated > 0;
     }
 
     public static function finalize(int $draft_id) {

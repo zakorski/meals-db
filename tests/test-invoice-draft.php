@@ -96,9 +96,16 @@ class DraftWpdb extends wpdb {
 
     public function get_results($q, $o = null) {
         if (stripos($q, 'meals_invoice_drafts') !== false) {
-            // list() never SELECTs payload — model that by stripping it.
+            // Honor the status / billing_month WHERE filters list() emits (the
+            // values are inlined by prepare()), so finalized_client_map() sees a
+            // realistic finalized-drafts-for-this-month set. list() never SELECTs
+            // payload — model that by stripping it.
+            $st = preg_match("/status = '([^']*)'/", $q, $m1) ? $m1[1] : null;
+            $bm = preg_match("/billing_month = '([^']*)'/", $q, $m2) ? $m2[1] : null;
             $out = [];
             foreach ($this->drafts as $row) {
+                if ($st !== null && (string) ($row['status'] ?? '') !== $st) { continue; }
+                if ($bm !== null && (string) ($row['billing_month'] ?? '') !== $bm) { continue; }
                 unset($row['payload']);
                 $out[] = $row;
             }
@@ -188,6 +195,23 @@ function sample_rows(): array {
             'tax_cents'       => 0,
         ],
     ];
+}
+
+// Build a row map for an arbitrary set of client ids (for the shared-lock tests).
+function rows_for(array $ids): array {
+    $r = [];
+    foreach ($ids as $id) {
+        $r[$id] = [
+            'client_id'       => $id,
+            'last_name'       => 'Name' . $id,
+            'first_name'      => 'F',
+            'individual_id'   => 'IND-' . $id,
+            'allocated_mains' => 1,
+            'resolved_rate'   => 9.05,
+            'tax_cents'       => 0,
+        ];
+    }
+    return $r;
 }
 
 // ===========================================================================
@@ -396,6 +420,57 @@ chk_true($old10 !== false, 'T-10: edits re-enabled after unfinalize');
 chk(MealsDB_Invoice_Draft::unfinalize($id10, 'again'), false, 'T-10: unfinalize refuses an already-draft draft');
 // Unknown draft id → false (never throws).
 chk(MealsDB_Invoice_Draft::unfinalize(999999, 'nope'), false, 'T-10: unknown draft id → false');
+
+// ===========================================================================
+// T-11 (PR #418 review): shared per-client-month lock. Two finalized drafts for
+// the SAME client-month share is_finalized; un-finalizing one must NOT silently
+// clear a lock another finalized invoice still needs. Without cascade → refused;
+// with cascade → both un-finalize and the lock clears once (reference-counted).
+// ===========================================================================
+$w11 = fresh_wpdb();
+$idA = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_VAC, '2026-02', '2026-02-01', '2026-02-28', rows_for([42, 77]), []
+);
+$idB = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_VAC, '2026-02', '2026-02-01', '2026-02-28', rows_for([42, 77]), []
+);
+MealsDB_Invoice_Draft::finalize($idA);
+MealsDB_Invoice_Draft::finalize($idB); // idempotent month lock — both finalized
+// Conflict detection sees the sibling + the shared clients.
+$conf = MealsDB_Invoice_Draft::get_unfinalize_conflicts($idA);
+chk(count($conf), 1, 'T-11: one conflicting sibling detected');
+chk((int) $conf[0]['draft_id'], $idB, 'T-11: the sibling is draft B');
+chk(count($conf[0]['shared_clients']), 2, 'T-11: both shared clients reported');
+chk_true(isset($conf[0]['shared_clients'][42]), 'T-11: shared client 42 named');
+// Without cascade → refused; nothing changes.
+chk(MealsDB_Invoice_Draft::unfinalize($idA, 'no cascade'), false, 'T-11: unfinalize refused without cascade when a sibling shares the lock');
+chk(MealsDB_Invoice_Draft::get($idA)['status'], 'finalized', 'T-11: draft A still finalized after refusal');
+chk(MealsDB_Invoice_Draft::get($idB)['status'], 'finalized', 'T-11: draft B still finalized after refusal');
+// With cascade → both un-finalize, lock cleared once per shared client.
+$calls_before = count($w11->finalize_calls);
+chk(MealsDB_Invoice_Draft::unfinalize($idA, 'fix both', true), true, 'T-11: cascade unfinalize returns true');
+chk(MealsDB_Invoice_Draft::get($idA)['status'], 'draft', 'T-11: draft A editable after cascade');
+chk(MealsDB_Invoice_Draft::get($idB)['status'], 'draft', 'T-11: sibling B also un-finalized by cascade');
+chk(count($w11->finalize_calls) - $calls_before, 2, 'T-11: lock cleared once per shared client (42, 77)');
+
+// T-11b: NON-overlapping drafts for the same month do NOT conflict — the lock
+// is per client, so un-finalizing one leaves the other (disjoint) invoice's
+// lock intact and needs no cascade.
+$w11b = fresh_wpdb();
+$idC = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_SDNB_LEGACY, '2026-09', '2026-09-01', '2026-09-30', rows_for([88]), ['zone' => 'M']
+);
+$idE = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_SDNB_LEGACY, '2026-09', '2026-09-01', '2026-09-30', rows_for([99]), ['zone' => 'S']
+);
+MealsDB_Invoice_Draft::finalize($idC);
+MealsDB_Invoice_Draft::finalize($idE);
+chk(count(MealsDB_Invoice_Draft::get_unfinalize_conflicts($idC)), 0, 'T-11b: disjoint sibling is NOT a conflict');
+$calls_before_c = count($w11b->finalize_calls);
+chk(MealsDB_Invoice_Draft::unfinalize($idC, 'disjoint ok'), true, 'T-11b: unfinalize succeeds without cascade when no client is shared');
+chk(MealsDB_Invoice_Draft::get($idC)['status'], 'draft', 'T-11b: C editable');
+chk(MealsDB_Invoice_Draft::get($idE)['status'], 'finalized', 'T-11b: disjoint sibling E STILL finalized');
+chk(count($w11b->finalize_calls) - $calls_before_c, 1, 'T-11b: only C\'s own client lock (88) cleared');
 
 // ===========================================================================
 // T-7: shared-helper parity (QW-2) — round-trip + legacy plaintext JSON.

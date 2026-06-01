@@ -156,24 +156,40 @@
             }
             var $el = $(this);
             $el.prop('disabled', true);
-
-            post('mealsdb_unfinalize_draft', {
-                draft_id: $el.data('draft-id'),
-                reason: reason
-            }).done(function (resp) {
-                if (resp && resp.success) {
-                    // Reload into the now editable view / refreshed list.
-                    window.location.reload();
-                } else {
-                    MealsDBNotice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
-                    $el.prop('disabled', false);
-                }
-            }).fail(function () {
-                MealsDBNotice('error', i18n.genericErr);
-                $el.prop('disabled', false);
-            });
+            sendUnfinalize($el, reason, 0);
         });
     });
+
+    // Post the un-finalize, handling the shared-lock confirmation round-trip
+    // (PR #418). When other finalized invoices share this draft's client-month,
+    // the server answers with requires_confirmation + a message naming them; we
+    // confirm and re-post with cascade=1 to un-finalize them together.
+    function sendUnfinalize($el, reason, cascade) {
+        post('mealsdb_unfinalize_draft', {
+            draft_id: $el.data('draft-id'),
+            reason: reason,
+            cascade: cascade
+        }).done(function (resp) {
+            if (resp && resp.success && resp.data && resp.data.requires_confirmation) {
+                if (window.confirm(resp.data.message || i18n.confirmUnfin)) {
+                    sendUnfinalize($el, reason, 1);
+                } else {
+                    $el.prop('disabled', false);
+                }
+                return;
+            }
+            if (resp && resp.success) {
+                // Reload into the now editable view / refreshed list.
+                window.location.reload();
+            } else {
+                MealsDBNotice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
+                $el.prop('disabled', false);
+            }
+        }).fail(function () {
+            MealsDBNotice('error', i18n.genericErr);
+            $el.prop('disabled', false);
+        });
+    }
 
     function revert($cell, message) {
         var prior = $cell.data('prior');

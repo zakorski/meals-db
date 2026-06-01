@@ -266,6 +266,13 @@ class MealsDB_Ajax_Invoice_Draft {
      * finalize lock: restores the draft to editable `draft` status and clears
      * the per-client-month finalized locks. manage_options + nonce + rate limit
      * (the shared guard spine) PLUS a required, audited reason string.
+     *
+     * SHARED-LOCK CONFIRMATION (PR #418 review): is_finalized is shared per
+     * client-month, so more than one finalized invoice can depend on the same
+     * lock. When others do, we do NOT silently clear it: on the first call
+     * (cascade absent) we return requires_confirmation with a message naming the
+     * shared client(s), month, and the other invoice(s); the operator confirms
+     * and the JS re-posts with cascade=1, which un-finalizes them all together.
      */
     public static function unfinalize_draft(): void {
         if (!self::guard('settings_modify')) {
@@ -275,6 +282,7 @@ class MealsDB_Ajax_Invoice_Draft {
         try {
             $draft_id = isset($_POST['draft_id']) ? absint($_POST['draft_id']) : 0;
             $reason   = isset($_POST['reason']) ? sanitize_text_field(wp_unslash((string) $_POST['reason'])) : '';
+            $cascade  = !empty($_POST['cascade']);
             if ($draft_id <= 0) {
                 wp_send_json_error(['message' => __('Missing draft id.', 'meals-db')]);
                 return;
@@ -285,7 +293,21 @@ class MealsDB_Ajax_Invoice_Draft {
                 return;
             }
 
-            $ok = MealsDB_Invoice_Draft::unfinalize($draft_id, $reason);
+            // Shared-lock gate: if other finalized invoices cover any of this
+            // draft's clients for the same month, surface a confirmation before
+            // clearing the shared lock. Continuing (cascade) un-finalizes them all.
+            if (!$cascade) {
+                $conflicts = MealsDB_Invoice_Draft::get_unfinalize_conflicts($draft_id);
+                if (!empty($conflicts)) {
+                    wp_send_json_success([
+                        'requires_confirmation' => true,
+                        'message'               => self::compose_unfinalize_conflict_message($conflicts),
+                    ]);
+                    return;
+                }
+            }
+
+            $ok = MealsDB_Invoice_Draft::unfinalize($draft_id, $reason, $cascade);
             if (!$ok) {
                 wp_send_json_error(['message' => __('Could not un-finalize (draft not found, not finalized, or changed — reload).', 'meals-db')]);
                 return;
@@ -298,6 +320,38 @@ class MealsDB_Ajax_Invoice_Draft {
             MealsDB_Logger::error('[MealsDB Invoice_Draft AJAX] unfinalize failed: ' . $e->getMessage());
             wp_send_json_error(['message' => __('Unable to un-finalize draft. Please try again.', 'meals-db')]);
         }
+    }
+
+    /**
+     * Build the operator-facing confirmation naming the shared client(s), the
+     * month, and the other finalized invoice(s) that would be swept along.
+     * (manage_options-only audience, like the rest of the draft UI — naming the
+     * client is consistent with the grid's existing decrypted-PII exposure.)
+     */
+    private static function compose_unfinalize_conflict_message(array $conflicts): string {
+        $invoices = [];
+        $clients  = []; // client_id => label (dedup across siblings)
+        foreach ($conflicts as $c) {
+            $invoices[] = sprintf('#%d (%s, %s)', (int) $c['draft_id'], (string) $c['pipeline'], (string) $c['billing_month']);
+            foreach ((array) ($c['shared_clients'] ?? []) as $cid => $name) {
+                $cid = (int) $cid;
+                $clients[$cid] = ($name !== '') ? sprintf('%s (#%d)', $name, $cid) : sprintf('#%d', $cid);
+            }
+        }
+        $client_list = array_values($clients);
+        $max         = 6;
+        $extra       = count($client_list) > $max ? (count($client_list) - $max) : 0;
+        if ($extra > 0) {
+            $client_list = array_slice($client_list, 0, $max);
+        }
+        $client_str = implode(', ', $client_list) . ($extra > 0 ? sprintf(' +%d more', $extra) : '');
+
+        return sprintf(
+            /* translators: 1: other finalized invoice list, 2: shared client list */
+            __('Another finalized invoice — %1$s — also covers shared client(s): %2$s. Continuing will UN-FINALIZE BOTH invoices so the month can be rebuilt. Continue?', 'meals-db'),
+            implode(', ', $invoices),
+            $client_str
+        );
     }
 
     public static function finalize_draft(): void {

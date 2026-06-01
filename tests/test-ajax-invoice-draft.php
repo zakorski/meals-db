@@ -187,8 +187,17 @@ class AjaxDraftWpdb extends wpdb {
 
     public function get_results($q, $o = null) {
         if (stripos($q, 'meals_invoice_drafts') !== false) {
+            // Honor the status / billing_month filters (see DraftWpdb) so the
+            // shared-lock conflict detection sees a realistic finalized set.
+            $st = preg_match("/status = '([^']*)'/", $q, $m1) ? $m1[1] : null;
+            $bm = preg_match("/billing_month = '([^']*)'/", $q, $m2) ? $m2[1] : null;
             $out = [];
-            foreach ($this->drafts as $row) { unset($row['payload']); $out[] = $row; }
+            foreach ($this->drafts as $row) {
+                if ($st !== null && (string) ($row['status'] ?? '') !== $st) { continue; }
+                if ($bm !== null && (string) ($row['billing_month'] ?? '') !== $bm) { continue; }
+                unset($row['payload']);
+                $out[] = $row;
+            }
             return $out;
         }
         return [];
@@ -502,6 +511,41 @@ $_POST = ['draft_id' => $id, 'reason' => 'x'];
 MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
 chk(json_type(), 'error', 'T-10: unfinalize rejected without capability');
 chk($w->drafts[$id]['status'], 'finalized', 'T-10: still finalized without capability');
+
+// ===========================================================================
+// T-11 (PR #418 review): shared-lock confirmation round-trip. Two finalized
+// drafts share a client-month → the first un-finalize call (no cascade) returns
+// requires_confirmation with a message naming the sibling + shared client; the
+// cascade re-call un-finalizes BOTH.
+// ===========================================================================
+$w = reset_env();
+$idA = make_draft('vac', '2026-02');
+$idB = make_draft('vac', '2026-02'); // same month + client (stub generator → 42)
+MealsDB_Invoice_Draft::finalize($idA);
+MealsDB_Invoice_Draft::finalize($idB);
+chk($w->drafts[$idA]['status'], 'finalized', 'T-11: precondition — A finalized');
+chk($w->drafts[$idB]['status'], 'finalized', 'T-11: precondition — B finalized');
+
+// First call (no cascade) → confirmation required, nothing un-finalized yet.
+$w->audit = []; $GLOBALS['JSON'] = null;
+$_POST = ['draft_id' => $idA, 'reason' => 'fix zero-priced invoice'];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'success', 'T-11: first call returns success envelope');
+chk(json_data()['requires_confirmation'] ?? null, true, 'T-11: requires_confirmation flagged');
+chk_true(strpos((string) (json_data()['message'] ?? ''), '#' . $idB) !== false, 'T-11: message names the sibling invoice');
+chk_true(strpos((string) (json_data()['message'] ?? ''), 'Zubrowski') !== false, 'T-11: message names the shared client');
+chk($w->drafts[$idA]['status'], 'finalized', 'T-11: A NOT un-finalized before confirmation');
+chk($w->drafts[$idB]['status'], 'finalized', 'T-11: B NOT un-finalized before confirmation');
+chk(count($w->audit), 0, 'T-11: no audit row before confirmation');
+
+// Cascade re-call → both un-finalize.
+$GLOBALS['JSON'] = null;
+$_POST = ['draft_id' => $idA, 'reason' => 'fix zero-priced invoice', 'cascade' => 1];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'success', 'T-11: cascade call returns success');
+chk($w->drafts[$idA]['status'], 'draft', 'T-11: A un-finalized after cascade');
+chk($w->drafts[$idB]['status'], 'draft', 'T-11: sibling B un-finalized after cascade');
+chk(count($w->audit), 2, 'T-11: an audit row for each un-finalized invoice');
 
 // ---------------------------------------------------------------------------
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
