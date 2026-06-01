@@ -1503,10 +1503,6 @@ class MealsDB_Admin_UI {
             },
             static function (array $client) {
                 ?>
-                <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="rate"><?php esc_html_e('Rate *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="rate" id="rate" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['rate'] ?? ''); ?>" /></td>
-                </tr>
                 <?php
             },
             static function (array $client) {

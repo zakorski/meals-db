@@ -178,6 +178,11 @@ class MealsDB_Clients_Repository {
 
         self::$last_failed_column = null;
 
+        // Parity with update_client(): drop any keys that aren't real columns
+        // (e.g. the removed 'rate' field) so an unknown column can never cause
+        // an INSERT rejection. filter_to_known_columns logs anything it drops.
+        $data = self::filter_to_known_columns($data);
+
         try {
             $result = $wpdb->insert($this->table_name, $data);
 
