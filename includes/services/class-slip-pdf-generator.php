@@ -788,7 +788,7 @@ body { font-family: Helvetica, Arial, sans-serif; color: #111; margin: 0; paddin
 .slip-header h1.name-line { font-size: 24pt; font-weight: bold; margin: 0 0 0.05in 0; }
 .slip-header .zone-order { font-size: 14pt; margin: 0 0 0.05in 0; }
 .slip-header .delivery-date { font-size: 11pt; margin: 0 0 0.15in 0; color: #444; }
-.items-table { width: 100%; border-collapse: collapse; font-size: 11pt; margin-top: 0.15in; }
+.items-table { width: 6.0in; table-layout: fixed; border-collapse: collapse; font-size: 11pt; margin-top: 0.15in; }
 .items-table th, .items-table td { border: 1px solid #000; padding: 3pt 5pt; text-align: left; }
 .items-table th { background-color: #eee; font-weight: bold; }
 .items-table .sku-col { width: 15%; }
