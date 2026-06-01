@@ -1,6 +1,6 @@
 <?php
 /**
- * Admin page: MealsDB → Invoice Drafts (directive INV-DRAFT-2).
+ * Admin page: MealsDB → Invoices (formerly "Invoice Drafts"; the sole invoice page as of INV-3).
  *
  * The screen the operator actually uses to review/edit a generated invoice
  * before finalizing it. Two views, switched by query param (mirroring the
@@ -37,7 +37,7 @@ defined('ABSPATH') || exit;
 
 class MealsDB_Invoice_Draft_Page {
 
-    public const PAGE_SLUG = 'mealsdb_invoice_drafts';
+    public const PAGE_SLUG = 'mealsdb-invoices';
 
     public static function init(): void {
         add_action('admin_menu', [self::class, 'register_menu'], 22);
@@ -47,8 +47,8 @@ class MealsDB_Invoice_Draft_Page {
     public static function register_menu(): void {
         add_submenu_page(
             'mealsdb',
-            __('Invoice Drafts', 'meals-db'),
-            __('Invoice Drafts', 'meals-db'),
+            __('Invoices', 'meals-db'),
+            __('Invoices', 'meals-db'),
             'manage_options',
             self::PAGE_SLUG,
             [self::class, 'render']
@@ -101,7 +101,7 @@ class MealsDB_Invoice_Draft_Page {
         $draft_id = isset($_GET['draft_id']) ? absint($_GET['draft_id']) : 0;
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('Meals DB — Invoice Drafts', 'meals-db') . '</h1>';
+        echo '<h1>' . esc_html__('Meals DB — Invoices', 'meals-db') . '</h1>';
 
         if ($draft_id > 0) {
             self::render_review_view($draft_id);

@@ -37,7 +37,6 @@ class MealsDB_Ajax {
             'MealsDB_Ajax_Drafts',
             'MealsDB_Ajax_Clients',
             'MealsDB_Ajax_Initials',
-            'MealsDB_Ajax_Invoice',
             'MealsDB_Ajax_Delivery_Slips',
             'MealsDB_Ajax_Reports',
             'MealsDB_Ajax_Settings',

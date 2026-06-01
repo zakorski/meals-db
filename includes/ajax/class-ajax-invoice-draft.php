@@ -591,9 +591,11 @@ class MealsDB_Ajax_Invoice_Draft {
     }
 
     /**
-     * Allowed SDNB service-zone codes. Mirrors
-     * MealsDB_Ajax_Invoice::allowed_sdnb_zones (same filter) so the draft
-     * generator and the legacy direct-download accept the same zones.
+     * Allowed SDNB service-zone codes. This used to mirror the old
+     * MealsDB_Ajax_Invoice::allowed_sdnb_zones (removed in INV-3 when the
+     * direct-download invoice page was consolidated away); the same
+     * 'mealsdb_allowed_sdnb_zones' filter is preserved so the zone set is
+     * unchanged for callers that hooked it.
      */
     private static function allowed_zones(): array {
         $defaults = ['M', 'S'];
