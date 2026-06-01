@@ -499,9 +499,19 @@ class MealsDB_Allocation_Rebuilder {
             // intact (the old system still needs them), so this is the ONLY
             // place they are filtered out of the new allocation count. IDs come
             // from the canonical constants, not hardcoded here.
-            $overage_ids = array_map('intval', array_values(
-                MealsDB_Operational_Constants::default_overage_product_ids()
-            ));
+            //
+            // Filter the UNION of the operator-CONFIGURED overage IDs
+            // (mealsdb_overage_product_ids, via overage_product_ids()) and the
+            // seed defaults: on installs where the operator re-pointed an
+            // overage SKU, the configured ID is what the old system now injects,
+            // while orders placed before the change still carry the seed ID —
+            // both appear within the parallel-run window and both must be
+            // excluded. Overage SKUs are never legitimate meals, so a superset
+            // filter can never under-count a real main/side.
+            $overage_ids = array_values(array_unique(array_map('intval', array_merge(
+                array_values(MealsDB_Operational_Constants::overage_product_ids()),
+                array_values(MealsDB_Operational_Constants::default_overage_product_ids())
+            ))));
             foreach ($items as $it) {
                 $wc_pid = (int) $it['wc_product_id'];
                 if (in_array($wc_pid, $overage_ids, true)) {
