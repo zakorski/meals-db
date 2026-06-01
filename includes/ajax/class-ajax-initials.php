@@ -37,20 +37,27 @@ class MealsDB_Ajax_Initials {
             wp_send_json(['success' => false, 'message' => __('Rate limit exceeded. Please try again later.', 'meals-db')]);
         }
 
-        // Get optional client data for address-based generation
+        // Optional name to seed name-based candidate patterns.
         $first_name = sanitize_text_field(wp_unslash($_POST['first_name'] ?? ''));
         $last_name = sanitize_text_field(wp_unslash($_POST['last_name'] ?? ''));
-        $client_data = self::get_client_data_from_request();
 
-        // Use new validator if we have client data, otherwise fallback to legacy
-        if (!empty($first_name) || !empty($last_name) || !empty($client_data)) {
-            $code = MealsDB_Initials_Validator::generate($first_name, $last_name, $client_data);
+        // Use the name-seeded generator when a name is present, otherwise the
+        // plain random generator. Both enforce global uniqueness.
+        if (!empty($first_name) || !empty($last_name)) {
+            $code = MealsDB_Initials_Validator::generate($first_name, $last_name);
         } else {
             $code = MealsDB_Initials::generate();
         }
 
         if (empty($code) || $code === false) {
-            wp_send_json(['success' => false, 'message' => 'Unable to generate initials.']);
+            // Generator exhausted its 100 attempts. Surface a specific,
+            // actionable message (rendered on-page by client-initials.js, not a
+            // popup) so the operator can immediately retry — and so a genuinely
+            // near-full namespace gets noticed.
+            wp_send_json([
+                'success' => false,
+                'message' => __('Could not find an unused initials code after 100 attempts. Please click Generate again to retry.', 'meals-db'),
+            ]);
         }
 
         wp_send_json([
@@ -62,7 +69,8 @@ class MealsDB_Ajax_Initials {
     /**
      * Validate an initials code for a client.
      *
-     * Accepts optional address data for address-based duplicate checking.
+     * Delivery initials are globally unique; any code already used by another
+     * client is rejected.
      */
     public static function validate_initials(): void {
         check_ajax_referer('mealsdb_validate_initials', 'nonce');
@@ -94,26 +102,15 @@ class MealsDB_Ajax_Initials {
             }
         }
 
-        // Get client address data for address-based validation
-        $client_data = self::get_client_data_from_request();
-
-        // Use new validator with address data
-        $validation = MealsDB_Initials::validate_code($code, $client_id, $client_data);
+        // Delivery initials are globally unique — a duplicate is simply invalid.
+        $validation = MealsDB_Initials::validate_code($code, $client_id);
 
         if (!is_array($validation)) {
             wp_send_json(['success' => false, 'message' => 'Unable to validate initials.']);
         }
 
         if (!empty($validation['valid'])) {
-            $response = ['success' => true];
-
-            // Include sharing info if initials are shared
-            if (!empty($validation['shared'])) {
-                $response['shared'] = true;
-                $response['message'] = $validation['message'];
-            }
-
-            wp_send_json($response);
+            wp_send_json(['success' => true]);
         }
 
         $message = isset($validation['message']) ? $validation['message'] : __('Invalid initials.', 'meals-db');
@@ -122,48 +119,5 @@ class MealsDB_Ajax_Initials {
             'success' => false,
             'message' => $message,
         ]);
-    }
-
-    /**
-     * Extract client address data from POST request.
-     *
-     * The form posts the postal field as `address_postal` /
-     * `delivery_address_postal` per MealsDB_Client_Form::$db_columns
-     * (and confirmed in class-admin-ui.php and assets/js/client-initials.js).
-     * A previous version of this method read `address_postal_code`
-     * / `delivery_address_postal_code` — those keys are never
-     * present in $_POST, so the postal was silently dropped from
-     * the address data. The validator's is_address_empty then
-     * treated the address as incomplete and silently disabled
-     * address-based initials sharing. Operators saw "duplicate
-     * initials" rejections on shared-address pairs that should
-     * have been allowed.
-     *
-     * @return array Client data with address fields.
-     */
-    private static function get_client_data_from_request(): array {
-        $client_data = array();
-
-        // Primary address fields (form field names)
-        $address_fields = array(
-            'address_street_number',
-            'address_street_name',
-            'address_unit',
-            'address_city',
-            'address_postal',
-            'delivery_address_street_number',
-            'delivery_address_street_name',
-            'delivery_address_unit',
-            'delivery_address_city',
-            'delivery_address_postal',
-        );
-
-        foreach ($address_fields as $field) {
-            if (isset($_POST[$field])) {
-                $client_data[$field] = sanitize_text_field(wp_unslash($_POST[$field]));
-            }
-        }
-
-        return $client_data;
     }
 }

@@ -3,7 +3,7 @@
  * Generates and validates initials codes for Meals DB clients.
  *
  * This class is now a wrapper around MealsDB_Initials_Validator for backward compatibility.
- * The new validator supports address-based duplicate checking.
+ * Delivery initials are globally unique (no same-address sharing exception).
  *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
@@ -36,8 +36,7 @@ class MealsDB_Initials {
     /**
      * Generate a random 3-letter uppercase code.
      *
-     * Note: This method cannot perform address-based validation since no client data is provided.
-     * For better generation that considers client address, use MealsDB_Initials_Validator::generate().
+     * Delegates to the validator's generator, which guarantees global uniqueness.
      */
     public static function generate(): string {
         // Delegate to new validator with empty address data
@@ -54,52 +53,36 @@ class MealsDB_Initials {
     /**
      * Validate a code against formatting, banned list, and existing records.
      *
-     * Note: This method cannot perform full address-based validation since no client data is provided.
-     * It will reject duplicates even if they're at the same address.
-     * For full validation, use MealsDB_Initials_Validator::validate() with client address data.
+     * Delivery initials are globally unique; any duplicate is rejected.
      *
      * @param string $code The initials code to validate.
      * @param int|null $exclude_client_id Client ID to exclude from duplicate check (for editing).
-     * @param array $client_data Optional client data including address fields for full validation.
+     * @param array $client_data Unused (kept for signature compatibility).
      * @return array Validation result with 'valid' and 'message' keys.
      */
     public static function validate_code(string $code, ?int $exclude_client_id = null, array $client_data = array()): array {
         $code = strtoupper(trim($code));
 
-        // If client_data is provided, use the new validator
+        // If client_data is provided, defer to the validator. (The validator
+        // ignores the address fields now — initials are globally unique — but
+        // it remains the single source of truth for the uniqueness rule.)
         if (!empty($client_data)) {
             $result = MealsDB_Initials_Validator::validate($code, $client_data, $exclude_client_id);
 
-            // Convert to old format
-            if ($result['valid']) {
-                if (!empty($result['shared'])) {
-                    $sharing_names = array_map(function($client) {
-                        return trim($client['first_name'] . ' ' . $client['last_name']);
-                    }, $result['sharing_with']);
-
-                    return [
-                        'valid'   => true,
-                        'message' => sprintf(
-                            __('Initials are valid (shared with %s at same address).', 'meals-db'),
-                            implode(', ', $sharing_names)
-                        ),
-                        'shared'  => true,
-                    ];
-                }
-
+            if (!empty($result['valid'])) {
                 return [
                     'valid'   => true,
                     'message' => __('Initials are available.', 'meals-db'),
                 ];
-            } else {
-                return [
-                    'valid'   => false,
-                    'message' => $result['error'],
-                ];
             }
+
+            return [
+                'valid'   => false,
+                'message' => $result['error'] ?? __('These initials are already in use.', 'meals-db'),
+            ];
         }
 
-        // Legacy validation without address data
+        // Validation without client data: same checks, run directly here.
         if (!preg_match('/^[A-Z]{3}$/', $code)) {
             return [
                 'valid'   => false,
