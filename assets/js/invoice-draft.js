@@ -133,7 +133,63 @@
                 $el.prop('disabled', false);
             });
         });
+
+        // --- Un-finalize (list + review), directive INV-2 ---
+        // Reverses the one-way finalize lock. A REASON is required (the server
+        // re-enforces non-empty); captured via window.prompt() for v1 per the
+        // directive (upgradeable to a modal later — the integrity logic is
+        // server-side). On success we reload into the now-editable view.
+        $(document).on('click', '.mealsdb-draft-unfinalize', function (e) {
+            e.preventDefault();
+            if (!window.confirm(i18n.confirmUnfin || 'Un-finalize this invoice? It will become editable again.')) {
+                return;
+            }
+            var reason = window.prompt(i18n.reasonPrompt || 'Enter a reason for un-finalizing (required):', '');
+            // Cancelled prompt → abort silently. Empty/whitespace → block here too
+            // (the server also rejects it, but fail fast for the operator).
+            if (reason === null) {
+                return;
+            }
+            if (!reason || !reason.trim()) {
+                MealsDBNotice('error', i18n.reasonRequired || 'A reason is required to un-finalize.');
+                return;
+            }
+            var $el = $(this);
+            $el.prop('disabled', true);
+            sendUnfinalize($el, reason, 0);
+        });
     });
+
+    // Post the un-finalize, handling the shared-lock confirmation round-trip
+    // (PR #418). When other finalized invoices share this draft's client-month,
+    // the server answers with requires_confirmation + a message naming them; we
+    // confirm and re-post with cascade=1 to un-finalize them together.
+    function sendUnfinalize($el, reason, cascade) {
+        post('mealsdb_unfinalize_draft', {
+            draft_id: $el.data('draft-id'),
+            reason: reason,
+            cascade: cascade
+        }).done(function (resp) {
+            if (resp && resp.success && resp.data && resp.data.requires_confirmation) {
+                if (window.confirm(resp.data.message || i18n.confirmUnfin)) {
+                    sendUnfinalize($el, reason, 1);
+                } else {
+                    $el.prop('disabled', false);
+                }
+                return;
+            }
+            if (resp && resp.success) {
+                // Reload into the now editable view / refreshed list.
+                window.location.reload();
+            } else {
+                MealsDBNotice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
+                $el.prop('disabled', false);
+            }
+        }).fail(function () {
+            MealsDBNotice('error', i18n.genericErr);
+            $el.prop('disabled', false);
+        });
+    }
 
     function revert($cell, message) {
         var prior = $cell.data('prior');

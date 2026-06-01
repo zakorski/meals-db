@@ -606,6 +606,26 @@ class MealsDB_Allocation_Engine {
     }
 
     /**
+     * Reverse of finalize_month: clears the finalized lock on a client-month so
+     * the rebuilder can recompute it again. Used ONLY by the audited un-finalize
+     * flow (MealsDB_Invoice_Draft::unfinalize). Returns true if the row was
+     * updated (or was already not finalized).
+     */
+    public function unfinalize_month(int $client_id, string $billing_month): bool {
+        $allocations_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+
+        $updated = $this->wpdb->update(
+            $allocations_table,
+            ['is_finalized' => 0, 'finalized_at' => null],
+            ['client_id' => $client_id, 'billing_month' => $billing_month],
+            ['%d', '%s'],
+            ['%d', '%s']
+        );
+
+        return $updated !== false;
+    }
+
+    /**
      * Recalculate all active government clients for a billing month.
      *
      * @param string $billing_month Format "YYYY-MM"
