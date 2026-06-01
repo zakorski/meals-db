@@ -285,8 +285,8 @@ class MealsDB_WC_Order_Query {
      * Program-wide rate fallback when a client has no contracted meals_client_rates row.
      * SDNB: urban/rural primary-main rate (existing is_rural_zone rule).
      * Veteran/Private: the per-main rate from MealsDB_Rate_Definitions. These prices are
-     * BORN in Definitions (not WC) and are equal per the operator (see class-rate-definitions
-     * defaults() — 'private_main'), so both types resolve the same 'private_main' key.
+     * BORN in Definitions (not WC). Equal today but on SEPARATE keys ('veteran_main' /
+     * 'private_main') so either can change independently.
      * Never returns a silent 0 for a recognised type.
      */
     private function resolve_program_rate(string $client_type, ?string $zone, int $client_id): float {
@@ -301,10 +301,14 @@ class MealsDB_WC_Order_Query {
             return MealsDB_Operational_Constants::get_sdnb_main_rate('primary', $rural);
         }
 
-        // Veteran and Private share the per-main rate. Operator confirmed veteran prices
-        // equal private prices; both are seeded in MealsDB_Rate_Definitions as 'private_main'.
+        // Veteran and Private have EQUAL main prices today but SEPARATE Definitions keys
+        // ('veteran_main' / 'private_main') so either can change without affecting the other.
         // get() returns null only for an unknown key (a caller bug) — fall back to 0.00 then.
-        if ($type === 'VETERAN' || $type === 'PRIVATE') {
+        if ($type === 'VETERAN') {
+            $main_rate = MealsDB_Rate_Definitions::get('veteran_main');
+            return $main_rate !== null ? (float) $main_rate : 0.00;
+        }
+        if ($type === 'PRIVATE') {
             $main_rate = MealsDB_Rate_Definitions::get('private_main');
             return $main_rate !== null ? (float) $main_rate : 0.00;
         }

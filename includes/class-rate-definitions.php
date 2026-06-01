@@ -74,9 +74,15 @@ class MealsDB_Rate_Definitions {
             'vac_per_main_coverage'     => (float) MealsDB_Operational_Constants::VAC_PER_MAIN_ALLOWANCE,
             'vac_side'                  => (float) MealsDB_Operational_Constants::VAC_RATE_SIDE,
             // Janet's private/veteran prices — NEW, born here (not constants).
+            // Veteran prices equal private prices today but are SEPARATE keys so the two
+            // can diverge without editing the other. Keep values in sync until/unless the
+            // operator sets distinct Veteran prices.
             'private_main'              => 9.50,
             'private_side'              => 4.25,
             'private_combo'             => 13.75,
+            'veteran_main'              => 9.50,
+            'veteran_side'              => 4.25,
+            'veteran_combo'             => 13.75,
         ];
     }
 

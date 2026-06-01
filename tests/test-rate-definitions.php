@@ -157,8 +157,11 @@ reset_state();
 chk(MealsDB_Rate_Definitions::get('vac_per_main_coverage'), 10.64, 'T-1 seed fallback (vac coverage)');
 chk(MealsDB_Rate_Definitions::get('sdnb_side'), 4.48, 'T-1 seed fallback (sdnb_side)');
 $all = MealsDB_Rate_Definitions::all();
-chk(count($all), 11, 'T-1 all() returns full seed set');
+// 14 = 11 original keys + the 3 Veteran keys (veteran_main/side/combo) added by
+// directive GUI-RATE-3 (seeded equal to private_* but on their own keys).
+chk(count($all), 14, 'T-1 all() returns full seed set');
 chk($all['private_combo'], 13.75, 'T-1 all() includes born-here private_combo');
+chk($all['veteran_main'], 9.50, 'T-1 all() includes born-here veteran_main (= private)');
 
 // ---------------------------------------------------------------------------
 // T-2 — option overrides seed; un-set keys still return seed

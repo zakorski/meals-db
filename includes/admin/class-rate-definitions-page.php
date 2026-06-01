@@ -99,10 +99,15 @@ class MealsDB_Rate_Definitions_Page {
                 'vac_per_main_coverage' => __('Per-main coverage', 'meals-db'),
                 'vac_side'              => __('Side rate', 'meals-db'),
             ],
-            'Private / Veteran prices' => [
+            'Private prices' => [
                 'private_main'  => __('Main', 'meals-db'),
                 'private_side'  => __('Side', 'meals-db'),
                 'private_combo' => __('Main + side combo', 'meals-db'),
+            ],
+            'Veteran prices' => [
+                'veteran_main'  => __('Main', 'meals-db'),
+                'veteran_side'  => __('Side', 'meals-db'),
+                'veteran_combo' => __('Main + side combo', 'meals-db'),
             ],
         ];
     }
