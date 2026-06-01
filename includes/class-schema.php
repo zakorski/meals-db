@@ -60,7 +60,7 @@ class MealsDB_Schema {
                     'allowance_mains'              => 'INT NULL',
                     'allowance_sides'              => 'INT NULL',
                     'client_contribution'          => 'DECIMAL(10,2) NULL',
-                    'vet_health_card'              => 'VARCHAR(50) NULL',
+                    'vet_health_card'              => 'VARCHAR(500) NULL',
                     'vet_health_card_index'        => 'CHAR(64) NULL',
                     'use_legacy_billing'           => 'TINYINT(1) NOT NULL DEFAULT 1',
                     'default_rate_id'              => 'BIGINT UNSIGNED NULL',
