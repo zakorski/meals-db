@@ -454,22 +454,12 @@ class MealsDB_Admin_UI {
             true
         );
 
-        $client_type_logic_path = MEALS_DB_PLUGIN_DIR . 'assets/js/client-type-logic.js';
-        $client_type_logic_version = file_exists($client_type_logic_path) ? filemtime($client_type_logic_path) : MEALS_DB_VERSION;
-        wp_enqueue_script(
-            'mealsdb-client-type-logic',
-            MEALS_DB_PLUGIN_URL . 'assets/js/client-type-logic.js',
-            ['jquery', 'mealsdb-admin'],
-            $client_type_logic_version,
-            true
-        );
-
         $initials_script_path = MEALS_DB_PLUGIN_DIR . 'assets/js/client-initials.js';
         $initials_script_version = file_exists($initials_script_path) ? filemtime($initials_script_path) : MEALS_DB_VERSION;
         wp_enqueue_script(
             'mealsdb-client-initials',
             MEALS_DB_PLUGIN_URL . 'assets/js/client-initials.js',
-            ['jquery', 'mealsdb-admin', 'mealsdb-client-type-logic', $notice_handle],
+            ['jquery', 'mealsdb-admin', $notice_handle],
             $initials_script_version,
             true
         );
