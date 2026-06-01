@@ -84,6 +84,9 @@ class MealsDB_Invoice_Draft_Page {
                     'saved'       => __('Saved', 'meals-db'),
                     'genericErr'  => __('Something went wrong. Please try again.', 'meals-db'),
                     'confirmFin'  => __('Finalize this draft? Finalized drafts are read-only.', 'meals-db'),
+                    'confirmUnfin' => __('Un-finalize this invoice? It will become editable again — you can edit it or regenerate.', 'meals-db'),
+                    'reasonPrompt' => __('Enter a reason for un-finalizing (required — it is audited):', 'meals-db'),
+                    'reasonRequired' => __('A reason is required to un-finalize.', 'meals-db'),
                 ],
             ]) . ';',
             'before'
@@ -180,6 +183,11 @@ class MealsDB_Invoice_Draft_Page {
             if ($status === 'draft' && $did > 0) {
                 echo ' | <a href="#" class="mealsdb-draft-finalize" data-draft-id="' . esc_attr((string) $did) . '">'
                     . esc_html__('Finalize', 'meals-db') . '</a>';
+            }
+            if ($status === 'finalized' && $did > 0) {
+                // Directive INV-2: audited, admin-only reversal of the finalize lock.
+                echo ' | <a href="#" class="mealsdb-draft-unfinalize" data-draft-id="' . esc_attr((string) $did) . '">'
+                    . esc_html__('Un-finalize', 'meals-db') . '</a>';
             }
             echo '</td>';
             echo '</tr>';
@@ -302,6 +310,19 @@ class MealsDB_Invoice_Draft_Page {
         } else {
             // Finalized: offer the captured artifact(s) for download (Step 3).
             self::render_download_links($draft_id, (string) ($draft['pipeline'] ?? ''));
+
+            // Directive INV-2: an audited, admin-only un-finalize. Reverses the
+            // one-way finalize lock so a draft finalized in error (e.g. against
+            // an empty products table) can be edited or regenerated without raw
+            // SQL. The JS prompts for a required reason and POSTs it; the AJAX
+            // handler re-checks manage_options + nonce + the non-empty reason.
+            echo '<p style="margin-top:12px;">';
+            echo '<button type="button" class="button mealsdb-draft-unfinalize" data-draft-id="'
+                . esc_attr((string) $draft_id) . '">' . esc_html__('Un-finalize', 'meals-db') . '</button>';
+            echo ' <span class="description">'
+                . esc_html__('Un-finalizing makes this invoice editable again (clears the finalized lock). Audited with a reason.', 'meals-db')
+                . '</span>';
+            echo '</p>';
         }
     }
 

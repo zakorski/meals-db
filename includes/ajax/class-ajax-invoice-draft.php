@@ -54,6 +54,7 @@ class MealsDB_Ajax_Invoice_Draft {
         add_action('wp_ajax_mealsdb_generate_draft',   [__CLASS__, 'generate_draft']);
         add_action('wp_ajax_mealsdb_edit_draft_field', [__CLASS__, 'edit_draft_field']);
         add_action('wp_ajax_mealsdb_finalize_draft',   [__CLASS__, 'finalize_draft']);
+        add_action('wp_ajax_mealsdb_unfinalize_draft', [__CLASS__, 'unfinalize_draft']);
         // The download is an admin-post handler (it streams a file, not JSON).
         add_action('admin_post_mealsdb_download_finalized_invoice', [__CLASS__, 'download_finalized']);
     }
@@ -260,6 +261,45 @@ class MealsDB_Ajax_Invoice_Draft {
      * the read-only grid, where the Download links (Step 3) appear. We return
      * the set of available formats so the caller can surface them immediately.
      */
+    /**
+     * Un-finalize a finalized draft (directive INV-2). Reverses the one-way
+     * finalize lock: restores the draft to editable `draft` status and clears
+     * the per-client-month finalized locks. manage_options + nonce + rate limit
+     * (the shared guard spine) PLUS a required, audited reason string.
+     */
+    public static function unfinalize_draft(): void {
+        if (!self::guard('settings_modify')) {
+            return; // guard() already emitted the JSON error.
+        }
+
+        try {
+            $draft_id = isset($_POST['draft_id']) ? absint($_POST['draft_id']) : 0;
+            $reason   = isset($_POST['reason']) ? sanitize_text_field(wp_unslash((string) $_POST['reason'])) : '';
+            if ($draft_id <= 0) {
+                wp_send_json_error(['message' => __('Missing draft id.', 'meals-db')]);
+                return;
+            }
+            // The reason is REQUIRED — every un-finalize is audited with it.
+            if (trim($reason) === '') {
+                wp_send_json_error(['message' => __('A reason is required to un-finalize.', 'meals-db')]);
+                return;
+            }
+
+            $ok = MealsDB_Invoice_Draft::unfinalize($draft_id, $reason);
+            if (!$ok) {
+                wp_send_json_error(['message' => __('Could not un-finalize (draft not found, not finalized, or changed — reload).', 'meals-db')]);
+                return;
+            }
+
+            wp_send_json_success([
+                'message' => __('Invoice un-finalized. It is editable again — you can edit it or regenerate.', 'meals-db'),
+            ]);
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Invoice_Draft AJAX] unfinalize failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to un-finalize draft. Please try again.', 'meals-db')]);
+        }
+    }
+
     public static function finalize_draft(): void {
         if (!self::guard('settings_modify')) {
             return;

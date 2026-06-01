@@ -437,6 +437,72 @@ chk(json_type(), 'error', 'T-9: edit rejected when rate-limited');
 chk((int) ($GLOBALS['JSON']['status'] ?? 0), 429, 'T-9: rate-limit returns HTTP 429');
 chk(count($w->audit), 0, 'T-9: no audit row when rate-limited');
 
+// ===========================================================================
+// T-10 (directive INV-2): unfinalize_draft — success after finalize, the
+// REQUIRED reason, missing-id rejection, audit row, and guard rejections.
+// ===========================================================================
+// Happy path: finalize, then un-finalize with a reason.
+$w = reset_env();
+$id = make_draft('vac', '2026-09');
+$_POST = ['draft_id' => $id];
+MealsDB_Ajax_Invoice_Draft::finalize_draft();
+chk($w->drafts[$id]['status'], 'finalized', 'T-10: precondition — draft finalized');
+$w->audit = []; // assert only on the unfinalize audit row
+$GLOBALS['JSON'] = null;
+$_POST = ['draft_id' => $id, 'reason' => 'finalized at zero against empty products'];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'success', 'T-10: unfinalize returns success');
+chk($w->drafts[$id]['status'], 'draft', 'T-10: draft restored to editable');
+chk(count($w->audit), 1, 'T-10: exactly ONE audit row written');
+chk_true(strpos($w->audit[0], "'invoice_draft_unfinalized'") !== false, 'T-10: audit action = invoice_draft_unfinalized');
+chk_true(strpos($w->audit[0], 'finalized at zero against empty products') !== false, 'T-10: audit carries the reason');
+
+// Empty / whitespace reason → rejected, no state change, no audit.
+$w = reset_env();
+$id = make_draft('vac', '2026-10');
+$_POST = ['draft_id' => $id];
+MealsDB_Ajax_Invoice_Draft::finalize_draft();
+$w->audit = [];
+$GLOBALS['JSON'] = null;
+$_POST = ['draft_id' => $id, 'reason' => '   '];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'error', 'T-10: empty reason → error');
+chk($w->drafts[$id]['status'], 'finalized', 'T-10: still finalized after a reasonless request');
+chk(count($w->audit), 0, 'T-10: no audit row when the reason is rejected');
+
+// Missing draft id → error.
+$w = reset_env();
+$GLOBALS['JSON'] = null;
+$_POST = ['reason' => 'whatever'];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'error', 'T-10: missing draft id → error');
+
+// Un-finalizing a draft-status (never finalized) draft → service refuses.
+$w = reset_env();
+$id = make_draft('vac', '2026-11');
+$GLOBALS['JSON'] = null;
+$_POST = ['draft_id' => $id, 'reason' => 'should refuse'];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'error', 'T-10: un-finalize on a draft-status draft → error');
+
+// Guard rejections: bad nonce / missing capability before any state change.
+$w = reset_env(); $id = make_draft('vac', '2026-12');
+$_POST = ['draft_id' => $id]; MealsDB_Ajax_Invoice_Draft::finalize_draft();
+$w->audit = []; $GLOBALS['NONCE_OK'] = false; $GLOBALS['JSON'] = null;
+$_POST = ['draft_id' => $id, 'reason' => 'x'];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'error', 'T-10: unfinalize rejected on bad nonce');
+chk($w->drafts[$id]['status'], 'finalized', 'T-10: still finalized after bad-nonce request');
+chk(count($w->audit), 0, 'T-10: no audit row on bad nonce');
+
+$w = reset_env(); $id = make_draft('vac', '2027-01');
+$_POST = ['draft_id' => $id]; MealsDB_Ajax_Invoice_Draft::finalize_draft();
+$w->audit = []; $GLOBALS['CAP_OK'] = false; $GLOBALS['JSON'] = null;
+$_POST = ['draft_id' => $id, 'reason' => 'x'];
+MealsDB_Ajax_Invoice_Draft::unfinalize_draft();
+chk(json_type(), 'error', 'T-10: unfinalize rejected without capability');
+chk($w->drafts[$id]['status'], 'finalized', 'T-10: still finalized without capability');
+
 // ---------------------------------------------------------------------------
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }

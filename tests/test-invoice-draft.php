@@ -365,6 +365,39 @@ chk(MealsDB_Invoice_Draft::get($idX)['status'], 'draft', 'T-A6: draft stays edit
 chk(count($wC->finalize_calls), 0, 'T-A6: months NOT frozen when the artifact could not be produced');
 
 // ===========================================================================
+// T-10 (directive INV-2): unfinalize reverses finalize — clears the per-client
+// finalized locks (unfinalize_month fires per client), restores the draft to
+// editable 'draft' (clearing finalized_by/at/output), audits WITH a reason, and
+// re-enables edits. Only a FINALIZED draft can be un-finalized.
+// ===========================================================================
+$w10 = fresh_wpdb();
+$id10 = MealsDB_Invoice_Draft::create(
+    MealsDB_Invoice_Draft::PIPELINE_VAC, '2026-08', '2026-08-01', '2026-08-31', sample_rows(), []
+);
+// A draft-status draft cannot be un-finalized.
+chk(MealsDB_Invoice_Draft::unfinalize($id10, 'too soon'), false, 'T-10: unfinalize refuses a draft-status draft');
+// Finalize, then un-finalize.
+MealsDB_Invoice_Draft::finalize($id10);
+chk(MealsDB_Invoice_Draft::get($id10)['status'], 'finalized', 'T-10: precondition — draft finalized');
+$calls_after_finalize = count($w10->finalize_calls); // 2 (one per client)
+$ok10 = MealsDB_Invoice_Draft::unfinalize($id10, 'setup error: zero products');
+chk($ok10, true, 'T-10: unfinalize returns true on a finalized draft');
+$d10 = MealsDB_Invoice_Draft::get($id10);
+chk($d10['status'], 'draft', 'T-10: status restored to draft');
+chk($w10->drafts[$id10]['finalized_output'], null, 'T-10: finalized_output cleared');
+chk($w10->drafts[$id10]['finalized_at'], null, 'T-10: finalized_at cleared');
+chk($w10->drafts[$id10]['finalized_by'], null, 'T-10: finalized_by cleared');
+// unfinalize_month fired once per client (same client set as finalize).
+chk(count($w10->finalize_calls) - $calls_after_finalize, 2, 'T-10: unfinalize_month fired per client');
+// The restored draft is editable again.
+$old10 = MealsDB_Invoice_Draft::edit_field($id10, '42', 'last_name', 'Edited-After-Unfinalize');
+chk_true($old10 !== false, 'T-10: edits re-enabled after unfinalize');
+// Re-unfinalizing a now-draft draft is refused (idempotency guard).
+chk(MealsDB_Invoice_Draft::unfinalize($id10, 'again'), false, 'T-10: unfinalize refuses an already-draft draft');
+// Unknown draft id → false (never throws).
+chk(MealsDB_Invoice_Draft::unfinalize(999999, 'nope'), false, 'T-10: unknown draft id → false');
+
+// ===========================================================================
 // T-7: shared-helper parity (QW-2) — round-trip + legacy plaintext JSON.
 // ===========================================================================
 $arr = ['a' => 1, 'b' => ['c' => 'déjà vu', 'd' => [1, 2, 3]]];

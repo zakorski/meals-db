@@ -303,6 +303,83 @@ class MealsDB_Invoice_Draft {
      *                    (['pipeline'=>..., 'files'=>[...]]) on success;
      *                    null on failure/refusal.
      */
+    /**
+     * Reverse a finalize: restore the draft to editable `draft` status and clear
+     * the per-client-month finalized locks, so it can be edited or regenerated.
+     * Audited WITH a reason. manage_options is enforced at the AJAX boundary.
+     *
+     * @param int    $draft_id
+     * @param string $reason  Operator-supplied reason (audited; required).
+     * @return bool  true on success, false if not found / not finalized / failed.
+     */
+    public static function unfinalize(int $draft_id, string $reason): bool {
+        try {
+            $draft = self::get($draft_id);
+            if ($draft === null) {
+                return false;
+            }
+            if (($draft['status'] ?? '') !== 'finalized') {
+                // Only a finalized draft can be un-finalized.
+                return false;
+            }
+
+            $payload       = $draft['payload'];
+            $current       = (isset($payload['current']) && is_array($payload['current']))
+                ? $payload['current'] : [];
+            $billing_month = (string) ($draft['billing_month'] ?? '');
+
+            // 1) Clear the per-client-month finalized locks (reverse of the
+            //    finalize_month loop). Mirror finalize's client set (payload current).
+            if ($billing_month !== '' && class_exists('MealsDB_Allocation_Engine')) {
+                $engine = new MealsDB_Allocation_Engine();
+                foreach (array_keys($current) as $client_id) {
+                    $cid = (int) $client_id;
+                    if ($cid > 0) {
+                        $engine->unfinalize_month($cid, $billing_month);
+                    }
+                }
+            }
+
+            // 2) Restore the draft row to editable `draft`, clearing the
+            //    finalized metadata + the captured output. Guarded WHERE keeps
+            //    the transition atomic (only a still-finalized row flips).
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::INVOICE_DRAFTS);
+            $updated = $wpdb->update(
+                $table,
+                [
+                    'status'           => 'draft',
+                    'finalized_by'     => null,
+                    'finalized_at'     => null,
+                    'finalized_output' => null,
+                ],
+                ['draft_id' => $draft_id, 'status' => 'finalized'],
+                ['%s', '%d', '%s', '%s'],
+                ['%d', '%s']
+            );
+            if ($updated === false || (int) $updated === 0) {
+                // Lost race / already changed — treat as refusal.
+                return false;
+            }
+
+            // 3) Audit WITH the reason (committed artifact change → audit log).
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::log(
+                    'invoice_draft_unfinalized',
+                    $draft_id,
+                    'reason',
+                    'finalized',
+                    (string) $reason
+                );
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            self::log_error('unfinalize', $e);
+            return false;
+        }
+    }
+
     public static function finalize(int $draft_id) {
         try {
             $draft = self::get($draft_id);
