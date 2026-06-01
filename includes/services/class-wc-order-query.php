@@ -283,8 +283,11 @@ class MealsDB_WC_Order_Query {
 
     /**
      * Program-wide rate fallback when a client has no contracted meals_client_rates row.
-     * SDNB: urban/rural primary-main rate (existing is_rural_zone rule). Veteran: Definitions.
-     * Private: WooCommerce price. Never returns a silent 0 for a recognised type.
+     * SDNB: urban/rural primary-main rate (existing is_rural_zone rule).
+     * Veteran/Private: the per-main rate from MealsDB_Rate_Definitions. These prices are
+     * BORN in Definitions (not WC) and are equal per the operator (see class-rate-definitions
+     * defaults() — 'private_main'), so both types resolve the same 'private_main' key.
+     * Never returns a silent 0 for a recognised type.
      */
     private function resolve_program_rate(string $client_type, ?string $zone, int $client_id): float {
         $type = strtoupper(trim($client_type));
@@ -298,20 +301,12 @@ class MealsDB_WC_Order_Query {
             return MealsDB_Operational_Constants::get_sdnb_main_rate('primary', $rural);
         }
 
-        if ($type === 'VETERAN') {
-            // __CONFIRM__ : exact MealsDB_Rate_Definitions key for the Veteran primary-main rate.
-            // Do NOT guess. Confirm the key name, then use it here:
-            $veteran_rate = MealsDB_Rate_Definitions::get('__CONFIRM__veteran_primary_main_key');
-            return $veteran_rate !== null ? (float) $veteran_rate : 0.00;
-        }
-
-        if ($type === 'PRIVATE') {
-            // __CONFIRM__ : how a Private per-main rate is sourced from WooCommerce.
-            // The codebase reads WC price via $product->get_price() / wc_get_price_to_display
-            // (see class-products-loader.php, class-quick-order-products.php). Reuse that;
-            // do NOT invent a new price path. Confirm WHICH product represents the per-main
-            // rate before implementing. Until confirmed, leave this returning 0.00 and FLAG it.
-            return 0.00; // __CONFIRM__ replace with WC-sourced rate
+        // Veteran and Private share the per-main rate. Operator confirmed veteran prices
+        // equal private prices; both are seeded in MealsDB_Rate_Definitions as 'private_main'.
+        // get() returns null only for an unknown key (a caller bug) — fall back to 0.00 then.
+        if ($type === 'VETERAN' || $type === 'PRIVATE') {
+            $main_rate = MealsDB_Rate_Definitions::get('private_main');
+            return $main_rate !== null ? (float) $main_rate : 0.00;
         }
 
         return 0.00;
