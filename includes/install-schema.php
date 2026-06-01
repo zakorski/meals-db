@@ -36,6 +36,7 @@ class MealsDB_Installer {
 
         // Run one-time migrations
         self::migrate_rate_to_client_rates();
+        self::widen_vet_health_card_column();
         self::drop_defunct_transaction_tables();
 
         // Seed the first task-engine rule so a freshly-installed site has
@@ -189,6 +190,47 @@ class MealsDB_Installer {
      * run can retry from scratch. Step 3 only executes when the
      * backfill committed cleanly.
      */
+    /**
+     * One-time: widen meals_clients.vet_health_card from VARCHAR(50) to VARCHAR(500).
+     *
+     * vet_health_card is AES-256 encrypted (base64(hmac.iv.ciphertext), ~90+ chars),
+     * so VARCHAR(50) overflows for every value and blocked all Veteran creates. Its
+     * sibling encrypted fields (individual_id, requisition_id) are already VARCHAR(500);
+     * this brings vet_health_card in line. Idempotent: only ALTERs when the live column
+     * is still narrower than 500. Safe to run on every install/upgrade.
+     */
+    private static function widen_vet_health_card_column(): void {
+        global $wpdb;
+
+        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+
+        // Read the live column type; only act if it's not already VARCHAR(500)+.
+        $col = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT CHARACTER_MAXIMUM_LENGTH AS len
+                   FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME = %s
+                    AND COLUMN_NAME = 'vet_health_card'",
+                $clients_table
+            ),
+            ARRAY_A
+        );
+
+        // If we can't read it, or it's already wide enough, do nothing.
+        if (!is_array($col) || !isset($col['len'])) {
+            return;
+        }
+        if ((int) $col['len'] >= 500) {
+            return;
+        }
+
+        $alter_sql = "ALTER TABLE `{$clients_table}` MODIFY COLUMN `vet_health_card` VARCHAR(500) NULL";
+        if ($wpdb->query($alter_sql) === false) {
+            error_log('[MealsDB Installer] Failed to widen vet_health_card column: ' . $wpdb->last_error);
+        }
+    }
+
     private static function migrate_rate_to_client_rates(): void {
         global $wpdb;
 
