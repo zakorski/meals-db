@@ -211,7 +211,7 @@ class MealsDB_Invoice_Generator {
             $allocated_nontax_sides = (int) $s['used_nontax_sides'];
 
             $rate_id       = isset($client['default_rate_id']) ? (int) $client['default_rate_id'] : 0;
-            $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid);
+            $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid, $client['client_type'] ?? '', $client['delivery_area_zone'] ?? null);
 
             // Contribution: sum of product-5675 line items across orders
             // whose meals landed in this billing month for this client.
