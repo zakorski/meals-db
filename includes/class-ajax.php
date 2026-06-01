@@ -37,6 +37,12 @@ class MealsDB_Ajax {
             'MealsDB_Ajax_Drafts',
             'MealsDB_Ajax_Clients',
             'MealsDB_Ajax_Initials',
+            // INV-3: the old direct-generate MealsDB_Ajax_Invoice was removed;
+            // the draft handler is the sole invoice AJAX path now, so register
+            // it here too (mealsdb_generate_draft / edit / finalize / download
+            // setup) to honour this shim's "same endpoint set" contract for
+            // legacy bootstrap callers.
+            'MealsDB_Ajax_Invoice_Draft',
             'MealsDB_Ajax_Delivery_Slips',
             'MealsDB_Ajax_Reports',
             'MealsDB_Ajax_Settings',
