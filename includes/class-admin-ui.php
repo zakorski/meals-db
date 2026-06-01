@@ -1325,6 +1325,18 @@ class MealsDB_Admin_UI {
                 </tr>
                 <?php
             },
+            static function (array $client) use ($gender_value) {
+                ?>
+                <tr data-client-type="sdnb,veteran,private">
+                    <th><?php esc_html_e('Gender', 'meals-db'); ?></th>
+                    <td>
+                        <label><input type="radio" name="gender" value="Male" <?php checked($gender_value, 'Male'); ?> /> <?php esc_html_e('Male', 'meals-db'); ?></label>
+                        <label><input type="radio" name="gender" value="Female" <?php checked($gender_value, 'Female'); ?> /> <?php esc_html_e('Female', 'meals-db'); ?></label>
+                        <label><input type="radio" name="gender" value="Other" <?php checked($gender_value, 'Other'); ?> /> <?php esc_html_e('Other', 'meals-db'); ?></label>
+                    </td>
+                </tr>
+                <?php
+            },
             static function (array $client) {
                 ?>
                 <tr data-client-type="sdnb,veteran">
@@ -1629,18 +1641,6 @@ class MealsDB_Admin_UI {
                 <tr>
                     <th><label for="individual_id"><?php esc_html_e('Individual ID', 'meals-db'); ?></label></th>
                     <td><input type="text" name="individual_id" id="individual_id" class="regular-text" value="<?php echo esc_attr($client['individual_id'] ?? ''); ?>" /></td>
-                </tr>
-                <?php
-            },
-            static function (array $client) use ($gender_value) {
-                ?>
-                <tr>
-                    <th><?php esc_html_e('Gender', 'meals-db'); ?></th>
-                    <td>
-                        <label><input type="radio" name="gender" value="Male" <?php checked($gender_value, 'Male'); ?> /> <?php esc_html_e('Male', 'meals-db'); ?></label>
-                        <label><input type="radio" name="gender" value="Female" <?php checked($gender_value, 'Female'); ?> /> <?php esc_html_e('Female', 'meals-db'); ?></label>
-                        <label><input type="radio" name="gender" value="Other" <?php checked($gender_value, 'Other'); ?> /> <?php esc_html_e('Other', 'meals-db'); ?></label>
-                    </td>
                 </tr>
                 <?php
             },
