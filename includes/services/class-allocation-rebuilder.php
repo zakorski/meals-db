@@ -492,10 +492,24 @@ class MealsDB_Allocation_Rebuilder {
                 continue;
             }
             $mains = 0; $tax_sides = 0; $nontax_sides = 0;
+            // Legacy overage products: the OLD system injects these SKUs into
+            // orders for its own accounting. The new system must NOT count them
+            // (they would inflate mains/sides during the parallel run). We
+            // exclude by product ID — the products' meals_products rows are left
+            // intact (the old system still needs them), so this is the ONLY
+            // place they are filtered out of the new allocation count. IDs come
+            // from the canonical constants, not hardcoded here.
+            $overage_ids = array_map('intval', array_values(
+                MealsDB_Operational_Constants::default_overage_product_ids()
+            ));
             foreach ($items as $it) {
+                $wc_pid = (int) $it['wc_product_id'];
+                if (in_array($wc_pid, $overage_ids, true)) {
+                    continue; // legacy overage SKU — never counted by the new system
+                }
                 $pd = $this->wpdb->get_row($this->wpdb->prepare(
                     "SELECT product_type, taxable FROM `{$products_table}` WHERE wc_product_id = %d",
-                    (int) $it['wc_product_id']
+                    $wc_pid
                 ), ARRAY_A);
                 if (!$pd) continue;
                 $qty = (int) $it['quantity'];
