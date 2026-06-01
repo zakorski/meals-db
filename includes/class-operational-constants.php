@@ -202,6 +202,44 @@ class MealsDB_Operational_Constants {
     }
 
     /**
+     * Overage product IDs as actually CONFIGURED on this install: the
+     * operator-set `mealsdb_overage_product_ids` option overlaid on the
+     * seed defaults. Same keyed shape as default_overage_product_ids().
+     *
+     * Why this exists: default_overage_product_ids() is only the seed
+     * constants. The Settings page (views/settings.php) lets the operator
+     * re-point an overage SKU, and the save path
+     * (includes/ajax/class-ajax-settings.php) persists those values to the
+     * `mealsdb_overage_product_ids` option. On such installs the CONFIGURED
+     * ID — not the seed — is what the OLD system injects into orders, so any
+     * consumer that must recognise overage SKUs (e.g. the allocation
+     * rebuilder's meal-count exclusion) has to honour the option or those
+     * orders inflate the count. A per-key 0/missing falls back to the seed,
+     * mirroring the settings UI's own `?? default` convention.
+     *
+     * Guarded for non-WP contexts (CLI/tests) where get_option is absent —
+     * there we return the seeds, matching default_overage_product_ids().
+     *
+     * @return array{mains: int, taxable_sides: int, nontax_sides: int}
+     */
+    public static function overage_product_ids(): array {
+        $defaults = self::default_overage_product_ids();
+        if (!function_exists('get_option')) {
+            return $defaults;
+        }
+        $saved = get_option('mealsdb_overage_product_ids', []);
+        if (!is_array($saved)) {
+            $saved = [];
+        }
+        $resolved = [];
+        foreach ($defaults as $key => $default) {
+            $value = isset($saved[$key]) ? (int) $saved[$key] : 0;
+            $resolved[$key] = $value > 0 ? $value : (int) $default;
+        }
+        return $resolved;
+    }
+
+    /**
      * Get the SDNB main rate for a tier and rurality.
      *
      * Reads through MealsDB_Rate_Definitions (directive DEFINITIONS-1) so the
