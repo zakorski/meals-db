@@ -154,7 +154,9 @@ function dirty_clears(FinFakeWpdb $w): array {
 
 // ---------------------------------------------------------------------------
 // Case 1: Finalized TARGET month. Rebuild a finalized month -> no DELETE, no
-// INSERT (its submitted detail is untouched), dirty flag consumed, no recalc.
+// INSERT (its submitted detail is untouched), no recalc. BC-3: the dirty flag
+// is PRESERVED (not consumed) so a back-dated order into a submitted month is
+// not silently dropped — it stays queued and a degraded event is emitted.
 // ---------------------------------------------------------------------------
 $GLOBALS['wpdb'] = new FinFakeWpdb();
 $GLOBALS['wpdb']->finalized = ['2025-03'];
@@ -168,7 +170,7 @@ $res = $rb->rebuild_client_month(1, '2025-03');
 chk(count($GLOBALS['wpdb']->inserts[alloc_table()] ?? []), 0, 'target: no detail rows written for a finalized target');
 chk(count($GLOBALS['wpdb']->deletes), 0, 'target: no DELETE issued for a finalized target');
 chk($res, ['mains_unplaced' => 0, 'sides_unplaced' => 0], 'target: returns zero unplaced');
-chk(dirty_clears($GLOBALS['wpdb']), ['2025-03'], 'target: dirty flag for the finalized target is consumed');
+chk(dirty_clears($GLOBALS['wpdb']), [], 'target: dirty flag for the finalized target is PRESERVED (BC-3: order not dropped)');
 chk($eng->recalculated, [], 'target: no summary recalculated for a finalized target');
 
 // ---------------------------------------------------------------------------

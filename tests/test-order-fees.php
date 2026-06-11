@@ -58,6 +58,13 @@ if (!class_exists('WC_Order')) {
         public function get_id() { return $this->id; }
         public function get_customer_id() { return $this->customer_id; }
         public function get_meta($k) { return $this->meta[$k] ?? ''; }
+        // BC-2: the applier derives the contribution's billing month from the
+        // order's creation timestamp (UTC). A fixed date keeps it deterministic.
+        public function get_date_created() {
+            return new class {
+                public function getTimestamp() { return gmmktime(12, 0, 0, 6, 15, 2026); }
+            };
+        }
         public function get_items($type = 'line_item') {
             $out = [];
             foreach ($this->items as $pid => $qty) { $out[] = new WC_Order_Item_Product((int) $pid); }

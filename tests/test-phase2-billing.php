@@ -18,6 +18,9 @@
  */
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
+// BC-5: sum_contribution_for_orders now resolves the contribution product id via
+// get_fee_product_ids() -> get_option(). With no override, defaults apply (5675).
+if (!function_exists('get_option')) { function get_option($name, $default = false) { return $default; } }
 
 // Mock WooCommerce's tax API: get_phase2_billing_data resolves the HST
 // rate live from WC_Tax (LB-7 follow-up — no fallback). 15% standard rate.
@@ -92,7 +95,7 @@ $wpdb->scripted = [
     ],
     'get_var' => [
         // Rate-resolution and contribution-sum: both hit get_var; route via SQL hints.
-        "SUM(CAST(lt.meta_value AS DECIMAL" => '0.0000', // no contribution
+        "SUM(CAST(ls.meta_value AS DECIMAL" => '0.0000', // no contribution
     ],
     'get_row' => [
         // resolve_rate_for_order may hit get_row for the rates table.
@@ -166,7 +169,7 @@ $wpdb3->scripted = [
     ],
     'get_var' => [
         // The product-5675 contribution sum query returns this decimal:
-        "SUM(CAST(lt.meta_value AS DECIMAL" => '19.7700',
+        "SUM(CAST(ls.meta_value AS DECIMAL" => '19.7700',
     ],
 ];
 $GLOBALS['wpdb'] = $wpdb3;

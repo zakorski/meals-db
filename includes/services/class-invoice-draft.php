@@ -418,6 +418,16 @@ class MealsDB_Invoice_Draft {
                     }
                     if (!$still_covered) {
                         $engine->unfinalize_month($cid, $billing_month);
+                        // BC-3: unlocking a month exists precisely so it can
+                        // rebuild and pick up orders that arrived while it was
+                        // finalized — which the rebuilder skipped and left
+                        // queued (a finalized month consumes no dirty flag). Re-
+                        // queue the now-open client-month so the next rebuild
+                        // materialises them. Without this, the unlock appears to
+                        // do nothing until some unrelated order re-dirties it.
+                        if (class_exists('MealsDB_Allocation_Rebuilder')) {
+                            (new MealsDB_Allocation_Rebuilder())->mark_dirty($cid, $billing_month);
+                        }
                     }
                 }
             }

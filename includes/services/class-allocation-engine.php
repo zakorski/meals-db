@@ -245,6 +245,24 @@ class MealsDB_Allocation_Engine {
     }
 
     /**
+     * Public seam over resolve_client_for_order() for callers that need to
+     * route a single order to its owning client through the ONE canonical chain
+     * (meta -> customer_id -> wp_user, with MAJ-1 rate disambiguation).
+     *
+     * BC-1: the allocation rebuilder uses this to filter customer_id-matched
+     * orders down to the client actually being rebuilt — so a dual-program user
+     * (two clients sharing one wp_user_id) no longer double-counts, and an order
+     * pinned by meta to a different client is excluded. Returns 0 when the order
+     * routes to no (non-Private) client.
+     *
+     * @param int $wc_order_id
+     * @return int client_id, or 0.
+     */
+    public function resolve_client_id_for_order(int $wc_order_id): int {
+        return $this->resolve_client_for_order($wc_order_id);
+    }
+
+    /**
      * Resolve the meals_clients.client_id for a WC order via the same chain
      * the old allocate_order used: mealsdb_client_id meta -> mealsdb_client_user_id
      * meta -> WC native customer_id -> clients.wp_user_id. Skips Private
@@ -508,6 +526,38 @@ class MealsDB_Allocation_Engine {
      * @param int $wc_order_id
      */
     public function deallocate_order(int $wc_order_id): void {
+        $summary_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+
+        // BC-2: release the monthly client contribution if THIS order was the
+        // carrier, so the next qualifying order in the month re-applies it.
+        // Keyed on contribution_order_id so a non-carrier order never clears
+        // another order's flag. Runs BEFORE the empty-rows early-return: a
+        // contribution-only order (fee, no meals) has no delivery_allocations
+        // rows but must still release the month. Previously this reset did not
+        // exist (despite the order-fees docblock claiming it did), so a
+        // cancelled/refunded carrier left contribution_applied=1 forever and the
+        // month was never re-billed the contribution.
+        $this->wpdb->query($this->wpdb->prepare(
+            "UPDATE `{$summary_table}`
+             SET contribution_applied = 0, contribution_order_id = NULL
+             WHERE contribution_order_id = %d",
+            $wc_order_id
+        ));
+
+        $this->mark_order_months_dirty($wc_order_id);
+    }
+
+    /**
+     * Mark every (client_id, billing_month) that had rows for this order as
+     * dirty, so the rebuilder recomputes them from scratch. Unlike
+     * deallocate_order() this does NOT release the contribution flag — it is the
+     * right action for a PARTIAL refund (BC-6), where the order stays active and
+     * still carries its contribution; only the meal quantities change, and the
+     * rebuilder picks up the NET (post-refund) quantities on its next pass.
+     *
+     * @param int $wc_order_id
+     */
+    public function mark_order_months_dirty(int $wc_order_id): void {
         $delivery_alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
 
         $affected = $this->wpdb->get_results($this->wpdb->prepare(

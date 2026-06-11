@@ -147,48 +147,92 @@ class MealsDB_Allocation_Rebuilder {
 
         $prior_month = self::prior_month($billing_month);
         $next_month  = self::next_month($billing_month);
+        // BC-1: a delivery's meals spill FORWARD when their month is over cap, so
+        // a row billed to $prior_month may originate from a delivery in the month
+        // BEFORE it. To recompute $prior_month's rows correctly we must replay
+        // that earlier month's deliveries too — otherwise the fill deletes the
+        // spilled-in row (it's in the write window) but never reloads its source
+        // (whose delivery-month is outside the window) and the meals vanish.
+        // $prior_prior is loaded as a CONSUME-ONLY leading edge: its deliveries
+        // are placed so their forward spill into $prior is reproduced, but its
+        // OWN rows are neither deleted nor rewritten (they already exist and are
+        // billed there).
+        $prior_prior_month = self::prior_month($prior_month);
 
         // LB-3: never rebuild a finalized month — it's a submitted invoice.
-        // The $finalized set covers all three window months so the fill below
-        // also protects finalized PRIOR/NEXT neighbours from being deleted or
-        // written into (rebuilding open June pulls in May; if May is finalized
-        // its submitted detail must survive untouched).
+        // The $finalized set covers all three WRITE-window months so the fill
+        // below also protects finalized PRIOR/NEXT neighbours from being deleted
+        // or written into (rebuilding open June pulls in May; if May is finalized
+        // its submitted detail must survive untouched). $prior_prior is never in
+        // this set — it is already protected from writes/deletes by being
+        // consume-only.
         $finalized = $this->finalized_months($client_id, [
             $prior_month,
             $billing_month,
             $next_month,
         ]);
         if (isset($finalized[$billing_month])) {
+            // BC-3: a dirty marker on a FINALIZED month means an order arrived
+            // (or changed) for a submitted invoice. We cannot rewrite the
+            // invoice, but we must NOT pretend the work is done. Leave the dirty
+            // flag in place so it resurfaces (the operator can unfinalize-and-
+            // rebuild or handle it out of band), and emit a degraded event so
+            // the situation is visible. Consuming the flag here — the pre-BC-3
+            // behaviour — silently dropped the order with no signal at all.
+            // (The flag persisting means the nightly sweep re-emits this event
+            // until the month is handled; that recurring nag is intentional —
+            // finalized-month order activity is rare and should not be ignored.)
             error_log(sprintf(
-                '[MealsDB Rebuilder] Skipped finalized target month %s for client %d.',
+                '[MealsDB Rebuilder] Dirty marker on FINALIZED month %s for client %d — left queued, not rebuilt.',
                 $billing_month,
                 $client_id
             ));
-            $this->clear_dirty($client_id, $billing_month); // consume the flag; nothing to do
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'warning',
+                    'category'  => 'allocation',
+                    'subsystem' => 'allocation_rebuilder',
+                    'event'     => 'rebuild.dirty_finalized_month',
+                    'outcome'   => 'degraded',
+                    'message'   => 'Order activity for a finalized (submitted) month was not materialised.',
+                    'context'   => ['client_id' => $client_id, 'billing_month' => $billing_month],
+                ]);
+            }
+            // Deliberately NO clear_dirty(): the month stays queued.
             return ['mains_unplaced' => 0, 'sides_unplaced' => 0];
         }
 
-        // Allowances for the three months involved.
-        $cap_prior = $this->engine->calculate_permitted_for_month($client_id, $prior_month);
-        $cap_curr  = $this->engine->calculate_permitted_for_month($client_id, $billing_month);
-        $cap_next  = $this->engine->calculate_permitted_for_month($client_id, $next_month);
+        // Allowances for the four months involved (write window + the
+        // consume-only leading edge).
+        $cap_prior_prior = $this->engine->calculate_permitted_for_month($client_id, $prior_prior_month);
+        $cap_prior       = $this->engine->calculate_permitted_for_month($client_id, $prior_month);
+        $cap_curr        = $this->engine->calculate_permitted_for_month($client_id, $billing_month);
+        $cap_next        = $this->engine->calculate_permitted_for_month($client_id, $next_month);
 
         // Gather this client's deliveries whose delivery-month is in
-        // {prior, current, next}.
+        // {prior_prior, prior, current, next}.
         $deliveries = $this->load_deliveries_for_months(
             $client_id,
-            [$prior_month, $billing_month, $next_month]
+            [$prior_prior_month, $prior_month, $billing_month, $next_month]
         );
 
-        // Run the fill across the three months. The fill writes
+        // Run the fill across the four months. The fill writes
         // delivery_allocations rows for this client and returns the current
         // month's unplaceable overflow (errors attributed to the center).
+        // $prior_prior is consume-only: it grants headroom (so its forward spill
+        // into $prior is computed) but is never deleted or written.
         $unplaced = $this->fill_months(
             $client_id,
-            [$prior_month => $cap_prior, $billing_month => $cap_curr, $next_month => $cap_next],
+            [
+                $prior_prior_month => $cap_prior_prior,
+                $prior_month       => $cap_prior,
+                $billing_month     => $cap_curr,
+                $next_month        => $cap_next,
+            ],
             $deliveries,
             $billing_month,
-            $finalized              // LB-3: months in here are never deleted or written
+            $finalized,                          // LB-3: months in here are never deleted or written
+            [$prior_prior_month => true]         // BC-1: consume-only — placed but never deleted/written
         );
 
         // Refresh summaries for the affected months — but skip any finalized
@@ -301,7 +345,7 @@ class MealsDB_Allocation_Rebuilder {
      *        delivery whose overflow cannot be placed within $caps.
      * @return array{mains_unplaced:int, sides_unplaced:int}
      */
-    private function fill_months(int $client_id, array $caps, array $deliveries, ?string $error_month = null, array $finalized = []): array {
+    private function fill_months(int $client_id, array $caps, array $deliveries, ?string $error_month = null, array $finalized = [], array $consume_only = []): array {
         $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
         $months      = array_keys($caps);
 
@@ -309,8 +353,11 @@ class MealsDB_Allocation_Rebuilder {
         // LB-3: but NEVER delete a finalized month (submitted invoice). A
         // finalized month is excluded from the DELETE here and from the insert
         // path below, so it keeps exactly the detail rows it had at finalization.
-        $months_to_clear = array_values(array_filter($months, static function ($m) use ($finalized) {
-            return empty($finalized[$m]);
+        // BC-1: a consume-only month (the prior-prior leading edge) is likewise
+        // excluded from the DELETE — its rows already exist and are billed there;
+        // we only replay it to reproduce its forward spill into the write window.
+        $months_to_clear = array_values(array_filter($months, static function ($m) use ($finalized, $consume_only) {
+            return empty($finalized[$m]) && empty($consume_only[$m]);
         }));
         if (!empty($months_to_clear)) {
             $placeholders = implode(',', array_fill(0, count($months_to_clear), '%s'));
@@ -345,7 +392,7 @@ class MealsDB_Allocation_Rebuilder {
             // Pass 1: fill the delivery month up to headroom.
             $place_to_month = function(string $month) use (
                 &$remaining_mains, &$remaining_tax_sides, &$remaining_nontax_sides,
-                &$headroom, $d, $client_id, $alloc_table, $finalized
+                &$headroom, $d, $client_id, $alloc_table, $finalized, $consume_only
             ) {
                 if (!isset($headroom[$month]) || !empty($finalized[$month])) {
                     // Outside our window, OR finalized (immutable): leave the
@@ -366,19 +413,26 @@ class MealsDB_Allocation_Rebuilder {
                     return;
                 }
 
-                $this->wpdb->insert($alloc_table, [
-                    'client_id'          => $client_id,
-                    'wc_order_id'        => (int) $d['wc_order_id'],
-                    'order_date'         => (string) $d['order_date'],
-                    'delivery_date'      => (string) $d['delivery_date'],
-                    'billing_month'      => $month,
-                    'mains_count'        => $put_mains,
-                    'sides_count'        => $put_sides,
-                    'tax_sides_count'    => $put_tax,
-                    'nontax_sides_count' => $put_nontax,
-                    'coverage_start'     => (string) $d['delivery_date'],
-                    'coverage_end'       => (string) ($d['coverage_end'] ?? $d['delivery_date']),
-                ]);
+                // BC-1: a consume-only month (prior-prior leading edge) consumes
+                // headroom — so the delivery's overflow into the write window is
+                // computed correctly — but its row is NOT written. Its existing,
+                // already-billed row was deliberately left in place (not deleted
+                // above), so re-inserting here would duplicate it.
+                if (empty($consume_only[$month])) {
+                    $this->wpdb->insert($alloc_table, [
+                        'client_id'          => $client_id,
+                        'wc_order_id'        => (int) $d['wc_order_id'],
+                        'order_date'         => (string) $d['order_date'],
+                        'delivery_date'      => (string) $d['delivery_date'],
+                        'billing_month'      => $month,
+                        'mains_count'        => $put_mains,
+                        'sides_count'        => $put_sides,
+                        'tax_sides_count'    => $put_tax,
+                        'nontax_sides_count' => $put_nontax,
+                        'coverage_start'     => (string) $d['delivery_date'],
+                        'coverage_end'       => (string) ($d['coverage_end'] ?? $d['delivery_date']),
+                    ]);
+                }
 
                 $remaining_mains        -= $put_mains;
                 $remaining_tax_sides    -= $put_tax;
@@ -450,9 +504,18 @@ class MealsDB_Allocation_Rebuilder {
         $orders_table = $this->wpdb->prefix . 'wc_orders';
         $meta_table   = $this->wpdb->prefix . 'wc_orders_meta';
 
-        // Pull orders whose date_created falls in the window AND that belong
-        // to this client (either via mealsdb_client_id meta or by joining the
-        // clients table on customer_id).
+        // Pull orders whose date_created falls in the window AND that belong to
+        // this client. BC-1: two sources, merged and de-duplicated by order id —
+        //   (a) orders pinned to THIS client by mealsdb_client_id meta
+        //       (authoritative; works even when the client has no wp_user link); and
+        //   (b) orders matched by WC customer_id, but ONLY when this client owns
+        //       the wp_user link (wp_user_id > 0), and each filtered through the
+        //       canonical resolver so a dual-program user's orders (MAJ-1) route
+        //       to exactly one client and orders pinned elsewhere are excluded.
+        // Previously this keyed solely on `customer_id = wp_user_id` with no
+        // wp_user_id>0 guard and ignored the meta — so a client with no link
+        // claimed every guest order (customer_id 0), meta-pinned orders were
+        // never loaded, and dual-program users were double-counted.
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $wp_user_id = (int) $this->wpdb->get_var($this->wpdb->prepare(
             "SELECT wp_user_id FROM `{$clients_table}` WHERE client_id = %d",
@@ -462,16 +525,51 @@ class MealsDB_Allocation_Rebuilder {
         // Cast a slightly wider net on order date because delivery_date may
         // sit a few days off the order_date; the engine's schedule maps
         // order date -> delivery date downstream.
-        $orders = $this->wpdb->get_results($this->wpdb->prepare(
+        $date_lo = (new DateTime($range_start))->modify('-7 days')->format('Y-m-d');
+        $date_hi = (new DateTime($range_end))->modify('+7 days')->format('Y-m-d');
+        $excluded_statuses = "('wc-cancelled','wc-failed','wc-refunded','wc-trash','wc-checkout-draft')";
+
+        // (a) Meta-pinned orders for this client.
+        $pinned = $this->wpdb->get_results($this->wpdb->prepare(
             "SELECT o.id, DATE(o.date_created_gmt) AS order_date
              FROM `{$orders_table}` o
-             WHERE o.customer_id = %d
-               AND o.status NOT IN ('wc-cancelled','wc-failed','wc-refunded','wc-trash')
+             INNER JOIN `{$meta_table}` m ON m.order_id = o.id
+                 AND m.meta_key = 'mealsdb_client_id' AND m.meta_value = %s
+             WHERE o.type = 'shop_order'
+               AND o.status NOT IN {$excluded_statuses}
                AND DATE(o.date_created_gmt) BETWEEN %s AND %s",
-            $wp_user_id,
-            (new DateTime($range_start))->modify('-7 days')->format('Y-m-d'),
-            (new DateTime($range_end))->modify('+7 days')->format('Y-m-d')
+            (string) $client_id,
+            $date_lo,
+            $date_hi
         ), ARRAY_A);
+
+        // (b) customer_id-matched orders, resolved to a single client.
+        $by_customer = [];
+        if ($wp_user_id > 0) {
+            $candidate_orders = $this->wpdb->get_results($this->wpdb->prepare(
+                "SELECT o.id, DATE(o.date_created_gmt) AS order_date
+                 FROM `{$orders_table}` o
+                 WHERE o.customer_id = %d
+                   AND o.type = 'shop_order'
+                   AND o.status NOT IN {$excluded_statuses}
+                   AND DATE(o.date_created_gmt) BETWEEN %s AND %s",
+                $wp_user_id,
+                $date_lo,
+                $date_hi
+            ), ARRAY_A);
+            foreach ((array) $candidate_orders as $co) {
+                if ($this->engine->resolve_client_id_for_order((int) $co['id']) === $client_id) {
+                    $by_customer[] = $co;
+                }
+            }
+        }
+
+        // Merge + de-dup by order id (a pinned order may also match customer_id).
+        $orders = [];
+        foreach (array_merge((array) $pinned, $by_customer) as $o) {
+            $orders[(int) $o['id']] = $o;
+        }
+        $orders = array_values($orders);
 
         if (empty($orders)) {
             return [];

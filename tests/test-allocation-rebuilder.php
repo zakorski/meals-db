@@ -308,16 +308,23 @@ $wpdb = fill(
 chk(count(rows_for($wpdb, err_table_name())), 2, 'attribution: null error_month logs every overflow');
 
 // ---------------------------------------------------------------------------
-// Test 8: REGRESSION — rebuild_client_month must build a three-month window so
-// a current-month delivery's overflow spills into the NEXT month instead of
-// being logged as unplaced. Previously the window was {prior, current} only,
-// which dropped the spill on the floor (silent under-billing) for the normal
-// invoice / Data-Ops path that marks just the order's own month dirty.
+// Test 8: REGRESSION — rebuild_client_month must build a window wide enough that
+// a delivery's overflow spills into the NEXT month instead of being logged as
+// unplaced. Previously the window was {prior, current} only, which dropped the
+// spill on the floor (silent under-billing) for the normal invoice / Data-Ops
+// path that marks just the order's own month dirty.
+//
+// BC-1: the LOAD window was widened again to FOUR months
+// {prior_prior, prior, current, next}. The leading prior_prior month is
+// "consume-only" — it is loaded so a delivery that spilled FORWARD from it into
+// `prior` is recomputed, but its own rows are never deleted or rewritten. The
+// WRITE window (deletes/inserts/summary-refresh/dirty-clear) stays {prior,
+// current, next}.
 //
 // Rebuild Jan with a Jan delivery of 14 mains against a Jan cap of 10:
 //   -> 10 in Jan, 4 spilled into Feb, no error.
-// Also assert the window is {Dec, Jan, Feb}, all three summaries refresh, and
-// only the Jan dirty marker is cleared.
+// Assert the load window is {Nov, Dec, Jan, Feb}, the three WRITE-window
+// summaries refresh, and only the Jan dirty marker is cleared.
 // ---------------------------------------------------------------------------
 $GLOBALS['wpdb'] = new RebFakeWpdb();
 $GLOBALS['wpdb']->get_var_return = 'SDNB'; // non-Private client_type
@@ -332,7 +339,7 @@ $rb->inject_engine($eng);
 $rb->injected_deliveries = [ delivery('2025-01-15', 14, 0, 0, 700) ];
 $res = $rb->rebuild_client_month(1, '2025-01');
 
-chk($rb->loaded_months, ['2024-12', '2025-01', '2025-02'], 'window: rebuild loads prior+current+next');
+chk($rb->loaded_months, ['2024-11', '2024-12', '2025-01', '2025-02'], 'window: rebuild loads prior_prior+prior+current+next (BC-1)');
 $rows = rows_for($GLOBALS['wpdb'], alloc_table_name());
 chk(count($rows), 2, 'window: two rows (Jan cap + Feb spill)');
 chk((string) $rows[0]['billing_month'] . '/' . (int) $rows[0]['mains_count'], '2025-01/10', 'window: Jan filled to cap 10');
