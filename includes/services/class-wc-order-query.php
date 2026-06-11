@@ -42,11 +42,12 @@ class MealsDB_WC_Order_Query {
         // BC-7: wc-failed / wc-refunded must never count — a refunded or failed
         // order was still printing delivery slips and inflating the PO meal
         // projection. wc-checkout-draft is the HPOS abandoned-checkout placeholder
-        // and never represents a real order. (wc-pending stays INCLUDED: a meal
-        // may be cooked before payment clears — the documented status-quo choice.)
+        // and never represents a real order. wc-pending is excluded per the
+        // operator's decision (an unpaid pending order is not cooked/delivered
+        // until payment clears).
         array $exclude_statuses = [
             'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
-            'wc-failed', 'wc-refunded', 'wc-checkout-draft',
+            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
         ]
     ): array {
         $wp_user_ids = array_filter(array_map('intval', $wp_user_ids));
@@ -201,11 +202,11 @@ class MealsDB_WC_Order_Query {
         string $start_date,
         string $end_date,
         // BC-7: keep this default in lockstep with get_orders_for_users() — slips
-        // and PO demand flow through here, so failed/refunded/checkout-draft must
-        // be excluded; wc-pending stays counted.
+        // and PO demand flow through here, so failed/refunded/checkout-draft/
+        // pending must all be excluded.
         array $exclude_statuses = [
             'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
-            'wc-failed', 'wc-refunded', 'wc-checkout-draft',
+            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
         ]
     ): array {
         $orders = $this->get_orders_for_users($wp_user_ids, $start_date, $end_date, $exclude_statuses);

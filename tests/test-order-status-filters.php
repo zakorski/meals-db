@@ -6,9 +6,9 @@
  *
  * The two order-pull entry points (get_orders_for_users,
  * get_orders_with_items_for_users) default $exclude_statuses; the slip and PO
- * paths use that default. The fix adds wc-failed, wc-refunded, and
- * wc-checkout-draft to it. (wc-pending stays INCLUDED — a meal may be cooked
- * before payment clears; that is the documented status-quo behaviour.)
+ * paths use that default. The fix adds wc-failed, wc-refunded,
+ * wc-checkout-draft, and wc-pending to it (per the operator's decision: an
+ * unpaid pending order is not cooked/delivered until payment clears).
  *
  * Run: php tests/test-order-status-filters.php
  */
@@ -45,8 +45,8 @@ foreach (['get_orders_for_users', 'get_orders_with_items_for_users'] as $method)
     chk(in_array('wc-cancelled', $defaults, true), true, "$method: still excludes wc-cancelled");
     chk(in_array('wc-trash', $defaults, true), true,     "$method: still excludes wc-trash");
 
-    // Pending stays IN (counted) per the documented decision.
-    chk(in_array('wc-pending', $defaults, true), false,  "$method: wc-pending remains counted (not excluded)");
+    // Pending is excluded per the operator's decision (not cooked until paid).
+    chk(in_array('wc-pending', $defaults, true), true,   "$method: excludes wc-pending");
 }
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";

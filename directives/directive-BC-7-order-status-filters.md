@@ -2,7 +2,7 @@
 
 **Audit reference:** 2026-06 review, reports/order-query subsystem (`class-wc-order-query.php`, `class-reports.php`).
 **Severity:** MEDIUM — a refunded/failed order still ships (driver slip prints "Collect: $X") and inflates the purchase-order projection.
-**Scope:** ~5–15 lines, primarily `includes/services/class-wc-order-query.php`. **Risk:** LOW (but verify the "pending counts" intent with the operator).
+**Scope:** ~5–15 lines, primarily `includes/services/class-wc-order-query.php`. **Risk:** LOW. (Operator confirmed `wc-pending` is excluded — see P3.)
 
 ---
 
@@ -26,7 +26,7 @@ The blacklist **admits `wc-failed`, `wc-refunded`, and `wc-pending`**. Consequen
 
 - A **fully refunded** order (`wc-refunded`) is excluded from the allocation ledger (the refund hook deallocates it) but is **still returned by the slip/PO query** — so the driver gets a slip and a collection amount for an order the customer was refunded.
 - A **failed** order (`wc-failed`) likewise prints slips and inflates the PO meal projection.
-- **Pending** (`wc-pending`) in PO demand may be intentional (meals still need cooking before payment clears) — but it should be a documented choice, not an accident of the blacklist.
+- **Pending** (`wc-pending`) — the operator confirmed unpaid pending orders are not cooked/delivered until payment clears, so this too is excluded (resolved in P3).
 
 The whitelist callers are correct; the blacklist default is the problem.
 
@@ -45,7 +45,7 @@ grep -n "get_orders_for_users\|get_orders_for_delivery_range\|get_orders_with_it
 grep -n "get_orders_for_delivery_range\|exclude_statuses" includes/services/class-delivery-slip-generator.php includes/services/class-slip-pdf-generator.php
 ```
 
-**P3 — OPERATOR DECISION (required before coding):** Should `wc-pending` orders be cooked/delivered before payment? This determines whether `pending` stays in the slip/PO set. Failed and refunded are unambiguous (exclude); pending is a business call. Get the answer; do not guess.
+**P3 — OPERATOR DECISION (resolved):** the operator confirmed an unpaid `wc-pending` order is NOT cooked/delivered until payment clears, so `wc-pending` is excluded from the slip/PO set alongside failed/refunded.
 
 ---
 
@@ -58,13 +58,13 @@ In `class-wc-order-query.php`, both `get_orders_for_users()` (~42) and `get_orde
 ```php
 // BC-7: a failed or refunded order must never print a delivery slip or inflate
 // the purchase-order projection. (Cancelled/trash/draft already excluded.)
-// 'wc-pending' is a deliberate business choice — see directive note; INCLUDE it
-// only if the operator confirms pending orders are cooked before payment.
+// wc-pending is excluded per the operator's decision (P3): an unpaid pending
+// order is not cooked/delivered until payment clears.
 array $exclude_statuses = [
     'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
     'wc-failed', 'wc-refunded',
     'wc-checkout-draft',                 // HPOS abandoned-checkout drafts
-    // 'wc-pending',                     // <-- uncomment per P3 operator decision
+    'wc-pending',                        // unpaid — not cooked until payment clears
 ]
 ```
 
