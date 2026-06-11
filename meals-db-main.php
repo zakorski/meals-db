@@ -182,45 +182,11 @@ function mealsdb_maybe_upgrade_schema(): void {
         return;
     }
 
-    global $wpdb;
-
-    // Stale-lock recovery. If the previous attempt died mid-install (PHP
-    // fatal, OOM kill, request timeout), the lock row was never
-    // released. 5 minutes is well past any realistic dbDelta runtime, so
-    // treat anything older as abandoned and clear it. Read directly
-    // from the DB to bypass the notoptions cache, which can incorrectly
-    // claim the row doesn't exist after a prior request's fatal error.
-    $held_at = (int) $wpdb->get_var($wpdb->prepare(
-        "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s LIMIT 1",
-        'mealsdb_install_lock'
-    ));
-    if ($held_at > 0 && (time() - $held_at) > 300) {
-        delete_option('mealsdb_install_lock');
-    }
-
-    // Atomic lock acquisition via INSERT IGNORE. The InnoDB UNIQUE
-    // index on option_name serialises concurrent inserts: whichever
-    // request lands first gets rows_affected=1, every other request
-    // gets 0 and returns early. A transient or a WP-API add_option()
-    // is NOT safe here because add_option() uses INSERT ... ON
-    // DUPLICATE KEY UPDATE, which succeeds (as an update) under
-    // contention — the old transient-based check was effectively a
-    // no-op under real parallel load.
-    $wpdb->query($wpdb->prepare(
-        "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, %s)",
-        'mealsdb_install_lock',
-        (string) time(),
-        'no'
-    ));
-
-    if ((int) $wpdb->rows_affected !== 1) {
+    // Atomic install lock — shared with MealsDB_Updates::run_database_maintenance
+    // so a manual "update database" run can't race this auto-upgrade.
+    if (!mealsdb_acquire_install_lock()) {
         return;
     }
-
-    // Invalidate the notoptions cache so the release-path delete_option
-    // below actually clears the real row rather than short-circuiting
-    // on a stale "option does not exist" cache entry.
-    wp_cache_delete('notoptions', 'options');
 
     try {
         require_once plugin_dir_path(__FILE__) . 'includes/install-schema.php';
@@ -248,8 +214,65 @@ function mealsdb_maybe_upgrade_schema(): void {
         // failed attempt doesn't block recovery.
         error_log('[MealsDB] Install/upgrade failed: ' . $e->getMessage());
     } finally {
+        mealsdb_release_install_lock();
+    }
+}
+
+/**
+ * Acquire the atomic install lock. Returns true if THIS caller now holds it.
+ *
+ * The InnoDB UNIQUE index on option_name serialises concurrent inserts:
+ * whichever request lands first gets rows_affected=1; every other request gets
+ * 0 and is told the lock is held. A transient or a WP-API add_option() is NOT
+ * safe here because add_option() uses INSERT ... ON DUPLICATE KEY UPDATE, which
+ * succeeds (as an update) under contention. Includes 5-minute stale-lock
+ * recovery for a prior attempt that died mid-install (PHP fatal, OOM, timeout).
+ *
+ * Shared by the admin_init auto-upgrade and the manual
+ * MealsDB_Updates::run_database_maintenance() endpoint.
+ *
+ * @return bool
+ */
+function mealsdb_acquire_install_lock() {
+    global $wpdb;
+
+    // Stale-lock recovery. Read directly from the DB to bypass the notoptions
+    // cache, which can incorrectly claim the row doesn't exist after a prior
+    // request's fatal error.
+    $held_at = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT option_value FROM `{$wpdb->options}` WHERE option_name = %s LIMIT 1",
+        'mealsdb_install_lock'
+    ));
+    if ($held_at > 0 && (time() - $held_at) > 300) {
         delete_option('mealsdb_install_lock');
     }
+
+    $wpdb->query($wpdb->prepare(
+        "INSERT IGNORE INTO `{$wpdb->options}` (option_name, option_value, autoload) VALUES (%s, %s, %s)",
+        'mealsdb_install_lock',
+        (string) time(),
+        'no'
+    ));
+
+    if ((int) $wpdb->rows_affected !== 1) {
+        return false;
+    }
+
+    // Invalidate the notoptions cache so the release-path delete_option actually
+    // clears the real row rather than short-circuiting on a stale "option does
+    // not exist" cache entry.
+    wp_cache_delete('notoptions', 'options');
+
+    return true;
+}
+
+/**
+ * Release the atomic install lock held by mealsdb_acquire_install_lock().
+ *
+ * @return void
+ */
+function mealsdb_release_install_lock() {
+    delete_option('mealsdb_install_lock');
 }
 
 /**

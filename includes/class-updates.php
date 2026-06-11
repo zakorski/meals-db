@@ -20,6 +20,14 @@ class MealsDB_Updates {
      * @return array|WP_Error
      */
     public static function check_for_updates() {
+        // Service-layer capability re-check (defense in depth, layer 3). Checking
+        // for / deploying plugin code is a manage_options operation — a baseline
+        // (manage_woocommerce) caller, or any future non-AJAX caller, must not
+        // reach the git/release machinery.
+        if (!is_user_logged_in() || !current_user_can('manage_options')) {
+            return new WP_Error('mealsdb_forbidden', __('You do not have permission to check for updates.', 'meals-db'));
+        }
+
         $currentVersion = defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : '';
 
         if (!self::is_git_repository()) {
@@ -113,6 +121,13 @@ class MealsDB_Updates {
      * @return array|WP_Error
      */
     public static function pull_updates() {
+        // Service-layer capability re-check (defense in depth, layer 3). This
+        // deploys code over the live plugin dir (git pull / release zip) — it
+        // MUST require manage_options regardless of how it was reached.
+        if (!is_user_logged_in() || !current_user_can('manage_options')) {
+            return new WP_Error('mealsdb_forbidden', __('You do not have permission to update the plugin.', 'meals-db'));
+        }
+
         if (self::is_git_repository()) {
             $statusOutput = self::run_git_command(['status', '--porcelain']);
             if (is_wp_error($statusOutput)) {
@@ -183,11 +198,35 @@ class MealsDB_Updates {
      * @return array
      */
     public static function run_database_maintenance() {
+        // Service-layer capability re-check (defense in depth, layer 3). install()
+        // runs DDL (and DROPs for defunct tables); it is a manage_options
+        // operation, not a baseline one.
+        if (!is_user_logged_in() || !current_user_can('manage_options')) {
+            return new WP_Error('mealsdb_forbidden', __('You do not have permission to update the database.', 'meals-db'));
+        }
+
         if (!class_exists('MealsDB_Installer')) {
             require_once MEALS_DB_PLUGIN_DIR . 'includes/install-schema.php';
         }
 
-        MealsDB_Installer::install();
+        // Serialize against the admin_init auto-upgrade via the SAME install
+        // lock, so a manual run can't race a concurrent upgrade (install()
+        // continues past individual CREATE failures — two at once can corrupt
+        // the build). If the lock is held, report busy rather than piling on.
+        if (function_exists('mealsdb_acquire_install_lock') && !mealsdb_acquire_install_lock()) {
+            return new WP_Error(
+                'mealsdb_install_busy',
+                __('A database update is already running. Please try again shortly.', 'meals-db')
+            );
+        }
+
+        try {
+            MealsDB_Installer::install();
+        } finally {
+            if (function_exists('mealsdb_release_install_lock')) {
+                mealsdb_release_install_lock();
+            }
+        }
 
         return [
             'message' => __('Database schema has been checked and updated.', 'meals-db'),
