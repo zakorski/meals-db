@@ -22,6 +22,13 @@ class MealsDB_Allocation_Hooks {
         add_action('woocommerce_order_status_cancelled', [self::class, 'on_order_cancelled'], 20, 1);
         add_action('woocommerce_order_status_refunded', [self::class, 'on_order_refunded'], 20, 1);
         add_action('woocommerce_order_status_failed', [self::class, 'on_order_failed'], 20, 1);
+        // BC-6: a PARTIAL refund leaves the order in an active status, so the
+        // full-status refund hook above never fires. woocommerce_order_refunded
+        // fires on every refund (partial OR full); we mark the order's client-
+        // month(s) dirty so the rebuilder recomputes from NET quantities. (It
+        // also fires alongside the full-refund status change — marking dirty
+        // twice is idempotent, so no need to distinguish.)
+        add_action('woocommerce_order_refunded', [self::class, 'on_order_partially_refunded'], 20, 2);
         add_action('woocommerce_order_status_trash', [self::class, 'on_order_status_trashed'], 20, 1);
         // HPOS: orders are not posts, so trashed_post / before_delete_post never
         // fire for them. Subscribe to WooCommerce's own order-lifecycle hooks,
@@ -220,6 +227,29 @@ class MealsDB_Allocation_Hooks {
      */
     public static function on_order_failed(int $order_id): void {
         self::process_deallocation_hook('woocommerce_order_status_failed', $order_id);
+    }
+
+    /**
+     * BC-6: handle a (possibly partial) refund. The order may stay active, so we
+     * do NOT fully deallocate or release the contribution — we just mark the
+     * order's client-month(s) dirty so the rebuilder re-derives NET (post-refund)
+     * meal quantities. Never throws (instrumentation must not break WC).
+     *
+     * @param int $order_id
+     * @param int $refund_id
+     */
+    public static function on_order_partially_refunded(int $order_id, int $refund_id = 0): void {
+        try {
+            (new MealsDB_Allocation_Engine())->mark_order_months_dirty($order_id);
+            self::safe_record_hook('woocommerce_order_refunded', 'order', $order_id);
+        } catch (\Throwable $e) {
+            self::safe_record_hook(
+                'woocommerce_order_refunded', 'order', $order_id,
+                MealsDB_Hook_Logger::OUTCOME_ERRORED,
+                ['exception' => get_class($e)],
+                $e->getMessage()
+            );
+        }
     }
 
     /**

@@ -748,11 +748,30 @@ class MealsDB_Reports {
             return ['rows' => [], 'summary' => self::empty_contribution_summary()];
         }
 
+        // BC-4: the client contribution is a per-BILLING-MONTH charge (applied to
+        // the first qualifying order of the month). "Expected" is one month's
+        // flat contribution, so reconciling it over a multi-month range compares
+        // one month's expected against several months' paid and ALWAYS reports a
+        // false discrepancy. Require the range to fall within a single calendar
+        // month. (Delivery-fee reconciliation, by contrast, scales expected by
+        // the order count, so it is range-safe.)
+        if (substr((string) $start_date, 0, 7) !== substr((string) $end_date, 0, 7)) {
+            return [
+                'rows'    => [],
+                'summary' => self::empty_contribution_summary(),
+                'error'   => __('Contribution reconciliation must be run for a single calendar month.', 'meals-db'),
+            ];
+        }
+
+        // BC-4: only SDNB/Veteran clients are billed the contribution by
+        // MealsDB_Order_Fees. A Private client with a non-zero client_contribution
+        // column would otherwise show as permanently "underpaid" (paid $0).
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $clients = $this->wpdb->get_results(
             "SELECT client_id, wp_user_id, first_name, last_name, client_contribution, client_type
              FROM `{$clients_table}`
-             WHERE client_contribution > 0 AND active = 1 AND wp_user_id > 0",
+             WHERE client_contribution > 0 AND active = 1 AND wp_user_id > 0
+               AND client_type IN ('SDNB', 'Veteran')",
             ARRAY_A
         );
 

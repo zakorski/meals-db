@@ -112,7 +112,16 @@ class MealsDB_Order_Fees {
 
             // ---- Monthly client contribution ----------------------------
             if ($client_contribution > 0 && $fee_ids['client_contribution'] > 0) {
-                $billing_month = gmdate('Y-m');
+                // BC-2: key the contribution to the order's BILLING month
+                // (derived from the order's creation date, in UTC — the same
+                // basis the allocation engine buckets deliveries by), NOT the
+                // wall-clock month. A back-dated order entered this month for
+                // last month must flag last month, matching where its fee line
+                // is billed.
+                $created       = $order->get_date_created();
+                $billing_month = self::contribution_month_for_timestamp(
+                    $created ? $created->getTimestamp() : null
+                );
                 if (!self::contribution_applied_this_month($client_id, $billing_month)
                     && !self::order_has_product($order, $fee_ids['client_contribution'])) {
 
@@ -366,6 +375,21 @@ class MealsDB_Order_Fees {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Resolve the billing month a contribution belongs to from the order's
+     * creation timestamp, in UTC — the SAME basis the allocation engine uses to
+     * bucket deliveries (DATE(date_created_gmt)). BC-2: the flag was previously
+     * keyed on gmdate('Y-m') (the wall-clock month), so a back-dated order
+     * flagged the wrong month while its fee line rode the order's real (prior)
+     * billing month. A null timestamp falls back to the current UTC month.
+     *
+     * @param int|null $created_ts Unix timestamp of the order's creation, or null.
+     * @return string YYYY-MM
+     */
+    public static function contribution_month_for_timestamp(?int $created_ts): string {
+        return $created_ts ? gmdate('Y-m', $created_ts) : gmdate('Y-m');
     }
 
     /**

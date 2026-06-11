@@ -39,7 +39,15 @@ class MealsDB_WC_Order_Query {
         array $wp_user_ids,
         string $start_date,
         string $end_date,
-        array $exclude_statuses = ['wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash']
+        // BC-7: wc-failed / wc-refunded must never count — a refunded or failed
+        // order was still printing delivery slips and inflating the PO meal
+        // projection. wc-checkout-draft is the HPOS abandoned-checkout placeholder
+        // and never represents a real order. (wc-pending stays INCLUDED: a meal
+        // may be cooked before payment clears — the documented status-quo choice.)
+        array $exclude_statuses = [
+            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
+            'wc-failed', 'wc-refunded', 'wc-checkout-draft',
+        ]
     ): array {
         $wp_user_ids = array_filter(array_map('intval', $wp_user_ids));
         if (empty($wp_user_ids)) {
@@ -98,6 +106,20 @@ class MealsDB_WC_Order_Query {
     }
 
     /**
+     * BC-6: net quantity = ordered + refunded(signed), floored at 0. WC stores
+     * refund line quantities as negative, so $refunded_signed is normally <= 0.
+     * Exposed for the consumer-side clamp and for unit testing the semantics the
+     * get_order_items SQL implements (GREATEST(0, ordered + SUM(refund _qty))).
+     *
+     * @param int $ordered          Original line quantity (>= 0).
+     * @param int $refunded_signed  Sum of refund line _qty (<= 0 in practice).
+     * @return int
+     */
+    public static function clamp_net_quantity(int $ordered, int $refunded_signed): int {
+        return max(0, $ordered + $refunded_signed);
+    }
+
+    /**
      * Fetch line items for the given order IDs.
      *
      * @param int[] $order_ids WC order IDs.
@@ -121,7 +143,19 @@ class MealsDB_WC_Order_Query {
                 oi.order_id,
                 oi.order_item_name,
                 product_meta.meta_value   AS wc_product_id,
-                qty_meta.meta_value       AS quantity,
+                -- BC-6: NET quantity = ordered _qty plus the sum of any refund
+                -- line items' _qty (which WC stores as NEGATIVE) correlated by
+                -- _refunded_item_id, floored at 0. A non-refunded item adds 0,
+                -- so unrefunded orders are unaffected.
+                GREATEST(0, CAST(qty_meta.meta_value AS SIGNED) + COALESCE((
+                    SELECT SUM(CAST(rq.meta_value AS SIGNED))
+                    FROM {$itemmeta_table} rim
+                    INNER JOIN {$itemmeta_table} rq
+                        ON rq.order_item_id = rim.order_item_id
+                        AND rq.meta_key = '_qty'
+                    WHERE rim.meta_key = '_refunded_item_id'
+                        AND rim.meta_value = oi.order_item_id
+                ), 0)) AS quantity,
                 subtotal_meta.meta_value  AS line_subtotal,
                 tax_meta.meta_value       AS line_tax,
                 total_meta.meta_value     AS line_total
@@ -166,7 +200,13 @@ class MealsDB_WC_Order_Query {
         array $wp_user_ids,
         string $start_date,
         string $end_date,
-        array $exclude_statuses = ['wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash']
+        // BC-7: keep this default in lockstep with get_orders_for_users() — slips
+        // and PO demand flow through here, so failed/refunded/checkout-draft must
+        // be excluded; wc-pending stays counted.
+        array $exclude_statuses = [
+            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
+            'wc-failed', 'wc-refunded', 'wc-checkout-draft',
+        ]
     ): array {
         $orders = $this->get_orders_for_users($wp_user_ids, $start_date, $end_date, $exclude_statuses);
         if (empty($orders)) {
