@@ -93,9 +93,18 @@ class MealsDB_Event_Log {
             $severity = isset($e['severity']) && in_array($e['severity'], self::SEVERITIES, true)
                 ? (string) $e['severity']
                 : 'info';
-            $outcome = isset($e['outcome']) && in_array($e['outcome'], self::OUTCOMES, true)
-                ? (string) $e['outcome']
-                : self::OUTCOME_SUCCEEDED;
+            // Outcome: an ABSENT outcome defaults to succeeded (most info events
+            // don't set one). But a PRESENT-but-unrecognised outcome is a caller
+            // typo (e.g. 'fail') — default it to DEGRADED so it surfaces on the
+            // dashboard/digest (failed|degraded), rather than silently 'succeeded'
+            // which would hide a real problem.
+            if (!isset($e['outcome']) || $e['outcome'] === '') {
+                $outcome = self::OUTCOME_SUCCEEDED;
+            } elseif (in_array($e['outcome'], self::OUTCOMES, true)) {
+                $outcome = (string) $e['outcome'];
+            } else {
+                $outcome = self::OUTCOME_DEGRADED;
+            }
 
             // Discipline 2: UTC. occurred_at defaults to now; callers may
             // override (e.g. backfills) but everything is gmdate-shaped.

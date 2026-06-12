@@ -224,6 +224,14 @@ class MealsDB_Ajax_Clients {
             wp_send_json_error(['message' => __('Invalid client or WordPress user.', 'meals-db')]);
         }
 
+        // A positive id must reference a real WP user — the allocation rebuilder
+        // routes orders via wp_user_id ↔ wc_orders.customer_id, so linking to a
+        // nonexistent user silently breaks billing. (0 means "unlink".) The form
+        // path already enforces this; mirror it here.
+        if ($wp_user_id > 0 && !get_userdata($wp_user_id)) {
+            wp_send_json_error(['message' => __('That WordPress user does not exist.', 'meals-db')]);
+        }
+
         $conn = MealsDB_DB::get_connection();
 
         if (!$conn) {

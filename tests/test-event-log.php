@@ -128,13 +128,18 @@ assert_true(
 assert_true(strpos((string) $row['context'], '"client_id":42') !== false, 'context stored');
 
 // ---------------------------------------------------------------------------
-// Invalid severity/outcome coerced to safe defaults.
+// Invalid severity coerced to a safe default; a PRESENT-but-invalid outcome
+// is made VISIBLE (degraded), not silently 'succeeded' (LOW-findings fix).
 // ---------------------------------------------------------------------------
 $id = MealsDB_Event_Log::record(['event' => 'x', 'severity' => 'bogus', 'outcome' => 'bogus']);
 $row = $wpdb->rows[$id];
 assert_equal('info', $row['severity'], 'invalid severity → info');
-assert_equal('succeeded', $row['outcome'], 'invalid outcome → succeeded');
+assert_equal('degraded', $row['outcome'], 'invalid (typo) outcome → degraded, not silently succeeded');
 assert_equal('general', $row['category'], 'missing category → general');
+
+// An ABSENT outcome still defaults to succeeded (most info events set none).
+$id2 = MealsDB_Event_Log::record(['event' => 'y']);
+assert_equal('succeeded', $wpdb->rows[$id2]['outcome'], 'absent outcome → succeeded');
 
 // ---------------------------------------------------------------------------
 // PII scrub at WRITE time: email in the message is fingerprinted.

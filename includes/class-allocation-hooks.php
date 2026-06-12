@@ -369,7 +369,12 @@ class MealsDB_Allocation_Hooks {
                     'months_recalculated' => [$current_month, $next_month],
                 ]);
             }
-            throw $e;
+            // Pattern 7: background cron jobs log and SWALLOW — do NOT rethrow.
+            // A throw out of WP-Cron aborts the other hooks scheduled in the same
+            // spawn; fail() above already recorded this failure as a job row.
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error('[MealsDB Allocation] nightly_sync failed: ' . $e->getMessage());
+            }
         }
     }
 }
