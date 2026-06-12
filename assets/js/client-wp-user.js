@@ -101,11 +101,12 @@
             $status.empty();
         };
 
-        // Minimal HTML escaper for the confirmation echo. Prefer the shared
-        // Report.esc when present (consolidation goal, audit STR-2).
+        // HTML-text escaper. Prefer the shared MealsDBReport.esc (consolidation
+        // goal, audit STR-2); fall back to an identical DOM round-trip if
+        // report-utils didn't load, so escaping is never disabled.
         function escapeHtml(value) {
-            if (window.Report && typeof window.Report.esc === 'function') {
-                return window.Report.esc(value);
+            if (window.MealsDBReport && typeof window.MealsDBReport.esc === 'function') {
+                return window.MealsDBReport.esc(value);
             }
             return $('<div>').text(value == null ? '' : String(value)).html();
         }

@@ -19,8 +19,14 @@
 
     var csvData = '';
 
+    // Prefer the shared MealsDBReport.esc (STR-2 consolidation); fall back to the
+    // local entity-replace so escaping is never disabled. Used in text context
+    // only here, so the canonical (text) escaper renders identically.
     function esc(s) {
         if (s === null || s === undefined) { return ''; }
+        if (window.MealsDBReport && typeof window.MealsDBReport.esc === 'function') {
+            return window.MealsDBReport.esc(s);
+        }
         return String(s)
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
