@@ -41,6 +41,8 @@ namespace {
                 if (function_exists('add_filter')) {
                     add_filter('pre_set_site_transient_update_plugins', [$this, 'checkForUpdates']);
                     add_filter('plugins_api', [$this, 'pluginsApi'], 10, 3);
+                    // SHA-256 gate for the native "update now" flow.
+                    add_filter('upgrader_pre_download', [$this, 'verifyDownload'], 10, 4);
                 }
             }
 
@@ -151,19 +153,171 @@ namespace {
                     $version = ltrim($data['name'], 'v');
                 }
 
-                $package = '';
-                if ($this->vcsApi->releaseAssetsEnabled() && !empty($data['assets'][0]['browser_download_url'])) {
-                    $package = $data['assets'][0]['browser_download_url'];
-                } elseif (!empty($data['zipball_url'])) {
-                    $package = $data['zipball_url'];
-                }
+                // Select the package by ASSET NAME, not positionally. A release
+                // that attaches a non-plugin asset first (a SHA256SUMS.txt, a
+                // screenshot) would otherwise be installed as the plugin.
+                $package = self::selectPackageUrl($data, $this->vcsApi->releaseAssetsEnabled());
 
                 return [
                     'version' => $version,
                     'package' => $package,
                     'zipball' => !empty($data['zipball_url']) ? $data['zipball_url'] : '',
                     'body'    => !empty($data['body']) ? $data['body'] : '',
+                    // Expected archive checksum, if the release notes carry one.
+                    'sha256'  => self::extractSha256FromBody(!empty($data['body']) ? (string) $data['body'] : ''),
                 ];
+            }
+
+            /**
+             * Choose the release package URL by asset name (a .zip, preferring
+             * the plugin slug) rather than trusting assets[0]. Falls back to the
+             * GitHub zipball when no suitable asset is present or assets are off.
+             *
+             * @param array $data         Decoded GitHub "latest release" JSON.
+             * @param bool  $assetsEnabled Whether release assets are preferred.
+             * @return string Package URL, or '' if none.
+             */
+            public static function selectPackageUrl(array $data, $assetsEnabled) {
+                if ($assetsEnabled && !empty($data['assets']) && is_array($data['assets'])) {
+                    $firstZip = '';
+                    foreach ($data['assets'] as $asset) {
+                        if (!is_array($asset)) {
+                            continue;
+                        }
+                        $name = isset($asset['name']) ? (string) $asset['name'] : '';
+                        $url  = isset($asset['browser_download_url']) ? (string) $asset['browser_download_url'] : '';
+                        if ($url === '' || !preg_match('/\.zip$/i', $name)) {
+                            continue;
+                        }
+                        // Strongly prefer an asset that names the plugin.
+                        if (stripos($name, 'meals-db') !== false) {
+                            return $url;
+                        }
+                        if ($firstZip === '') {
+                            $firstZip = $url;
+                        }
+                    }
+                    if ($firstZip !== '') {
+                        return $firstZip;
+                    }
+                }
+                return !empty($data['zipball_url']) ? (string) $data['zipball_url'] : '';
+            }
+
+            /**
+             * Pull a "SHA256: <hex>" line out of GitHub release notes (mirrors
+             * MealsDB_Updates::extract_sha256_from_release_body).
+             *
+             * @param string $body
+             * @return string lowercase 64-hex, or ''.
+             */
+            public static function extractSha256FromBody($body) {
+                if (!is_string($body) || $body === '') {
+                    return '';
+                }
+                if (!preg_match('/sha-?256[\s:=]+([a-f0-9]{64})/i', $body, $m)) {
+                    return '';
+                }
+                return strtolower($m[1]);
+            }
+
+            /**
+             * Decide whether a downloaded archive may be installed.
+             *
+             * @param string $actualSha    SHA-256 of the downloaded file.
+             * @param string $expectedSha  Expected SHA-256 (from release notes /
+             *                              the mealsdb_release_expected_sha256 filter).
+             * @param bool   $allowUnverified  MEALSDB_ALLOW_UNVERIFIED_RELEASE.
+             * @return string 'ok' | 'mismatch' | 'unverified'.
+             */
+            public static function evaluateChecksum($actualSha, $expectedSha, $allowUnverified) {
+                $expectedSha = strtolower(trim((string) $expectedSha));
+                if ($expectedSha !== '') {
+                    if (preg_match('/^[a-f0-9]{64}$/', $expectedSha)
+                        && is_string($actualSha)
+                        && hash_equals($expectedSha, strtolower($actualSha))) {
+                        return 'ok';
+                    }
+                    return 'mismatch';
+                }
+                return $allowUnverified ? 'ok' : 'unverified';
+            }
+
+            /**
+             * Resolve the expected SHA-256 for the current latest release: the
+             * release-notes value, overridable by the mealsdb_release_expected_sha256
+             * filter (e.g. a pinned constant for publisher-compromise protection).
+             *
+             * @return string lowercase 64-hex, or ''.
+             */
+            private function expectedSha256() {
+                $release = $this->fetchLatestRelease();
+                $sha = (is_array($release) && !empty($release['sha256'])) ? strtolower((string) $release['sha256']) : '';
+                if (function_exists('apply_filters')) {
+                    $sha = (string) apply_filters('mealsdb_release_expected_sha256', $sha, is_array($release) ? $release : []);
+                }
+                return preg_match('/^[a-f0-9]{64}$/', $sha) ? $sha : '';
+            }
+
+            /**
+             * upgrader_pre_download gate: for THIS plugin only, download the
+             * package and verify its SHA-256 before WordPress installs it. The
+             * bundled "update now" flow previously fed the package straight into
+             * core's updater with no integrity check (the checksum gate in
+             * MealsDB_Updates only covered the separate no-git fallback path).
+             *
+             * Returns the verified local file (WP installs from it), a WP_Error
+             * (aborts the update), or the unchanged $reply for other plugins.
+             *
+             * @param mixed  $reply
+             * @param string $package
+             * @param object $upgrader
+             * @param array  $hookExtra
+             * @return mixed
+             */
+            public function verifyDownload($reply, $package = '', $upgrader = null, $hookExtra = []) {
+                // Let a prior filter's decision stand, and only handle our plugin.
+                if ($reply !== false) {
+                    return $reply;
+                }
+                $isOurs = is_array($hookExtra) && isset($hookExtra['plugin'])
+                    && $hookExtra['plugin'] === $this->pluginBasename;
+                if (!$isOurs || !is_string($package) || $package === '') {
+                    return $reply;
+                }
+
+                if (!function_exists('download_url')) {
+                    require_once ABSPATH . 'wp-admin/includes/file.php';
+                }
+
+                $tmp = download_url($package);
+                if (is_wp_error($tmp)) {
+                    return $tmp;
+                }
+
+                $actualSha = hash_file('sha256', $tmp);
+                $allowUnverified = defined('MEALSDB_ALLOW_UNVERIFIED_RELEASE') && MEALSDB_ALLOW_UNVERIFIED_RELEASE;
+                $status = self::evaluateChecksum(
+                    is_string($actualSha) ? $actualSha : '',
+                    $this->expectedSha256(),
+                    $allowUnverified
+                );
+
+                if ($status === 'ok') {
+                    return $tmp; // verified (or explicitly opted out) — WP installs from here
+                }
+
+                @unlink($tmp);
+                if ($status === 'mismatch') {
+                    return new \WP_Error(
+                        'mealsdb_puc_checksum',
+                        __('The Meals DB update archive failed SHA-256 verification. Update aborted.', 'meals-db')
+                    );
+                }
+                return new \WP_Error(
+                    'mealsdb_puc_unverified',
+                    __('The Meals DB release is not signed with a SHA-256 checksum. Add a "SHA256: <hex>" line to the release notes, or set MEALSDB_ALLOW_UNVERIFIED_RELEASE to true in wp-config.php to allow unverified updates.', 'meals-db')
+                );
             }
 
             private function parseRepository() {

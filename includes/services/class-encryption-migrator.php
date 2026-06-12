@@ -201,77 +201,91 @@ class MealsDB_Encryption_Migrator {
         ];
 
         foreach ($columns as $col) {
-            // ORDER BY client_id ASC: without it, repeated calls of
-            // reencrypt_legacy() can return the same rows over and over
-            // until they're all converted, wasting work and obscuring
-            // the "no more legacy" termination condition.
-            $sql = $wpdb->prepare(
-                sprintf(
-                    "SELECT client_id, `%s` AS v FROM `%s` WHERE `%s` IS NOT NULL AND `%s` <> '' ORDER BY client_id ASC LIMIT %%d",
-                    $col,
-                    $table,
-                    $col,
-                    $col
-                ),
-                $batch_size
-            );
-            $rows = $wpdb->get_results($sql, ARRAY_A);
-            if (!is_array($rows)) {
-                continue;
-            }
-
-            foreach ($rows as $row) {
-                $stats['processed']++;
-
-                if (MealsDB_Encryption::classify_payload((string) $row['v']) !== 'legacy') {
-                    continue;
-                }
-
-                if ($dry_run) {
-                    $stats['reencrypted']++;
-                    $stats['columns'][$col]++;
-                    continue;
-                }
-
-                $wpdb->query('START TRANSACTION');
-                try {
-                    $plaintext = MealsDB_Encryption::decrypt($row['v']);
-                    $fresh     = MealsDB_Encryption::encrypt($plaintext);
-
-                    $updated = $wpdb->update(
-                        $table,
-                        [$col => $fresh],
-                        ['client_id' => (int) $row['client_id']]
-                    );
-
-                    if ($updated === false) {
-                        throw new \RuntimeException($wpdb->last_error ?: 'update returned false');
-                    }
-
-                    $wpdb->query('COMMIT');
-                    $stats['reencrypted']++;
-                    $stats['columns'][$col]++;
-                } catch (\Throwable $e) {
-                    $wpdb->query('ROLLBACK');
-                    $stats['failed']++;
-                    error_log(sprintf(
-                        '[MealsDB Encryption Migrator] client_id=%d column=%s failed: %s',
-                        (int) $row['client_id'],
+            // Keyset pagination by client_id. The previous single LIMIT-batch
+            // read (no cursor) re-read the same first $batch_size rows on every
+            // call — converted rows still satisfy `IS NOT NULL AND <> ''` — so
+            // rows past position $batch_size were permanently unreachable.
+            // Advancing a `client_id > $after` window drains the whole column
+            // regardless of conversion state, terminating on a short batch.
+            $after = 0;
+            do {
+                $sql = $wpdb->prepare(
+                    sprintf(
+                        "SELECT client_id, `%s` AS v FROM `%s` WHERE client_id > %%d AND `%s` IS NOT NULL AND `%s` <> '' ORDER BY client_id ASC LIMIT %%d",
                         $col,
-                        $e->getMessage()
-                    ));
+                        $table,
+                        $col,
+                        $col
+                    ),
+                    $after,
+                    $batch_size
+                );
+                $rows = $wpdb->get_results($sql, ARRAY_A);
+                if (!is_array($rows) || empty($rows)) {
+                    break;
+                }
+                $batch_count = count($rows);
 
-                    if ($failure_threshold > 0 && $stats['failed'] >= $failure_threshold) {
-                        $stats['aborted']      = true;
-                        $stats['abort_reason'] = sprintf(
-                            'Aborted after %d failures (threshold=%d). Check the error log for the root cause before re-running.',
-                            $stats['failed'],
-                            $failure_threshold
+                foreach ($rows as $row) {
+                    // Advance the cursor on EVERY row (converted or not) so the
+                    // next batch never re-reads a row we've already processed.
+                    $after = (int) $row['client_id'];
+                    $stats['processed']++;
+
+                    if (MealsDB_Encryption::classify_payload((string) $row['v']) !== 'legacy') {
+                        continue;
+                    }
+
+                    if ($dry_run) {
+                        $stats['reencrypted']++;
+                        $stats['columns'][$col]++;
+                        continue;
+                    }
+
+                    $wpdb->query('START TRANSACTION');
+                    try {
+                        $plaintext = MealsDB_Encryption::decrypt($row['v']);
+                        $fresh     = MealsDB_Encryption::encrypt($plaintext);
+
+                        $updated = $wpdb->update(
+                            $table,
+                            [$col => $fresh],
+                            ['client_id' => (int) $row['client_id']]
                         );
-                        error_log('[MealsDB Encryption Migrator] ' . $stats['abort_reason']);
-                        break 2; // Exit both the row loop AND the column loop.
+
+                        if ($updated === false) {
+                            throw new \RuntimeException($wpdb->last_error ?: 'update returned false');
+                        }
+
+                        $wpdb->query('COMMIT');
+                        $stats['reencrypted']++;
+                        $stats['columns'][$col]++;
+                    } catch (\Throwable $e) {
+                        $wpdb->query('ROLLBACK');
+                        $stats['failed']++;
+                        error_log(sprintf(
+                            '[MealsDB Encryption Migrator] client_id=%d column=%s failed: %s',
+                            (int) $row['client_id'],
+                            $col,
+                            $e->getMessage()
+                        ));
+
+                        if ($failure_threshold > 0 && $stats['failed'] >= $failure_threshold) {
+                            $stats['aborted']      = true;
+                            $stats['abort_reason'] = sprintf(
+                                'Aborted after %d failures (threshold=%d). Check the error log for the root cause before re-running.',
+                                $stats['failed'],
+                                $failure_threshold
+                            );
+                            error_log('[MealsDB Encryption Migrator] ' . $stats['abort_reason']);
+                            break; // exit the row loop; the aborted flag stops the rest
+                        }
                     }
                 }
+            } while (!$stats['aborted'] && $batch_count === $batch_size);
+
+            if ($stats['aborted']) {
+                break;
             }
         }
 
