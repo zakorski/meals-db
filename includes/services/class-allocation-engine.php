@@ -646,7 +646,9 @@ class MealsDB_Allocation_Engine {
 
         $updated = $this->wpdb->update(
             $allocations_table,
-            ['is_finalized' => 1, 'finalized_at' => current_time('mysql')],
+            // Pattern 11: store UTC. The invoice-draft layer writes finalized_at
+            // with gmdate(); use the same basis here so the two never disagree.
+            ['is_finalized' => 1, 'finalized_at' => gmdate('Y-m-d H:i:s')],
             ['client_id' => $client_id, 'billing_month' => $billing_month],
             ['%d', '%s'],
             ['%d', '%s']

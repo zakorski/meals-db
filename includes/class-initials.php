@@ -131,8 +131,13 @@ class MealsDB_Initials {
         }
 
         if ($wpdb->last_error) {
+            // Fail CLOSED for a uniqueness gate: when we cannot verify, treat the
+            // code as already-taken (true) rather than "available" (false), so a
+            // transient DB error can't let a duplicate through or hand out a code
+            // we failed to check. The generator just tries another code; the
+            // validator surfaces "not available", prompting a retry.
             error_log('[MealsDB] Failed to execute initials lookup query: ' . $wpdb->last_error);
-            return false;
+            return true;
         }
 
         return $row !== null;

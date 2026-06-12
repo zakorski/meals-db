@@ -118,7 +118,7 @@ class MealsDB_Quick_Order_Ajax {
                 'success'    => true,
                 'categories' => $categories,
             ]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] get_categories error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
@@ -155,7 +155,7 @@ class MealsDB_Quick_Order_Ajax {
                 'success'  => true,
                 'products' => $products,
             ]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] get_products_by_category error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
@@ -183,7 +183,7 @@ class MealsDB_Quick_Order_Ajax {
                 'success'  => true,
                 'products' => $products,
             ]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] get_all_products error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
@@ -216,7 +216,7 @@ class MealsDB_Quick_Order_Ajax {
                 'success'  => true,
                 'products' => $products,
             ]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] search_products error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
@@ -447,7 +447,7 @@ class MealsDB_Quick_Order_Ajax {
                 'order_id' => $order_id,
                 'order_link' => get_edit_post_link($order_id),
             ]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] Order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
@@ -568,7 +568,7 @@ class MealsDB_Quick_Order_Ajax {
                 'order_date' => $order_date,
                 'order_id'   => $source_order_id,
             ]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] clone_order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
@@ -699,7 +699,7 @@ class MealsDB_Quick_Order_Ajax {
                 'items'       => $items,
                 'rate_id'     => $rate_id > 0 ? $rate_id : null,
             ]);
-        } catch (Exception $e) {
+        } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] clone_get_order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
@@ -877,6 +877,11 @@ class MealsDB_Quick_Order_Ajax {
                 continue;
             }
 
+            // Cap per-line quantity so a fat-fingered "5000" can't create a
+            // runaway order at catalog price. 100 meals/line is well past any
+            // real single-client order.
+            $quantity = min($quantity, 100);
+
             $items[] = [
                 'product_id'   => $product_id,
                 'quantity'     => $quantity,
@@ -983,7 +988,7 @@ class MealsDB_Quick_Order_Ajax {
             try {
                 $wc_date = new WC_DateTime($order_date->format('Y-m-d H:i:s'), $order_date->getTimezone());
                 $order->set_date_created($wc_date);
-            } catch (Exception $e) {
+            } catch (\Throwable $e) {
                 // Ignore date parsing errors and keep default creation date.
             }
         }
@@ -1127,6 +1132,12 @@ class MealsDB_Quick_Order_Ajax {
      */
     public static function get_next_dates(): void {
         self::verify_request();
+
+        // Rate-limit like every sibling QO read endpoint (this one was missing it).
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
+        }
 
         // JS posts `client_id` containing a WP user ID (historical
         // contract). Accept `wp_user_id` too for callers that prefer

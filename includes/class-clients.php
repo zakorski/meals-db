@@ -193,6 +193,15 @@ class MealsDB_Clients {
      * @return bool
      */
     private static function set_client_active_status(int $client_id, int $active, string $action): bool {
+        // Defence-in-depth (Pattern 1, layer 3): re-check capability here as
+        // delete_client does, so a future caller reaching activate/deactivate
+        // without the AJAX gate can't flip a client's active status.
+        if (function_exists('current_user_can')
+            && (!is_user_logged_in() || !MealsDB_Permissions::can_access_plugin())) {
+            error_log('[MealsDB] ' . $action . ' blocked: insufficient permissions.');
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) {
             return false;

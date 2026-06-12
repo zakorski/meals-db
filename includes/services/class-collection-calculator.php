@@ -31,7 +31,9 @@ class MealsDB_Collection_Calculator {
 
         if ($payment_method === 'cash') {
             return [
-                'collect'    => $total + $delivery_fee,
+                // Sum in integer cents so two 2-dp floats can't render as
+                // 25.700000000000003 if a display path drops number_format().
+                'collect'    => (MealsDB_Money::to_cents($total) + MealsDB_Money::to_cents($delivery_fee)) / 100.0,
                 'is_prepaid' => false,
             ];
         }
@@ -72,7 +74,8 @@ class MealsDB_Collection_Calculator {
             : 0.0;
 
         return [
-            'collect'          => $delivery_fee + $contribution_due,
+            // Integer-cents sum — avoid float drift (see for_private()).
+            'collect'          => (MealsDB_Money::to_cents($delivery_fee) + MealsDB_Money::to_cents($contribution_due)) / 100.0,
             'contribution_due' => $contribution_due,
             'is_prepaid'       => false,
         ];
