@@ -159,33 +159,13 @@ assert_equal('2026-01-16 00:00:00', $d_one['end_exclusive'], 'T-6 single-day end
 $d_bad = $ref->invoke($reports, '2026-01-01', 'not-a-date');
 assert_equal(null, $d_bad, 'T-5 malformed date -> normalise_dates returns null');
 
-// Malformed input -> caller returns empty array, no fatal.
-$rec_bad = new BoundaryRecordingWpdb();
-$reports_bad = new MealsDB_Reports($rec_bad);
-assert_equal([], $reports_bad->get_resupply_requirements('2026-01-01', 'not-a-date'), 'T-5 caller returns [] on bad date');
-assert_equal([], $rec_bad->captured, 'T-5 no query prepared on bad date');
-
-// ---------------------------------------------------------------------------
-// T-1 / T-3: live query bound + operator for the two normalise_dates consumers.
-// ---------------------------------------------------------------------------
-foreach (['get_resupply_requirements', 'get_meal_breakdown'] as $method) {
-    $rec = new BoundaryRecordingWpdb();
-    $GLOBALS['wpdb'] = $rec; // MealsDB_DB::table() reads the global for the prefix.
-    $r   = new MealsDB_Reports($rec);
-    $r->$method('2026-01-01', '2026-01-31');
-
-    assert_true(count($rec->captured) >= 1, "$method prepared a query");
-    $cap = $rec->captured[0];
-
-    // Operator against date_created_gmt is `<`, never `<=`.
-    assert_contains('o.date_created_gmt < ', $cap['resolved'], "$method uses `<` against date_created_gmt");
-    assert_not_contains('date_created_gmt <= ', $cap['resolved'], "$method does not use `<=` against date_created_gmt");
-    assert_contains('o.date_created_gmt >= ', $cap['resolved'], "$method uses `>=` for the start bound");
-
-    // The exclusive next-day bound is the one bound (not the midnight 31st).
-    assert_true(in_array('2026-02-01 00:00:00', $cap['args'], true), "$method binds the exclusive end (2026-02-01 00:00:00)");
-    assert_true(!in_array('2026-01-31 00:00:00', $cap['args'], true), "$method does NOT bind the midnight last-day end");
-}
+// NOTE: the per-caller capture loop that used to live here exercised
+// get_resupply_requirements / get_meal_breakdown — dead methods now removed.
+// normalise_dates itself is still unit-tested via reflection above (T-5/T-6),
+// and the half-open `<` (never `<=`) guarantee for EVERY surviving date-bounded
+// report query is enforced by the full-file source assertion below (T-3). The
+// live consumers (private_customer_report, order_error_report, generate_purchase_order)
+// short-circuit on the empty stub, so they aren't capture-testable here.
 
 // ---------------------------------------------------------------------------
 // T-3 (full-file): no `<= %s` against date_created_gmt and no `$dates['end']`
