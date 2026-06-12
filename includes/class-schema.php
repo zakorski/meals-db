@@ -774,7 +774,7 @@ class MealsDB_Schema {
      * integrity is enforced at the PHP layer (see
      * MealsDB_Clients_Repository and the cascading service methods).
      */
-    public static function generate_create_table_sql($conn, array $schema): string {
+    public static function generate_create_table_sql(array $schema): string {
         $table_name = MealsDB_DB::get_table_name($schema['table']);
         $table_name = str_replace('`', '``', $table_name);
 
@@ -797,7 +797,7 @@ class MealsDB_Schema {
             }
         }
 
-        $charset_sql = self::build_charset_collation_sql($conn);
+        $charset_sql = self::build_charset_collation_sql();
         $engine      = $schema['engine'] ?? 'InnoDB';
 
         return sprintf(
@@ -850,7 +850,7 @@ class MealsDB_Schema {
     /**
      * Build consistent charset/collation SQL using the active connection.
      */
-    public static function build_charset_collation_sql($conn = null): string {
+    public static function build_charset_collation_sql(): string {
         global $wpdb;
 
         $charset = $wpdb->charset ?: 'utf8mb4';
