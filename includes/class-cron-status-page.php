@@ -216,27 +216,46 @@ class MealsDB_Cron_Status_Page {
     }
 
     public static function handle_test_send(): void {
-        if (!MealsDB_Permissions::can_access_plugin()) {
+        // Settings-adjacent action that triggers outbound mail to operator-set
+        // recipients — manage_options + rate limit, not baseline (a baseline
+        // user could otherwise spam mail / probe). Recipients also drive the
+        // failure digest, so this is a settings-tier surface.
+        if (!current_user_can('manage_options')) {
             wp_die(esc_html__('Access denied.', 'meals-db'));
         }
         check_admin_referer(self::TEST_ACTION);
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('settings_modify')) {
+            self::redirect_with_notice(__('Rate limit exceeded. Please try again later.', 'meals-db'));
+            return;
+        }
 
         $notice = '';
         try {
             MealsDB_Daily_Report::run();
             $notice = __('Test report dispatched. Check the configured recipients.', 'meals-db');
         } catch (\Throwable $e) {
-            $notice = sprintf(__('Test report failed: %s', 'meals-db'), $e->getMessage());
+            // Don't surface the raw exception message (may carry SQL/paths);
+            // log it and show a generic failure.
+            MealsDB_Logger::error('[MealsDB Cron Status] Test report failed: ' . $e->getMessage());
+            $notice = __('Test report failed. See the error log for details.', 'meals-db');
         }
 
         self::redirect_with_notice($notice);
     }
 
     public static function handle_save_settings(): void {
-        if (!MealsDB_Permissions::can_access_plugin()) {
+        // Persists the report/digest recipient list — a settings change, so
+        // manage_options + rate limit, not baseline.
+        if (!current_user_can('manage_options')) {
             wp_die(esc_html__('Access denied.', 'meals-db'));
         }
         check_admin_referer(self::SAVE_ACTION);
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('settings_modify')) {
+            self::redirect_with_notice(__('Rate limit exceeded. Please try again later.', 'meals-db'));
+            return;
+        }
 
         $recipients_raw = isset($_POST['recipients']) ? wp_unslash((string) $_POST['recipients']) : '';
         // Validate each entry; persist only the valid ones, comma-joined.

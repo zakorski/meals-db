@@ -29,6 +29,19 @@ class MealsDB_Ajax_Migration {
         $offset  = (int) ( $_POST['offset'] ?? 0 );
         $dry_run = MealsDB_Helpers::bool_flag( $_POST['dry_run'] ?? null, true );
 
+        // QW-1: phases 4/5 are REAL destructive writes (create_clients /
+        // create_rates) — the same class of work the db-sync sibling guards.
+        // verify() above intentionally has no rate limit (the chunked UI fires
+        // many requests per walk), so gate fresh destructive runs here on the
+        // FIRST chunk only, exactly like MealsDB_Ajax_Db_Sync::run_phase: dry
+        // runs write nothing and are never limited; a real run consumes one
+        // token at offset 0 and subsequent chunks pass through.
+        if ( ! $dry_run && $offset === 0
+            && class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please wait before retrying.', 'meals-db' ) ], 429 );
+        }
+
         $result = [];
 
         switch ( $phase ) {

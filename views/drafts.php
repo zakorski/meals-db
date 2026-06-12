@@ -24,12 +24,11 @@ $results = $wpdb->get_results(
 );
 
 if ($results === null && $wpdb->last_error) {
+    // Log the raw DB error server-side, but DON'T echo it to the admin UI —
+    // MySQL errors can include partial SQL and table/column names (mirrors
+    // views/ignored.php's stated policy).
     error_log('[MealsDB] Failed to load draft list: ' . $wpdb->last_error);
-    $draft_error = sprintf(
-        /* translators: %s: database error message */
-        __('Unable to load client drafts: %s', 'meals-db'),
-        $wpdb->last_error
-    );
+    $draft_error = __('Unable to load client drafts. Please check the error log for details.', 'meals-db');
 } elseif (is_array($results)) {
     foreach ($results as $row) {
         $decoded = MealsDB_Client_Form::decode_draft_payload((string) ($row['data'] ?? ''));

@@ -42,7 +42,7 @@ class MealsDB_Ajax_Delivery_Slips {
         try {
             $pdf = $generator->generate_packer_slips_for_date($date);
         } catch (\Throwable $e) {
-            self::fail_with_message($e->getMessage());
+            self::fail_with_exception($e);
             return;
         }
 
@@ -57,7 +57,7 @@ class MealsDB_Ajax_Delivery_Slips {
         try {
             $pdf = $generator->generate_driver_slips_for_date($date);
         } catch (\Throwable $e) {
-            self::fail_with_message($e->getMessage());
+            self::fail_with_exception($e);
             return;
         }
 
@@ -76,7 +76,7 @@ class MealsDB_Ajax_Delivery_Slips {
                 $params['end_date']
             );
         } catch (\Throwable $e) {
-            self::fail_with_message($e->getMessage());
+            self::fail_with_exception($e);
             return;
         }
 
@@ -96,7 +96,7 @@ class MealsDB_Ajax_Delivery_Slips {
                 $params['end_date']
             );
         } catch (\Throwable $e) {
-            self::fail_with_message($e->getMessage());
+            self::fail_with_exception($e);
             return;
         }
 
@@ -172,6 +172,19 @@ class MealsDB_Ajax_Delivery_Slips {
             'success' => false,
             'message' => $message,
         ], 500);
+    }
+
+    /**
+     * Log a generator exception server-side (scrubbed) and return a GENERIC
+     * message to the client. Exception messages from the PDF generator / wpdb
+     * can carry filesystem paths and SQL fragments; surfacing them to the AJAX
+     * caller is information disclosure (every other handler logs + genericises).
+     */
+    private static function fail_with_exception(\Throwable $e): void {
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::error('[MealsDB Delivery Slips] generation failed: ' . $e->getMessage());
+        }
+        self::fail_with_message(__('Could not generate the slips. Please try again or check the error log.', 'meals-db'));
     }
 
     private static function verify_request(): void {

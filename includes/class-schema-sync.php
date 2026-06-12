@@ -13,10 +13,19 @@ class MealsDB_Schema_Sync {
      * @return array<string, mixed>|WP_Error Summary of sync actions or WP_Error on connection failure.
      */
     public static function run_full_sync() {
+        // Service-layer capability re-check (defense in depth). This runs schema
+        // DDL (CREATE TABLE / ALTER TABLE ADD COLUMN) and was reachable from the
+        // Data Ops page at baseline capability — schema ops are manage_options
+        // (mirrors MealsDB_Schema_Rebuild::run). A future non-view caller must
+        // not reach the DDL without it.
+        if (!is_user_logged_in() || !current_user_can('manage_options')) {
+            return new WP_Error('forbidden', 'You do not have permission to update the schema.');
+        }
+
         global $wpdb;
 
         if (!$wpdb) {
-            return new WP_Error('db_error', 'Unable to connect to external Meals DB.');
+            return new WP_Error('db_error', 'Unable to connect to the Meals DB database.');
         }
 
         $schemas = MealsDB_Schema::get_canonical_schema();

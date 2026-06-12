@@ -15,11 +15,13 @@ class MealsDB_Logger {
      * Log an error message to the error log with a Meals DB prefix.
      *
      * Replaces long base64-looking blobs and obvious PII fragments
-     * (emails, phone numbers, encrypted-payload-shaped strings) with
-     * fingerprints so server error logs (often world-readable on shared
-     * hosts) don't leak ciphertext, names, or contact details when
-     * callers helpfully pass through $wpdb->last_error or exception
-     * messages that include the offending row's content.
+     * (emails, NANP phone numbers, 9+-digit government-ID runs, and
+     * encrypted-payload-shaped strings) with fingerprints so server error
+     * logs (often world-readable on shared hosts) don't leak ciphertext,
+     * names, or contact details when callers helpfully pass through
+     * $wpdb->last_error or exception messages that include the offending
+     * row's content. (Names in free text are NOT detectable here — keep
+     * names out of log message strings; pass them via redacted fields.)
      */
     public static function error(string $message): void {
         error_log('[MealsDB] ' . self::sanitize_for_log($message));
@@ -42,6 +44,41 @@ class MealsDB_Logger {
             '/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i',
             static function ($m) {
                 return '[email:' . substr(hash('sha256', strtolower($m[0])), 0, 8) . ']';
+            },
+            $message
+        );
+        if ($step === null || preg_last_error() !== PREG_NO_ERROR) {
+            return '[REDACTED — log scrubber regex failed]';
+        }
+        $message = $step;
+
+        // Replace NANP-style phone numbers (10 digits, optional +1 and
+        // -/./space separators or parens) with a fingerprint. Digit boundaries
+        // prevent matching inside a longer number. The docblock promised this;
+        // previously only emails + blobs were scrubbed, so a "506-555-1234" in
+        // a caught exception reached error_log AND the failure-digest email.
+        $step = preg_replace_callback(
+            '/(?<!\d)(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}(?!\d)/',
+            static function ($m) {
+                $digits = preg_replace('/\D/', '', $m[0]);
+                return '[phone:' . substr(hash('sha256', (string) $digits), 0, 8) . ']';
+            },
+            $message
+        );
+        if ($step === null || preg_last_error() !== PREG_NO_ERROR) {
+            return '[REDACTED — log scrubber regex failed]';
+        }
+        $message = $step;
+
+        // Replace bare runs of >= 9 digits (government IDs — individual_id /
+        // vet_health_card / SIN — which are 9+ digits) with a fingerprint. Runs
+        // this short are not base64-blob-shaped, so the blob pass below would
+        // miss them. Short numbers (order ids, counts) are left intact. Phones
+        // were already fingerprinted above, so this only catches non-phone IDs.
+        $step = preg_replace_callback(
+            '/(?<!\d)\d{9,}(?!\d)/',
+            static function ($m) {
+                return '[id:' . substr(hash('sha256', $m[0]), 0, 8) . ']';
             },
             $message
         );
@@ -117,6 +154,25 @@ class MealsDB_Logger {
      * Replace the raw value of a sensitive field with a short
      * non-reversible fingerprint suitable for diff-style audit review.
      */
+    /**
+     * Produce the audit fingerprint of a single value (same shape redact_value
+     * emits for a sensitive field). Public so callers that log a COMPOSITE blob
+     * — e.g. the delete_client snapshot, whose 'record' field name bypasses the
+     * field-keyed redaction — can fingerprint the sensitive members BEFORE
+     * encoding, instead of writing PII (a client_email) to the append-only,
+     * long-retention audit log in cleartext.
+     *
+     * @param string|null $value
+     * @return string|null '[redacted:sha256=…]' for a non-empty value; the input
+     *                     unchanged for null / empty.
+     */
+    public static function fingerprint_value(?string $value): ?string {
+        if ($value === null || $value === '') {
+            return $value;
+        }
+        return '[redacted:sha256=' . substr(hash('sha256', $value), 0, 12) . ']';
+    }
+
     private static function redact_value(string $field, ?string $value): ?string {
         if ($value === null || $value === '') {
             return $value;
