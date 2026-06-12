@@ -536,9 +536,16 @@ class MealsDB_Encryption {
                 $value = (string) $value;
             }
 
-            // Don't double-encrypt rows that already carry an HMAC payload
-            // (e.g. in case a caller hands us a row read straight from the DB).
-            if (self::classify_payload($value) === 'new') {
+            // Don't double-encrypt rows that already carry an authenticated
+            // payload (e.g. a row read straight from the DB). Use the KEY-AWARE
+            // check, NOT the structural classify_payload(): an ordinary
+            // free-text note can strict-base64-decode to >= 49 bytes and so look
+            // structurally "new", which previously caused encrypt_columns to
+            // SKIP it and store PII in cleartext — defeating the fail-closed
+            // guarantee. is_authenticated_payload() skips a value only if its
+            // HMAC actually verifies under the MAC key, so genuine ciphertext is
+            // still skipped (idempotent) while real plaintext is always encrypted.
+            if (self::is_authenticated_payload($value)) {
                 continue;
             }
 

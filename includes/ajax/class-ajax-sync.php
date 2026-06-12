@@ -151,8 +151,10 @@ class MealsDB_Ajax_Sync {
     public static function check_updates(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
 
-        if (!MealsDB_Permissions::can_access_plugin()) {
-            wp_send_json_error(['message' => 'Unauthorized']);
+        // Deploying/checking plugin code is a manage_options operation, not the
+        // baseline manage_woocommerce. The service layer re-checks too.
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meals-db')], 403);
         }
 
         if (class_exists('MealsDB_Rate_Limiter')
@@ -175,12 +177,14 @@ class MealsDB_Ajax_Sync {
     public static function run_update(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
 
-        if (!MealsDB_Permissions::can_access_plugin()) {
-            wp_send_json_error(['message' => 'Unauthorized']);
+        // Deploys code over the live plugin dir — manage_options only. The
+        // service layer (MealsDB_Updates::pull_updates) re-checks as well.
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meals-db')], 403);
         }
 
         if (class_exists('MealsDB_Rate_Limiter')
-            && !MealsDB_Rate_Limiter::check_rate_limit('sync_operations')) {
+            && !MealsDB_Rate_Limiter::check_rate_limit('migration_destructive')) {
             wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
         }
 
@@ -214,11 +218,23 @@ class MealsDB_Ajax_Sync {
     public static function update_database(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
 
-        if (!MealsDB_Permissions::can_access_plugin()) {
-            wp_send_json_error(['message' => 'Unauthorized']);
+        // Runs the installer (DDL) — manage_options only, and rate-limited (it
+        // was previously the one update endpoint with no throttle). The service
+        // layer re-checks and serialises via the install lock.
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Unauthorized', 'meals-db')], 403);
+        }
+
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('migration_destructive')) {
+            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
         }
 
         $result = MealsDB_Updates::run_database_maintenance();
+
+        if (is_wp_error($result)) {
+            self::handle_update_failure($result);
+        }
 
         wp_send_json_success($result);
     }
