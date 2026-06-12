@@ -71,12 +71,20 @@ class MealsDB_Event_Digest {
                 'outcome' => [MealsDB_Event_Log::OUTCOME_FAILED, MealsDB_Event_Log::OUTCOME_DEGRADED],
                 'since'   => $since_utc,
                 'until'   => $now_utc,
-                'limit'   => 1000,
+                'limit'   => 1001, // one over the cap so we can DETECT overflow
             ]);
+
+            // More than the cap means the digest's counts are a FLOOR, not the
+            // whole window — flag it rather than silently under-reporting during
+            // a flood (exactly when the operator most needs to know).
+            $window_incomplete = count($events) > 1000;
+            if ($window_incomplete) {
+                $events = array_slice($events, 0, 1000);
+            }
 
             $sent = false;
             if (!empty($events)) {
-                $sent = self::send_digest($events, $since_utc, $now_utc);
+                $sent = self::send_digest($events, $since_utc, $now_utc, $window_incomplete);
             }
 
             // Advance the watermark regardless of send success — a stuck
@@ -97,7 +105,7 @@ class MealsDB_Event_Digest {
     /**
      * @param array<int, array<string, mixed>> $events
      */
-    private static function send_digest(array $events, string $since_utc, string $until_utc): bool {
+    private static function send_digest(array $events, string $since_utc, string $until_utc, bool $window_incomplete = false): bool {
         $recipients = self::recipients();
         if (empty($recipients)) {
             return false;
@@ -138,6 +146,11 @@ class MealsDB_Event_Digest {
         $lines[] = '';
         $lines[] = sprintf('Failed:   %d', $failed);
         $lines[] = sprintf('Degraded: %d', $degraded);
+        if ($window_incomplete) {
+            $lines[] = '';
+            $lines[] = 'NOTE: this window held MORE than 1000 failed/degraded events — the';
+            $lines[] = 'counts above are a FLOOR. See the Event Log dashboard for the full picture.';
+        }
         $lines[] = '';
         if (!empty($detail)) {
             $lines[] = 'Detail (at or above the configured severity threshold):';

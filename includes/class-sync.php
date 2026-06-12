@@ -149,11 +149,65 @@ class MealsDB_Sync {
         add_action('profile_update', [self::class, 'on_wp_user_updated'], 10, 2);
         add_action('woocommerce_customer_save_address', [self::class, 'on_wc_address_saved'], 10, 2);
         add_action('woocommerce_created_customer', [self::class, 'on_wc_customer_created'], 10, 1);
+        // Unlink clients from a WP user when it's deleted, so the dangling
+        // wp_user_id link doesn't make the nightly sync log a
+        // sync_nightly_missing_user row for it every night forever.
+        add_action('deleted_user', [self::class, 'on_wp_user_deleted'], 10, 1);
 
         if (!wp_next_scheduled('mealsdb_nightly_sync')) {
             wp_schedule_event(strtotime('tomorrow 02:00:00'), 'daily', 'mealsdb_nightly_sync');
         }
         add_action('mealsdb_nightly_sync', [self::class, 'run_nightly_sync']);
+    }
+
+    /**
+     * A WP user was deleted — NULL the wp_user_id link on any clients that
+     * pointed at it. Without this the link dangles, and the nightly sync writes
+     * one sync_nightly_missing_user audit row per orphaned client per night,
+     * forever, into the append-only (never-pruned) audit log. Each unlink is
+     * audit-logged once here. Never throws (instrumentation must not break the
+     * user-deletion flow).
+     *
+     * @param int $user_id
+     */
+    public static function on_wp_user_deleted(int $user_id): void {
+        if ($user_id <= 0) {
+            return;
+        }
+        try {
+            global $wpdb;
+            $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+            $wp_column     = self::resolve_wp_user_column($wpdb, $clients_table);
+            if ($wp_column === null) {
+                return;
+            }
+
+            $client_ids = array_map('intval', (array) $wpdb->get_col($wpdb->prepare(
+                "SELECT client_id FROM `{$clients_table}` WHERE `{$wp_column}` = %d",
+                $user_id
+            )));
+
+            if (empty($client_ids)) {
+                self::safe_record_hook('deleted_user', 'user', $user_id,
+                    MealsDB_Hook_Logger::OUTCOME_SKIPPED, ['reason' => 'no_linked_clients']);
+                return;
+            }
+
+            $wpdb->query($wpdb->prepare(
+                "UPDATE `{$clients_table}` SET `{$wp_column}` = NULL WHERE `{$wp_column}` = %d",
+                $user_id
+            ));
+
+            foreach ($client_ids as $cid) {
+                MealsDB_Logger::log('wp_user_deleted_unlink', $cid, 'wp_user_id', (string) $user_id, null);
+            }
+
+            self::safe_record_hook('deleted_user', 'user', $user_id,
+                MealsDB_Hook_Logger::OUTCOME_PROCESSED, ['unlinked' => count($client_ids)]);
+        } catch (\Throwable $e) {
+            self::safe_record_hook('deleted_user', 'user', $user_id,
+                MealsDB_Hook_Logger::OUTCOME_ERRORED, ['exception' => get_class($e)], $e->getMessage());
+        }
     }
 
     /**
