@@ -119,7 +119,7 @@ $form_schema = is_array($definition['form_schema'] ?? null) ? $definition['form_
     function setStatus(msg, type) {
         var $s = $('#mealsdb-task-detail-status');
         $s.removeClass('notice-success notice-error notice-warning').addClass('notice-' + (type || 'info'));
-        $s.html('<p>' + msg + '</p>').show();
+        $s.empty().append($('<p>').text(msg)).show(); // .text() — never inject server msg as HTML
     }
 
     $('#mealsdb-task-complete').on('click', function() {

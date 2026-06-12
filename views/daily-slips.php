@@ -100,7 +100,7 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
     function showStatus(msg, type) {
         $('#mealsdb-slip-status').show()
             .removeClass('notice-info notice-success notice-error notice-warning')
-            .addClass('notice-' + type).html('<p>' + msg + '</p>');
+            .addClass('notice-' + type).empty().append($('<p>').text(msg)); // .text() — no HTML injection
     }
 
     // Submit a hidden form so the browser handles the binary PDF

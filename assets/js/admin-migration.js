@@ -142,8 +142,11 @@
     }
     function consStatsHtml(stats) {
         if (!stats) return '';
+        // Escape keys AND values — this string is injected via .html() below, and
+        // a stat value that ever carried an error string would otherwise land an
+        // XSS (the sibling statsHtml() already escapes for exactly this reason).
         return Object.keys(stats).map(function (k) {
-            return k + ': ' + stats[k];
+            return escHtml(k) + ': ' + escHtml(stats[k]);
         }).join(', ');
     }
 
