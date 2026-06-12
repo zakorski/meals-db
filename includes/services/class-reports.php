@@ -67,134 +67,6 @@ class MealsDB_Reports {
     }
 
     /**
-     * Calculate resupply requirements for order items within the given date range.
-     *
-     * @param string|int $start_date
-     * @param string|int $end_date
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public function get_resupply_requirements($start_date, $end_date): array {
-        if (!self::is_authorized_to_read_reports()) {
-            return [];
-        }
-
-        if (!$this->wpdb instanceof wpdb) {
-            return [];
-        }
-
-        $dates = $this->normalise_dates($start_date, $end_date);
-        if ($dates === null) {
-            return [];
-        }
-
-        $order_items_table      = $this->wpdb->prefix . 'woocommerce_order_items';
-        $order_itemmeta_table   = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
-        $orders_table           = $this->wpdb->prefix . 'wc_orders';
-        $meals_products_table   = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
-
-        $sql = "
-            SELECT
-                oi.order_item_name AS item,
-                CAST(product_meta.meta_value AS UNSIGNED) AS wc_product_id,
-                SUM(CAST(qty_meta.meta_value AS DECIMAL(20,6))) AS total_quantity,
-                COALESCE(mp.case_size, 1) AS case_size,
-                CEIL(SUM(CAST(qty_meta.meta_value AS DECIMAL(20,6))) / NULLIF(mp.case_size, 0)) AS cases_needed,
-                COALESCE(mp.unit_cost, 0) AS unit_cost,
-                CEIL(SUM(CAST(qty_meta.meta_value AS DECIMAL(20,6))) / NULLIF(mp.case_size, 0)) * COALESCE(mp.unit_cost, 0) AS total_cost
-            FROM {$order_items_table} oi
-            INNER JOIN {$order_itemmeta_table} product_meta
-                ON product_meta.order_item_id = oi.order_item_id
-                AND product_meta.meta_key = '_product_id'
-            INNER JOIN {$order_itemmeta_table} qty_meta
-                ON qty_meta.order_item_id = oi.order_item_id
-                AND qty_meta.meta_key = '_qty'
-            INNER JOIN {$orders_table} o
-                ON o.id = oi.order_id
-            LEFT JOIN `{$meals_products_table}` mp
-                ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
-            WHERE o.date_created_gmt >= %s
-                AND o.date_created_gmt < %s
-                AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
-                AND o.type = 'shop_order'
-                AND (mp.product_type IS NULL OR mp.product_type IN ('meal', 'side'))
-            GROUP BY wc_product_id, item, mp.case_size, mp.unit_cost
-            ORDER BY item ASC
-        ";
-
-        $prepared = $this->wpdb->prepare($sql, $dates['start'], $dates['end_exclusive']);
-        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
-
-        return array_map([$this, 'format_resupply_row'], is_array($rows) ? $rows : []);
-    }
-
-    /**
-     * Generate a breakdown of meals and sides by metadata within the given date range.
-     *
-     * @param string|int $start_date
-     * @param string|int $end_date
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public function get_meal_breakdown($start_date, $end_date): array {
-        if (!self::is_authorized_to_read_reports()) {
-            return [];
-        }
-
-        if (!$this->wpdb instanceof wpdb) {
-            return [];
-        }
-
-        $dates = $this->normalise_dates($start_date, $end_date);
-        if ($dates === null) {
-            return [];
-        }
-
-        $order_items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
-        $order_itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
-        $orders_table         = $this->wpdb->prefix . 'wc_orders';
-        $meals_products_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS));
-
-        $sql = "
-            SELECT
-                CAST(product_meta.meta_value AS UNSIGNED) AS wc_product_id,
-                oi.order_item_name AS item,
-                SUM(CAST(qty_meta.meta_value AS DECIMAL(20,6))) AS total_quantity,
-                COALESCE(mp.product_type, 'meal') AS product_type,
-                COALESCE(mp.main_ingredient, '') AS main_ingredient,
-                mp.dietary_tags,
-                mp.allergen_flags
-            FROM {$order_items_table} oi
-            INNER JOIN {$order_itemmeta_table} product_meta
-                ON product_meta.order_item_id = oi.order_item_id
-                AND product_meta.meta_key = '_product_id'
-            INNER JOIN {$order_itemmeta_table} qty_meta
-                ON qty_meta.order_item_id = oi.order_item_id
-                AND qty_meta.meta_key = '_qty'
-            INNER JOIN {$orders_table} o
-                ON o.id = oi.order_id
-            LEFT JOIN `{$meals_products_table}` mp
-                ON mp.wc_product_id = CAST(product_meta.meta_value AS UNSIGNED)
-            WHERE o.date_created_gmt >= %s
-                AND o.date_created_gmt < %s
-                AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
-                AND o.type = 'shop_order'
-                AND (mp.product_type IS NULL OR mp.product_type IN ('meal', 'side'))
-            GROUP BY wc_product_id, item, mp.product_type, mp.main_ingredient, mp.dietary_tags, mp.allergen_flags
-            ORDER BY item ASC
-        ";
-
-        $prepared = $this->wpdb->prepare($sql, $dates['start'], $dates['end_exclusive']);
-        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
-
-        if (!is_array($rows)) {
-            return [];
-        }
-
-        return array_map([$this, 'format_meal_breakdown_row'], $rows);
-    }
-
-    /**
      * Export the provided rows to a CSV string.
      *
      * @param array<int, array<string, mixed>> $rows
@@ -237,141 +109,6 @@ class MealsDB_Reports {
         fclose($handle);
 
         return is_string($csv) ? $csv : '';
-    }
-
-    /**
-     * @param array<string, mixed> $row
-     *
-     * @return array<string, mixed>
-     */
-    private function format_resupply_row(array $row): array {
-        $total_quantity = isset($row['total_quantity']) ? (float) $row['total_quantity'] : 0.0;
-        $case_size      = isset($row['case_size']) ? (int) $row['case_size'] : 1;
-
-        if ($case_size <= 0) {
-            $case_size = 1;
-        }
-
-        $cases_needed = (int) ceil($total_quantity / $case_size);
-        $unit_cost    = isset($row['unit_cost']) ? (float) $row['unit_cost'] : 0.0;
-        $total_cost   = $cases_needed * $unit_cost;
-
-        return [
-            'item'            => isset($row['item']) ? (string) $row['item'] : '',
-            'wc_product_id'   => isset($row['wc_product_id']) ? (int) $row['wc_product_id'] : 0,
-            'total_quantity'  => $total_quantity,
-            'case_size'       => $case_size,
-            'cases_needed'    => $cases_needed,
-            'unit_cost'       => number_format($unit_cost, 2, '.', ''),
-            'total_cost'      => number_format($total_cost, 2, '.', ''),
-        ];
-    }
-
-    /**
-     * @param array<string, mixed> $row
-     *
-     * @return array<string, mixed>
-     */
-    private function format_meal_breakdown_row(array $row): array {
-        $product_type = 'meal';
-        if (isset($row['product_type']) && in_array($row['product_type'], ['meal', 'side'], true)) {
-            $product_type = $row['product_type'];
-        }
-
-        return [
-            'wc_product_id'   => isset($row['wc_product_id']) ? (int) $row['wc_product_id'] : 0,
-            'item'            => isset($row['item']) ? (string) $row['item'] : '',
-            'total_quantity'  => isset($row['total_quantity']) ? (float) $row['total_quantity'] : 0.0,
-            'product_type'    => $product_type,
-            'main_ingredient' => isset($row['main_ingredient']) ? (string) $row['main_ingredient'] : '',
-            'dietary_tags'    => $this->decode_json_array(isset($row['dietary_tags']) ? $row['dietary_tags'] : null),
-            'allergen_flags'  => $this->decode_json_array(isset($row['allergen_flags']) ? $row['allergen_flags'] : null),
-        ];
-    }
-
-    /**
-     * Calculate average weekly demand per product over a trailing period.
-     *
-     * @param int $trailing_weeks Number of weeks to look back (default 8).
-     *
-     * @return array<int, array<string, mixed>> Keyed by wc_product_id.
-     */
-    public function get_demand_history(int $trailing_weeks = 8): array {
-        if (!self::is_authorized_to_read_reports()) {
-            return [];
-        }
-
-        if (!$this->wpdb instanceof wpdb) {
-            return [];
-        }
-
-        if ($trailing_weeks < 1) {
-            $trailing_weeks = 8;
-        }
-
-        $end_date           = gmdate('Y-m-d');
-        $end_date_exclusive = gmdate('Y-m-d', strtotime($end_date . ' +1 day'));
-        $start_date         = gmdate('Y-m-d', strtotime("-" . ($trailing_weeks * 7) . " days"));
-
-        $order_items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
-        $order_itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
-        $orders_table         = $this->wpdb->prefix . 'wc_orders';
-
-        $sql = "
-            SELECT
-                CAST(product_meta.meta_value AS UNSIGNED) AS wc_product_id,
-                oi.order_item_name AS product_name,
-                YEARWEEK(o.date_created_gmt, 1) AS year_week,
-                SUM(CAST(qty_meta.meta_value AS DECIMAL(10,2))) AS weekly_quantity
-            FROM {$order_items_table} oi
-            INNER JOIN {$order_itemmeta_table} product_meta
-                ON product_meta.order_item_id = oi.order_item_id
-                AND product_meta.meta_key = '_product_id'
-            INNER JOIN {$order_itemmeta_table} qty_meta
-                ON qty_meta.order_item_id = oi.order_item_id
-                AND qty_meta.meta_key = '_qty'
-            INNER JOIN {$orders_table} o
-                ON o.id = oi.order_id
-                AND o.type = 'shop_order'
-                AND o.status NOT IN ('wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash')
-            WHERE o.date_created_gmt >= %s AND o.date_created_gmt < %s
-                AND oi.order_item_type = 'line_item'
-            GROUP BY wc_product_id, product_name, year_week
-            ORDER BY wc_product_id, year_week
-        ";
-
-        $prepared = $this->wpdb->prepare($sql, $start_date, $end_date_exclusive);
-        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
-
-        if (!is_array($rows)) {
-            return [];
-        }
-
-        // Aggregate per product.
-        $products = [];
-        foreach ($rows as $row) {
-            $pid = (int) $row['wc_product_id'];
-            if (!isset($products[$pid])) {
-                $products[$pid] = [
-                    'wc_product_id'     => $pid,
-                    'product_name'      => (string) $row['product_name'],
-                    'avg_weekly_demand' => 0.0,
-                    'weekly_history'    => [],
-                    'total_trailing'    => 0.0,
-                ];
-            }
-            $qty = (float) $row['weekly_quantity'];
-            $products[$pid]['weekly_history'][$row['year_week']] = $qty;
-            $products[$pid]['total_trailing'] += $qty;
-        }
-
-        // Calculate averages using trailing_weeks as denominator.
-        foreach ($products as &$p) {
-            $p['avg_weekly_demand'] = round($p['total_trailing'] / $trailing_weeks, 2);
-        }
-        unset($p);
-
-        return $products;
     }
 
     /**
@@ -970,8 +707,6 @@ class MealsDB_Reports {
         $valid_statuses = ['wc-processing', 'wc-completed', 'wc-paid'];
 
         $orders_table     = $this->wpdb->prefix . 'wc_orders';
-        $items_table      = $this->wpdb->prefix . 'woocommerce_order_items';
-        $itemmeta_table   = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
 
         $rows = [];
         $grand = self::empty_private_report_totals();
@@ -1024,25 +759,15 @@ class MealsDB_Reports {
             $orders_by_user[$uid][] = $oid;
         }
 
-        // One query for every line_item across every order, with the three
-        // meta keys we care about folded in via correlated joins. This
-        // replaces WC_Order::get_items() hydrations (each of which hits
-        // order_items + order_itemmeta separately).
-        $order_placeholders = implode(',', array_fill(0, count($order_ids), '%d'));
-        $items_sql = $this->wpdb->prepare(
-            "SELECT oi.order_id,
-                    pid.meta_value AS product_id,
-                    qty.meta_value AS quantity,
-                    ls.meta_value  AS line_subtotal
-             FROM {$items_table} oi
-             LEFT JOIN {$itemmeta_table} pid ON pid.order_item_id = oi.order_item_id AND pid.meta_key = '_product_id'
-             LEFT JOIN {$itemmeta_table} qty ON qty.order_item_id = oi.order_item_id AND qty.meta_key = '_qty'
-             LEFT JOIN {$itemmeta_table} ls  ON ls.order_item_id  = oi.order_item_id AND ls.meta_key  = '_line_subtotal'
-             WHERE oi.order_id IN ($order_placeholders)
-               AND oi.order_item_type = 'line_item'",
-            ...$order_ids
-        );
-        $item_rows = $this->wpdb->get_results($items_sql, ARRAY_A);
+        // Line items across every order, via the canonical order-query layer so
+        // the join shape, status rules, AND the refund subtraction live in ONE
+        // place (consolidation of the hand-rolled items query). NOTE: quantity is
+        // now NET of refunds (BC-6) — a partial refund reduces the mains/sides
+        // counts below; the before-tax subtotal remains the original
+        // _line_subtotal (refund money handling is out of scope for this report).
+        $item_rows = ($this->order_query instanceof MealsDB_WC_Order_Query)
+            ? $this->order_query->get_order_items($order_ids)
+            : [];
 
         // Aggregate per-user totals from the two result sets. The original
         // code summed WC_Order::get_subtotal() (= sum of _line_subtotal
@@ -1078,8 +803,8 @@ class MealsDB_Reports {
                 continue;
             }
 
-            $product_id = (int) $ir['product_id'];
-            $qty        = (int) $ir['quantity'];
+            $product_id = (int) $ir['wc_product_id']; // get_order_items() key
+            $qty        = (int) $ir['quantity'];      // NET of refunds (BC-6)
             $user_totals[$uid]['before_tax'] += (float) $ir['line_subtotal'];
 
             if (isset($product_type_map[$product_id])) {

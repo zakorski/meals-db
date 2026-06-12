@@ -119,9 +119,6 @@ $GLOBALS['__mealsdb_test_caps']      = [];
 $wpdb    = new AuthzTest_Wpdb();
 $reports = new MealsDB_Reports($wpdb);
 
-assert_equal([], $reports->get_resupply_requirements('2026-01-01', '2026-01-31'), 'get_resupply_requirements returns []');
-assert_equal([], $reports->get_meal_breakdown('2026-01-01', '2026-01-31'), 'get_meal_breakdown returns []');
-assert_equal([], $reports->get_demand_history(8), 'get_demand_history returns []');
 assert_equal([], $reports->generate_purchase_order(12, 6, 0.85), 'generate_purchase_order returns []');
 
 $contribution = $reports->contribution_reconciliation('2026-01-01', '2026-01-31');
@@ -155,7 +152,7 @@ $reports = new MealsDB_Reports($wpdb);
 
 $guard_bypassed = false;
 try {
-    $reports->get_resupply_requirements('2026-01-01', '2026-01-31');
+    $reports->generate_purchase_order(12, 6, 0.85);
 } catch (RuntimeException $e) {
     $guard_bypassed = str_contains($e->getMessage(), 'must not be reached') === false
         ? false
