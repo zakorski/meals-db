@@ -80,7 +80,7 @@ class MealsDB_Task_Type_Physical_Count {
         $po_service = new MealsDB_Purchase_Orders();
         $po_service->update($po_id, [
             'status'        => MealsDB_Purchase_Orders::STATUS_RECONCILED,
-            'reconciled_at' => function_exists('current_time') ? current_time('mysql') : gmdate('Y-m-d H:i:s'),
+            'reconciled_at' => gmdate('Y-m-d H:i:s'), // Pattern 11: store UTC, not site-local current_time().
         ]);
     }
 

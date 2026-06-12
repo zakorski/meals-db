@@ -136,7 +136,12 @@ function mealsdb_uninstall_cleanup_current_site(): void {
     delete_option('mealsdb_db_version');
     delete_option('mealsdb_zone_delivery_schedule');
     delete_option('mealsdb_overage_product_ids');
+    delete_option('mealsdb_fee_product_ids');
+    delete_option('mealsdb_appetito_excluded_categories');
     delete_option('mealsdb_legacy_decrypt_disabled');
+    // A crashed install can leave this lock row behind; clean it for a true
+    // clean-slate uninstall (it's autoload='no', so otherwise an orphan).
+    delete_option('mealsdb_install_lock');
     // Directive STR-LOG digest options.
     delete_option('mealsdb_event_digest_last_run');
     delete_option('mealsdb_event_digest_min_severity');

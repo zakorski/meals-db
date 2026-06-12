@@ -59,6 +59,11 @@ class MealsDB_Daily_Report {
         'nightly_allocation_sync'   => 'Nightly Allocation Sync',
         'task_cron'                 => 'Task Cron',
         'derived_value_audit'       => 'Derived Value Integrity',
+        // Both self-log to the trunk; without them a never-scheduled
+        // retention/digest job would surface nowhere (the table grows
+        // unbounded — the MAJ-2 lesson — with no MISSED detection).
+        'log_retention'             => 'Log Retention',
+        'event_digest'              => 'Event Digest',
         'daily_report'              => 'Daily Report (this job)',
     ];
 
