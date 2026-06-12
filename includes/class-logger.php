@@ -226,15 +226,20 @@ class MealsDB_Logger {
         $old = self::redact_value($field, $old);
         $new = self::redact_value($field, $new);
 
+        // Write created_at explicitly in UTC (Pattern 11). The column otherwise
+        // falls to MySQL DEFAULT CURRENT_TIMESTAMP, which evaluates in the DB
+        // server's timezone — skewing the audit trail's ordering against the
+        // gmdate-stamped operational trunk on a non-UTC host.
         $sql = $wpdb->prepare(
-            "INSERT INTO `{$table}` (user_id, action, target_id, field_changed, old_value, new_value, source) VALUES (%d, %s, %d, %s, %s, %s, %s)",
+            "INSERT INTO `{$table}` (user_id, action, target_id, field_changed, old_value, new_value, source, created_at) VALUES (%d, %s, %d, %s, %s, %s, %s, %s)",
             $user_id,
             $action,
             $target_id,
             $field,
             $old,
             $new,
-            $source
+            $source,
+            gmdate('Y-m-d H:i:s')
         );
 
         $result = $wpdb->query($sql);

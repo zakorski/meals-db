@@ -634,6 +634,9 @@ class MealsDB_Migration_Consolidated {
                     'label'          => 'Standard',
                     'rate'           => $rate,
                     'is_default'     => 1,
+                    // Business "effective today" date — deliberately the site-local
+                    // calendar day (current_time), NOT gmdate, so a late-evening
+                    // migration doesn't stamp a rate as effective tomorrow (UTC).
                     'effective_date' => current_time('Y-m-d'),
                 ],
                 ['%d', '%s', '%f', '%d', '%s']
