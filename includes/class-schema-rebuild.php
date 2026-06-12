@@ -102,7 +102,7 @@ class MealsDB_Schema_Rebuild {
             }
 
             $table_name  = MealsDB_DB::get_table_name($table_key);
-            $create_sql  = MealsDB_Schema::generate_create_table_sql($wpdb, $schemas[$table_key]);
+            $create_sql  = MealsDB_Schema::generate_create_table_sql($schemas[$table_key]);
 
             try {
                 $query_result = $wpdb->query($create_sql);
