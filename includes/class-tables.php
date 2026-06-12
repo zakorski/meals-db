@@ -1,6 +1,6 @@
 <?php
 /**
- * Canonical table definitions for the external Meals DB.
+ * Canonical table definitions for the Meals DB (WordPress wpdb).
  */
 defined('ABSPATH') || exit;
 

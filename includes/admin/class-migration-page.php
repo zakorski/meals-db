@@ -103,7 +103,7 @@ class MealsDB_Migration_Page {
 
             <div class="mealsdb-mig-info notice notice-info inline">
                 <p><strong><?php esc_html_e( 'Migration tool.', 'meals-db' ); ?></strong>
-                <?php esc_html_e( 'Builds government client records in the Meals DB external database from data already in this WordPress / WooCommerce site. Use the Consolidated Migration below.', 'meals-db' ); ?></p>
+                <?php esc_html_e( 'Builds government client records in Meals DB from data already in this WordPress / WooCommerce site. Use the Consolidated Migration below.', 'meals-db' ); ?></p>
             </div>
 
             <!-- Step 2: Progress -->

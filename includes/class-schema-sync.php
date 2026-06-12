@@ -1,6 +1,6 @@
 <?php
 /**
- * Synchronize external Meals DB schemas with installer definitions.
+ * Synchronize Meals DB schemas with installer definitions.
  */
 
 defined('ABSPATH') || exit;

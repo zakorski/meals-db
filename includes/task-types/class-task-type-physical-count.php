@@ -97,15 +97,32 @@ class MealsDB_Task_Type_Physical_Count {
             return;
         }
 
+        // Source the ORDERED quantity (and the valid SKU set) from the stored PO,
+        // NOT the form. quantity_ordered is a readonly display field — trusting
+        // the submitted value lets a tampered request apply an arbitrary stock
+        // delta. Only actual_count is taken from the operator.
+        $ordered_by_sku = [];
+        $po = (new MealsDB_Purchase_Orders())->get($po_id);
+        foreach ((array) ($po['items'] ?? []) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $isku = isset($item['sku']) ? (string) $item['sku'] : '';
+            if ($isku !== '') {
+                $ordered_by_sku[$isku] = isset($item['quantity_ordered']) ? (int) $item['quantity_ordered'] : 0;
+            }
+        }
+
         foreach ($adjustments as $adj) {
             if (!is_array($adj)) {
                 continue;
             }
             $sku = isset($adj['sku']) ? (string) $adj['sku'] : '';
-            if ($sku === '') {
+            // Reject any SKU not actually on this PO — never trust a form-only sku.
+            if ($sku === '' || !array_key_exists($sku, $ordered_by_sku)) {
                 continue;
             }
-            $ordered = isset($adj['quantity_ordered']) ? (int) $adj['quantity_ordered'] : 0;
+            $ordered = $ordered_by_sku[$sku]; // server-sourced
             $actual  = isset($adj['actual_count']) ? (int) $adj['actual_count'] : $ordered;
             $diff    = $actual - $ordered;
 

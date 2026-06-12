@@ -109,20 +109,6 @@ class MealsDB_Client_Form {
         'client_id',
     ];
 
-    /**
-     * Fields that require AES-256 encryption.
-     *
-     * Mirrors MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS. Kept as a local
-     * property so existing references continue to work; initialized lazily
-     * below so both sources remain in sync.
-     */
-    private static $encrypted_fields = [
-        'individual_id',
-        'requisition_id',
-        'vet_health_card',
-        'diet_concerns',
-        'client_comments',
-    ];
 
     /**
      * Deterministic index columns used for uniqueness checks on encrypted data.

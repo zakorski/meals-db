@@ -315,11 +315,15 @@ class MealsDB_Installer {
         foreach ($tables_to_drop as $base_name) {
             $table_name = $prefix . $base_name;
             $escaped    = str_replace('`', '``', $table_name);
-            $sql        = sprintf("DROP TABLE IF EXISTS `%s`", $escaped);
 
-            if ($wpdb->query($sql) === false) {
+            // Only log an actual drop. DROP TABLE IF EXISTS succeeds on a
+            // missing table too, so the old unconditional "Dropped" line ran on
+            // every install/upgrade and implied recurring destructive action.
+            $exists = (string) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table_name)) === $table_name;
+
+            if ($wpdb->query(sprintf("DROP TABLE IF EXISTS `%s`", $escaped)) === false) {
                 error_log(sprintf('[MealsDB Installer] Failed to drop defunct table %s: %s', $table_name, $wpdb->last_error));
-            } else {
+            } elseif ($exists) {
                 error_log(sprintf('[MealsDB Installer] Dropped defunct table: %s', $table_name));
             }
         }

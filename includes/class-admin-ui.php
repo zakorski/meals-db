@@ -870,7 +870,7 @@ class MealsDB_Admin_UI {
                 });
             } else {
                 add_action('admin_notices', function() {
-                    echo '<div class="notice notice-success"><p>External database schema updated successfully.</p></div>';
+                    echo '<div class="notice notice-success"><p>' . esc_html__('Database schema updated successfully.', 'meals-db') . '</p></div>';
                 });
             }
         }
@@ -1014,7 +1014,7 @@ class MealsDB_Admin_UI {
         ?>
         <div class="notice notice-warning">
             <p><strong><?php echo esc_html__('External Meals DB Force Rebuild completed.', 'meals-db'); ?></strong></p>
-            <p class="description"><?php echo esc_html__('All external Meals DB tables were dropped and recreated using the canonical schema.', 'meals-db'); ?></p>
+            <p class="description"><?php echo esc_html__('All Meals DB tables were dropped and recreated using the canonical schema.', 'meals-db'); ?></p>
             <ul>
                 <li><strong><?php echo esc_html__('Tables dropped:', 'meals-db'); ?></strong> <?php echo esc_html(implode(', ', $dropped)); ?></li>
                 <?php if (!empty($drop_errors)) : ?>
