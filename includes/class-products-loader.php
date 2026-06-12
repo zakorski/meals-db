@@ -1,6 +1,6 @@
 <?php
 /**
- * Helper for loading product metadata from the external Meals DB.
+ * Helper for loading product metadata from the Meals DB tables.
  */
 
 defined('ABSPATH') || exit;
