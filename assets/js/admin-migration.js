@@ -47,7 +47,13 @@
     // stats rendering where both keys and values come from the AJAX
     // response and could contain characters the browser would treat
     // as markup.
+    // Prefer the shared MealsDBReport.esc (STR-2 consolidation); fall back to an
+    // identical DOM round-trip so escaping is never disabled if report-utils
+    // didn't load.
     function escHtml(s) {
+        if (window.MealsDBReport && typeof window.MealsDBReport.esc === 'function') {
+            return window.MealsDBReport.esc(s);
+        }
         var d = document.createElement('div');
         d.textContent = s == null ? '' : String(s);
         return d.innerHTML;

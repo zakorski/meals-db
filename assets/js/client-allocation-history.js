@@ -32,8 +32,13 @@
     // server JSON response into HTML strings below. Even though
     // most fields are integers / DB-controlled month strings,
     // future schema additions could let user-controlled text in.
+    // Prefer the shared MealsDBReport.esc (STR-2 consolidation); fall back to the
+    // local entity-replace so escaping is never disabled. Text context only.
     function escHtml(value) {
         if (value === null || value === undefined) return '';
+        if (window.MealsDBReport && typeof window.MealsDBReport.esc === 'function') {
+            return window.MealsDBReport.esc(value);
+        }
         return String(value)
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')

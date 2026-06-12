@@ -12,8 +12,15 @@
 (function(window) {
     'use strict';
 
+    // Prefer the shared MealsDBReport.esc (STR-2 consolidation); fall back to an
+    // identical DOM round-trip. Both escape & < > (the text-context vectors);
+    // neither escapes quotes — unchanged from this file's prior behaviour for
+    // the attribute interpolations below.
     function esc(str) {
         if (str === null || typeof str === 'undefined') return '';
+        if (window.MealsDBReport && typeof window.MealsDBReport.esc === 'function') {
+            return window.MealsDBReport.esc(str);
+        }
         var div = document.createElement('div');
         div.appendChild(document.createTextNode(String(str)));
         return div.innerHTML;
