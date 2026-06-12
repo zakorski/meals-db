@@ -105,11 +105,17 @@ class MealsDB_Clients {
         $client_snapshot = null;
         $client_record = $repository->get_client_by_id($client_id);
         if (is_array($client_record)) {
+            // client_email is sensitive PII (it is in the logger's SENSITIVE_FIELDS).
+            // This snapshot is logged under the field name 'record' as a JSON blob,
+            // which bypasses the logger's field-keyed redaction — so fingerprint the
+            // email here, BEFORE encoding, rather than writing it in cleartext to the
+            // append-only, long-retention audit log. (Name/type stay readable so the
+            // deletion audit is still meaningful — names are not in SENSITIVE_FIELDS.)
             $client_snapshot = [
                 'first_name' => $client_record['first_name'] ?? null,
                 'last_name' => $client_record['last_name'] ?? null,
                 'client_type' => $client_record['client_type'] ?? null,
-                'client_email' => $client_record['client_email'] ?? null,
+                'client_email' => MealsDB_Logger::fingerprint_value($client_record['client_email'] ?? null),
             ];
         }
 

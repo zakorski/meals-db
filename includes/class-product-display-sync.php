@@ -151,11 +151,26 @@ class MealsDB_Product_Display_Sync {
             ]);
         }
 
-        if (!current_user_can('manage_woocommerce')) {
+        $capability = class_exists('MealsDB_Permissions')
+            ? MealsDB_Permissions::required_capability()
+            : 'manage_woocommerce';
+        if (!current_user_can($capability)) {
             wp_send_json([
                 'success' => false,
                 'message' => __('You are not allowed to perform this action.', 'meals-db'),
             ], 403);
+        }
+
+        // Rate-limit: full_sync() walks the entire published-product catalog and
+        // writes a meals_products row per product — an unthrottled heavy loop is
+        // a cheap DoS lever for any authenticated baseline user. Use the
+        // bulk-backfill bucket, matching the other catalog-wide operations.
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('settings_modify')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
         }
 
         $result = self::full_sync();
