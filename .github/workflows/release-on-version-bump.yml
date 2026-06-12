@@ -101,6 +101,24 @@ jobs:
           cd ..
 
       # ------------------------------------------------------------------
+      # 5️⃣b Compute the asset checksum.
+      #
+      # The plugin's update path verifies the downloaded archive against a
+      # "SHA256: <hex>" line in the release notes before installing it
+      # (plugin-update-checker upgrader_pre_download gate; MealsDB_Updates
+      # release path). Without this line the updater refuses the release
+      # unless MEALSDB_ALLOW_UNVERIFIED_RELEASE is set. The hash MUST be of
+      # the exact asset we attach below (meals-db-main.zip), which is what
+      # the native updater downloads.
+      # ------------------------------------------------------------------
+      - name: Compute zip SHA-256
+        id: checksum
+        run: |
+          sha256=$(sha256sum build/meals-db-main.zip | awk '{print $1}')
+          echo "zip_sha256=${sha256}" >> "$GITHUB_ENV"
+          echo "🔐 meals-db-main.zip SHA256: ${sha256}"
+
+      # ------------------------------------------------------------------
       # 6️⃣ Create GitHub Release and attach zip
       # ------------------------------------------------------------------
       - name: Create GitHub Release
@@ -109,7 +127,10 @@ jobs:
         with:
           tag_name: v${{ env.new_version }}
           name: "Release v${{ env.new_version }}"
-          body: "Automated release for version v${{ env.new_version }}."
+          body: |
+            Automated release for version v${{ env.new_version }}.
+
+            SHA256: ${{ env.zip_sha256 }}
           files: build/meals-db-main.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
