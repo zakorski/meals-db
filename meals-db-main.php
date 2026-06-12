@@ -388,7 +388,7 @@ add_action('admin_notices', function () {
         ));
         echo '</strong></p><p>';
         echo esc_html__(
-            'The legacy format decrypts without integrity verification, which is susceptible to padding-oracle attacks. Run the encryption migrator (WP-CLI: "wp mealsdb reencrypt-legacy" or an admin action) to re-encrypt these rows under the authenticated format.',
+            'The legacy format decrypts without integrity verification, which is susceptible to padding-oracle attacks. Run "wp mealsdb reencrypt-legacy" (WP-CLI; use --dry-run first to preview) to re-encrypt these rows under the authenticated format.',
             'meals-db'
         );
         echo '</p><p>';
@@ -602,3 +602,10 @@ $updateChecker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChec
 
 $updateChecker->setBranch('main');
 $updateChecker->getVcsApi()->enableReleaseAssets();
+
+// WP-CLI tooling. Registered only under WP-CLI so the class (which calls
+// \WP_CLI) never loads in a web request. `wp mealsdb reencrypt-legacy` drives
+// the encryption-harden migration the admin notice references.
+if (defined('WP_CLI') && WP_CLI && class_exists('MealsDB_CLI')) {
+    \WP_CLI::add_command('mealsdb reencrypt-legacy', ['MealsDB_CLI', 'reencrypt_legacy']);
+}
