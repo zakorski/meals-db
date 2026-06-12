@@ -13,10 +13,20 @@ $paged    = max(1, (int) ($_GET['paged'] ?? 1));
 $offset   = ($paged - 1) * $per_page;
 
 $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
-$total_drafts = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$drafts_table}`");
+
+// Show only the current operator's own drafts. Resume / save / delete are all
+// owner-gated (created_by), so listing every operator's drafts only leaked
+// their decoded client PII (names, email, government IDs in the resume payload)
+// while the viewer couldn't act on them anyway.
+$current_user_id = get_current_user_id();
+$total_drafts = (int) $wpdb->get_var($wpdb->prepare(
+    "SELECT COUNT(*) FROM `{$drafts_table}` WHERE created_by = %d",
+    $current_user_id
+));
 $results = $wpdb->get_results(
     $wpdb->prepare(
-        "SELECT id, data, created_at FROM `{$drafts_table}` ORDER BY created_at DESC LIMIT %d OFFSET %d",
+        "SELECT id, data, created_at FROM `{$drafts_table}` WHERE created_by = %d ORDER BY created_at DESC LIMIT %d OFFSET %d",
+        $current_user_id,
         $per_page,
         $offset
     ),
@@ -77,7 +87,7 @@ if ($results === null && $wpdb->last_error) {
                         <td><?= esc_html($data['phone_primary'] ?? '') ?></td>
                         <td><?= esc_html(mysql2date('Y-m-d H:i', $draft['created_at'])) ?></td>
                         <td>
-                            <form method="post" action="<?php echo admin_url('admin.php?page=mealsdb&tab=add'); ?>">
+                            <form method="post" action="<?php echo esc_url(admin_url('admin.php?page=mealsdb&tab=add')); ?>">
                                 <?php foreach ($data as $key => $value): ?>
                                     <?php
                                     $serialized_value = is_scalar($value)

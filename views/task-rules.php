@@ -128,7 +128,7 @@ $base_url = admin_url('admin.php?page=mealsdb&tab=tasks');
     function setStatus(msg, type) {
         var $s = $('#mealsdb-rules-status');
         $s.removeClass('notice-success notice-error notice-warning').addClass('notice-' + (type || 'info'));
-        $s.html('<p>' + msg + '</p>').show();
+        $s.empty().append($('<p>').text(msg)).show(); // .text() — never inject server msg as HTML
     }
 
     $('#mealsdb-rule-form').on('submit', function(e) {

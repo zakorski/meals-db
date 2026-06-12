@@ -72,7 +72,7 @@ MealsDB_Permissions::enforce();
     function showStatus(msg, type) {
         $('#mealsdb-po-status').show()
             .removeClass('notice-info notice-success notice-error notice-warning')
-            .addClass('notice-' + type).html('<p>' + msg + '</p>');
+            .addClass('notice-' + type).empty().append($('<p>').text(msg)); // .text() — no HTML injection
     }
 
     function rowStyle(si) {

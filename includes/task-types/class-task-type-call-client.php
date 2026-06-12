@@ -98,16 +98,24 @@ class MealsDB_Task_Type_Call_Client {
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
+        // Bound the "due window" with UTC dates instead of MySQL CURDATE()
+        // (which evaluates in the DB session timezone). The rule clock and the
+        // stored next_*_date are UTC-based, so deriving "today" in UTC keeps the
+        // spawn window and the schedule on one timezone.
+        $today_utc = gmdate('Y-m-d');
+        $end_utc   = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->modify('+' . $days_window . ' days')->format('Y-m-d');
+
         $sql = "SELECT client_id, wp_user_id, first_name, last_name, client_phone_1,
                        next_order_date, ordering_contact_method
                 FROM `{$clients_table}`
                 WHERE active = 1
                   AND wp_user_id > 0
                   AND next_order_date IS NOT NULL
-                  AND next_order_date >= CURDATE()
-                  AND next_order_date <= DATE_ADD(CURDATE(), INTERVAL %d DAY)";
+                  AND next_order_date >= %s
+                  AND next_order_date <= %s";
 
-        $args = [$days_window];
+        $args = [$today_utc, $end_utc];
 
         if ($contact_method !== '') {
             $sql .= " AND LOWER(ordering_contact_method) = LOWER(%s)";

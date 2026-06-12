@@ -80,17 +80,23 @@ class MealsDB_Task_Type_Client_Delivery {
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
 
+        // UTC-bound due window (not DB-session CURDATE) — keeps the spawn window
+        // on the same timezone as the rule clock and the stored dates.
+        $today_utc = gmdate('Y-m-d');
+        $end_utc   = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->modify('+' . $days_window . ' days')->format('Y-m-d');
+
         $sql = "SELECT client_id, wp_user_id, first_name, last_name,
                        delivery_day, next_delivery_date
                 FROM `{$clients_table}`
                 WHERE active = 1
                   AND wp_user_id > 0
                   AND next_delivery_date IS NOT NULL
-                  AND next_delivery_date >= CURDATE()
-                  AND next_delivery_date <= DATE_ADD(CURDATE(), INTERVAL %d DAY)
+                  AND next_delivery_date >= %s
+                  AND next_delivery_date <= %s
                 ORDER BY next_delivery_date ASC, last_name ASC";
 
-        $rows = $wpdb->get_results($wpdb->prepare($sql, $days_window), ARRAY_A);
+        $rows = $wpdb->get_results($wpdb->prepare($sql, $today_utc, $end_utc), ARRAY_A);
         if (!is_array($rows)) {
             return [];
         }
