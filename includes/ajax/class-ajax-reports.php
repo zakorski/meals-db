@@ -102,6 +102,18 @@ class MealsDB_Ajax_Reports {
         $reports = new MealsDB_Reports($GLOBALS['wpdb']);
         $result  = $reports->contribution_reconciliation($start_date, $end_date);
 
+        // The service layer guards against a multi-month range (the contribution
+        // is a flat per-billing-month charge, so any range spanning >1 month
+        // always reports a false discrepancy) and returns an 'error' key with
+        // empty rows. Surface that as a real error response rather than wrapping
+        // it in success — otherwise the JS renders an empty $0.00 table and the
+        // operator never sees why. Mirrors the permission/date-format error
+        // shape above; the reports JS already displays data.message.
+        if (!empty($result['error'])) {
+            wp_send_json_error(['message' => $result['error']]);
+            return;
+        }
+
         wp_send_json_success($result);
     }
 

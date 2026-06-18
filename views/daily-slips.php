@@ -122,7 +122,9 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
                 $form.append($('<input>', { type: 'hidden', name: name, value: value }));
             }
         });
-        $form.appendTo('body').submit().remove();
+        // .trigger('submit') rather than the deprecated .submit() shorthand
+        // (JQMIGRATE warns on jQuery.fn.submit() as an event-binding alias).
+        $form.appendTo('body').trigger('submit').remove();
     }
 
     function buildRequestForMode(kind) {
