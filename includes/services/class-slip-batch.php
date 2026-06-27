@@ -401,6 +401,16 @@ class MealsDB_Slip_Batch {
     // ------------------------------------------------------------------ //
 
     /**
+     * Public accessor for a protected storage subdir (e.g. 'tmp'), so the merge
+     * engine (unit 03) writes its scratch backgrounds under the SAME
+     * deny-by-default root rather than re-implementing the guard logic. Returns
+     * the absolute path or null if it cannot be created/secured.
+     */
+    public static function storage_dir(string $sub): ?string {
+        return self::protected_dir($sub);
+    }
+
+    /**
      * Resolve (and lazily create + protect) a subdir under the slip storage
      * root. Returns the absolute path, or null if it cannot be created/secured.
      *
