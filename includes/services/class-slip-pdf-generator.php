@@ -22,6 +22,26 @@ class MealsDB_Slip_PDF_Generator {
     private const CATEGORY_RANK_SIDE = 2;
     private const CATEGORY_RANK_FEE  = 3;
 
+    // ----------------------------------------------------------------- //
+    //  Midland packing-document calibration (SPEC-midland-packing-documents).
+    //  Letter landscape, inches from page top-left. These are the SINGLE
+    //  SOURCE OF TRUTH for the divider/driver-block geometry — the merge
+    //  engine (unit 03) anchors its overlay to the SAME constants, so doc 2's
+    //  drawn divider and doc 4's text never drift apart. Measured from the
+    //  real doc 3 reference scan; tune ONLY these if the plugin's own divider
+    //  y differs at the final live calibration pass.
+    // ----------------------------------------------------------------- //
+
+    /** Right-region divider drawn on doc 2 (doc 4 text anchors just below it). */
+    public const DOC2_DIVIDER_LEFT_IN  = 7.59;
+    public const DOC2_DIVIDER_TOP_IN   = 4.50;
+    public const DOC2_DIVIDER_WIDTH_IN = 3.25;
+
+    /** Doc 4 driver block placement (clears the item table + handwriting band). */
+    public const DOC4_BLOCK_LEFT_IN  = 7.4;
+    public const DOC4_BLOCK_TOP_IN   = 4.62;
+    public const DOC4_BLOCK_WIDTH_IN = 3.2;
+
     /** WC product_cat term IDs that resolve to "Side" on the slip. */
     private const SIDE_CATEGORY_IDS = [43, 37, 23, 25, 98];
 
@@ -373,15 +393,32 @@ class MealsDB_Slip_PDF_Generator {
             $collect_amount = $priv['collect'] === null ? 0.0 : round((float) $priv['collect'], 2);
         }
 
+        // Secondary phone + alternate contact (Midland doc 4 / resolved open
+        // item, 2026-06-26). These fields exist on meals_clients but are absent
+        // for many clients — carry them through ONLY when populated; the doc 4
+        // renderer skips empties so a blank field never prints a stray label.
+        // The existing daily driver slip ignores these extra keys, so adding
+        // them here is non-breaking.
+        $contact_phone = (string) ($client['alternate_contact_phone_1'] ?? '');
+        if ($contact_phone === '') {
+            $contact_phone = (string) ($client['alternate_contact_phone_2'] ?? '');
+        }
+
         return [
-            'client_name'    => $name,
-            'street'         => (string) ($client['delivery_street_name'] ?? ''),
-            'city'           => (string) ($client['delivery_city'] ?? ''),
-            'phone'          => (string) ($client['client_phone_1'] ?? ''),
-            'client_type'    => $client_type_raw !== '' ? $client_type_raw : 'Private',
-            'breakdown'      => $breakdown,
-            'collect_amount' => $collect_amount,
-            'collect_label'  => 'Collect: $' . number_format($collect_amount, 2, '.', ''),
+            'client_name'     => $name,
+            'street'          => (string) ($client['delivery_street_name'] ?? ''),
+            'city'            => (string) ($client['delivery_city'] ?? ''),
+            // Doc 4 address line = street; city + postal. delivery_postal_code
+            // is the delivery-address group's postal (matches street/city above).
+            'postal'          => (string) ($client['delivery_postal_code'] ?? ''),
+            'phone'           => (string) ($client['client_phone_1'] ?? ''),
+            'phone_secondary' => (string) ($client['client_phone_2'] ?? ''),
+            'contact_name'    => (string) ($client['alternate_contact_name'] ?? ''),
+            'contact_phone'   => $contact_phone,
+            'client_type'     => $client_type_raw !== '' ? $client_type_raw : 'Private',
+            'breakdown'       => $breakdown,
+            'collect_amount'  => $collect_amount,
+            'collect_label'   => 'Collect: $' . number_format($collect_amount, 2, '.', ''),
         ];
     }
 
@@ -843,6 +880,481 @@ CSS;
     }
 
     private function h(string $s): string {
+        return self::esc($s);
+    }
+
+    /** Static escaper so the shared (static) doc 4 fragment can reuse it. */
+    private static function esc(string $s): string {
         return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+
+    // ================================================================= //
+    //  Midland packing documents (doc 1 cover, doc 2 packer, doc 4 driver).
+    //
+    //  These are PURPOSE-BUILT, calibrated renderers for the two-phase
+    //  Midland workflow — deliberately SEPARATE from the live daily-slip
+    //  render path above (which the existing delivery-slips UI depends on
+    //  and is left byte-identical). They REUSE the data pipeline above
+    //  (build_slips / build_driver_block / fetch_customer_note /
+    //  format_long_date) so content stays consistent. Visual calibration
+    //  (exact coordinates vs the reference scans) is verified on the live
+    //  host — see SPEC-midland-packing-documents-COMBINED.md.
+    // ================================================================= //
+
+    /**
+     * Assemble the persistable batch data for a zone export: the ordered,
+     * positional doc 4 driver-block payloads (element N ↔ doc 3 page N+1 at
+     * merge time) plus the per-order metadata doc 1 needs (initials +
+     * take-from-hold flag), captured as a SNAPSHOT so doc 1 / doc 4 render
+     * identically from the persisted batch regardless of later data changes.
+     *
+     * @return array{order_count:int, doc4_orders:array<int,array>}
+     */
+    public function build_batch_data(array $zone_names, string $start_date, string $end_date): array {
+        $clients = $this->client_query->get_clients_for_zones_driver($zone_names);
+        $orders  = $this->fetch_orders_for_clients($clients, $start_date, $end_date);
+        $slips   = $this->build_slips($orders, $clients, true);
+
+        $doc4_orders = [];
+        foreach ($slips as $slip) {
+            $driver = is_array($slip['driver'] ?? null) ? $slip['driver'] : [];
+            $note   = (string) ($slip['additional_notes'] ?? '');
+
+            $doc4_orders[] = [
+                'order_number'    => (string) ($slip['order_number'] ?? ''),
+                'initials'        => (string) ($slip['initials'] ?? ''),
+                // Snapshot the "take from hold" decision at generation time so
+                // doc 1's initials line is reproducible from the persisted batch
+                // (case-insensitive CONTAINS — "TAKE FROM HOLD - back door" etc.
+                // all qualify).
+                'take_from_hold'  => ($note !== '' && stripos($note, 'take from hold') !== false),
+                'client_name'     => (string) ($driver['client_name'] ?? ''),
+                'street'          => (string) ($driver['street'] ?? ''),
+                'city'            => (string) ($driver['city'] ?? ''),
+                'postal'          => (string) ($driver['postal'] ?? ''),
+                'phone'           => (string) ($driver['phone'] ?? ''),
+                'phone_secondary' => (string) ($driver['phone_secondary'] ?? ''),
+                'contact_name'    => (string) ($driver['contact_name'] ?? ''),
+                'contact_phone'   => (string) ($driver['contact_phone'] ?? ''),
+                'collect_amount'  => (float)  ($driver['collect_amount'] ?? 0),
+                'collect_label'   => (string) ($driver['collect_label'] ?? ''),
+            ];
+        }
+
+        return [
+            'order_count' => count($doc4_orders),
+            'doc4_orders' => $doc4_orders,
+        ];
+    }
+
+    // ----------------------------------------------------------------- //
+    //  DOC 1 — cover sheet (per zone)
+    // ----------------------------------------------------------------- //
+
+    /**
+     * Render the per-zone cover sheet. Driven entirely by the persisted batch
+     * snapshot so the count / initials / export timestamp are reproducible.
+     *
+     * @param string $zone_name     the batch's zone (matches a schedule key)
+     * @param string $delivery_date 'Y-m-d'
+     * @param array  $batch         decoded batch: ['order_count'=>int,
+     *                              'orders'=>array<doc4 order>, 'created_at'=>UTC]
+     */
+    public function generate_doc1_cover_sheet(string $zone_name, string $delivery_date, array $batch): string {
+        $html = $this->render_doc1_html($zone_name, $delivery_date, $batch);
+        return $this->render_with_dompdf($html);
+    }
+
+    private function render_doc1_html(string $zone_name, string $delivery_date, array $batch): string {
+        $orders      = is_array($batch['orders'] ?? null) ? $batch['orders'] : [];
+        $order_count = (int) ($batch['order_count'] ?? count($orders));
+        $created_at  = (string) ($batch['created_at'] ?? '');
+
+        $zone_number  = $this->resolve_zone_number($zone_name);
+        $zone_title   = $zone_number !== null ? 'Zone ' . $zone_number : self::esc($zone_name);
+        $delivery_lbl = self::esc($this->format_long_date($delivery_date));
+
+        // Initials line: the delivery_initials of orders flagged take_from_hold
+        // at generation, joined " | ". NONE when none qualify (operator
+        // decision 2026-06-26 — explicit "none", not a blank line).
+        $initials = [];
+        foreach ($orders as $o) {
+            if (!empty($o['take_from_hold'])) {
+                $ini = trim((string) ($o['initials'] ?? ''));
+                if ($ini !== '') {
+                    $initials[] = $ini;
+                }
+            }
+        }
+        $initials_line = empty($initials) ? 'NONE' : implode(' | ', array_map([self::class, 'esc'], $initials));
+
+        // "Orders Exported <Month D, YYYY @ h:mm am/pm>" = generation time, shown
+        // in the site timezone. created_at is stored UTC; convert for display.
+        $exported_line = self::esc($this->format_export_timestamp($created_at));
+
+        $legend_rows  = $this->build_legend_rows();
+        $legend_html  = '';
+        foreach ($legend_rows as $r) {
+            $legend_html .= '<tr>'
+                . '<td>' . self::esc($r['zone']) . '</td>'
+                . '<td>' . self::esc($r['weekday']) . '</td>'
+                . '<td>' . self::esc($r['area']) . '</td>'
+                . '</tr>';
+        }
+        if ($legend_html === '') {
+            // No schedule configured — render an empty body rather than fake rows.
+            $legend_html = '<tr><td colspan="3" class="legend-empty">(delivery schedule not configured)</td></tr>';
+        }
+
+        $page_y = 1 + $order_count; // cover is page 1; one page per order after.
+        $css    = $this->midland_doc_css();
+
+        $body = <<<HTML
+<div class="doc1-page">
+    <div class="d1-zone">{$zone_title}</div>
+    <div class="d1-date">Delivery Date: {$delivery_lbl}</div>
+    <div class="d1-gap"></div>
+    <div class="d1-hold-label">ORDERS - TAKE FROM HOLD</div>
+    <div class="d1-initials">{$initials_line}</div>
+    <div class="d1-gap"></div>
+    <table class="d1-legend">
+        <thead>
+            <tr><th colspan="3" class="legend-title">LEGEND: DELIVERY SCHEDULE FOR PACKING</th></tr>
+            <tr><th>ZONE #</th><th>WEEKDAY</th><th>AREA</th></tr>
+        </thead>
+        <tbody>{$legend_html}</tbody>
+    </table>
+    <div class="d1-exported">Orders Exported {$exported_line}</div>
+    <div class="d1-gap"></div>
+    <div class="d1-count">{$order_count} Orders</div>
+    <div class="d1-footer">Page 1 of {$page_y}</div>
+</div>
+HTML;
+
+        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
+    }
+
+    // ----------------------------------------------------------------- //
+    //  DOC 2 — packer slip (item list left, blank-but-divider right)
+    // ----------------------------------------------------------------- //
+
+    /**
+     * Render the doc 2 packer slips for a zone batch: one page per order, the
+     * item list in the left region, the right region blank EXCEPT the drawn
+     * divider doc 4 later anchors to. Re-queried from live order data at
+     * download time (item tables are not persisted).
+     */
+    public function generate_doc2_packer_by_zones(array $zone_names, string $start_date, string $end_date): string {
+        $clients = $this->client_query->get_clients_for_zones($zone_names);
+        $orders  = $this->fetch_orders_for_clients($clients, $start_date, $end_date);
+        $slips   = $this->build_slips($orders, $clients, false);
+        $html    = $this->render_doc2_html($slips);
+        return $this->render_with_dompdf($html);
+    }
+
+    private function render_doc2_html(array $slips): string {
+        $css   = $this->midland_doc_css();
+        $count = count($slips);
+        $y     = 1 + $count; // global page count: cover (1) + one per order.
+
+        $body = '';
+        foreach ($slips as $i => $slip) {
+            $n          = $i + 1;            // order N within the zone batch
+            $page_x     = $n + 1;            // global page # (cover is page 1)
+            $is_last    = ($i === $count - 1);
+            $body      .= $this->render_doc2_page($slip, $n, $count, $page_x, $y, $is_last);
+        }
+        if ($body === '') {
+            $body = '<div class="doc2-page"><div class="d2-empty">No orders found for this selection.</div></div>';
+        }
+
+        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
+    }
+
+    private function render_doc2_page(array $slip, int $n, int $m, int $page_x, int $page_y, bool $is_last): string {
+        $initials      = self::esc((string) ($slip['initials'] ?? ''));
+        $zone          = self::esc((string) ($slip['zone'] ?? ''));
+        $order_number  = self::esc((string) ($slip['order_number'] ?? ''));
+        $delivery_date = self::esc((string) ($slip['delivery_date'] ?? ''));
+
+        $items_html = '';
+        foreach (($slip['items'] ?? []) as $item) {
+            $items_html .= '<tr>'
+                . '<td class="d2-sku">' . self::esc((string) $item['sku']) . '</td>'
+                . '<td class="d2-qty">' . (int) $item['qty'] . '</td>'
+                . '<td class="d2-name">' . self::esc((string) $item['product_name']) . '</td>'
+                . '<td class="d2-cat">' . self::esc((string) $item['category']) . '</td>'
+                . '</tr>';
+        }
+
+        // Totals wording corrected per directive: Total Mains / Total Sides.
+        $totals = sprintf(
+            'Total Items: %d | Total Mains: %d | Total Sides: %d',
+            (int) ($slip['total_items'] ?? 0),
+            (int) ($slip['total_mains'] ?? 0),
+            (int) ($slip['total_sides'] ?? 0)
+        );
+
+        $notes      = (string) ($slip['additional_notes'] ?? '');
+        $notes_html = '';
+        if ($notes !== '') {
+            $notes_html = '<div class="d2-notes"><span class="d2-notes-label">Additional Notes:</span> '
+                . nl2br(self::esc($notes)) . '</div>';
+        }
+
+        $page_class = 'doc2-page' . ($is_last ? '' : ' d2-break');
+
+        return <<<HTML
+<div class="{$page_class}">
+    <div class="d2-name-line">Name: {$initials}</div>
+    <div class="d2-zone-order">{$zone} - Order {$order_number}</div>
+    <div class="d2-delivery">Delivery Date: {$delivery_date}</div>
+    <div class="d2-position">Order {$n} of {$m}</div>
+    <table class="d2-items">
+        <thead>
+            <tr><th class="d2-sku">SKU</th><th class="d2-qty">Qty</th><th class="d2-name">Product</th><th class="d2-cat">Category</th></tr>
+        </thead>
+        <tbody>{$items_html}</tbody>
+    </table>
+    <div class="d2-totals">{$totals}<span class="d2-page">Page {$page_x} of {$page_y}</span></div>
+    {$notes_html}
+    <div class="d2-divider"></div>
+</div>
+HTML;
+    }
+
+    // ----------------------------------------------------------------- //
+    //  DOC 4 — driver block(s), standalone (manual-fallback download)
+    // ----------------------------------------------------------------- //
+
+    /**
+     * Render the saved doc 4 driver blocks as standalone landscape pages — one
+     * per order, the block alone at the calibrated right-region position, NO
+     * item table and NO divider (this is the print-on-top manual fallback; the
+     * physical slip it overlays already carries the divider). Same source the
+     * merge engine composites, so standalone and merged output match.
+     *
+     * @param array<int,array> $doc4_orders persisted, positional driver blocks
+     */
+    public function generate_doc4_driver_blocks(array $doc4_orders): string {
+        $css   = $this->midland_doc_css();
+        $count = count($doc4_orders);
+
+        $body = '';
+        foreach (array_values($doc4_orders) as $i => $order) {
+            $is_last    = ($i === $count - 1);
+            $page_class = 'doc4-page' . ($is_last ? '' : ' d4-break');
+            $block      = self::driver_block_inner_html(is_array($order) ? $order : []);
+            $body      .= "<div class=\"{$page_class}\"><div class=\"d4-block\">{$block}</div></div>";
+        }
+        if ($body === '') {
+            $body = '<div class="doc4-page"><div class="d2-empty">No driver blocks in this batch.</div></div>';
+        }
+
+        $html = "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
+        return $this->render_with_dompdf($html);
+    }
+
+    /**
+     * The doc 4 driver-block CONTENT fragment (no positioning, no divider).
+     * Shared single source of truth: the standalone doc 4 wraps it on a blank
+     * page; the merge engine (unit 03) wraps it over the doc 3 background — at
+     * the SAME calibrated coordinates (DOC4_BLOCK_* constants). Skips every
+     * empty field so an absent secondary phone / contact never prints a stray
+     * label or dangling "()".
+     *
+     * @param array $order a persisted doc 4 order payload
+     */
+    public static function driver_block_inner_html(array $order): string {
+        $collect = self::esc((string) ($order['collect_label'] ?? ''));
+        $name    = self::esc((string) ($order['client_name'] ?? ''));
+        $street  = trim((string) ($order['street'] ?? ''));
+        $city    = trim((string) ($order['city'] ?? ''));
+        $postal  = trim((string) ($order['postal'] ?? ''));
+
+        // City + postal on one line; emit only the parts present.
+        $city_postal = trim($city . ' ' . $postal);
+
+        $lines = '';
+        if ($collect !== '') {
+            $lines .= '<div class="d4-collect">' . $collect . '</div>';
+        }
+        if ($name !== '') {
+            $lines .= '<div class="d4-name">' . $name . '</div>';
+        }
+        if ($street !== '') {
+            $lines .= '<div class="d4-addr">' . self::esc($street) . '</div>';
+        }
+        if ($city_postal !== '') {
+            $lines .= '<div class="d4-addr">' . self::esc($city_postal) . '</div>';
+        }
+
+        // Phone(s): primary; secondary if present; alternate contact
+        // "(Name) phone" if present — each only when populated.
+        $phone     = trim((string) ($order['phone'] ?? ''));
+        $phone2    = trim((string) ($order['phone_secondary'] ?? ''));
+        $c_name    = trim((string) ($order['contact_name'] ?? ''));
+        $c_phone   = trim((string) ($order['contact_phone'] ?? ''));
+        if ($phone !== '') {
+            $lines .= '<div class="d4-phone">' . self::esc($phone) . '</div>';
+        }
+        if ($phone2 !== '') {
+            $lines .= '<div class="d4-phone">' . self::esc($phone2) . '</div>';
+        }
+        if ($c_name !== '' || $c_phone !== '') {
+            $contact = $c_name !== '' ? '(' . $c_name . ')' : '';
+            $contact = trim($contact . ' ' . $c_phone);
+            $lines  .= '<div class="d4-phone">' . self::esc($contact) . '</div>';
+        }
+
+        return $lines;
+    }
+
+    // ----------------------------------------------------------------- //
+    //  Shared helpers for the Midland docs
+    // ----------------------------------------------------------------- //
+
+    /**
+     * Resolve a zone's display NUMBER from the configured delivery schedule
+     * (mealsdb_zone_delivery_schedule). The option is keyed by zone NAME, so
+     * the number is the 1-based position of that key — matching the legend's
+     * ZONE # column and the existing zone ordering. Returns null when the zone
+     * is not configured (caller falls back to the raw name).
+     */
+    private function resolve_zone_number(string $zone_name): ?int {
+        $schedule = get_option('mealsdb_zone_delivery_schedule', []);
+        if (!is_array($schedule) || empty($schedule)) {
+            return null;
+        }
+        $i = 0;
+        foreach ($schedule as $key => $cfg) {
+            $i++;
+            if ((string) $key === $zone_name) {
+                return $i;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Build the doc 1 legend rows from the configured delivery schedule rather
+     * than hardcoding them (resolved open item, 2026-06-26). ZONE # = 1-based
+     * position; WEEKDAY = the schedule label (carries the "morning/afternoon"
+     * granularity) or the bare day; AREA = the zone name (the schedule key).
+     *
+     * @return array<int,array{zone:string,weekday:string,area:string}>
+     */
+    private function build_legend_rows(): array {
+        $schedule = get_option('mealsdb_zone_delivery_schedule', []);
+        if (!is_array($schedule) || empty($schedule)) {
+            return [];
+        }
+        $rows = [];
+        $i    = 0;
+        foreach ($schedule as $zone_name => $cfg) {
+            $i++;
+            $cfg     = is_array($cfg) ? $cfg : [];
+            $label   = trim((string) ($cfg['label'] ?? ''));
+            $day     = trim((string) ($cfg['day'] ?? ''));
+            $weekday = $label !== '' ? $label : $day;
+            $rows[]  = [
+                'zone'    => (string) $i,
+                'weekday' => $weekday,
+                'area'    => (string) $zone_name,
+            ];
+        }
+        return $rows;
+    }
+
+    /**
+     * Format the batch's UTC created_at as "Month D, YYYY @ h:mm am/pm" in the
+     * site timezone for doc 1's "Orders Exported" line.
+     */
+    private function format_export_timestamp(string $utc): string {
+        if ($utc === '') {
+            return '';
+        }
+        $ts = strtotime($utc . ' UTC');
+        if ($ts === false) {
+            return $utc;
+        }
+        if (function_exists('wp_timezone')) {
+            try {
+                $dt = new \DateTime('@' . $ts);
+                $dt->setTimezone(wp_timezone());
+                return $dt->format('F j, Y @ g:i a');
+            } catch (\Throwable $e) {
+                // fall through to server-local formatting
+            }
+        }
+        return date('F j, Y @ g:i a', $ts);
+    }
+
+    /**
+     * Shared CSS for the calibrated Midland documents (doc 1 / 2 / 4). Letter
+     * landscape, ZERO page margin so the inch coordinates below are measured
+     * from the true page top-left (matching the reference-scan measurements).
+     * The divider + driver block use the DOC2_DIVIDER_* / DOC4_BLOCK_*
+     * constants so doc 2 and doc 4 share one geometry.
+     */
+    private function midland_doc_css(): string {
+        $div_l = self::DOC2_DIVIDER_LEFT_IN;
+        $div_t = self::DOC2_DIVIDER_TOP_IN;
+        $div_w = self::DOC2_DIVIDER_WIDTH_IN;
+        $b_l   = self::DOC4_BLOCK_LEFT_IN;
+        $b_t   = self::DOC4_BLOCK_TOP_IN;
+        $b_w   = self::DOC4_BLOCK_WIDTH_IN;
+
+        return <<<CSS
+@page { size: letter landscape; margin: 0; }
+body { font-family: Helvetica, Arial, sans-serif; color: #000; margin: 0; padding: 0; }
+
+/* ---- shared page box (full Letter landscape, inch-addressable) ---- */
+.doc1-page, .doc2-page, .doc4-page { position: relative; width: 11in; height: 8.5in; overflow: hidden; }
+.d2-break, .d4-break { page-break-after: always; }
+.d2-empty { position: absolute; top: 3in; width: 11in; text-align: center; font-size: 16pt; }
+
+/* ---- DOC 1 cover sheet (centered vertical stack) ---- */
+.doc1-page { text-align: center; }
+.d1-zone { font-size: 48pt; font-weight: bold; padding-top: 0.6in; }
+.d1-date { font-size: 22pt; margin-top: 0.1in; }
+.d1-gap { height: 0.3in; }
+.d1-hold-label { font-size: 20pt; font-weight: bold; }
+.d1-initials { font-size: 20pt; font-weight: bold; margin-top: 0.08in; }
+.d1-legend { margin: 0.1in auto; width: 6in; border-collapse: collapse; font-size: 12pt; }
+.d1-legend th, .d1-legend td { border: 1px solid #000; padding: 4pt 8pt; text-align: center; }
+.d1-legend .legend-title { font-weight: bold; }
+.d1-legend .legend-empty { font-style: italic; }
+.d1-exported { font-size: 20pt; font-weight: bold; margin-top: 0.1in; }
+.d1-count { font-size: 26pt; font-weight: bold; }
+.d1-footer { font-size: 9pt; margin-top: 0.2in; }
+
+/* ---- DOC 2 packer slip (left region; right blank but for divider) ---- */
+.d2-name-line   { position: absolute; left: 0.31in; top: 0.38in; font-size: 15pt; font-weight: bold; }
+.d2-zone-order  { position: absolute; left: 4.6in;  top: 0.36in; font-size: 16pt; font-weight: bold; }
+.d2-delivery    { position: absolute; left: 0.31in; top: 0.76in; font-size: 10pt; font-weight: bold; }
+.d2-position    { position: absolute; left: 0.31in; top: 1.08in; font-size: 10pt; font-weight: bold; }
+.d2-items       { position: absolute; left: 0.24in; top: 1.26in; width: 6.9in; border-collapse: collapse; font-size: 11pt; table-layout: fixed; }
+.d2-items th, .d2-items td { border: 1px solid #000; padding: 1pt 5pt; text-align: left; }
+.d2-items th    { background: #fff; font-weight: bold; }    /* white header (no grey) */
+.d2-items td.d2-sku, .d2-items th.d2-sku { width: 1.0in; font-weight: bold; }
+.d2-items .d2-qty { width: 0.6in; text-align: center; }
+.d2-items .d2-name { width: 4.0in; }
+.d2-items .d2-cat  { width: 1.1in; }
+.d2-totals      { position: absolute; left: 0.24in; top: 4.18in; font-size: 10pt; font-weight: bold; }
+.d2-totals .d2-page { margin-left: 1.0in; }
+.d2-notes       { position: absolute; left: 0.24in; top: 4.46in; width: 6.9in; font-size: 10pt; }
+.d2-notes .d2-notes-label { font-weight: bold; }
+/* Divider: a filled bar (background-color), NOT border-top (which bleeds full
+   width in dompdf). Shared geometry with doc 4's anchor. */
+.d2-divider     { position: absolute; left: {$div_l}in; top: {$div_t}in; width: {$div_w}in; height: 2px; background-color: #000; font-size: 0; line-height: 0; }
+
+/* ---- DOC 4 driver block (right-region overlay position; NO divider) ---- */
+.d4-block       { position: absolute; left: {$b_l}in; top: {$b_t}in; width: {$b_w}in; font-size: 12pt; line-height: 1.5; }
+.d4-block .d4-collect { font-size: 16pt; font-weight: bold; margin-bottom: 0.08in; }
+.d4-block .d4-name    { font-size: 16pt; font-weight: bold; }
+.d4-block .d4-addr    { font-size: 12pt; }
+.d4-block .d4-phone   { font-size: 12pt; }
+CSS;
     }
 }
