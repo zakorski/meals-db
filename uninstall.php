@@ -166,6 +166,45 @@ function mealsdb_uninstall_cleanup_current_site(): void {
             OR option_name LIKE '_transient_mealsdb_qo_%'
             OR option_name LIKE '_transient_timeout_mealsdb_qo_%'"
     );
+
+    // Midland packing-slip files (directive 01/04): the meals_slip_batches table
+    // is dropped by the loop above, but its on-disk doc 3 scans + merged PDFs
+    // live under wp-content/uploads/mealsdb-slips/. They carry decrypted client
+    // PII, so a clean-slate uninstall must remove the whole tree.
+    if (function_exists('wp_upload_dir')) {
+        $uploads = wp_upload_dir();
+        if (is_array($uploads) && !empty($uploads['basedir'])) {
+            $slip_dir = rtrim((string) $uploads['basedir'], '/\\') . '/mealsdb-slips';
+            mealsdb_uninstall_rrmdir($slip_dir);
+        }
+    }
+}
+
+/**
+ * Recursively delete a directory and its contents. Best-effort and contained:
+ * only descends real directories (no symlink following) and swallows failures
+ * so an uninstall is never blocked by a stray locked file.
+ */
+function mealsdb_uninstall_rrmdir(string $dir): void {
+    if ($dir === '' || !is_dir($dir)) {
+        return;
+    }
+    $items = @scandir($dir);
+    if ($items === false) {
+        return;
+    }
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+        $path = $dir . '/' . $item;
+        if (is_dir($path) && !is_link($path)) {
+            mealsdb_uninstall_rrmdir($path);
+        } else {
+            @unlink($path);
+        }
+    }
+    @rmdir($dir);
 }
 
 if (is_multisite()) {
