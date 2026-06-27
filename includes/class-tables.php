@@ -47,6 +47,19 @@ class MealsDB_Tables
     public const INVOICE_DRAFTS = 'meals_invoice_drafts';
 
     /**
+     * Midland packing-slip batches (directive 01, Midland packing documents).
+     * One row per generated batch (a zone + delivery date). Persists the saved
+     * doc 4 driver-block payloads (one per order, positional), the uploaded
+     * doc 3 scan path, the merged output path, and the batch state. The
+     * doc4_payload carries decrypted client PII (name/address/phone), so it is
+     * encrypted at rest under the same key as the invoice-draft payload. This
+     * is an additive table (STR-11 schema-sync handles it) and is in all()
+     * below, so install/uninstall manage it via the standard loops — no
+     * literal-name special-casing needed. Mirrors INVOICE_DRAFTS.
+     */
+    public const SLIP_BATCHES = 'meals_slip_batches';
+
+    /**
      * Retrieve all canonical table names.
      *
      * @return string[]
@@ -70,6 +83,7 @@ class MealsDB_Tables
             self::CLIENT_MONTH_DIRTY,
             self::ALLOCATION_ERRORS,
             self::INVOICE_DRAFTS,
+            self::SLIP_BATCHES,
         ];
     }
 }

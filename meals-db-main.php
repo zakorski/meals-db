@@ -94,12 +94,14 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Initials::init();
     MealsDB_Ajax_Invoice_Draft::init();
     MealsDB_Ajax_Delivery_Slips::init();
+    MealsDB_Ajax_Slip_Batch::init();
     MealsDB_Ajax_Reports::init();
     MealsDB_Quick_Order_Products::init();
     MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();
     MealsDB_WC_Product_Tab::init();
     MealsDB_Invoice_Draft_Page::init();
+    MealsDB_Slip_Batch_Page::init();
     MealsDB_Rate_Definitions_Page::init();
     MealsDB_Ajax_Rate_Definitions::init();
     MealsDB_Migration_Page::init();
