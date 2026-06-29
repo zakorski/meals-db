@@ -61,6 +61,16 @@ class MealsDB_Invoice_Draft_Page {
             return;
         }
 
+        // Spreadsheet styling for the curated review grid (directive
+        // INVOICE-DRAFT-SPREADSHEET Part 2). Scoped to #mealsdb-draft-grid;
+        // guarded to this page by the hook check above.
+        wp_enqueue_style(
+            'mealsdb-invoice-draft-css',
+            plugins_url('assets/css/invoice-draft.css', dirname(dirname(__FILE__))),
+            [],
+            defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false
+        );
+
         // Shared on-page notice helper (directive GUI-NOTICES) — supplies
         // window.MealsDBNotice for the draft grid's validation/finalize messages.
         $notice_handle = MealsDB_Admin_UI::register_notice_script();
@@ -261,40 +271,10 @@ class MealsDB_Invoice_Draft_Page {
             return;
         }
 
-        // Key-driven columns: union of all row keys in first-seen order. This
-        // is the move that keeps the grid from forking per pipeline — VAC vs
-        // SDNB row shapes (and INV-DRAFT-3's fold fields) render for free.
-        $columns = [];
-        foreach ($current as $row) {
-            if (is_array($row)) {
-                foreach (array_keys($row) as $k) {
-                    $columns[$k] = true;
-                }
-            }
-        }
-        $columns = array_keys($columns);
-
-        echo '<table class="widefat striped" id="mealsdb-draft-grid" data-draft-id="' . esc_attr((string) $draft_id) . '">';
-        echo '<thead><tr>';
-        foreach ($columns as $col) {
-            echo '<th>' . esc_html(self::humanize($col)) . '</th>';
-        }
-        echo '</tr></thead><tbody>';
-
-        foreach ($current as $client_id => $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $cid = (string) $client_id;
-            echo '<tr>';
-            foreach ($columns as $col) {
-                $val     = $row[$col] ?? null;
-                $gen_val = $generated[$client_id][$col] ?? null;
-                self::render_cell($cid, $col, $val, $gen_val, $editable);
-            }
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
+        // Curated per-pipeline columns (Part 1) when a map exists and the
+        // operator hasn't toggled "Show all fields"; otherwise the raw
+        // array_keys grid (debug parity + pipelines without a map yet).
+        self::render_grid((int) $draft_id, (string) ($draft['pipeline'] ?? ''), $current, $generated, $editable);
 
         if ($editable) {
             // Finalize button. INV-DRAFT-3: finalize now LOCKS + audits AND
@@ -360,6 +340,235 @@ class MealsDB_Invoice_Draft_Page {
     }
 
     /**
+     * Grid dispatcher: curated per-pipeline layout when a column map exists and
+     * the operator hasn't asked to see everything; otherwise the raw
+     * array_keys grid. A "Show all fields" toggle flips between them (debug
+     * parity with the pre-curation behavior, and the only grid for pipelines
+     * whose map isn't built yet).
+     */
+    private static function render_grid(int $draft_id, string $pipeline, array $current, array $generated, bool $editable): void {
+        $show_all = !empty($_GET['show_all']);
+        $map      = $show_all ? null : self::column_map($pipeline);
+
+        // Toggle link — preserves draft_id, flips show_all.
+        $base = admin_url('admin.php?page=' . self::PAGE_SLUG . '&draft_id=' . $draft_id);
+        if (self::column_map($pipeline) !== null) {
+            $toggle_url   = $show_all ? $base : ($base . '&show_all=1');
+            $toggle_label = $show_all
+                ? __('Show curated columns', 'meals-db')
+                : __('Show all fields', 'meals-db');
+            echo '<p style="margin:8px 0;"><a href="' . esc_url($toggle_url) . '">'
+                . esc_html($toggle_label) . '</a></p>';
+        }
+
+        if ($map === null) {
+            self::render_raw_grid($draft_id, $current, $generated, $editable);
+            return;
+        }
+        self::render_curated_grid($draft_id, $pipeline, $map, $current, $generated, $editable);
+    }
+
+    /**
+     * The original key-driven grid: union of all row keys in first-seen order,
+     * every scalar an editable input. Kept verbatim as the "Show all fields"
+     * fallback and as the grid for pipelines without a curated map.
+     */
+    private static function render_raw_grid(int $draft_id, array $current, array $generated, bool $editable): void {
+        $columns = [];
+        foreach ($current as $row) {
+            if (is_array($row)) {
+                foreach (array_keys($row) as $k) {
+                    $columns[$k] = true;
+                }
+            }
+        }
+        $columns = array_keys($columns);
+
+        echo '<table class="widefat striped" id="mealsdb-draft-grid" data-draft-id="' . esc_attr((string) $draft_id) . '">';
+        echo '<thead><tr>';
+        foreach ($columns as $col) {
+            echo '<th>' . esc_html(self::humanize($col)) . '</th>';
+        }
+        echo '</tr></thead><tbody>';
+
+        foreach ($current as $client_id => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $cid = (string) $client_id;
+            echo '<tr>';
+            foreach ($columns as $col) {
+                $val     = $row[$col] ?? null;
+                $gen_val = $generated[$client_id][$col] ?? null;
+                self::render_cell($cid, $col, $val, $gen_val, $editable);
+            }
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    /**
+     * The curated spreadsheet grid (Part 1/3c). Derived cells are computed
+     * on-read via the pipeline's shared compute fn (same one finalize uses) so
+     * what Janet sees equals what finalize emits — never recomputed in JS,
+     * never persisted into `current`.
+     */
+    private static function render_curated_grid(int $draft_id, string $pipeline, array $map, array $current, array $generated, bool $editable): void {
+        echo '<table class="widefat striped mealsdb-draft-curated" id="mealsdb-draft-grid" data-draft-id="' . esc_attr((string) $draft_id) . '">';
+        echo '<thead><tr>';
+        foreach ($map as $col) {
+            echo '<th class="mealsdb-col-' . esc_attr($col['type']) . '">' . esc_html($col['label']) . '</th>';
+        }
+        echo '</tr></thead><tbody>';
+
+        foreach ($current as $client_id => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $cid     = (string) $client_id;
+            $derived = self::derive_row($pipeline, $row);
+            $gen_row = (isset($generated[$client_id]) && is_array($generated[$client_id])) ? $generated[$client_id] : [];
+            echo '<tr>';
+            foreach ($map as $col) {
+                self::render_curated_cell($cid, $col, $row, $gen_row, $derived, $editable);
+            }
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    /**
+     * Compute the derived figures for one row via the pipeline's compute fn —
+     * the SAME function the serializer calls. Returns [] for pipelines with no
+     * money derivation (e.g. SDNB new-portal, whose total the portal owns).
+     */
+    private static function derive_row(string $pipeline, array $row): array {
+        if ($pipeline === MealsDB_Invoice_Draft::PIPELINE_VAC) {
+            return MealsDB_Invoice_Generator::compute_vac_row_derived($row);
+        }
+        return [];
+    }
+
+    /** Format one derived column's value for display ($-money or plain int). */
+    private static function format_derived_value(array $col, array $derived): string {
+        $key = (string) ($col['derived_key'] ?? '');
+        $raw = $derived[$key] ?? 0;
+        return ((string) ($col['type'] ?? '') === 'derived-money')
+            ? '$' . MealsDB_Money::format((int) $raw)
+            : (string) (int) $raw;
+    }
+
+    /**
+     * Compute the formatted derived display values for one row, keyed by the
+     * grid's derived-cell field (matching the data-derived-field attributes).
+     * The edit endpoint (3b) returns this so the JS can refresh derived cells
+     * in place after a save — WITHOUT recomputing any money in JavaScript.
+     * Returns [] for pipelines with no money derivation (SDNB), so the response
+     * carries an empty map there.
+     *
+     * @return array<string,string> derived_field => formatted display value.
+     */
+    public static function derived_display(string $pipeline, array $row): array {
+        $map = self::column_map($pipeline);
+        if ($map === null) {
+            return [];
+        }
+        $derived = self::derive_row($pipeline, $row);
+        if (empty($derived)) {
+            return [];
+        }
+        $out = [];
+        foreach ($map as $col) {
+            $type = (string) ($col['type'] ?? '');
+            if ($type === 'derived-money' || $type === 'derived-int') {
+                $out[(string) $col['field']] = self::format_derived_value($col, $derived);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Render one curated cell per its declared type. Editable inputs keep
+     * data-client-id / data-field so the existing save path (invoice-draft.js)
+     * is untouched. Derived cells carry data-derived-field (no input) so the
+     * save handler's recompute response can refresh them in place.
+     */
+    private static function render_curated_cell(string $client_id, array $col, array $row, array $gen_row, array $derived, bool $editable): void {
+        $type  = (string) $col['type'];
+        $field = (string) $col['field'];
+
+        switch ($type) {
+            case 'identity-name':
+                $name = trim((string) ($row['first_name'] ?? '') . ' ' . (string) ($row['last_name'] ?? ''));
+                echo '<td class="mealsdb-col-identity-name"><span>' . esc_html($name) . '</span></td>';
+                return;
+
+            case 'derived-money':
+            case 'derived-int':
+                $disp = self::format_derived_value($col, $derived);
+                echo '<td class="mealsdb-derived" data-client-id="' . esc_attr($client_id) . '" '
+                    . 'data-derived-field="' . esc_attr($field) . '">'
+                    . '<span>' . esc_html($disp) . '</span></td>';
+                return;
+
+            case 'input-int':
+            case 'input-money':
+                $val     = $row[$field] ?? null;
+                $display = ($type === 'input-money')
+                    ? number_format((float) $val, 2, '.', '')
+                    : (string) (int) $val;
+                echo '<td class="mealsdb-col-' . esc_attr($type) . '">';
+                if ($editable) {
+                    echo '<input type="text" class="mealsdb-draft-cell" '
+                        . 'data-client-id="' . esc_attr($client_id) . '" '
+                        . 'data-field="' . esc_attr($field) . '" '
+                        . 'value="' . esc_attr($display) . '" />';
+                } else {
+                    echo '<span>' . esc_html($display) . '</span>';
+                }
+                self::was_hint($gen_row[$field] ?? null, $display, $type);
+                echo '</td>';
+                return;
+
+            case 'identity':
+            default:
+                $val     = $row[$field] ?? null;
+                $display = is_scalar($val) || $val === null ? (string) $val : wp_json_encode($val);
+                echo '<td class="mealsdb-col-identity">';
+                if ($editable && (is_scalar($val) || $val === null)) {
+                    echo '<input type="text" class="mealsdb-draft-cell" '
+                        . 'data-client-id="' . esc_attr($client_id) . '" '
+                        . 'data-field="' . esc_attr($field) . '" '
+                        . 'value="' . esc_attr($display) . '" />';
+                } else {
+                    echo '<span>' . esc_html($display) . '</span>';
+                }
+                self::was_hint($gen_row[$field] ?? null, $display, $type);
+                echo '</td>';
+                return;
+        }
+    }
+
+    /**
+     * Emit the "was: <generated value>" hint when an editable field's current
+     * value differs from the generated baseline. For money inputs the baseline
+     * is normalised to 2dp so a 9.05 vs 9.050 representation doesn't show a
+     * spurious hint.
+     */
+    private static function was_hint($generated_value, string $display, string $type): void {
+        if ($generated_value === null || !is_scalar($generated_value)) {
+            return;
+        }
+        $gen = (string) $generated_value;
+        if ($type === 'input-money') {
+            $gen = number_format((float) $generated_value, 2, '.', '');
+        }
+        if ($gen !== $display) {
+            echo '<div class="mealsdb-draft-was">' . esc_html__('was:', 'meals-db') . ' ' . esc_html($gen) . '</div>';
+        }
+    }
+
+    /**
      * Render one grid cell. Editable scalar fields become an input carrying
      * data-client-id / data-field (the save JS keys off these). Non-scalar
      * values, and every cell on a finalized draft, render read-only.
@@ -409,6 +618,46 @@ class MealsDB_Invoice_Draft_Page {
             );
         }
         echo '</select>';
+    }
+
+    /**
+     * Curated, ordered column list for a pipeline's draft grid (directive
+     * INVOICE-DRAFT-SPREADSHEET Part 1) — replaces the array_keys dump. Each
+     * entry: field key + label + type. Types drive rendering AND editability:
+     *   identity-name : composite "First Last", read-only, frozen first column.
+     *   identity      : a single identity field, editable text.
+     *   input-int     : editable integer (right-aligned).
+     *   input-money   : editable dollar value (right-aligned, 2dp).
+     *   derived-money : READ-ONLY, computed-on-read from the pipeline's compute
+     *                   fn via 'derived_key'; never editable, never persisted.
+     *   derived-int   : READ-ONLY computed integer (e.g. remaining_sides).
+     *
+     * Returns null for a pipeline with no curated map yet — the caller falls
+     * back to the raw array_keys grid, so SDNB drafts render unchanged until
+     * their maps are built (SDNB-legacy's `resolved_rate` editability is the
+     * deferred open question; new-portal is legibility-only with no Total).
+     *
+     * VAC map reflects the 2026-06-29 operator review: bill_* and fold_* are
+     * editable inputs (fold hand-entered); vet_mains_cost / vac_total are
+     * derived; the dead client contribution / mock "VAC Portion" are NOT
+     * columns (pulled but never billed — surfacing them would lie).
+     */
+    public static function column_map(string $pipeline): ?array {
+        if ($pipeline === MealsDB_Invoice_Draft::PIPELINE_VAC) {
+            return [
+                ['field' => 'client',         'label' => __('Client', 'meals-db'),         'type' => 'identity-name'],
+                ['field' => 'street_name',    'label' => __('Address', 'meals-db'),        'type' => 'identity'],
+                ['field' => 'bill_mains',     'label' => __('Meals', 'meals-db'),          'type' => 'input-int'],
+                ['field' => 'bill_rate',      'label' => __('Rate', 'meals-db'),           'type' => 'input-money'],
+                ['field' => 'fold_amount',    'label' => __('Fold Amount', 'meals-db'),    'type' => 'input-money'],
+                ['field' => 'fold_hst',       'label' => __('Fold HST', 'meals-db'),       'type' => 'input-money'],
+                ['field' => 'vet_mains_cost', 'label' => __('Vet Mains Cost', 'meals-db'), 'type' => 'derived-money', 'derived_key' => 'vet_mains_cost_cents'],
+                ['field' => 'vac_total',      'label' => __('VAC Total', 'meals-db'),      'type' => 'derived-money', 'derived_key' => 'vac_total_cents'],
+                ['field' => 'remaining_sides','label' => __('Sides Left', 'meals-db'),     'type' => 'derived-int',   'derived_key' => 'remaining_sides'],
+            ];
+        }
+        // SDNB legacy / new-portal: no curated map yet → fall back to raw grid.
+        return null;
     }
 
     /** "allocated_tax_sides" → "Allocated Tax Sides". */

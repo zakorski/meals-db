@@ -1293,6 +1293,48 @@ class MealsDB_Invoice_Generator {
      *
      * @param array<int|string,array> $rows VAC draft rows keyed by client_id.
      */
+    /**
+     * Derive the VAC per-row money figures from a stored `current` row.
+     *
+     * SINGLE SOURCE OF TRUTH for VAC derivation (directive
+     * INVOICE-DRAFT-SPREADSHEET 3a): both serialize_vac_csv (finalize) and the
+     * draft grid (render + live recompute over the edit endpoint) call THIS
+     * function, so what Janet sees on the grid is byte-for-byte what finalize
+     * emits. Never reimplement this math in JavaScript.
+     *
+     * VAC is billed MAINS-ONLY. fold_amount / fold_hst are INPUTS — Janet
+     * hand-enters them per veteran (operator decision 2026-06-29); this fn
+     * READS them, it does not derive them. Sides are NOT billed; they surface
+     * only in the informational remaining_sides figure. bill_mains / bill_rate
+     * fall back to allocated_mains / resolved_rate so a bare phase-2 row (no
+     * bill_* yet) still derives correctly.
+     *
+     * @param array $row A VAC `current` row (build_vac_draft_rows shape).
+     * @return array{vet_mains_cost_cents:int, vac_total_cents:int,
+     *               remaining_sides:int, allowance_remaining_cents:int}
+     */
+    public static function compute_vac_row_derived(array $row): array {
+        $bill_rate           = (float) ($row['bill_rate'] ?? ($row['resolved_rate'] ?? 0));
+        $bill_mains          = (int) ($row['bill_mains'] ?? ($row['allocated_mains'] ?? 0));
+        $allocated_tax_sides = (int) ($row['allocated_tax_sides'] ?? 0);
+
+        $fold_amount_cents    = MealsDB_Money::to_cents($row['fold_amount'] ?? 0);
+        $fold_hst_cents       = MealsDB_Money::to_cents($row['fold_hst'] ?? 0);
+        $vet_mains_cost_cents = MealsDB_Money::multiply($bill_mains, $bill_rate);
+        $vac_total_cents      = $vet_mains_cost_cents + $fold_amount_cents + $fold_hst_cents;
+
+        // Informational — reference only, NEVER summed into the billed total.
+        $sides_allowance         = (int) ($row['info_sides_allowance'] ?? 0);
+        $monthly_allowance_cents = (int) ($row['info_monthly_allowance_cents'] ?? 0);
+
+        return [
+            'vet_mains_cost_cents'      => $vet_mains_cost_cents,
+            'vac_total_cents'           => $vac_total_cents,
+            'remaining_sides'           => max(0, $sides_allowance - $allocated_tax_sides),
+            'allowance_remaining_cents' => max(0, $monthly_allowance_cents - $vet_mains_cost_cents),
+        ];
+    }
+
     public static function serialize_vac_csv(array $rows): string {
         // Pre-compute duplicate individual_id counts (over ALL rows handed in).
         $vet_duplicate_counts = [];
@@ -1342,20 +1384,26 @@ class MealsDB_Invoice_Generator {
             $allocated_sides        = $allocated_tax_sides + $allocated_nontax_sides;
 
             // fold_amount / fold_hst are stored as DOLLAR floats (the edit
-            // layer round-trips them as dollars). The VAC total is mains-only
-            // plus the hand-entered fold and its HST — sides are NOT billed.
-            $fold_amount_cents    = MealsDB_Money::to_cents($vet['fold_amount'] ?? 0);
-            $fold_hst_cents       = MealsDB_Money::to_cents($vet['fold_hst'] ?? 0);
-            $vet_mains_cost_cents = MealsDB_Money::multiply($bill_mains, $bill_rate);
-            $vac_total_cents      = $vet_mains_cost_cents + $fold_amount_cents + $fold_hst_cents;
+            // layer round-trips them as dollars) and are emitted directly in
+            // the Fold Amount / Bill HST columns below.
+            $fold_amount_cents = MealsDB_Money::to_cents($vet['fold_amount'] ?? 0);
+            $fold_hst_cents    = MealsDB_Money::to_cents($vet['fold_hst'] ?? 0);
+
+            // Derived money — the SINGLE source of truth shared with the draft
+            // grid (directive INVOICE-DRAFT-SPREADSHEET 3a). vac_total is
+            // mains-only plus the hand-entered fold and its HST; sides are NOT
+            // billed (they surface only as the informational remaining_sides).
+            $derived                   = self::compute_vac_row_derived($vet);
+            $vet_mains_cost_cents      = $derived['vet_mains_cost_cents'];
+            $vac_total_cents           = $derived['vac_total_cents'];
+            $remaining_sides           = $derived['remaining_sides'];
+            $allowance_remaining_cents = $derived['allowance_remaining_cents'];
 
             // Informational figures — reference only, NEVER summed into the total.
-            $mains_allowance           = (int) ($vet['info_mains_allowance'] ?? 0);
-            $sides_allowance           = (int) ($vet['info_sides_allowance'] ?? 0);
-            $remaining_sides           = max(0, $sides_allowance - $allocated_tax_sides);
-            $monthly_allowance_cents   = (int) ($vet['info_monthly_allowance_cents'] ?? 0);
-            $allowance_remaining_cents = max(0, $monthly_allowance_cents - $vet_mains_cost_cents);
-            $info_sides_cost_cents     = (int) ($vet['info_sides_cost_cents'] ?? 0);
+            $mains_allowance         = (int) ($vet['info_mains_allowance'] ?? 0);
+            $sides_allowance         = (int) ($vet['info_sides_allowance'] ?? 0);
+            $monthly_allowance_cents = (int) ($vet['info_monthly_allowance_cents'] ?? 0);
+            $info_sides_cost_cents   = (int) ($vet['info_sides_cost_cents'] ?? 0);
 
             $errors        = self::validate_client_row($vet, 'Veteran', $vet_duplicate_counts, 1);
             $new_user_flag = (string) ($vet['new_user_flag'] ?? 'No');
