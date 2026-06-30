@@ -2,13 +2,13 @@
 /**
  * Admin page: MealsDB → Packing Slips (directive 06).
  *
- * The operator's view onto the two-phase Midland workflow. A "Generate batch"
+ * The operator's view onto the Midland packing-slip batch workflow. A "Generate batch"
  * control (zone + delivery date) over a HISTORY TABLE of saved batches —
  * modeled on the invoice-draft history view (MealsDB_Invoice_Draft_Page), reusing
  * the same machinery (submenu + page-scoped enqueue + localized config + the
  * shared on-page notice helper). Only the columns and per-row actions differ.
  *
- * Capability: manage_options — the doc 4 / merged downloads expose DECRYPTED
+ * Capability: manage_options — the Packing Slips / Doc 4 downloads expose DECRYPTED
  * client PII (name/address/phone), the same tight audience as the invoice page;
  * do NOT loosen it. Every cell is escaped at emission; the interactive logic
  * lives in the enqueued assets/js/slip-batch.js (no inline <script> blob).
@@ -67,9 +67,7 @@ class MealsDB_Slip_Batch_Page {
                     'working'     => __('Working…', 'meals-db'),
                     'genericErr'  => __('Something went wrong. Please try again.', 'meals-db'),
                     'pickZone'    => __('Choose a zone and delivery date first.', 'meals-db'),
-                    'confirmCancel' => __('Cancel this batch? This permanently deletes the saved driver sheets and any uploaded scan. This cannot be undone.', 'meals-db'),
-                    'uploading'   => __('Uploading…', 'meals-db'),
-                    'combining'   => __('Combining…', 'meals-db'),
+                    'confirmCancel' => __('Cancel this batch? This permanently deletes the saved driver sheets. This cannot be undone.', 'meals-db'),
                 ],
             ]) . ';',
             'before'
@@ -97,7 +95,7 @@ class MealsDB_Slip_Batch_Page {
     private static function render_generate_form(): void {
         echo '<h2>' . esc_html__('Generate a batch', 'meals-db') . '</h2>';
         echo '<p class="description">'
-            . esc_html__('Generates the packer + driver documents for one zone and delivery date, and saves the driver sheets so the scan can be combined later.', 'meals-db')
+            . esc_html__('Generates and saves the packer slips (with cover) and the driver sheets for one zone and delivery date, for manual handling.', 'meals-db')
             . '</p>';
 
         echo '<div id="mealsdb-slip-generate" style="margin:8px 0;">';
@@ -149,9 +147,10 @@ class MealsDB_Slip_Batch_Page {
     }
 
     /**
-     * Render one batch row. Download links are server-built GET URLs carrying
-     * the workflow nonce (MealsDB_Ajax_Slip_Batch::download_url); the mutating
-     * actions (upload / combine / cancel) are data-attr buttons the JS drives.
+     * Render one batch row. The two download links — Packing Slips (combined
+     * cover + packer slips) and Doc 4 (driver sheets) — are server-built GET
+     * URLs carrying the workflow nonce (MealsDB_Ajax_Slip_Batch::download_url).
+     * Cancel is a data-attr button the JS drives.
      */
     private static function render_row(array $row): void {
         $id      = (int) ($row['batch_id'] ?? 0);
@@ -160,8 +159,6 @@ class MealsDB_Slip_Batch_Page {
         $count   = (int) ($row['order_count'] ?? 0);
         $created = (string) ($row['created_at'] ?? '');
         $status  = (string) ($row['status'] ?? '');
-        $has_doc3   = !empty($row['has_doc3']);
-        $has_merged = !empty($row['has_merged']);
 
         $dl = static function (string $which) use ($id): string {
             return class_exists('MealsDB_Ajax_Slip_Batch')
@@ -178,26 +175,9 @@ class MealsDB_Slip_Batch_Page {
 
         echo '<td class="mealsdb-slip-actions">';
 
-        // Always-available downloads.
-        echo '<a class="button" href="' . esc_url($dl('doc1')) . '">' . esc_html__('Doc 1 (cover)', 'meals-db') . '</a> ';
-        echo '<a class="button" href="' . esc_url($dl('doc2')) . '">' . esc_html__('Doc 2 (packer)', 'meals-db') . '</a> ';
+        // Combined cover + packer slips, then the driver sheets (manual overlay).
+        echo '<a class="button" href="' . esc_url($dl('packing_slips')) . '">' . esc_html__('Packing Slips', 'meals-db') . '</a> ';
         echo '<a class="button" href="' . esc_url($dl('doc4')) . '">' . esc_html__('Doc 4 (driver)', 'meals-db') . '</a> ';
-
-        // Upload doc 3 (hidden file input + trigger button).
-        echo '<span class="mealsdb-slip-upload" style="display:inline-block;">';
-        echo '<input type="file" accept="application/pdf,.pdf" class="mealsdb-slip-doc3-file" style="display:none;" />';
-        echo '<button type="button" class="button mealsdb-slip-upload-btn">' . esc_html__('Upload Doc 3', 'meals-db') . '</button>';
-        echo '</span> ';
-
-        // Combine — greyed until a valid doc 3 is present.
-        $combine_attr = ($has_doc3 || $has_merged) ? '' : ' disabled="disabled"';
-        echo '<button type="button" class="button mealsdb-slip-combine-btn"' . $combine_attr . '>'
-            . esc_html__('Combine', 'meals-db') . '</button> ';
-
-        // Download merged — only once a merge exists.
-        echo '<a class="button mealsdb-slip-merged-link" href="' . esc_url($dl('merged')) . '"'
-            . ($has_merged ? '' : ' style="display:none;"') . '>'
-            . esc_html__('Download merged', 'meals-db') . '</a> ';
 
         // Cancel (confirm popup in JS).
         echo '<button type="button" class="button mealsdb-slip-cancel-btn">' . esc_html__('Cancel', 'meals-db') . '</button>';

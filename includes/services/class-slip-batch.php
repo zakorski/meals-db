@@ -2,8 +2,8 @@
 /**
  * Midland packing-slip batch service (directive 04, Midland packing documents).
  *
- * Persistence + service layer for the two-phase packer/driver workflow:
- *   generate (save doc 4 payloads) → upload doc 3 → combine (merge) → [cancel].
+ * Persistence + service layer for the packing-slip workflow:
+ *   generate (persist the per-order doc 4 payloads) → [cancel].
  * Pure persistence/service: NO HTML, NO AJAX (those are unit 05/06).
  *
  * Modeled directly on MealsDB_Invoice_Draft — same disciplines:
@@ -15,14 +15,11 @@
  *     AJAX layer (unit 05); an attempt/failure (encryption failed) goes to the
  *     operational trunk here.
  *   - Fail-safe: every public method swallows its own \Throwable and returns a
- *     sentinel (0 / null / false / '') — it never propagates out.
+ *     sentinel (0 / null / false) — it never propagates out.
  *
- * UNLIKE invoice drafts (which keep their finalized artifact encrypted IN the
- * DB), the doc 3 scan and the merged output are PDFs that can run to many MB
- * once 300-DPI backgrounds are composited, so they live on DISK under a
- * web-inaccessible upload subdir (mealsdb-slips/) — the table stores only the
- * paths. Those files are PII-bearing once rendered, hence the deny-by-default
- * directory guard (Pattern 15) and 0600 permissions.
+ * The doc 4 payloads are the only artifact persisted, and they live encrypted
+ * IN the table (the doc4_payload column) — there are no on-disk files. cancel()
+ * is a hard delete of the row.
  */
 defined('ABSPATH') || exit;
 
@@ -31,12 +28,7 @@ class MealsDB_Slip_Batch {
     /** Payload schema version, for forward migration of the JSON shape. */
     private const PAYLOAD_SCHEMA = 1;
 
-    /** Upload subdir (under wp_upload_dir()['basedir']) for all slip files. */
-    private const STORAGE_SUBDIR = 'mealsdb-slips';
-
-    public const STATUS_GENERATED     = 'generated';
-    public const STATUS_DOC3_UPLOADED = 'doc3_uploaded';
-    public const STATUS_COMBINED      = 'combined';
+    public const STATUS_GENERATED = 'generated';
 
     /**
      * Create a batch from the per-order doc 4 payloads. The caller (unit 05's
@@ -57,7 +49,7 @@ class MealsDB_Slip_Batch {
             }
 
             // Re-index to a clean 0..N-1 list so the positional pairing with
-            // doc 3 pages (element N ↔ page N+1) is unambiguous at merge time.
+            // doc 2 (element N ↔ order N+1) is unambiguous downstream.
             $orders  = array_values($doc4_payloads);
             $payload = [
                 'schema' => self::PAYLOAD_SCHEMA,
@@ -125,8 +117,7 @@ class MealsDB_Slip_Batch {
 
             $row = $wpdb->get_row($wpdb->prepare(
                 "SELECT batch_id, zone_name, delivery_date, order_count, doc4_payload,
-                        doc3_path, doc3_page_count, merged_path, status,
-                        created_by, created_at, updated_at
+                        status, created_by, created_at, updated_at
                  FROM `{$table}` WHERE batch_id = %d",
                 $batch_id
             ), ARRAY_A);
@@ -158,8 +149,7 @@ class MealsDB_Slip_Batch {
     /**
      * List batches (newest first), optionally filtered by zone / delivery date /
      * status. Meta only — does NOT decrypt or return the doc 4 payload, so the
-     * history view never touches PII. has_doc3 / has_merged are derived booleans
-     * for the table's per-row action state.
+     * history view never touches PII.
      *
      * @param array $filters ['zone_name'=>..., 'delivery_date'=>..., 'status'=>...]
      * @return array<int,array> meta rows.
@@ -186,8 +176,7 @@ class MealsDB_Slip_Batch {
 
             // doc4_payload is deliberately NOT selected — list view needs no PII.
             $sql = "SELECT batch_id, zone_name, delivery_date, order_count,
-                           doc3_path, doc3_page_count, merged_path, status,
-                           created_by, created_at, updated_at
+                           status, created_by, created_at, updated_at
                     FROM `{$table}`";
             if (!empty($where)) {
                 $sql .= ' WHERE ' . implode(' AND ', $where);
@@ -200,14 +189,6 @@ class MealsDB_Slip_Batch {
                 return [];
             }
 
-            // Derive the action-state booleans the UI needs without exposing
-            // the raw paths' contents.
-            foreach ($rows as &$r) {
-                $r['has_doc3']   = !empty($r['doc3_path']);
-                $r['has_merged'] = !empty($r['merged_path']);
-            }
-            unset($r);
-
             return $rows;
         } catch (\Throwable $e) {
             self::log_error('list_batches', $e);
@@ -216,140 +197,10 @@ class MealsDB_Slip_Batch {
     }
 
     /**
-     * Store an uploaded (and already-validated) doc 3 PDF for a batch.
-     *
-     * The AJAX layer (unit 05) is responsible for the upload security checks
-     * (PDF MIME sniff, size cap) and for computing $page_count via
-     * MealsDB_Slip_Merge::validate_doc3() BEFORE calling this — this method only
-     * persists a file it is told is good. Replaceable: a new upload overwrites
-     * the previous one and deletes the old file (latest scan wins).
-     *
-     * @param int    $batch_id
-     * @param string $tmp_pdf_path absolute path to the validated temp PDF
-     * @param int    $page_count   pages in the PDF (== order_count, per validate)
-     * @return bool true on success.
-     */
-    public static function store_doc3(int $batch_id, string $tmp_pdf_path, int $page_count): bool {
-        try {
-            $batch = self::get($batch_id);
-            if ($batch === null) {
-                return false;
-            }
-            if (!is_string($tmp_pdf_path) || $tmp_pdf_path === '' || !is_readable($tmp_pdf_path)) {
-                return false;
-            }
-
-            $dir = self::protected_dir('doc3');
-            if ($dir === null) {
-                return false;
-            }
-
-            // Random destination filename (Pattern 15) — never trust/keep the
-            // client's name. Keyed by batch for operator traceability on disk.
-            $dest = trailingslashit($dir) . 'batch-' . $batch_id . '-' . self::random_token() . '.pdf';
-
-            if (!self::move_file($tmp_pdf_path, $dest)) {
-                return false;
-            }
-            @chmod($dest, 0600);
-
-            global $wpdb;
-            $table = MealsDB_DB::get_table_name(MealsDB_Tables::SLIP_BATCHES);
-            $updated = $wpdb->update(
-                $table,
-                [
-                    'doc3_path'       => $dest,
-                    'doc3_page_count' => $page_count,
-                    'status'          => self::STATUS_DOC3_UPLOADED,
-                    'updated_at'      => gmdate('Y-m-d H:i:s'),
-                ],
-                ['batch_id' => $batch_id],
-                ['%s', '%d', '%s', '%s'],
-                ['%d']
-            );
-
-            if ($updated === false) {
-                // DB write failed — don't orphan the file we just moved in.
-                self::delete_file_quietly($dest);
-                return false;
-            }
-
-            // Row updated: now it is safe to drop any PRIOR doc 3 file (the
-            // replace case). Done after the successful UPDATE so a failed write
-            // never deletes the file still referenced by the row.
-            $old = (string) ($batch['doc3_path'] ?? '');
-            if ($old !== '' && $old !== $dest) {
-                self::delete_file_quietly($old);
-            }
-
-            return true;
-        } catch (\Throwable $e) {
-            self::log_error('store_doc3', $e);
-            return false;
-        }
-    }
-
-    /**
-     * Persist the merged finished PDF bytes for a batch. Stable filename
-     * (batch-<id>.pdf) so a re-combine overwrites in place (latest wins).
-     * Returns the absolute path on success, or '' on failure.
-     *
-     * @param int    $batch_id
-     * @param string $pdf_bytes raw PDF content
-     * @return string path on success, '' on failure.
-     */
-    public static function store_merged(int $batch_id, string $pdf_bytes): string {
-        try {
-            if ($batch_id <= 0 || !is_string($pdf_bytes) || $pdf_bytes === '') {
-                return '';
-            }
-            if (self::get($batch_id) === null) {
-                return '';
-            }
-
-            $dir = self::protected_dir('merged');
-            if ($dir === null) {
-                return '';
-            }
-
-            $dest = trailingslashit($dir) . 'batch-' . $batch_id . '.pdf';
-            if (file_put_contents($dest, $pdf_bytes) === false) {
-                return '';
-            }
-            @chmod($dest, 0600);
-
-            global $wpdb;
-            $table = MealsDB_DB::get_table_name(MealsDB_Tables::SLIP_BATCHES);
-            $updated = $wpdb->update(
-                $table,
-                [
-                    'merged_path' => $dest,
-                    'status'      => self::STATUS_COMBINED,
-                    'updated_at'  => gmdate('Y-m-d H:i:s'),
-                ],
-                ['batch_id' => $batch_id],
-                ['%s', '%s', '%s'],
-                ['%d']
-            );
-
-            if ($updated === false) {
-                self::delete_file_quietly($dest);
-                return '';
-            }
-
-            return $dest;
-        } catch (\Throwable $e) {
-            self::log_error('store_merged', $e);
-            return '';
-        }
-    }
-
-    /**
-     * Hard-delete a batch: remove the row AND its doc 3 / merged files from
-     * disk. Operator decision (the directive): cancel is a permanent delete;
-     * they regenerate from scratch if needed. The audit log entry is written by
-     * the AJAX layer (unit 05), which owns the request context. Returns true if
-     * the row was deleted.
+     * Hard-delete a batch row. Operator decision (the directive): cancel is a
+     * permanent delete; they regenerate from scratch if needed. The audit log
+     * entry is written by the AJAX layer (unit 05), which owns the request
+     * context. Returns true if the row was deleted.
      */
     public static function cancel(int $batch_id): bool {
         try {
@@ -357,161 +208,18 @@ class MealsDB_Slip_Batch {
                 return false;
             }
 
-            $batch = self::get($batch_id);
-            // Even if decrypt failed (get() → null), still attempt to delete the
-            // row by id so a corrupt batch can be cleared; fetch paths directly.
             global $wpdb;
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::SLIP_BATCHES);
-
-            if ($batch === null) {
-                $paths = $wpdb->get_row($wpdb->prepare(
-                    "SELECT doc3_path, merged_path FROM `{$table}` WHERE batch_id = %d",
-                    $batch_id
-                ), ARRAY_A);
-                $doc3   = is_array($paths) ? (string) ($paths['doc3_path'] ?? '') : '';
-                $merged = is_array($paths) ? (string) ($paths['merged_path'] ?? '') : '';
-            } else {
-                $doc3   = (string) ($batch['doc3_path'] ?? '');
-                $merged = (string) ($batch['merged_path'] ?? '');
-            }
 
             $deleted = $wpdb->delete($table, ['batch_id' => $batch_id], ['%d']);
             if ($deleted === false || (int) $deleted === 0) {
                 return false;
             }
 
-            // Row is gone — clear the files (after the row, so a failed delete
-            // never strands a row pointing at a removed file).
-            if ($doc3 !== '') {
-                self::delete_file_quietly($doc3);
-            }
-            if ($merged !== '') {
-                self::delete_file_quietly($merged);
-            }
-
             return true;
         } catch (\Throwable $e) {
             self::log_error('cancel', $e);
             return false;
-        }
-    }
-
-    // ------------------------------------------------------------------ //
-    //  Storage helpers
-    // ------------------------------------------------------------------ //
-
-    /**
-     * Public accessor for a protected storage subdir (e.g. 'tmp'), so the merge
-     * engine (unit 03) writes its scratch backgrounds under the SAME
-     * deny-by-default root rather than re-implementing the guard logic. Returns
-     * the absolute path or null if it cannot be created/secured.
-     */
-    public static function storage_dir(string $sub): ?string {
-        return self::protected_dir($sub);
-    }
-
-    /**
-     * Resolve (and lazily create + protect) a subdir under the slip storage
-     * root. Returns the absolute path, or null if it cannot be created/secured.
-     *
-     * The root and every subdir get a deny-by-default `.htaccess` and an empty
-     * `index.html` (Pattern 15): these files carry decrypted client PII once
-     * rendered, so they must NOT be web-served even though they live under
-     * wp-content/uploads. Dirs are 0700.
-     *
-     * @param string $sub one of 'doc3', 'merged', 'tmp'
-     */
-    private static function protected_dir(string $sub): ?string {
-        $sub = preg_replace('/[^a-z0-9_]/i', '', $sub);
-        if ($sub === '' || $sub === null) {
-            return null;
-        }
-
-        if (!function_exists('wp_upload_dir')) {
-            return null;
-        }
-        $uploads = wp_upload_dir();
-        if (!is_array($uploads) || empty($uploads['basedir'])) {
-            return null;
-        }
-
-        $root = trailingslashit($uploads['basedir']) . self::STORAGE_SUBDIR;
-        if (!self::ensure_protected_dir($root)) {
-            return null;
-        }
-
-        $path = trailingslashit($root) . $sub;
-        if (!self::ensure_protected_dir($path)) {
-            return null;
-        }
-
-        return $path;
-    }
-
-    /**
-     * Create $dir if needed and drop the deny guards. Idempotent. Returns false
-     * only if the directory cannot be made writable.
-     */
-    private static function ensure_protected_dir(string $dir): bool {
-        if (!is_dir($dir)) {
-            if (!function_exists('wp_mkdir_p') || !wp_mkdir_p($dir)) {
-                return false;
-            }
-            @chmod($dir, 0700);
-        }
-        if (!is_writable($dir)) {
-            return false;
-        }
-
-        $htaccess = trailingslashit($dir) . '.htaccess';
-        if (!file_exists($htaccess)) {
-            // Works on both Apache 2.2 (Deny) and 2.4 (Require) — mirrors how WP
-            // core protects sensitive upload subdirs.
-            @file_put_contents(
-                $htaccess,
-                "Require all denied\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n"
-            );
-        }
-        $index = trailingslashit($dir) . 'index.html';
-        if (!file_exists($index)) {
-            @file_put_contents($index, '');
-        }
-
-        return true;
-    }
-
-    /**
-     * Move a file into place, preferring an atomic rename and falling back to
-     * copy+unlink across filesystem boundaries (the PHP upload tmpdir is often
-     * on a different mount than wp-content). Returns true on success.
-     */
-    private static function move_file(string $src, string $dest): bool {
-        if (@rename($src, $dest)) {
-            return true;
-        }
-        if (@copy($src, $dest)) {
-            @unlink($src);
-            return true;
-        }
-        return false;
-    }
-
-    /** Best-effort delete; never throws, never warns. */
-    private static function delete_file_quietly(string $path): void {
-        if ($path !== '' && is_file($path)) {
-            @unlink($path);
-        }
-    }
-
-    /** Short random hex token for unguessable destination filenames. */
-    private static function random_token(): string {
-        try {
-            return bin2hex(random_bytes(8));
-        } catch (\Throwable $e) {
-            // random_bytes can only fail without a CSPRNG; fall back to WP's.
-            return function_exists('wp_generate_password')
-                ? substr(preg_replace('/[^a-f0-9]/i', '', md5(wp_generate_password(32, false))), 0, 16)
-                : substr(md5((string) getmypid() . (string) memory_get_usage()), 0, 16);
         }
     }
 

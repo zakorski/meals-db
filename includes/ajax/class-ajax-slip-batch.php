@@ -7,28 +7,24 @@
  *
  *   JSON mutations (POST):
  *     mealsdb_slip_generate_batch  → generate a batch (persist doc 4 payloads)
- *     mealsdb_slip_upload_doc3     → upload + validate the returned scan
- *     mealsdb_slip_combine         → composite doc 4 onto doc 3 → merged PDF
- *     mealsdb_slip_cancel          → hard-delete the batch (+ files)
+ *     mealsdb_slip_cancel          → hard-delete the batch
  *     mealsdb_slip_list            → history rows (table refresh)
  *
  *   File streams (GET link, nonce in URL):
- *     mealsdb_slip_download_doc1   → cover sheet (regenerated from the batch)
- *     mealsdb_slip_download_doc2   → packer slips (re-queried live; with divider)
- *     mealsdb_slip_download_doc4   → standalone driver blocks (manual fallback)
- *     mealsdb_slip_download_merged → the saved merged output (streamed from disk)
+ *     mealsdb_slip_download_packing_slips → cover (page 1) + packer slips, one PDF
+ *     mealsdb_slip_download_doc4          → standalone driver blocks (manual overlay)
  *
- * manage_options is REQUIRED on every endpoint: doc 4 / the merged output expose
- * DECRYPTED client PII (name/address/phone), exactly like the invoice-draft
- * grid — do NOT loosen to the baseline plugin cap.
+ * manage_options is REQUIRED on every endpoint: the packing-slips and doc-4
+ * downloads expose DECRYPTED client PII (name/address/phone), exactly like the
+ * invoice-draft grid — do NOT loosen to the baseline plugin cap.
  *
- * Audit: a committed change to a persisted record (generate / doc3 upload /
- * combine / cancel) goes to the AUDIT log via MealsDB_Logger::log() — the
- * STR-LOG boundary, matching what MealsDB_Invoice_Draft actually does. (Directive
- * 07 mentioned Event_Log::record, but it also said "match invoice-draft", which
- * uses the audit log; the audit log is correct for committed record changes.)
+ * Audit: a committed change to a persisted record (generate / cancel) goes to
+ * the AUDIT log via MealsDB_Logger::log() — the STR-LOG boundary, matching what
+ * MealsDB_Invoice_Draft actually does. (Directive 07 mentioned Event_Log::record,
+ * but it also said "match invoice-draft", which uses the audit log; the audit log
+ * is correct for committed record changes.)
  *
- * Every handler is wrapped so a generator/Imagick/dompdf failure becomes a clean
+ * Every handler is wrapped so a generator/dompdf failure becomes a clean
  * JSON error or wp_die — never a bare 500 with a leaked path.
  *
  * Author: Fishhorn Design
@@ -43,22 +39,15 @@ class MealsDB_Ajax_Slip_Batch {
     /** One nonce action for the whole workflow (each endpoint still verifies). */
     public const NONCE_ACTION = 'mealsdb_slip_batch_nonce';
 
-    /** Hard cap on an uploaded doc 3 (generous for a multi-page 300-DPI scan). */
-    private const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
-
     public static function init(): void {
         // JSON mutations.
         add_action('wp_ajax_mealsdb_slip_generate_batch', [self::class, 'generate_batch']);
-        add_action('wp_ajax_mealsdb_slip_upload_doc3',    [self::class, 'upload_doc3']);
-        add_action('wp_ajax_mealsdb_slip_combine',        [self::class, 'combine']);
         add_action('wp_ajax_mealsdb_slip_cancel',         [self::class, 'cancel']);
         add_action('wp_ajax_mealsdb_slip_list',           [self::class, 'list_batches']);
 
         // File streams (GET download links).
-        add_action('wp_ajax_mealsdb_slip_download_doc1',   [self::class, 'download_doc1']);
-        add_action('wp_ajax_mealsdb_slip_download_doc2',   [self::class, 'download_doc2']);
-        add_action('wp_ajax_mealsdb_slip_download_doc4',   [self::class, 'download_doc4']);
-        add_action('wp_ajax_mealsdb_slip_download_merged', [self::class, 'download_merged']);
+        add_action('wp_ajax_mealsdb_slip_download_packing_slips', [self::class, 'download_packing_slips']);
+        add_action('wp_ajax_mealsdb_slip_download_doc4',          [self::class, 'download_doc4']);
     }
 
     // ================================================================= //
@@ -115,138 +104,7 @@ class MealsDB_Ajax_Slip_Batch {
     }
 
     /**
-     * Upload the returned doc 3 scan for a batch. Validates (PDF + size +
-     * page-count === order-count) BEFORE storing; a mismatch is reported and
-     * NOT stored, so the front-end keeps Combine disabled. Replaceable.
-     */
-    public static function upload_doc3(): void {
-        if (!self::guard('delivery_slips')) {
-            return;
-        }
-        $tmp_copy = '';
-        try {
-            $batch_id = isset($_POST['batch_id']) ? absint($_POST['batch_id']) : 0;
-            $batch    = $batch_id > 0 ? MealsDB_Slip_Batch::get($batch_id) : null;
-            if ($batch === null) {
-                wp_send_json_error(['message' => __('Batch not found.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-
-            if (empty($_FILES['doc3']) || !is_array($_FILES['doc3'])) {
-                wp_send_json_error(['message' => __('No file was uploaded.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-            $file = $_FILES['doc3'];
-            if ((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-                wp_send_json_error(['message' => __('The upload did not complete.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-            if ((int) ($file['size'] ?? 0) <= 0 || (int) $file['size'] > self::MAX_UPLOAD_BYTES) {
-                wp_send_json_error(['message' => __('The file is empty or too large.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-
-            $src = (string) ($file['tmp_name'] ?? '');
-            if ($src === '' || !is_uploaded_file($src)) {
-                wp_send_json_error(['message' => __('Invalid upload.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-
-            // Extension + content-sniff: must be a PDF (never trust the name).
-            $name = (string) ($file['name'] ?? '');
-            if (strtolower((string) pathinfo($name, PATHINFO_EXTENSION)) !== 'pdf'
-                || !self::sniff_pdf($src)) {
-                wp_send_json_error(['message' => __('Only PDF files are accepted.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-
-            // Copy the upload to a scratch path we control for validation +
-            // (on success) hand-off to the store.
-            $tmp_copy = self::scratch_copy($src);
-            if ($tmp_copy === '') {
-                wp_send_json_error(['message' => __('Could not stage the upload.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-
-            $expected = (int) ($batch['order_count'] ?? 0);
-            $check    = MealsDB_Slip_Merge::validate_doc3($tmp_copy, $expected);
-            if (empty($check['ok'])) {
-                @unlink($tmp_copy);
-                wp_send_json_error([
-                    'message' => (string) ($check['reason'] ?? __('The scan failed validation.', 'meals-db')),
-                    'valid'   => false,
-                ]);
-                return;
-            }
-
-            $stored = MealsDB_Slip_Batch::store_doc3($batch_id, $tmp_copy, (int) $check['page_count']);
-            // store_doc3 moves the file; drop any leftover only if it remains.
-            if (is_file($tmp_copy)) { @unlink($tmp_copy); }
-            if (!$stored) {
-                wp_send_json_error(['message' => __('Could not store the scan.', 'meals-db'), 'valid' => false]);
-                return;
-            }
-
-            self::audit('slip_batch_doc3_uploaded', $batch_id, 'pages', '', (string) $check['page_count']);
-            wp_send_json_success(['valid' => true, 'page_count' => (int) $check['page_count']]);
-        } catch (\Throwable $e) {
-            if ($tmp_copy !== '' && is_file($tmp_copy)) { @unlink($tmp_copy); }
-            self::fail_json($e, __('Could not process the upload.', 'meals-db'));
-        }
-    }
-
-    /**
-     * Composite the saved doc 4 blocks onto the uploaded doc 3 → merged PDF,
-     * stored on the batch row. Re-combinable any number of times.
-     */
-    public static function combine(): void {
-        if (!self::guard('delivery_slips')) {
-            return;
-        }
-        try {
-            $batch_id = isset($_POST['batch_id']) ? absint($_POST['batch_id']) : 0;
-            $batch    = $batch_id > 0 ? MealsDB_Slip_Batch::get($batch_id) : null;
-            if ($batch === null) {
-                wp_send_json_error(['message' => __('Batch not found.', 'meals-db')]);
-                return;
-            }
-            $doc3 = (string) ($batch['doc3_path'] ?? '');
-            if ($doc3 === '' || !is_readable($doc3)) {
-                wp_send_json_error(['message' => __('Upload a valid doc 3 scan before combining.', 'meals-db')]);
-                return;
-            }
-
-            $bytes = MealsDB_Slip_Merge::combine($batch['orders'] ?? [], $doc3);
-            if ($bytes === '') {
-                // Surface the SPECIFIC cause when the merge service knows it
-                // (e.g. the PDF image tool is unavailable, vs a page-count
-                // mismatch) so the operator isn't sent to the Event Log to
-                // guess. Falls back to the generic message otherwise.
-                $reason = method_exists('MealsDB_Slip_Merge', 'last_error_reason')
-                    ? MealsDB_Slip_Merge::last_error_reason()
-                    : '';
-                $message = $reason !== ''
-                    ? sprintf(__('The merge failed: %s', 'meals-db'), $reason)
-                    : __('The merge failed (see Event Log).', 'meals-db');
-                wp_send_json_error(['message' => $message]);
-                return;
-            }
-
-            $path = MealsDB_Slip_Batch::store_merged($batch_id, $bytes);
-            if ($path === '') {
-                wp_send_json_error(['message' => __('Could not save the merged output.', 'meals-db')]);
-                return;
-            }
-
-            self::audit('slip_batch_combined', $batch_id, 'status', '', 'combined');
-            wp_send_json_success(['download' => self::download_url($batch_id, 'merged')]);
-        } catch (\Throwable $e) {
-            self::fail_json($e, __('Could not combine the documents.', 'meals-db'));
-        }
-    }
-
-    /**
-     * Hard-delete a batch (row + doc3/merged files). The confirmation popup is
+     * Hard-delete a batch row. The confirmation popup is
      * front-end (unit 06); the server just executes.
      */
     public static function cancel(): void {
@@ -289,11 +147,11 @@ class MealsDB_Ajax_Slip_Batch {
     //  Downloads (GET file streams)
     // ================================================================= //
 
-    public static function download_doc1(): void {
+    public static function download_packing_slips(): void {
         $batch = self::download_guard();
         try {
             $generator = self::make_pdf_generator();
-            $pdf = $generator->generate_doc1_cover_sheet(
+            $pdf = $generator->generate_packing_slips_combined(
                 (string) ($batch['zone_name'] ?? ''),
                 (string) ($batch['delivery_date'] ?? ''),
                 [
@@ -302,22 +160,7 @@ class MealsDB_Ajax_Slip_Batch {
                     'created_at'  => (string) ($batch['created_at'] ?? ''),
                 ]
             );
-            self::stream_pdf($pdf, self::filename($batch, 'cover'));
-        } catch (\Throwable $e) {
-            self::fail_die($e);
-        }
-    }
-
-    public static function download_doc2(): void {
-        $batch = self::download_guard();
-        try {
-            $generator = self::make_pdf_generator();
-            $pdf = $generator->generate_doc2_packer_by_zones(
-                [(string) ($batch['zone_name'] ?? '')],
-                (string) ($batch['delivery_date'] ?? ''),
-                (string) ($batch['delivery_date'] ?? '')
-            );
-            self::stream_pdf($pdf, self::filename($batch, 'packer'));
+            self::stream_pdf($pdf, self::filename($batch, 'packing-slips'));
         } catch (\Throwable $e) {
             self::fail_die($e);
         }
@@ -331,20 +174,6 @@ class MealsDB_Ajax_Slip_Batch {
                 is_array($batch['orders'] ?? null) ? $batch['orders'] : []
             );
             self::stream_pdf($pdf, self::filename($batch, 'driver'));
-        } catch (\Throwable $e) {
-            self::fail_die($e);
-        }
-    }
-
-    public static function download_merged(): void {
-        $batch = self::download_guard();
-        try {
-            $path = (string) ($batch['merged_path'] ?? '');
-            if ($path === '' || !is_readable($path)) {
-                wp_die(esc_html__('No merged output is available for this batch.', 'meals-db'), 404);
-            }
-            $bytes = (string) file_get_contents($path);
-            self::stream_pdf($bytes, self::filename($batch, 'merged'));
         } catch (\Throwable $e) {
             self::fail_die($e);
         }
@@ -421,7 +250,10 @@ class MealsDB_Ajax_Slip_Batch {
 
     /** Build a GET download URL (nonce in the link) for the history page. */
     public static function download_url(int $batch_id, string $which): string {
-        $action = 'mealsdb_slip_download_' . preg_replace('/[^a-z0-9]/', '', $which);
+        // Keep '_' in the whitelist: the suffix must match the REGISTERED action
+        // (e.g. 'packing_slips' → mealsdb_slip_download_packing_slips). Collapsing
+        // underscores here would silently 404 the download.
+        $action = 'mealsdb_slip_download_' . preg_replace('/[^a-z0-9_]/', '', $which);
         return add_query_arg(
             [
                 'action'   => $action,
@@ -453,35 +285,6 @@ class MealsDB_Ajax_Slip_Batch {
         }
         $dt = DateTime::createFromFormat('Y-m-d', $date);
         return $dt !== false && $dt->format('Y-m-d') === $date;
-    }
-
-    /** Magic-byte PDF sniff for the upload. */
-    private static function sniff_pdf(string $path): bool {
-        $fh = @fopen($path, 'rb');
-        if ($fh === false) {
-            return false;
-        }
-        $head = (string) fread($fh, 5);
-        fclose($fh);
-        return strncmp($head, '%PDF-', 5) === 0;
-    }
-
-    /** Copy an upload into our protected tmp dir; returns path or ''. */
-    private static function scratch_copy(string $src): string {
-        $dir = class_exists('MealsDB_Slip_Batch') ? MealsDB_Slip_Batch::storage_dir('tmp') : null;
-        if ($dir === null) {
-            return '';
-        }
-        try {
-            $dest = trailingslashit($dir) . 'upload-' . bin2hex(random_bytes(8)) . '.pdf';
-        } catch (\Throwable $e) {
-            $dest = trailingslashit($dir) . 'upload-' . md5((string) memory_get_usage()) . '.pdf';
-        }
-        if (!@copy($src, $dest)) {
-            return '';
-        }
-        @chmod($dest, 0600);
-        return $dest;
     }
 
     private static function make_pdf_generator(): MealsDB_Slip_PDF_Generator {

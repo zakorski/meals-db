@@ -167,10 +167,11 @@ function mealsdb_uninstall_cleanup_current_site(): void {
             OR option_name LIKE '_transient_timeout_mealsdb_qo_%'"
     );
 
-    // Midland packing-slip files (directive 01/04): the meals_slip_batches table
-    // is dropped by the loop above, but its on-disk doc 3 scans + merged PDFs
-    // live under wp-content/uploads/mealsdb-slips/. They carry decrypted client
-    // PII, so a clean-slate uninstall must remove the whole tree.
+    // Midland packing-slip files: the meals_slip_batches table is dropped by the
+    // loop above. Current builds keep no slip files on disk, but installs upgraded
+    // across the merge-workflow removal may still have legacy doc-3 scans / merged
+    // PDFs under wp-content/uploads/mealsdb-slips/. Those carry decrypted client
+    // PII, so a clean-slate uninstall removes the whole tree defensively.
     if (function_exists('wp_upload_dir')) {
         $uploads = wp_upload_dir();
         if (is_array($uploads) && !empty($uploads['basedir'])) {

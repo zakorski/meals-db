@@ -6,24 +6,16 @@
  *   T-2  doc4_payload is ENCRYPTED at rest (ciphertext, not the plaintext PII)
  *   T-3  get() round-trips the ordered doc 4 payloads exactly
  *   T-4  create() rejects a bad delivery date (returns 0)
- *   T-5  list_batches() returns meta only — NO orders/payload — + has_* flags
- *   T-6  store_doc3() moves the file into the protected dir, flips status,
- *        records page count; the dir carries .htaccess + index.html guards
- *   T-7  re-upload replaces the prior doc 3 file (latest wins)
- *   T-8  store_merged() writes bytes, flips status 'combined', returns the path
- *   T-9  cancel() hard-deletes the row AND removes the doc3/merged files
+ *   T-5  list_batches() returns meta only — NO orders/payload, no has_* flags
+ *   T-9  cancel() hard-deletes the row
  *
  * Uses the REAL MealsDB_Encryption + MealsDB_Slip_Batch (so the encrypt/decrypt
- * + fail-closed story is exercised), an in-memory $wpdb, and a real temp upload
- * dir (wp_upload_dir stubbed) so the on-disk file lifecycle is real.
+ * + fail-closed story is exercised) and an in-memory $wpdb.
  *
  * Run: php tests/test-slip-batch.php
  */
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
-
-// A real, isolated temp upload root for this run.
-$GLOBALS['TEST_UPLOAD_BASE'] = sys_get_temp_dir() . '/mealsdb-slip-test-' . getmypid();
 
 $GLOBALS['TEST_OPTIONS'] = [
     'mealsdb_settings' => ['encryption_key' => 'base64:' . base64_encode(str_repeat('k', 32))],
@@ -43,15 +35,6 @@ if (!function_exists('get_current_user_id')) {
 }
 if (!function_exists('trailingslashit')) {
     function trailingslashit($s) { return rtrim((string) $s, '/\\') . '/'; }
-}
-if (!function_exists('wp_mkdir_p')) {
-    function wp_mkdir_p($dir) { return is_dir($dir) || mkdir($dir, 0777, true); }
-}
-if (!function_exists('wp_upload_dir')) {
-    function wp_upload_dir() { return ['basedir' => $GLOBALS['TEST_UPLOAD_BASE']]; }
-}
-if (!function_exists('wp_generate_password')) {
-    function wp_generate_password($len = 12, $special = true) { return substr(md5((string) mt_rand()), 0, $len); }
 }
 if (!function_exists('__')) {
     function __($t, $d = null) { return $t; }
@@ -158,13 +141,6 @@ function sample_orders(): array {
     ];
 }
 
-// Write a throwaway "PDF" file, return its path.
-function make_tmp_pdf(string $tag): string {
-    $p = sys_get_temp_dir() . '/slip-src-' . $tag . '-' . getmypid() . '.pdf';
-    file_put_contents($p, "%PDF-1.4\n% $tag\n");
-    return $p;
-}
-
 // ===========================================================================
 // T-1 / T-2 / T-3 — create, encryption-at-rest, get() round-trip.
 // ===========================================================================
@@ -195,7 +171,7 @@ chk(MealsDB_Slip_Batch::create('Z', 'not-a-date', sample_orders()), 0, 'T-4: bad
 chk(MealsDB_Slip_Batch::create('', '2026-06-30', sample_orders()), 0, 'T-4: empty zone → 0');
 
 // ===========================================================================
-// T-5 — list_batches returns meta only (no PII), with has_* flags.
+// T-5 — list_batches returns meta only (no PII), no has_* flags.
 // ===========================================================================
 $w  = reset_env();
 $id = MealsDB_Slip_Batch::create('Sussex', '2026-07-02', sample_orders());
@@ -203,65 +179,16 @@ $list = MealsDB_Slip_Batch::list_batches();
 chk(count($list), 1, 'T-5: one batch listed');
 chk_true(!isset($list[0]['orders']) && !isset($list[0]['doc4_payload']),
     'T-5: list carries NO payload/orders');
-chk($list[0]['has_doc3'] ?? null, false, 'T-5: has_doc3 false initially');
-chk($list[0]['has_merged'] ?? null, false, 'T-5: has_merged false initially');
+chk_true(!isset($list[0]['has_doc3']) && !isset($list[0]['has_merged']),
+    'T-5: list no longer exposes has_doc3/has_merged');
 // Filter by zone.
 chk(count(MealsDB_Slip_Batch::list_batches(['zone_name' => 'Nowhere'])), 0, 'T-5: zone filter excludes');
 
 // ===========================================================================
-// T-6 — store_doc3 moves the file into a protected dir + flips status.
-// ===========================================================================
-$src = make_tmp_pdf('a');
-chk_true(MealsDB_Slip_Batch::store_doc3($id, $src, 2), 'T-6: store_doc3 returns true');
-chk_true(!file_exists($src), 'T-6: source temp file consumed (moved)');
-$doc3_path = (string) ($w->rows[$id]['doc3_path'] ?? '');
-chk_true($doc3_path !== '' && is_file($doc3_path), 'T-6: doc3 file exists at recorded path');
-chk((string) ($w->rows[$id]['status'] ?? ''), 'doc3_uploaded', 'T-6: status → doc3_uploaded');
-chk((int) ($w->rows[$id]['doc3_page_count'] ?? -1), 2, 'T-6: page count recorded');
-// Protected-dir guards present.
-$doc3_dir = dirname($doc3_path);
-chk_true(is_file($doc3_dir . '/.htaccess'), 'T-6: .htaccess guard present');
-chk_true(is_file($doc3_dir . '/index.html'), 'T-6: index.html guard present');
-
-// ===========================================================================
-// T-7 — re-upload replaces the prior doc 3 file.
-// ===========================================================================
-$old_doc3 = $doc3_path;
-$src2 = make_tmp_pdf('b');
-chk_true(MealsDB_Slip_Batch::store_doc3($id, $src2, 2), 'T-7: re-upload returns true');
-$new_doc3 = (string) ($w->rows[$id]['doc3_path'] ?? '');
-chk_true($new_doc3 !== '' && $new_doc3 !== $old_doc3, 'T-7: doc3_path changed');
-chk_true(!file_exists($old_doc3), 'T-7: old doc3 file deleted');
-chk_true(is_file($new_doc3), 'T-7: new doc3 file present');
-
-// ===========================================================================
-// T-8 — store_merged writes bytes, flips status, returns path.
-// ===========================================================================
-$merged_path = MealsDB_Slip_Batch::store_merged($id, "%PDF-1.4\nmerged\n");
-chk_true($merged_path !== '' && is_file($merged_path), 'T-8: merged file written');
-chk((string) ($w->rows[$id]['status'] ?? ''), 'combined', 'T-8: status → combined');
-chk((string) ($w->rows[$id]['merged_path'] ?? ''), $merged_path, 'T-8: merged_path recorded');
-
-// ===========================================================================
-// T-9 — cancel hard-deletes the row and the files.
+// T-9 — cancel hard-deletes the row.
 // ===========================================================================
 chk_true(MealsDB_Slip_Batch::cancel($id), 'T-9: cancel returns true');
 chk_true(!isset($w->rows[$id]), 'T-9: row removed');
-chk_true(!file_exists($new_doc3), 'T-9: doc3 file removed');
-chk_true(!file_exists($merged_path), 'T-9: merged file removed');
-
-// ---------------------------------------------------------------------------
-// Cleanup the temp upload root.
-// ---------------------------------------------------------------------------
-$base = $GLOBALS['TEST_UPLOAD_BASE'];
-if (is_dir($base)) {
-    $it = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::CHILD_FIRST
-    );
-    foreach ($it as $f) { $f->isDir() ? @rmdir($f) : @unlink($f); }
-    @rmdir($base);
-}
 
 // ---------------------------------------------------------------------------
 // Report.

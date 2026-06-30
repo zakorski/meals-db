@@ -48,9 +48,9 @@ class MealsDB_Tables
 
     /**
      * Midland packing-slip batches (directive 01, Midland packing documents).
-     * One row per generated batch (a zone + delivery date). Persists the saved
-     * doc 4 driver-block payloads (one per order, positional), the uploaded
-     * doc 3 scan path, the merged output path, and the batch state. The
+     * One row per generated batch (a zone + delivery date). Persists the batch
+     * identity (zone + delivery date), the saved doc 4 driver-block payloads
+     * (one per order, positional), and the batch state. The
      * doc4_payload carries decrypted client PII (name/address/phone), so it is
      * encrypted at rest under the same key as the invoice-draft payload. This
      * is an additive table (STR-11 schema-sync handles it) and is in all()

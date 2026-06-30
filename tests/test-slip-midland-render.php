@@ -129,6 +129,45 @@ chk(call_priv($gen, 'resolve_zone_number', 'Moncton Downtown'), 1, 'ZN-1 first �
 chk(call_priv($gen, 'resolve_zone_number', 'Sussex'), 2, 'ZN-1 second → 2');
 chk(call_priv($gen, 'resolve_zone_number', 'Nowhere'), null, 'ZN-1 unknown → null');
 
+// ===========================================================================
+// CMB-1 — combined Packing-Slips HTML: cover page 1 + continuous numbering.
+// ===========================================================================
+$cmb_batch = [
+    'order_count' => 5, // deliberately WRONG snapshot count; the combined doc
+                        // must override this with the live slip count (2 below).
+    'orders'     => [
+        ['initials' => 'AAA', 'take_from_hold' => true],
+        ['initials' => 'BBB', 'take_from_hold' => false],
+    ],
+    'created_at' => '2026-06-30 12:00:00',
+];
+$cmb_slip = [
+    'initials' => 'AAA', 'zone' => 'Zone 1', 'order_number' => '#100',
+    'delivery_date' => 'June 30, 2026', 'items' => [],
+    'total_items' => 0, 'total_mains' => 0, 'total_sides' => 0, 'additional_notes' => '',
+];
+$two_slips = [$cmb_slip, ['initials' => 'BBB'] + $cmb_slip];
+$html = call_priv($gen, 'render_packing_slips_combined_html', 'Moncton Downtown', '2026-06-30', $cmb_batch, $two_slips);
+
+// Count opening div tags, not bare class strings — the <style> block also
+// contains .doc1-page/.doc2-page selectors, so a bare substr_count over the
+// whole document double-counts the CSS rules.
+chk(substr_count($html, '<div class="doc1-page'), 1, 'CMB-1: exactly one cover page');
+chk(substr_count($html, '<div class="doc2-page'), 2, 'CMB-1: two packer pages');
+chk_true(strpos($html, '<div class="doc1-page d2-break">') !== false, 'CMB-1: cover breaks before first slip');
+chk_true(strpos($html, 'Page 1 of 3') !== false, 'CMB-1: cover stamped "Page 1 of 3"');
+chk_true(strpos($html, 'Page 2 of 3') !== false, 'CMB-1: first slip "Page 2 of 3"');
+chk_true(strpos($html, 'Page 3 of 3') !== false, 'CMB-1: last slip "Page 3 of 3"');
+chk_true(strpos($html, '2 Orders') !== false, 'CMB-1: cover count reflects live slip count');
+// Last page must NOT carry a trailing page break (no blank trailing page).
+$last = strrpos($html, 'doc2-page');
+chk_true(strpos($html, 'doc2-page d2-break', $last) === false, 'CMB-1: last slip has no trailing break');
+
+// Zero-order edge: cover only, no trailing break.
+$html0 = call_priv($gen, 'render_packing_slips_combined_html', 'Moncton Downtown', '2026-06-30', $cmb_batch, []);
+chk_true(strpos($html0, '<div class="doc1-page">') !== false, 'CMB-1: zero-order cover has no break');
+chk_true(strpos($html0, 'Page 1 of 1') !== false, 'CMB-1: zero-order cover "Page 1 of 1"');
+
 echo "\n=== Midland renderers (dompdf-free logic) ===\n";
 if (empty($failures)) { echo "PASS — {$passed} checks\n"; exit(0); }
 echo "FAIL — {$passed} passed, " . count($failures) . " failed:\n";
