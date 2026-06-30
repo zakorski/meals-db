@@ -13,10 +13,10 @@
  *     mealsdb_slip_list            → history rows (table refresh)
  *
  *   File streams (GET link, nonce in URL):
- *     mealsdb_slip_download_doc1   → cover sheet (regenerated from the batch)
- *     mealsdb_slip_download_doc2   → packer slips (re-queried live; with divider)
- *     mealsdb_slip_download_doc4   → standalone driver blocks (manual fallback)
- *     mealsdb_slip_download_merged → the saved merged output (streamed from disk)
+ *     mealsdb_slip_download_packing_slips → cover sheet + packer slips, one PDF
+ *                                           (regenerated/re-queried live from the batch)
+ *     mealsdb_slip_download_doc4          → standalone driver blocks (manual fallback)
+ *     mealsdb_slip_download_merged        → the saved merged output (streamed from disk)
  *
  * manage_options is REQUIRED on every endpoint: doc 4 / the merged output expose
  * DECRYPTED client PII (name/address/phone), exactly like the invoice-draft
@@ -55,10 +55,9 @@ class MealsDB_Ajax_Slip_Batch {
         add_action('wp_ajax_mealsdb_slip_list',           [self::class, 'list_batches']);
 
         // File streams (GET download links).
-        add_action('wp_ajax_mealsdb_slip_download_doc1',   [self::class, 'download_doc1']);
-        add_action('wp_ajax_mealsdb_slip_download_doc2',   [self::class, 'download_doc2']);
-        add_action('wp_ajax_mealsdb_slip_download_doc4',   [self::class, 'download_doc4']);
-        add_action('wp_ajax_mealsdb_slip_download_merged', [self::class, 'download_merged']);
+        add_action('wp_ajax_mealsdb_slip_download_packing_slips', [self::class, 'download_packing_slips']);
+        add_action('wp_ajax_mealsdb_slip_download_doc4',          [self::class, 'download_doc4']);
+        add_action('wp_ajax_mealsdb_slip_download_merged',        [self::class, 'download_merged']);
     }
 
     // ================================================================= //
@@ -289,11 +288,11 @@ class MealsDB_Ajax_Slip_Batch {
     //  Downloads (GET file streams)
     // ================================================================= //
 
-    public static function download_doc1(): void {
+    public static function download_packing_slips(): void {
         $batch = self::download_guard();
         try {
             $generator = self::make_pdf_generator();
-            $pdf = $generator->generate_doc1_cover_sheet(
+            $pdf = $generator->generate_packing_slips_combined(
                 (string) ($batch['zone_name'] ?? ''),
                 (string) ($batch['delivery_date'] ?? ''),
                 [
@@ -302,22 +301,7 @@ class MealsDB_Ajax_Slip_Batch {
                     'created_at'  => (string) ($batch['created_at'] ?? ''),
                 ]
             );
-            self::stream_pdf($pdf, self::filename($batch, 'cover'));
-        } catch (\Throwable $e) {
-            self::fail_die($e);
-        }
-    }
-
-    public static function download_doc2(): void {
-        $batch = self::download_guard();
-        try {
-            $generator = self::make_pdf_generator();
-            $pdf = $generator->generate_doc2_packer_by_zones(
-                [(string) ($batch['zone_name'] ?? '')],
-                (string) ($batch['delivery_date'] ?? ''),
-                (string) ($batch['delivery_date'] ?? '')
-            );
-            self::stream_pdf($pdf, self::filename($batch, 'packer'));
+            self::stream_pdf($pdf, self::filename($batch, 'packing-slips'));
         } catch (\Throwable $e) {
             self::fail_die($e);
         }
@@ -421,7 +405,10 @@ class MealsDB_Ajax_Slip_Batch {
 
     /** Build a GET download URL (nonce in the link) for the history page. */
     public static function download_url(int $batch_id, string $which): string {
-        $action = 'mealsdb_slip_download_' . preg_replace('/[^a-z0-9]/', '', $which);
+        // Keep '_' in the whitelist: the suffix must match the REGISTERED action
+        // (e.g. 'packing_slips' → mealsdb_slip_download_packing_slips). Collapsing
+        // underscores here would silently 404 the download.
+        $action = 'mealsdb_slip_download_' . preg_replace('/[^a-z0-9_]/', '', $which);
         return add_query_arg(
             [
                 'action'   => $action,

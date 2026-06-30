@@ -62,6 +62,11 @@ if (!function_exists('wp_send_json_error')) {
     function wp_send_json_error($d = null, $s = null) { $GLOBALS['JSON'] = ['type' => 'error', 'data' => $d, 'status' => $s]; }
 }
 if (!function_exists('add_action')) { function add_action() { return true; } }
+if (!function_exists('add_query_arg')) {
+    function add_query_arg($args, $url) { return $url . '?' . http_build_query($args); }
+}
+if (!function_exists('admin_url')) { function admin_url($p = '') { return 'http://t/wp-admin/' . $p; } }
+if (!function_exists('wp_create_nonce')) { function wp_create_nonce($a = '') { return 'nonce'; } }
 
 // Stub collaborators BEFORE the autoloader so the real ones don't load.
 class MealsDB_Rate_Limiter {
@@ -259,6 +264,15 @@ MealsDB_Slip_Batch::create('Moncton Downtown', '2026-06-30', [['order_number' =>
 MealsDB_Ajax_Slip_Batch::list_batches();
 chk(jtype(), 'success', 'LS-1 list success');
 chk(count(jdata()['batches'] ?? []), 1, 'LS-1 one batch listed');
+
+// ===========================================================================
+// DL-1 — download_url builds the combined-download action (underscore kept).
+// ===========================================================================
+reset_env();
+$url = MealsDB_Ajax_Slip_Batch::download_url(5, 'packing_slips');
+chk_true(strpos($url, 'action=mealsdb_slip_download_packing_slips') !== false, 'DL-1 packing_slips action name');
+$url4 = MealsDB_Ajax_Slip_Batch::download_url(5, 'doc4');
+chk_true(strpos($url4, 'action=mealsdb_slip_download_doc4') !== false, 'DL-1 doc4 action unchanged');
 
 // ---- cleanup temp upload root ----
 $base = $GLOBALS['TEST_UPLOAD_BASE'];
