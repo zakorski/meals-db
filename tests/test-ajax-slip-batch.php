@@ -1,27 +1,23 @@
 <?php
 /**
- * Tests for MealsDB_Ajax_Slip_Batch (directive 05) — the dompdf/Imagick-free
- * JSON mutation paths. Streaming downloads + the Imagick merge are live-only;
+ * Tests for MealsDB_Ajax_Slip_Batch (directive 05) — the dompdf-free
+ * JSON mutation paths. Streaming PDF downloads are live-only;
  * here we pin the guard stack and the mutation handlers' validation/audit:
  *
  *   G-1  guard: nonce fail / cap fail / rate-limit fail → error, no work
  *   GB-1 generate_batch: unknown zone / bad date → error
  *   GB-2 generate_batch: zero orders → error (no batch created)
  *   GB-3 generate_batch: happy path → batch persisted, audit row, success
- *   UP-1 upload_doc3: missing batch / no file → error valid=false
- *   CB-1 combine: no doc3 uploaded → error
  *   CN-1 cancel: happy path → row gone + audit; missing → error
  *   LS-1 list → returns batch rows
  *
- * Stubs the generator + merge; uses the REAL MealsDB_Slip_Batch + Encryption
+ * Stubs the generator; uses the REAL MealsDB_Slip_Batch + Encryption
  * with an in-memory $wpdb and a real temp upload dir.
  *
  * Run: php tests/test-ajax-slip-batch.php
  */
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
-if (!defined('UPLOAD_ERR_OK')) { define('UPLOAD_ERR_OK', 0); }
-if (!defined('UPLOAD_ERR_NO_FILE')) { define('UPLOAD_ERR_NO_FILE', 4); }
 
 $GLOBALS['NONCE_OK'] = true;
 $GLOBALS['CAP_OK']   = true;
@@ -85,12 +81,6 @@ class MealsDB_Collection_Calculator {}
 class MealsDB_Slip_PDF_Generator {
     public function __construct($q = null, $c = null) {}
     public function build_batch_data(array $zones, string $s, string $e): array { return $GLOBALS['GEN_DATA']; }
-}
-class MealsDB_Slip_Merge {
-    public static function validate_doc3(string $p, int $exp): array {
-        return ['ok' => true, 'page_count' => $exp, 'reason' => ''];
-    }
-    public static function combine(array $orders, string $doc3): string { return '%PDF-merged'; }
 }
 
 require_once __DIR__ . '/../includes/class-autoloader.php';
@@ -213,32 +203,6 @@ chk(count($w->rows), 1, 'GB-3 batch persisted');
 $batch_id = jdata()['batch_id'] ?? 0;
 chk_true($batch_id > 0, 'GB-3 batch_id returned');
 chk_true(count($GLOBALS['AUDIT']) === 1 && $GLOBALS['AUDIT'][0]['action'] === 'slip_batch_generated', 'GB-3 audit row written');
-
-// ===========================================================================
-// UP-1 — upload early rejections.
-// ===========================================================================
-reset_env();
-$_POST = ['batch_id' => 999];   // no such batch
-MealsDB_Ajax_Slip_Batch::upload_doc3();
-chk(jtype(), 'error', 'UP-1 missing batch → error');
-chk(jdata()['valid'] ?? null, false, 'UP-1 valid=false');
-
-// Create a real batch, then upload with no file.
-$w = reset_env();
-$bid = MealsDB_Slip_Batch::create('Moncton Downtown', '2026-06-30', [['order_number' => '#1']]);
-$_POST = ['batch_id' => $bid]; $_FILES = [];
-MealsDB_Ajax_Slip_Batch::upload_doc3();
-chk(jtype(), 'error', 'UP-1 no file → error');
-chk(jdata()['valid'] ?? null, false, 'UP-1 no file valid=false');
-
-// ===========================================================================
-// CB-1 — combine without an uploaded doc3.
-// ===========================================================================
-$w = reset_env();
-$bid = MealsDB_Slip_Batch::create('Moncton Downtown', '2026-06-30', [['order_number' => '#1']]);
-$_POST = ['batch_id' => $bid];
-MealsDB_Ajax_Slip_Batch::combine();
-chk(jtype(), 'error', 'CB-1 combine w/o doc3 → error');
 
 // ===========================================================================
 // CN-1 — cancel.
