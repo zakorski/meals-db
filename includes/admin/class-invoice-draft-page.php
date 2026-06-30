@@ -347,12 +347,12 @@ class MealsDB_Invoice_Draft_Page {
      * whose map isn't built yet).
      */
     private static function render_grid(int $draft_id, string $pipeline, array $current, array $generated, bool $editable): void {
-        $show_all = !empty($_GET['show_all']);
-        $map      = $show_all ? null : self::column_map($pipeline);
+        $show_all    = !empty($_GET['show_all']);
+        $has_curated = self::pipeline_has_curated_view($pipeline);
 
         // Toggle link — preserves draft_id, flips show_all.
-        $base = admin_url('admin.php?page=' . self::PAGE_SLUG . '&draft_id=' . $draft_id);
-        if (self::column_map($pipeline) !== null) {
+        if ($has_curated) {
+            $base         = admin_url('admin.php?page=' . self::PAGE_SLUG . '&draft_id=' . $draft_id);
             $toggle_url   = $show_all ? $base : ($base . '&show_all=1');
             $toggle_label = $show_all
                 ? __('Show curated columns', 'meals-db')
@@ -361,11 +361,24 @@ class MealsDB_Invoice_Draft_Page {
                 . esc_html($toggle_label) . '</a></p>';
         }
 
-        if ($map === null) {
+        if ($show_all || !$has_curated) {
             self::render_raw_grid($draft_id, $current, $generated, $editable);
             return;
         }
-        self::render_curated_grid($draft_id, $pipeline, $map, $current, $generated, $editable);
+
+        // SDNB-legacy uses a bespoke per-line "client block" layout; VAC (and
+        // any future flat pipeline) uses the generic curated grid.
+        if ($pipeline === MealsDB_Invoice_Draft::PIPELINE_SDNB_LEGACY) {
+            self::render_sdnb_legacy_grid($draft_id, $current, $generated, $editable);
+            return;
+        }
+        self::render_curated_grid($draft_id, $pipeline, self::column_map($pipeline), $current, $generated, $editable);
+    }
+
+    /** Does this pipeline have a curated (non-raw) review layout? */
+    private static function pipeline_has_curated_view(string $pipeline): bool {
+        return self::column_map($pipeline) !== null
+            || $pipeline === MealsDB_Invoice_Draft::PIPELINE_SDNB_LEGACY;
     }
 
     /**
@@ -469,6 +482,11 @@ class MealsDB_Invoice_Draft_Page {
      * @return array<string,string> derived_field => formatted display value.
      */
     public static function derived_display(string $pipeline, array $row): array {
+        // SDNB-legacy returns an ORDERED per-line list (shape: ['lines' => […]]),
+        // not a flat field→value map — the grid renders 1–2 line rows per client.
+        if ($pipeline === MealsDB_Invoice_Draft::PIPELINE_SDNB_LEGACY) {
+            return self::sdnb_legacy_derived_display($row);
+        }
         $map = self::column_map($pipeline);
         if ($map === null) {
             return [];
@@ -485,6 +503,194 @@ class MealsDB_Invoice_Draft_Page {
             }
         }
         return $out;
+    }
+
+    // -----------------------------------------------------------------
+    // SDNB-legacy: bespoke per-line "client block" grid (directive
+    // INVOICE-DRAFT-SPREADSHEET SDNB scope). A client renders as one editable
+    // header row (client-level inputs, shown once) followed by its 1–2
+    // read-only invoice-line rows. Line-1's Rate is the editable client-level
+    // resolved_rate; line-2's Rate is constant-derived (read-only).
+    // -----------------------------------------------------------------
+
+    /**
+     * Column model for the SDNB-legacy grid. `header` = client-level columns
+     * (the editable inputs + the frozen client name); `line` = per-invoice-line
+     * columns. Public so the layout is unit-testable.
+     */
+    public static function sdnb_legacy_column_model(): array {
+        return [
+            'header' => [
+                ['field' => 'client',                 'label' => __('Client', 'meals-db'),        'type' => 'identity-name'],
+                ['field' => 'allocated_mains',        'label' => __('Mains', 'meals-db'),         'type' => 'input-int'],
+                ['field' => 'allocated_tax_sides',    'label' => __('Tax Sides', 'meals-db'),     'type' => 'input-int'],
+                ['field' => 'allocated_nontax_sides', 'label' => __('Non-Tax Sides', 'meals-db'), 'type' => 'input-int'],
+                ['field' => 'contribution_cents',     'label' => __('Contribution', 'meals-db'),  'type' => 'input-money-cents'],
+            ],
+            'line' => [
+                ['key' => 'line_number',      'label' => __('Line', 'meals-db'),  'type' => 'line-label'],
+                ['key' => 'units',            'label' => __('Units', 'meals-db'), 'type' => 'derived-int'],
+                ['key' => 'rate',             'label' => __('Rate', 'meals-db'),  'type' => 'line-rate'],
+                ['key' => 'basic_cost_cents', 'label' => __('Basic', 'meals-db'), 'type' => 'derived-money'],
+                ['key' => 'tax_cents',        'label' => __('HST', 'meals-db'),   'type' => 'derived-money'],
+                ['key' => 'line_total_cents', 'label' => __('Total', 'meals-db'), 'type' => 'derived-money'],
+            ],
+        ];
+    }
+
+    /**
+     * Format one SDNB invoice line's derived figures into display strings,
+     * keyed by the line column keys. Shared by the renderer AND the live
+     * recompute endpoint (so the JS row template displays exactly what the
+     * server rendered) — never recompute money in JS.
+     *
+     * @return array<string,string>
+     */
+    public static function sdnb_line_display(array $line): array {
+        return [
+            'line_number'      => (string) (int) ($line['line_number'] ?? 0),
+            'units'            => (string) (int) ($line['units'] ?? 0),
+            'rate'             => '$' . number_format((float) ($line['rate'] ?? 0), 2, '.', ''),
+            'basic_cost_cents' => '$' . MealsDB_Money::format((int) ($line['basic_cost_cents'] ?? 0)),
+            'tax_cents'        => '$' . MealsDB_Money::format((int) ($line['tax_cents'] ?? 0)),
+            'line_total_cents' => '$' . MealsDB_Money::format((int) ($line['line_total_cents'] ?? 0)),
+        ];
+    }
+
+    /**
+     * Per-line derived payload for one SDNB-legacy client, as the live recompute
+     * endpoint returns it: ['lines' => [ display-string map per invoice line ]].
+     * Shape is deliberately distinct from VAC's flat field→value map so the JS
+     * branches correctly (VAC: refresh cells; SDNB: re-render line rows).
+     */
+    public static function sdnb_legacy_derived_display(array $row): array {
+        $lines = MealsDB_Invoice_Generator::recompute_sdnb_legacy_lines($row);
+        $out   = [];
+        foreach ($lines as $line) {
+            $out[] = self::sdnb_line_display($line);
+        }
+        return ['lines' => $out];
+    }
+
+    private static function render_sdnb_legacy_grid(int $draft_id, array $current, array $generated, bool $editable): void {
+        $model = self::sdnb_legacy_column_model();
+        echo '<table class="widefat mealsdb-draft-curated mealsdb-draft-sdnb" id="mealsdb-draft-grid" '
+            . 'data-draft-id="' . esc_attr((string) $draft_id) . '" data-pipeline="sdnb_legacy">';
+        echo '<thead><tr>';
+        foreach (array_merge($model['header'], $model['line']) as $col) {
+            echo '<th class="mealsdb-col-' . esc_attr($col['type']) . '">' . esc_html($col['label']) . '</th>';
+        }
+        echo '</tr></thead><tbody>';
+        foreach ($current as $client_id => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $gen_row = (isset($generated[$client_id]) && is_array($generated[$client_id])) ? $generated[$client_id] : [];
+            self::render_sdnb_client_block((string) $client_id, $row, $gen_row, $editable);
+        }
+        echo '</tbody></table>';
+    }
+
+    /** Render one client's block: an editable header row + its 1–2 line rows. */
+    private static function render_sdnb_client_block(string $cid, array $row, array $gen_row, bool $editable): void {
+        $model = self::sdnb_legacy_column_model();
+        $lines = MealsDB_Invoice_Generator::recompute_sdnb_legacy_lines($row);
+        if (empty($lines)) {
+            $lines = [null]; // zero-mains (suppressed in real drafts) — one header row, blank line cells.
+        }
+
+        foreach ($lines as $i => $line) {
+            $first = ($i === 0);
+            echo '<tr class="mealsdb-sdnb-row' . ($first ? ' mealsdb-sdnb-client-first' : '') . '" '
+                . 'data-client-id="' . esc_attr($cid) . '" data-line-index="' . esc_attr((string) $i) . '">';
+            foreach ($model['header'] as $col) {
+                self::render_sdnb_header_cell($cid, $col, $row, $gen_row, $editable, $first);
+            }
+            foreach ($model['line'] as $col) {
+                self::render_sdnb_line_cell($cid, $col, $line, $i, $row, $gen_row, $editable);
+            }
+            echo '</tr>';
+        }
+    }
+
+    /** A client-level header cell — rendered on line-1 only; blank thereafter. */
+    private static function render_sdnb_header_cell(string $cid, array $col, array $row, array $gen_row, bool $editable, bool $first): void {
+        $type  = (string) $col['type'];
+        $field = (string) $col['field'];
+
+        if (!$first) {
+            echo '<td class="mealsdb-col-' . esc_attr($type) . ' mealsdb-sdnb-cont"></td>';
+            return;
+        }
+        if ($type === 'identity-name') {
+            $name = trim((string) ($row['first_name'] ?? '') . ' ' . (string) ($row['last_name'] ?? ''));
+            echo '<td class="mealsdb-col-identity-name"><span>' . esc_html($name) . '</span></td>';
+            return;
+        }
+        if ($type === 'input-int') {
+            $val = (string) (int) ($row[$field] ?? 0);
+            echo '<td class="mealsdb-col-input-int">';
+            if ($editable) {
+                echo '<input type="text" class="mealsdb-draft-cell" data-client-id="' . esc_attr($cid) . '" '
+                    . 'data-field="' . esc_attr($field) . '" value="' . esc_attr($val) . '" />';
+            } else {
+                echo '<span>' . esc_html($val) . '</span>';
+            }
+            self::was_hint($gen_row[$field] ?? null, $val, $type);
+            echo '</td>';
+            return;
+        }
+        // input-money-cents — Contribution: stored cents, EDITED as dollars
+        // (directive SDNB D3). data-edit-as="dollars" tells the edit endpoint to
+        // convert dollars→cents for this *_cents field.
+        $dollars = number_format((int) ($row[$field] ?? 0) / 100, 2, '.', '');
+        echo '<td class="mealsdb-col-input-money">';
+        if ($editable) {
+            echo '<input type="text" class="mealsdb-draft-cell" data-client-id="' . esc_attr($cid) . '" '
+                . 'data-field="' . esc_attr($field) . '" data-edit-as="dollars" value="' . esc_attr($dollars) . '" />';
+        } else {
+            echo '<span>$' . esc_html($dollars) . '</span>';
+        }
+        $gen = $gen_row[$field] ?? null;
+        if ($gen !== null && is_numeric($gen)) {
+            $gen_d = number_format((int) $gen / 100, 2, '.', '');
+            if ($gen_d !== $dollars) {
+                echo '<div class="mealsdb-draft-was">' . esc_html__('was:', 'meals-db') . ' $' . esc_html($gen_d) . '</div>';
+            }
+        }
+        echo '</td>';
+    }
+
+    /** A per-line cell. Line-1 Rate is the editable resolved_rate; rest read-only. */
+    private static function render_sdnb_line_cell(string $cid, array $col, $line, int $line_index, array $row, array $gen_row, bool $editable): void {
+        $type = (string) $col['type'];
+        $key  = (string) ($col['key'] ?? '');
+        $disp = ($line === null) ? [] : self::sdnb_line_display($line);
+
+        if ($type === 'line-rate') {
+            // Editable client-level rate on line 1; constant-derived on line ≥2.
+            if ($line_index === 0 && $editable && $line !== null) {
+                $rate_val = number_format((float) ($row['resolved_rate'] ?? ($line['rate'] ?? 0)), 2, '.', '');
+                echo '<td class="mealsdb-col-input-money">';
+                echo '<input type="text" class="mealsdb-draft-cell" data-client-id="' . esc_attr($cid) . '" '
+                    . 'data-field="resolved_rate" value="' . esc_attr($rate_val) . '" />';
+                self::was_hint($gen_row['resolved_rate'] ?? null, $rate_val, 'input-money');
+                echo '</td>';
+                return;
+            }
+            echo '<td class="mealsdb-derived" data-client-id="' . esc_attr($cid) . '" '
+                . 'data-line-index="' . esc_attr((string) $line_index) . '" data-derived-field="rate">'
+                . '<span>' . esc_html($disp['rate'] ?? '') . '</span></td>';
+            return;
+        }
+        if ($type === 'line-label') {
+            echo '<td class="mealsdb-col-line-label"><span>' . esc_html($disp['line_number'] ?? '') . '</span></td>';
+            return;
+        }
+        // derived-int / derived-money line cell.
+        echo '<td class="mealsdb-derived" data-client-id="' . esc_attr($cid) . '" '
+            . 'data-line-index="' . esc_attr((string) $line_index) . '" data-derived-field="' . esc_attr($key) . '">'
+            . '<span>' . esc_html($disp[$key] ?? '') . '</span></td>';
     }
 
     /**

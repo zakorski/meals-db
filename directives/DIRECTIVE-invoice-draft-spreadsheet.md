@@ -225,5 +225,90 @@ curated per-pipeline layout (Part 1) with no inputs, rendering derived cells via
 - Confirm a derived cell (e.g. VAC `vac_total`) has no input and cannot be changed, on both the editable and the
   finalized read-only view.
 - "Show all fields" reveals the raw `array_keys` columns (debug parity with old behavior).
+
+---
+
+# SDNB-legacy grid — SCOPE (2026-06-29)
+
+> Status: VAC grid SHIPPED (PR #439, `compute_vac_row_derived` + curated map + CSS + recompute endpoint).
+> This section scopes the SDNB-legacy grid. Two decisions (D1, D2 below) gate the build — resolve with the
+> operator/dev BEFORE writing the column map. The VAC build is the template; the wiring (column_map →
+> derived_display → edit endpoint `derived` → JS refresh) is identical. The MATH and ROW SHAPE differ.
+
+## What's verified in code (not assumed)
+- **Stored `current` row** = bare phase-2 row from `build_sdnb_legacy_draft_rows` (`get_phase2_billing_data`):
+  `allocated_mains`, `allocated_sides`, `allocated_tax_sides`, `allocated_nontax_sides`, `resolved_rate`,
+  `contribution_cents` (INT cents), identity (`service_id`, `requisition_id`, `individual_id`,
+  `individual_id_index`, `delivery_area_zone`, names, address), `wp_user_id`. **No `bill_*` fields.**
+- **PII is DECRYPTED on the row** — `collect_sdnb_legacy_client_rows` `safe_decrypt`s `requisition_id` +
+  `individual_id` (class-invoice-generator.php ~679). So the grid can display them; "Show all" shows plaintext,
+  exactly as the array_keys grid does today (page is `manage_options`-gated — no new exposure).
+- **The adapter** (`serialize_sdnb_legacy` lines 944–963) maps `allocated_* → bill_*`,
+  `contribution_cents/100 → client_contribution` (float), wraps the row as `client`, then calls
+  `split_into_invoice_lines`.
+- **`split_into_invoice_lines` (line 377) emits 1 OR 2 lines.** Per line: `units`, `rate`, `basic_cost_cents`,
+  `client_contribution_cents` (line-1 only; always 0 on line 2), `tax_cents`. Line total =
+  `basic + tax − contribution`. Rurality (→ side rate + line-2 secondary main rate) comes from
+  `delivery_area_zone`, NOT the rate value (LB-7). HST = taxable_sides × side_rate × WC-sourced rate.
+
+## Decisions — RESOLVED (operator/dev, 2026-06-29)
+- **D1 → PER-LINE BREAKDOWN.** The grid shows each client's 1–2 invoice lines, each with its own
+  rate/units/basic/HST/total. This is the literal SDNB invoice shape — and the bigger build (per-line derived
+  payload + dynamic sub-row management; see "Per-line design" below).
+- **D2 → RATE EDITABLE.** `resolved_rate` is an editable `input-money` on **line 1 only** (line-2 rate is
+  always constant-derived and never an input).
+- **D3 → CONTRIBUTION EDITABLE, as DOLLARS.** The grid edits the contribution as a dollar amount; the layer
+  converts to/from `contribution_cents` (stored cents) on read/save. It is client-level (applies to line 1;
+  line 2 is always 0).
+
+## Per-line design (the crux of D1)
+The editable inputs are **client-level** (one `allocated_mains`/`tax_sides`/`nontax_sides`/`rate`/`contribution`
+per client) but the derived output is **per-line**, and editing an input can CHANGE THE LINE COUNT (e.g. adding
+mains past the sides count spawns a second line, or removing them collapses it). So:
+- **Layout — "client block" = an editable header row + 1–2 read-only line rows.**
+  - *Header row (editable):* Client (frozen) · Service ID · Zone · Mains · Tax Sides · Non-Tax Sides ·
+    Contribution($) — the client-level inputs, shown once.
+  - *Line rows (read-only, indented under the client):* Line # · Units · Rate · Basic · HST · Line Total. **D2
+    exception:** line-1's Rate cell is the editable `resolved_rate` input; line-2's Rate is read-only derived.
+  - Group line rows to their client with a `data-client-id` on every row + a CSS block separator (no rowspan —
+    rowspan fights the dynamic re-render).
+- **Recompute payload is per-line.** `edit_draft_field` returns `derived` as an ORDERED LIST of line objects
+  for the edited client, e.g. `derived.lines = [{units,rate,basic,hst,total}, …]`, NOT a flat field→value map.
+  This is a SHAPE CHANGE from the VAC `derived` map — the JS branch must handle both (VAC: field map; SDNB:
+  line list). Keep the VAC contract intact; add the list form for SDNB.
+- **JS must re-render the client's line rows** (remove existing `.mealsdb-line-row[data-client-id=X]`, re-emit
+  from `derived.lines`) because the line COUNT can change on edit. The VAC in-place cell update does not cover
+  this; SDNB needs a small row-template render in JS (display-only — still NO money math in JS).
+- `allocated_sides` (the line-1 gate) is **derived from** `tax_sides + nontax_sides`, NOT an independent input
+  (avoids the desync wrinkle); the adapter computes `bill_sides = tax + nontax`.
+
+## Refactor (Part 3a, mirrors the VAC extraction)
+Lift the adapter out of `serialize_sdnb_legacy` into:
+- `private static function adapt_sdnb_legacy_row(array $phase2_row): ?array` — the 944–963 mapping (returns
+  null for a zero-mains row, matching the current `continue`); set `bill_sides = tax + nontax`.
+- `public static function recompute_sdnb_legacy_lines(array $row): array` → `adapt_sdnb_legacy_row` →
+  `split_into_invoice_lines` → return the ORDERED 1–2 line objects (formatted-money-ready).
+`serialize_sdnb_legacy` then calls the SAME adapter (no duplicated mapping). Characterization test
+`test-invoice-serialize.php` T-A1 must stay byte-identical.
+
+## Column model (per-line)
+Header (editable, per client): Client (identity-name, frozen) · Service ID (identity) ·
+Zone (identity, `delivery_area_zone`) · Mains (`allocated_mains`, input-int) ·
+Tax Sides (`allocated_tax_sides`, input-int) · Non-Tax Sides (`allocated_nontax_sides`, input-int) ·
+Contribution (`contribution_cents` edited as `$`, input-money).
+Line rows (derived per line): Line # · Units (derived-int) · Rate (line-1 = `resolved_rate` input-money;
+line-2 derived) · Basic (derived-money) · HST (derived-money) · Line Total (derived-money).
+No `bill_*` columns (not on the row). Reconcile labels with the operator.
+
+## Test plan (mirror VAC, extended for per-line)
+- `test-sdnb-legacy-compute.php` — `recompute_sdnb_legacy_lines` against known `split_into_invoice_lines`
+  outputs: a 1-line case, a 2-line case (line-2 secondary main rate + line-1-only contribution), the
+  `bill_sides = tax+nontax` derivation, and that editing mains flips the line count.
+- Extend `test-invoice-draft-columns.php` — SDNB-legacy header map (editable types; no `bill_*`); line-row
+  model (Rate editable on line 1 only).
+- `test-ajax-invoice-draft.php` T-13 — SDNB-legacy edit returns `derived.lines` as an ordered list; editing
+  mains changes the list length.
+- `test-invoice-serialize.php` T-A1 unchanged (adapter refactor is behavior-preserving).
+- `$/cents` round-trip for the contribution edit (dollars in → cents stored → dollars displayed).
 </content>
 </invoke>

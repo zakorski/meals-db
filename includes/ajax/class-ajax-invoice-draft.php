@@ -193,6 +193,17 @@ class MealsDB_Ajax_Invoice_Draft {
                 return;
             }
 
+            // Some *_cents fields are stored in cents but EDITED as dollars on
+            // the grid (SDNB contribution — directive SDNB scope D3; the input
+            // carries data-edit-as="dollars" and the JS posts edit_as=dollars).
+            // Convert dollars→cents BEFORE validation so the int-baseline money
+            // path stores the right magnitude. to_cents rounds half-up.
+            $edit_as           = sanitize_text_field(wp_unslash($_POST['edit_as'] ?? ''));
+            $edited_as_dollars = ($edit_as === 'dollars' && substr($field, -6) === '_cents');
+            if ($edited_as_dollars && is_numeric($raw_value)) {
+                $raw_value = (string) MealsDB_Money::to_cents($raw_value);
+            }
+
             // Baseline guides numeric representation; fall back to the current
             // value's type if no generated baseline exists for the field.
             $baseline = $draft['payload']['generated'][$client_id][$field]
@@ -252,11 +263,21 @@ class MealsDB_Ajax_Invoice_Draft {
                 ? MealsDB_Invoice_Draft_Page::derived_display((string) ($draft['pipeline'] ?? ''), $updated_row)
                 : [];
 
+            // value_display is the string the grid puts back in the input box.
+            // For a dollars-edited cents field it's the dollar form (so the cell
+            // doesn't flip to a raw cents integer); otherwise it's the stored
+            // value verbatim.
+            $value_display = is_scalar($validated) ? (string) $validated : '';
+            if ($edited_as_dollars && is_int($validated)) {
+                $value_display = number_format($validated / 100, 2, '.', '');
+            }
+
             wp_send_json_success([
-                'field'   => $field,
-                'value'   => $validated,
-                'changed' => ($old !== $validated),
-                'derived' => $derived, // [derived_field => formatted]; [] when none
+                'field'         => $field,
+                'value'         => $validated,
+                'value_display' => $value_display,
+                'changed'       => ($old !== $validated),
+                'derived'       => $derived, // VAC: [field=>str]; SDNB: ['lines'=>[…]]; [] when none
             ]);
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Invoice_Draft AJAX] edit failed: ' . $e->getMessage());
