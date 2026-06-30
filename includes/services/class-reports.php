@@ -119,16 +119,20 @@ class MealsDB_Reports {
      * 2. Seasonal index from year-over-year comparison
      * 3. Inventory subtraction (stock + future)
      *
-     * @param int   $trailing_weeks       Weeks of recent history for baseline (default 12).
-     * @param int   $order_horizon_weeks  Weeks of stock to order for (default 6).
-     * @param float $decay_factor         Recency weight decay, 0-1 (default 0.85).
+     * The forecasting model is FIXED to the configuration validated by the 2025
+     * back-test and is NOT configurable by design (no params, meta, settings, or
+     * filters): 12-week recency-weighted history (decay 0.85, most-recent week
+     * weight 1.0), a 6-week order horizon PLUS a demand-proportional 3-week
+     * safety buffer = 9 weeks of coverage, and a year-over-year seasonal index
+     * clamped to [0.3, 3.0] (default 1.0 with no prior-year data). The 3-week
+     * buffer was chosen because it cut order volatility below the status quo
+     * (0.245 → 0.165) and dropped stockouts to a single month at an acceptable
+     * inventory level. The buffer is the 3 extra weeks of demand — NOT a flat
+     * per-product unit count.
+     *
      * @return array
      */
-    public function generate_purchase_order(
-        int $trailing_weeks = 12,
-        int $order_horizon_weeks = 6,
-        float $decay_factor = 0.85
-    ): array {
+    public function generate_purchase_order(): array {
         if (!self::is_authorized_to_read_reports()) {
             return [];
         }
@@ -137,13 +141,12 @@ class MealsDB_Reports {
             return [];
         }
 
-        if ($trailing_weeks < 1) {
-            $trailing_weeks = 12;
-        }
-        if ($order_horizon_weeks < 1) {
-            $order_horizon_weeks = 6;
-        }
-        $decay_factor = max(0.01, min(1.0, $decay_factor));
+        // Locked to the back-test-validated 3-week-buffer model. Not configurable.
+        $trailing_weeks      = 12;
+        $order_horizon_weeks = 6;
+        $decay_factor        = 0.85;
+        $buffer_weeks        = 3;
+        $coverage_weeks      = $order_horizon_weeks + $buffer_weeks; // 9
 
         $seasonal_min       = 0.3;
         $seasonal_max       = 3.0;
@@ -324,10 +327,13 @@ class MealsDB_Reports {
             }
 
             // Layer 3: Inventory subtraction.
+            // 6-week horizon + 3-week demand-proportional safety buffer = 9
+            // weeks of coverage. The buffer IS these 3 extra weeks of demand;
+            // the old flat per-product `buffer` meta is intentionally NOT read
+            // here (it is superseded and would double-count — over-ordering).
             $adjusted_weekly = round($weighted_avg * $seasonal_index, 2);
-            $projected_need  = (int) ceil($adjusted_weekly * $order_horizon_weeks);
+            $projected_need  = (int) ceil($adjusted_weekly * $coverage_weeks);
 
-            $buffer = (int) get_post_meta($pid, 'buffer', true);
             $meta   = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
             $case_size = isset($meta['case_size']) && (int) $meta['case_size'] > 0
                 ? (int) $meta['case_size']
@@ -339,8 +345,7 @@ class MealsDB_Reports {
             $future_inv    = max(0, (int) get_post_meta($pid, '_future_inventory_quantity', true));
             $total_available = $current_stock + $future_inv;
 
-            $qty_needed   = $projected_need + $buffer;
-            $units_needed = max(0, $qty_needed - $total_available);
+            $units_needed = max(0, $projected_need - $total_available);
             $cases_to_buy = $units_needed > 0 ? (int) ceil($units_needed / $case_size) : 0;
             $order_quantity = $cases_to_buy * $case_size;
 
@@ -364,8 +369,6 @@ class MealsDB_Reports {
                 'seasonal_index'      => round($seasonal_index, 2),
                 'adjusted_weekly'     => $adjusted_weekly,
                 'projected_need'      => $projected_need,
-                'buffer'              => $buffer,
-                'qty_needed'          => $qty_needed,
                 'current_stock'       => $current_stock,
                 'future_inventory'    => $future_inv,
                 'total_available'     => $total_available,
@@ -428,7 +431,7 @@ class MealsDB_Reports {
         // edited by a future caller.
         fwrite($handle, MealsDB_CSV::row([
             'SKU', 'Product Name', 'Avg/Week', 'Seasonal Idx', 'Adj/Week',
-            'Projected', 'Buffer', 'Qty Needed', 'Stock', 'Future',
+            'Projected', 'Stock', 'Future',
             'Available', 'Units Needed', 'Case Size', 'Cases', 'Order Qty', 'Note',
         ]) . "\n");
 
@@ -442,8 +445,6 @@ class MealsDB_Reports {
                 $row['seasonal_index'],
                 $row['adjusted_weekly'],
                 $row['projected_need'],
-                $row['buffer'],
-                $row['qty_needed'],
                 $row['current_stock'],
                 $row['future_inventory'],
                 $row['total_available'],
@@ -456,10 +457,11 @@ class MealsDB_Reports {
             $total_cases += $row['cases_to_buy'];
         }
 
-        // Blank separator row then grand-total row.
+        // Blank separator row then grand-total row. The Cases total sits under
+        // the 'Cases' column (index 11 of the 14-column layout).
         fwrite($handle, "\n");
         fwrite($handle, MealsDB_CSV::row([
-            'TOTAL', '', '', '', '', '', '', '', '', '', '', '', '', $total_cases, '', '',
+            'TOTAL', '', '', '', '', '', '', '', '', '', '', $total_cases, '', '',
         ]) . "\n");
 
         rewind($handle);

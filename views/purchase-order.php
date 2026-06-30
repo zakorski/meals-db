@@ -15,23 +15,11 @@ MealsDB_Permissions::enforce();
         <?php echo esc_html__('Generate a seasonally-adjusted purchase order. Uses recency-weighted demand, year-over-year seasonal indices, and current inventory levels.', 'meals-db'); ?>
     </p>
 
+    <p class="description">
+        <?php echo esc_html__('Forecast model (fixed, validated by back-test): 12-week recency-weighted history, 6-week order horizon plus a 3-week demand-proportional safety buffer (9 weeks of coverage), seasonal index clamped to 0.3–3.0. Not configurable.', 'meals-db'); ?>
+    </p>
+
     <div class="mealsdb-po-controls" style="margin-bottom:16px; display:flex; gap:12px; align-items:flex-end;">
-        <div>
-            <label for="mealsdb-po-trailing"><?php echo esc_html__('Trailing Period:', 'meals-db'); ?></label><br>
-            <select id="mealsdb-po-trailing">
-                <option value="8"><?php echo esc_html__('8 weeks', 'meals-db'); ?></option>
-                <option value="12" selected><?php echo esc_html__('12 weeks', 'meals-db'); ?></option>
-                <option value="16"><?php echo esc_html__('16 weeks', 'meals-db'); ?></option>
-            </select>
-        </div>
-        <div>
-            <label for="mealsdb-po-horizon"><?php echo esc_html__('Order Horizon:', 'meals-db'); ?></label><br>
-            <select id="mealsdb-po-horizon">
-                <option value="4"><?php echo esc_html__('4 weeks', 'meals-db'); ?></option>
-                <option value="6" selected><?php echo esc_html__('6 weeks', 'meals-db'); ?></option>
-                <option value="8"><?php echo esc_html__('8 weeks', 'meals-db'); ?></option>
-            </select>
-        </div>
         <div>
             <button type="button" class="button button-primary" id="mealsdb-po-generate">
                 <?php echo esc_html__('Generate', 'meals-db'); ?>
@@ -91,8 +79,6 @@ MealsDB_Permissions::enforce();
         html += '<th style="text-align:right">Seasonal</th>';
         html += '<th style="text-align:right">Adj/Wk</th>';
         html += '<th style="text-align:right">Projected</th>';
-        html += '<th style="text-align:right">Buffer</th>';
-        html += '<th style="text-align:right">Needed</th>';
         html += '<th style="text-align:right">Stock</th>';
         html += '<th style="text-align:right">Cases</th>';
         html += '<th style="text-align:right">Order Qty</th>';
@@ -110,8 +96,6 @@ MealsDB_Permissions::enforce();
             html += '<td style="text-align:right">' + fmt(r.seasonal_index) + '</td>';
             html += '<td style="text-align:right">' + fmt(r.adjusted_weekly) + '</td>';
             html += '<td style="text-align:right">' + fmt(r.projected_need) + '</td>';
-            html += '<td style="text-align:right">' + intText(r.buffer) + '</td>';
-            html += '<td style="text-align:right">' + fmt(r.qty_needed) + '</td>';
             html += '<td style="text-align:right">' + intText(r.total_available) + '</td>';
             html += '<td style="text-align:right"><strong>' + intText(r.cases_to_buy) + '</strong></td>';
             html += '<td style="text-align:right">' + intText(r.order_quantity) + '</td>';
@@ -120,7 +104,7 @@ MealsDB_Permissions::enforce();
         });
 
         html += '</tbody><tfoot><tr>';
-        html += '<th colspan="9">TOTAL</th>';
+        html += '<th colspan="7">TOTAL</th>';
         html += '<th style="text-align:right">' + intText(totalCases) + '</th>';
         html += '<th style="text-align:right">' + intText(totalQty) + '</th>';
         html += '<th></th>';
@@ -130,17 +114,14 @@ MealsDB_Permissions::enforce();
     }
 
     $('#mealsdb-po-generate').on('click', function() {
-        var trailing = $('#mealsdb-po-trailing').val();
-        var horizon  = $('#mealsdb-po-horizon').val();
-
+        // The forecast model is fixed (validated 3-week-buffer model); no
+        // tunable parameters are sent.
         showStatus('Generating...', 'info');
         $('#mealsdb-po-export').hide();
 
         $.post(ajaxurl, {
             action: 'mealsdb_generate_purchase_order',
-            nonce: nonce,
-            trailing_weeks: trailing,
-            order_horizon_weeks: horizon
+            nonce: nonce
         }, function(res) {
             if (!res.success) {
                 showStatus(res.message || 'Error generating purchase order.', 'error');
