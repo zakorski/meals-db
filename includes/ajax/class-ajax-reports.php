@@ -53,17 +53,13 @@ class MealsDB_Ajax_Reports {
 
         self::enforce_rate_limit();
 
-        $trailing_weeks      = isset($_REQUEST['trailing_weeks']) ? intval($_REQUEST['trailing_weeks']) : 12;
-        $order_horizon_weeks = isset($_REQUEST['order_horizon_weeks']) ? intval($_REQUEST['order_horizon_weeks']) : 6;
-        $decay_factor        = isset($_REQUEST['decay_factor']) ? floatval($_REQUEST['decay_factor']) : 0.85;
-
-        // Clamp values.
-        $trailing_weeks      = max(1, min(52, $trailing_weeks));
-        $order_horizon_weeks = max(1, min(12, $order_horizon_weeks));
-        $decay_factor        = max(0.01, min(1.0, $decay_factor));
-
+        // The forecasting model is locked to the back-test-validated
+        // configuration (12-week recency-weighted history, decay 0.85, 6-week
+        // horizon + 3-week demand-proportional buffer = 9 weeks coverage). It
+        // takes no parameters by design — any trailing/horizon/decay request
+        // inputs are ignored (the controls were removed from the view).
         $reports  = new MealsDB_Reports($GLOBALS['wpdb']);
-        $po_rows  = $reports->generate_purchase_order($trailing_weeks, $order_horizon_weeks, $decay_factor);
+        $po_rows  = $reports->generate_purchase_order();
         $csv      = $reports->export_purchase_order_csv($po_rows);
 
         wp_send_json([
