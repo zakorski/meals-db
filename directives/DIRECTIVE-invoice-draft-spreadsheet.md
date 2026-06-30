@@ -1,5 +1,13 @@
 # Directive — Invoice Draft "Spreadsheet" Review View (legible + live-recompute) — REV 2
 
+> **STATUS — SHIPPED (2026-06-30).** All three pipeline grids are merged to `main`:
+> - **VAC** — flat grid + live recompute, hand-entered fold — **PR #439**.
+> - **SDNB-legacy** — per-line "client block" grid + live recompute — **PR #440**.
+> - **SDNB-new-portal** — flat grid, legibility + edit only (portal owns the total; no recompute) — **PR #441**.
+>
+> All three open questions are resolved (recorded below). The only remaining item is the cross-cutting
+> **manual browser verification** in the Verify section — not yet performed on a live site.
+
 > **REV 2 note:** the first draft of this directive assumed (a) one universal pipeline math
 > function (`split_into_invoice_lines`), (b) one universal editable-field set
 > (`bill_mains`/`bill_sides`/`bill_tax_sides`/`bill_nontax_sides`/`client_contribution`), and
@@ -230,7 +238,8 @@ curated per-pipeline layout (Part 1) with no inputs, rendering derived cells via
 
 # SDNB-legacy grid — SCOPE (2026-06-29)
 
-> Status: VAC grid SHIPPED (PR #439, `compute_vac_row_derived` + curated map + CSS + recompute endpoint).
+> Status: SHIPPED. VAC grid (PR #439, `compute_vac_row_derived` + curated map + CSS + recompute endpoint);
+> SDNB-legacy grid (PR #440, this section); SDNB-new-portal grid (PR #441, flat map, no recompute).
 > This section scopes the SDNB-legacy grid. Two decisions (D1, D2 below) gate the build — resolve with the
 > operator/dev BEFORE writing the column map. The VAC build is the template; the wiring (column_map →
 > derived_display → edit endpoint `derived` → JS refresh) is identical. The MATH and ROW SHAPE differ.
