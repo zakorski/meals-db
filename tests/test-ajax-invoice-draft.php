@@ -120,12 +120,15 @@ class MealsDB_Invoice_Generator {
     private static function sample(): array {
         return [
             42 => [
-                'client_id'       => 42,
-                'last_name'       => 'Zubrowski',
-                'individual_id'   => 'IND-001',
-                'allocated_mains' => 12,
-                'resolved_rate'   => 9.05,
-                'tax_cents'       => 0,
+                'client_id'              => 42,
+                'last_name'              => 'Zubrowski',
+                'individual_id'          => 'IND-001',
+                'allocated_mains'        => 12,
+                'allocated_tax_sides'    => 0,
+                'allocated_nontax_sides' => 0,
+                'resolved_rate'          => 9.05,
+                'contribution_cents'     => 0, // present so SDNB contribution edits resolve
+                'tax_cents'              => 0,
             ],
         ];
     }
@@ -147,6 +150,15 @@ class MealsDB_Invoice_Generator {
             'vac_total_cents'           => 15000,
             'remaining_sides'           => 0,
             'allowance_remaining_cents' => 0,
+        ];
+    }
+    // SDNB-legacy per-line recompute (directive SDNB scope). Fixed two-line
+    // sentinel — WIRING only (real split math in test-sdnb-legacy-compute.php);
+    // the endpoint formats these via the page's sdnb_line_display().
+    public static function recompute_sdnb_legacy_lines(array $row): array {
+        return [
+            ['line_number' => 1, 'units' => 8, 'rate' => 11.40, 'basic_cost_cents' => 9120, 'tax_cents' => 336, 'line_total_cents' => 8956],
+            ['line_number' => 2, 'units' => 4, 'rate' => 10.20, 'basic_cost_cents' => 4080, 'tax_cents' => 0,   'line_total_cents' => 4080],
         ];
     }
 }
@@ -576,13 +588,42 @@ chk($derived['vet_mains_cost'] ?? null, '$150.00', 'T-12: vet_mains_cost formatt
 chk($derived['vac_total'] ?? null,      '$150.00', 'T-12: vac_total formatted from compute (15000c)');
 chk($derived['remaining_sides'] ?? null, '0',       'T-12: remaining_sides formatted as a count');
 
-// SDNB pipeline has no curated map → empty derived map (portal/owner math).
+// SDNB new-portal has no money derivation (the portal owns the total) → empty
+// derived map. (SDNB-legacy DOES derive per-line — see T-13b.)
 $w = reset_env();
-$id = make_draft('sdnb_legacy');
+$id = make_draft('sdnb_new_portal');
 $_POST = ['draft_id' => $id, 'client_id' => '42', 'field' => 'resolved_rate', 'new_value' => '12.50'];
 MealsDB_Ajax_Invoice_Draft::edit_draft_field();
-chk(json_type(), 'success', 'T-12: SDNB edit returns success');
-chk(json_data()['derived'] ?? 'MISSING', [], 'T-12: SDNB pipeline → empty derived map');
+chk(json_type(), 'success', 'T-12: SDNB new-portal edit returns success');
+chk(json_data()['derived'] ?? 'MISSING', [], 'T-12: new-portal pipeline → empty derived map');
+
+// ===========================================================================
+// T-13 (INVOICE-DRAFT-SPREADSHEET SDNB scope): the SDNB-legacy edit endpoint
+// (a) converts a dollars-edited contribution to stored cents and redisplays
+// dollars, and (b) returns the per-line derived list.
+// ===========================================================================
+// (a) $/cents round-trip: contribution edited as dollars → stored cents.
+$w = reset_env();
+$id = make_draft('sdnb_legacy');
+$_POST = ['draft_id' => $id, 'client_id' => '42', 'field' => 'contribution_cents', 'new_value' => '5.00', 'edit_as' => 'dollars'];
+MealsDB_Ajax_Invoice_Draft::edit_draft_field();
+chk(json_type(), 'success', 'T-13a: dollars-edited contribution saves');
+chk(json_data()['value'], 500, 'T-13a: $5.00 stored as 500 cents');
+chk(json_data()['value_display'] ?? null, '5.00', 'T-13a: input redisplays as dollars, not 500');
+chk(json_data()['changed'], true, 'T-13a: 0 → 500 is a change');
+
+// (b) per-line derived payload (ordered list, display strings).
+$w = reset_env();
+$id = make_draft('sdnb_legacy');
+$_POST = ['draft_id' => $id, 'client_id' => '42', 'field' => 'allocated_mains', 'new_value' => '20'];
+MealsDB_Ajax_Invoice_Draft::edit_draft_field();
+chk(json_type(), 'success', 'T-13b: SDNB mains edit success');
+$d = json_data()['derived'] ?? null;
+chk_true(is_array($d) && isset($d['lines']), 'T-13b: SDNB derived carries a per-line list (not a flat map)');
+chk(count($d['lines'] ?? []), 2, 'T-13b: two lines from the split');
+chk($d['lines'][0]['units'] ?? null,            '8',      'T-13b: line-1 units display');
+chk($d['lines'][0]['line_total_cents'] ?? null, '$89.56', 'T-13b: line-1 total formatted from cents');
+chk($d['lines'][1]['rate'] ?? null,             '$10.20', 'T-13b: line-2 (derived) rate formatted');
 
 // ---------------------------------------------------------------------------
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";

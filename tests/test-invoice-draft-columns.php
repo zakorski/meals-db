@@ -66,6 +66,32 @@ chk(MealsDB_Invoice_Draft_Page::column_map('sdnb_legacy'),    null, 'sdnb_legacy
 chk(MealsDB_Invoice_Draft_Page::column_map('sdnb_new_portal'), null, 'sdnb_new_portal has no curated map yet (fallback)');
 chk(MealsDB_Invoice_Draft_Page::column_map('bogus'),           null, 'unknown pipeline → null');
 
+// ---------------------------------------------------------------------------
+// SDNB-legacy uses a bespoke per-line "client block" model (NOT the flat
+// column_map — that stays null so the VAC path is untouched). Assert the
+// header (client-level editable) + line (per-invoice-line) column model.
+// ---------------------------------------------------------------------------
+$sdnb = MealsDB_Invoice_Draft_Page::sdnb_legacy_column_model();
+chk_true(isset($sdnb['header']) && isset($sdnb['line']), 'SDNB model has header + line lists');
+
+$hdr = [];
+foreach ($sdnb['header'] as $c) { $hdr[$c['field']] = $c['type']; }
+chk($hdr['client'] ?? null,                 'identity-name',    'SDNB header: client is identity-name');
+chk($hdr['allocated_mains'] ?? null,        'input-int',        'SDNB header: mains is input-int');
+chk($hdr['allocated_tax_sides'] ?? null,    'input-int',        'SDNB header: tax sides is input-int');
+chk($hdr['allocated_nontax_sides'] ?? null, 'input-int',        'SDNB header: non-tax sides is input-int');
+chk($hdr['contribution_cents'] ?? null,     'input-money-cents','SDNB header: contribution edited as dollars→cents');
+chk_true(!isset($hdr['bill_mains']) && !isset($hdr['bill_sides']), 'SDNB header: no bill_* columns');
+
+$line = [];
+foreach ($sdnb['line'] as $c) { $line[$c['key']] = $c['type']; }
+chk($line['line_number'] ?? null,      'line-label',    'SDNB line: line number');
+chk($line['units'] ?? null,            'derived-int',   'SDNB line: units derived');
+chk($line['rate'] ?? null,             'line-rate',     'SDNB line: rate (editable line-1 / derived line-2)');
+chk($line['basic_cost_cents'] ?? null, 'derived-money', 'SDNB line: basic derived-money');
+chk($line['tax_cents'] ?? null,        'derived-money', 'SDNB line: HST derived-money');
+chk($line['line_total_cents'] ?? null, 'derived-money', 'SDNB line: total derived-money');
+
 echo "Ran " . ($passed + count($failures)) . " checks: $passed passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
 exit(empty($failures) ? 0 : 1);

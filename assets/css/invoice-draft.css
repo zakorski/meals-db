@@ -119,3 +119,40 @@
 #mealsdb-draft-grid.mealsdb-draft-curated tr.mealsdb-row-saving td {
     opacity: 0.6;
 }
+
+/* -------------------------------------------------------------------------
+ * SDNB-legacy "client block" layout (directive SDNB scope). One client =
+ * an editable header row + its 1–2 read-only invoice-line rows. Grouping is
+ * shown with a heavier separator at each client's first row (NOT zebra
+ * striping, which would split a client's lines into different shades).
+ * ------------------------------------------------------------------------- */
+
+/* Client separator: a heavier top border begins each client's block. */
+#mealsdb-draft-grid.mealsdb-draft-sdnb tr.mealsdb-sdnb-client-first td {
+    border-top: 2px solid #a7aaad;
+}
+
+/* Uniform derived shading (override the curated zebra) so a client's line
+   rows read as one block rather than alternating colours. */
+#mealsdb-draft-grid.mealsdb-draft-sdnb td.mealsdb-derived,
+#mealsdb-draft-grid.mealsdb-draft-sdnb tbody tr:nth-child(odd) td.mealsdb-derived {
+    background: #f0f0f1;
+}
+
+/* Blank client-level continuation cells on a client's 2nd line row. */
+#mealsdb-draft-grid.mealsdb-draft-sdnb td.mealsdb-sdnb-cont {
+    background: #fff;
+}
+#mealsdb-draft-grid.mealsdb-draft-sdnb tbody tr:nth-child(odd) td.mealsdb-col-identity-name.mealsdb-sdnb-cont {
+    background: #fff;
+}
+
+/* Line number column — small, centred, muted. */
+#mealsdb-draft-grid.mealsdb-draft-sdnb td.mealsdb-col-line-label {
+    text-align: center;
+    color: #646970;
+    font-variant-numeric: tabular-nums;
+}
+#mealsdb-draft-grid.mealsdb-draft-sdnb th.mealsdb-col-line-label {
+    text-align: center;
+}

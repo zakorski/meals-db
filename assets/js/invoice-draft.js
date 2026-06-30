@@ -22,6 +22,67 @@
         return $.post(cfg.ajaxUrl, data);
     }
 
+    // SDNB-legacy per-line derived cell fields (display order matches the
+    // server's line columns; the line-0 Rate is an editable input, not a
+    // derived cell, so it's deliberately updated only where it exists).
+    var SDNB_LINE_FIELDS = ['units', 'rate', 'basic_cost_cents', 'tax_cents', 'line_total_cents'];
+
+    // Build a secondary (index >= 1) SDNB line row: blank header continuation
+    // cells + read-only line-detail cells. Line-0 is always server-rendered and
+    // never built here, so its editable header inputs are never disturbed.
+    function buildSdnbLineRow(cid, idx, headerCols) {
+        var html = '<tr class="mealsdb-sdnb-row" data-client-id="' + cid + '" data-line-index="' + idx + '">';
+        for (var i = 0; i < headerCols; i++) {
+            html += '<td class="mealsdb-sdnb-cont"></td>';
+        }
+        html += '<td class="mealsdb-col-line-label"><span></span></td>';
+        SDNB_LINE_FIELDS.forEach(function (f) {
+            html += '<td class="mealsdb-derived" data-client-id="' + cid + '" data-line-index="' + idx +
+                '" data-derived-field="' + f + '"><span></span></td>';
+        });
+        html += '</tr>';
+        return $(html);
+    }
+
+    // Re-render one SDNB client's invoice-line rows from the server's per-line
+    // derived payload. The line count can change (crossing the mains == sides
+    // boundary), so we update existing line rows, append new ones, and drop
+    // surplus ones — never touching the line-0 header row's editable inputs.
+    // Money is NEVER computed here; we only place the strings the server sent.
+    function rerenderSdnbLines($grid, cid, lines) {
+        var sel = 'tr[data-client-id="' + cid + '"]';
+        var headerCols = $grid.find('thead th').length - 6; // 6 per-line columns
+
+        lines.forEach(function (line, idx) {
+            var $row = $grid.find(sel + '[data-line-index="' + idx + '"]').first();
+            if (!$row.length) {
+                $row = buildSdnbLineRow(cid, idx, headerCols);
+                $grid.find(sel).last().after($row);
+            }
+            $row.find('.mealsdb-col-line-label span').text(line.line_number || (idx + 1));
+            SDNB_LINE_FIELDS.forEach(function (f) {
+                var $c = $row.find('[data-derived-field="' + f + '"] span');
+                if ($c.length) { $c.text(line[f]); }
+            });
+            var $d = $row.find('.mealsdb-derived').addClass('mealsdb-recomputed');
+            setTimeout(function () { $d.removeClass('mealsdb-recomputed'); }, 600);
+        });
+
+        // Drop surplus rows, but always keep line-0 so the editable header
+        // inputs survive even if the client momentarily has zero lines.
+        var keep = Math.max(1, lines.length);
+        $grid.find(sel).each(function () {
+            if (parseInt($(this).attr('data-line-index'), 10) >= keep) { $(this).remove(); }
+        });
+        if (!lines.length) {
+            var $row0 = $grid.find(sel + '[data-line-index="0"]').first();
+            $row0.find('.mealsdb-col-line-label span').text('');
+            SDNB_LINE_FIELDS.forEach(function (f) {
+                $row0.find('[data-derived-field="' + f + '"] span').text('');
+            });
+        }
+    }
+
     $(document).ready(function () {
 
         // --- Generate: show/hide the zone field for SDNB legacy ---
@@ -80,22 +141,37 @@
                 draft_id: $('#mealsdb-draft-grid').data('draft-id'),
                 client_id: $cell.data('client-id'),
                 field: $cell.data('field'),
-                new_value: newVal
+                new_value: newVal,
+                // *_cents fields edited as dollars (SDNB contribution) flag the
+                // server to convert; the value comes back as value_display.
+                edit_as: $cell.data('edit-as') || ''
             }).done(function (resp) {
                 if (resp && resp.success && resp.data) {
-                    var stored = (resp.data.value === null || resp.data.value === undefined)
-                        ? '' : String(resp.data.value);
+                    // Prefer value_display (the input's display form, e.g. a
+                    // dollars-edited cents field) over the raw stored value.
+                    var stored;
+                    if (resp.data.value_display !== undefined && resp.data.value_display !== null) {
+                        stored = String(resp.data.value_display);
+                    } else {
+                        stored = (resp.data.value === null || resp.data.value === undefined)
+                            ? '' : String(resp.data.value);
+                    }
                     $cell.val(stored).data('prior', stored);
                     if (resp.data.changed) {
                         bumpEditCount();
                         // Drop any stale "was:" hint — the cell now reflects an edit.
                         $cell.siblings('.mealsdb-draft-was').remove();
                     }
-                    // Refresh the read-only derived cells in this row from the
-                    // SERVER recompute (3d). Money is NEVER computed in JS — we
-                    // only display the formatted strings the endpoint returned.
+                    // Refresh the read-only derived cells from the SERVER
+                    // recompute. Money is NEVER computed in JS — we only display
+                    // the formatted strings the endpoint returned.
                     var derived = resp.data.derived;
-                    if (derived && typeof derived === 'object') {
+                    if (derived && derived.lines) {
+                        // SDNB-legacy: re-render this client's 1–2 line rows
+                        // (the count can change). Targets by client id, not row.
+                        rerenderSdnbLines($('#mealsdb-draft-grid'), String($cell.data('client-id')), derived.lines);
+                    } else if (derived && typeof derived === 'object') {
+                        // VAC (flat map): refresh the derived cells in this row.
                         Object.keys(derived).forEach(function (field) {
                             var $dc = $editRow.find('[data-derived-field="' + field + '"]');
                             if (!$dc.length) {

@@ -466,6 +466,68 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * Adapt a stored SDNB-legacy phase-2 row into the shape
+     * split_into_invoice_lines expects. SINGLE source of truth shared by
+     * serialize_sdnb_legacy (finalize) and recompute_sdnb_legacy_lines (the
+     * draft grid) — directive INVOICE-DRAFT-SPREADSHEET SDNB scope 3a.
+     *
+     * bill_sides is DERIVED from tax+nontax rather than read from
+     * allocated_sides. This is provably a no-op for generated data —
+     * MealsDB_Allocation_Rebuilder writes sides_count = tax_sides + nontax_sides
+     * on every detail row (put_nontax = put_sides − put_tax), so the summed
+     * allocated_sides always equals tax+nontax — AND it keeps an edited side
+     * count consistent with the line-1 gate (editing tax/nontax on the grid
+     * would otherwise desync against a stale allocated_sides).
+     *
+     * Returns null for a zero-mains row (matching the serializer's `continue`).
+     */
+    private static function adapt_sdnb_legacy_row(array $b): ?array {
+        if ((int) ($b['allocated_mains'] ?? 0) <= 0) {
+            return null;
+        }
+        $tax    = (int) ($b['allocated_tax_sides'] ?? 0);
+        $nontax = (int) ($b['allocated_nontax_sides'] ?? 0);
+        return [
+            'client'              => $b,
+            'resolved_rate'       => $b['resolved_rate'] ?? 0,
+            'bill_mains'          => (int) $b['allocated_mains'],
+            'bill_sides'          => $tax + $nontax, // derived; == allocated_sides by construction
+            'bill_tax_sides'      => $tax,
+            'bill_nontax_sides'   => $nontax,
+            // Contribution stored as cents on the row; split_into_invoice_lines
+            // converts the float back to cents via to_cents.
+            'client_contribution' => (int) ($b['contribution_cents'] ?? 0) / 100,
+        ];
+    }
+
+    /**
+     * Derive the ORDERED 1–2 invoice lines for one stored SDNB-legacy row —
+     * the shared compute fn the draft grid renders and the live recompute
+     * endpoint returns (directive INVOICE-DRAFT-SPREADSHEET SDNB scope 3a).
+     * Each line carries split_into_invoice_lines' fields plus a 1-based
+     * line_number and line_total_cents (= basic + tax − contribution, the same
+     * per-line total the serializer sums for the header). Returns [] for a
+     * zero-mains row.
+     *
+     * @return array<int,array> ordered list of line arrays.
+     */
+    public static function recompute_sdnb_legacy_lines(array $row): array {
+        $adapted = self::adapt_sdnb_legacy_row($row);
+        if ($adapted === null) {
+            return [];
+        }
+        $out = [];
+        foreach (self::split_into_invoice_lines($adapted) as $i => $line) {
+            $line['line_number']      = $i + 1;
+            $line['line_total_cents'] = (int) $line['basic_cost_cents']
+                + (int) $line['tax_cents']
+                - (int) $line['client_contribution_cents'];
+            $out[] = $line;
+        }
+        return $out;
+    }
+
+    /**
      * Validate a client row and return error messages.
      *
      * @param array  $client       Client row from meals_clients.
@@ -938,28 +1000,23 @@ class MealsDB_Invoice_Generator {
             }
         }
 
-        // Adapt phase-2 rows into the shape split_into_invoice_lines expects:
-        // bill_mains / bill_sides / bill_tax_sides / bill_nontax_sides come
-        // straight from allocated_* (the engine's monthly summary).
+        // Adapt phase-2 rows into the shape split_into_invoice_lines expects
+        // via the SHARED adapter (also used by the draft grid's
+        // recompute_sdnb_legacy_lines — directive INVOICE-DRAFT-SPREADSHEET
+        // SDNB scope 3a). adapt_sdnb_legacy_row returns null for a zero-mains
+        // row (no allocation this month → no line). bill_sides is derived from
+        // tax+nontax there; this is a no-op for generated data (the ledger
+        // writes sides_count = tax + nontax) and keeps an edited side count
+        // consistent with the line-1 gate.
         $invoice_rows = [];
         foreach ($rows as $b) {
-            if (!is_array($b) || (int) ($b['allocated_mains'] ?? 0) <= 0) {
-                continue; // No allocation in this month → no line.
+            if (!is_array($b)) {
+                continue;
             }
-            $invoice_rows[] = [
-                'client'              => $b,
-                'resolved_rate'       => $b['resolved_rate'] ?? 0,
-                'bill_mains'          => (int) $b['allocated_mains'],
-                'bill_sides'          => (int) ($b['allocated_sides'] ?? 0),
-                'bill_tax_sides'      => (int) ($b['allocated_tax_sides'] ?? 0),
-                'bill_nontax_sides'   => (int) ($b['allocated_nontax_sides'] ?? 0),
-                // Contribution is the sum of product-5675 line items on
-                // orders allocated to this month. Stored on the row as a
-                // float so the existing split_into_invoice_lines path
-                // (which converts back to cents via to_cents) works
-                // unchanged.
-                'client_contribution' => (int) ($b['contribution_cents'] ?? 0) / 100,
-            ];
+            $adapted = self::adapt_sdnb_legacy_row($b);
+            if ($adapted !== null) {
+                $invoice_rows[] = $adapted;
+            }
         }
 
         // Apply two-line splits to get final invoice lines.
