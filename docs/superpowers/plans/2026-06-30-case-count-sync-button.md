@@ -271,7 +271,7 @@ In `includes/class-product-display-sync.php`, add this method immediately AFTER 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `php tests/test-case-count-sync.php`
-Expected: `PASS — 16 checks`
+Expected: `PASS — 18 checks`
 
 Also lint: `php -l includes/class-product-display-sync.php` → `No syntax errors detected`.
 
@@ -369,7 +369,7 @@ add:
 php -l includes/class-product-display-sync.php
 php tests/test-case-count-sync.php
 ```
-Expected: `No syntax errors detected` and `PASS — 16 checks`. (No new test for the AJAX handler — its guard stack is byte-identical to the production-exercised `ajax_full_sync()`; the new logic under test is the worker.)
+Expected: `No syntax errors detected` and `PASS — 18 checks`. (No new test for the AJAX handler — its guard stack is byte-identical to the production-exercised `ajax_full_sync()`; the new logic under test is the worker.)
 
 - [ ] **Step 4: Commit**
 
@@ -507,7 +507,7 @@ pass=0; fail=0; failed=""
 for t in tests/test-*.php; do php "$t" >/dev/null 2>&1 && pass=$((pass+1)) || { fail=$((fail+1)); failed="$failed $t"; }; done
 echo "PASS: $pass  FAIL: $fail"; echo "Failed:$failed"
 ```
-Expected: `test-case-count-sync.php` → `PASS — 16 checks`. The full suite should show only the documented baseline failures — `tests/test-pdf-slip-binary-output.php` and `tests/test-vac-pdf.php` (missing local `mbstring`/`imagick`: `undefined function Dompdf\mb_internal_encoding()`) — and NOTHING else.
+Expected: `test-case-count-sync.php` → `PASS — 18 checks`. The full suite should show only the documented baseline failures — `tests/test-pdf-slip-binary-output.php` and `tests/test-vac-pdf.php` (missing local `mbstring`/`imagick`: `undefined function Dompdf\mb_internal_encoding()`) — and NOTHING else.
 
 - [ ] **Step 3: Confirm the AJAX action + button wiring line up (static check)**
 

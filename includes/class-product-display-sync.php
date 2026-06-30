@@ -234,6 +234,91 @@ class MealsDB_Product_Display_Sync {
     }
 
     /**
+     * Backfill meals_products.case_size from the legacy bare `case_size` postmeta.
+     *
+     * Column-keyed, idempotent, non-destructive. Reads the CURRENT case size from the
+     * canonical meals_products.case_size COLUMN (via get_product_data) — NOT from the
+     * `_mealsdb_case_size` postmeta, which the plugin never persists (it is only a WC
+     * form-field name; the tab writes the column directly). Only FILLS the default
+     * (column <= 1) from a real legacy value (> 1); never lowers or overwrites a column
+     * that already holds a real value, and never touches the legacy meta. Running it
+     * twice changes nothing the second time.
+     *
+     * NOTE: a product legitimately having case_size 1 cannot be distinguished from the
+     * unset default 1 — acceptable because the real case sizes are 12/24/36/48/100 and
+     * the operation is non-destructive (a true-1 product simply stays 1).
+     *
+     * @return array{scanned:int, filled:int, already_ok:int, no_legacy:int, failed:int}
+     */
+    public static function case_count_sync(): array {
+        $stats = ['scanned' => 0, 'filled' => 0, 'already_ok' => 0, 'no_legacy' => 0, 'failed' => 0];
+
+        if (!function_exists('wc_get_products') || !class_exists('MealsDB_Quick_Order_Products')) {
+            return $stats;
+        }
+
+        $allowed_slugs = MealsDB_Quick_Order_Products::get_allowed_category_slugs();
+
+        $page     = 1;
+        $per_page = 100;
+
+        do {
+            $products = wc_get_products([
+                'status'   => 'publish',
+                'limit'    => $per_page,
+                'page'     => $page,
+                'orderby'  => 'ID',
+                'order'    => 'ASC',
+                'return'   => 'objects',
+                'category' => $allowed_slugs,
+            ]);
+
+            if (!is_array($products) || empty($products)) {
+                break;
+            }
+
+            foreach ($products as $product) {
+                if (!$product instanceof WC_Product) {
+                    continue;
+                }
+                $pid = (int) $product->get_id();
+                if ($pid <= 0) {
+                    continue;
+                }
+
+                $stats['scanned']++;
+
+                $existing = MealsDB_Products::get_product_data($pid);
+                $current  = (int) ($existing['case_size'] ?? 1);          // canonical COLUMN value
+                $legacy   = (int) get_post_meta($pid, 'case_size', true); // legacy bare key (READ ONLY)
+
+                if ($current > 1) {
+                    // Column already holds a real (non-default) case size — leave it ALONE.
+                    $stats['already_ok']++;
+                } elseif ($legacy > 1) {
+                    // Default column + real legacy value: fill the COLUMN via the existing
+                    // upsert so every column stays consistent. The legacy meta is left intact.
+                    // Reading/writing the column (never the empty _mealsdb_case_size postmeta)
+                    // is what keeps this idempotent and non-destructive.
+                    $ok = MealsDB_Products::save_product_data($pid, array_merge($existing, ['case_size' => $legacy]));
+                    if ($ok) {
+                        $stats['filled']++;
+                    } else {
+                        // Upsert refused (e.g. capability) — surface it, never report a phantom success.
+                        $stats['failed']++;
+                    }
+                } else {
+                    $stats['no_legacy']++;
+                }
+            }
+
+            $page++;
+        } while (count($products) === $per_page);
+
+        return $stats;
+    }
+
+    /**
      * Extract display data from a WC product for caching.
      *
      * @param WC_Product $product
