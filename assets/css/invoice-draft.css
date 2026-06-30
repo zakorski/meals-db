@@ -1,0 +1,121 @@
+/**
+ * Invoice draft "spreadsheet" review grid (directive
+ * INVOICE-DRAFT-SPREADSHEET Part 2). Scoped entirely to #mealsdb-draft-grid so
+ * it can only affect the Invoices review view (enqueue is page-guarded too).
+ *
+ * Goal: the curated grid reads like a spreadsheet Janet can scan — bordered
+ * cells, aligned numbers, a frozen header + client column, and input cells that
+ * look like plain text until you click into one. Derived cells are visually
+ * distinct ("computed, not editable").
+ */
+
+#mealsdb-draft-grid.mealsdb-draft-curated {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: auto;
+    max-width: 100%;
+    /* The grid scrolls within its own box so the sticky header/column have a
+       scroll container to stick against. */
+    display: block;
+    overflow: auto;
+    max-height: 75vh;
+}
+
+#mealsdb-draft-grid.mealsdb-draft-curated th,
+#mealsdb-draft-grid.mealsdb-draft-curated td {
+    border-right: 1px solid #dcdcde;
+    border-bottom: 1px solid #dcdcde;
+    padding: 4px 8px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Numeric columns (inputs + derived) right-align so digits line up. */
+#mealsdb-draft-grid.mealsdb-draft-curated th.mealsdb-col-input-int,
+#mealsdb-draft-grid.mealsdb-draft-curated th.mealsdb-col-input-money,
+#mealsdb-draft-grid.mealsdb-draft-curated th.mealsdb-col-derived-money,
+#mealsdb-draft-grid.mealsdb-draft-curated th.mealsdb-col-derived-int,
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-col-input-int,
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-col-input-money,
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-derived {
+    text-align: right;
+}
+
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-col-input-int input,
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-col-input-money input {
+    text-align: right;
+}
+
+/* Sticky header row. */
+#mealsdb-draft-grid.mealsdb-draft-curated thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f6f7f7;
+}
+
+/* Frozen first column (Client) — stays visible scrolling a wide invoice. */
+#mealsdb-draft-grid.mealsdb-draft-curated th.mealsdb-col-identity-name,
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-col-identity-name {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: #fff;
+    font-weight: 600;
+    border-right: 2px solid #c3c4c7;
+}
+/* The top-left cell is sticky on both axes — keep it above the rest. */
+#mealsdb-draft-grid.mealsdb-draft-curated thead th.mealsdb-col-identity-name {
+    z-index: 3;
+    background: #f6f7f7;
+}
+/* Preserve the frozen-column background over zebra striping. */
+#mealsdb-draft-grid.mealsdb-draft-curated tbody tr:nth-child(odd) td.mealsdb-col-identity-name {
+    background: #f6f7f7;
+}
+
+/* Input cells read as text until focused — border appears on hover/focus like
+   a selected spreadsheet cell, so the grid doesn't look like a wall of boxes. */
+#mealsdb-draft-grid.mealsdb-draft-curated td input.mealsdb-draft-cell {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    background: transparent;
+    box-shadow: none;
+    margin: 0;
+    min-height: 24px;
+}
+#mealsdb-draft-grid.mealsdb-draft-curated td input.mealsdb-draft-cell:hover {
+    border-color: #c3c4c7;
+}
+#mealsdb-draft-grid.mealsdb-draft-curated td input.mealsdb-draft-cell:focus {
+    border-color: #2271b1;
+    background: #fff;
+    box-shadow: 0 0 0 1px #2271b1;
+    outline: none;
+}
+
+/* Derived cells: computed, not editable — subtle grey, distinct from inputs. */
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-derived {
+    background: #f0f0f1;
+    color: #1d2327;
+}
+#mealsdb-draft-grid.mealsdb-draft-curated tbody tr:nth-child(odd) td.mealsdb-derived {
+    background: #e8e9ea;
+}
+/* Brief flash when a derived cell is refreshed after a server recompute. */
+#mealsdb-draft-grid.mealsdb-draft-curated td.mealsdb-derived.mealsdb-recomputed {
+    background: #fcf9e8;
+}
+
+/* "was: <generated value>" hint under a changed input. */
+#mealsdb-draft-grid.mealsdb-draft-curated .mealsdb-draft-was {
+    font-size: 11px;
+    color: #777;
+    text-align: right;
+}
+
+/* Row in the middle of saving/recomputing. */
+#mealsdb-draft-grid.mealsdb-draft-curated tr.mealsdb-row-saving td {
+    opacity: 0.6;
+}

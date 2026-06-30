@@ -136,6 +136,19 @@ class MealsDB_Invoice_Generator {
     public static function serialize_sdnb_legacy(array $rows, array $ctx): string { return "sdnb_legacy\n" . count($rows); }
     public static function serialize_sdnb_new_portal(array $rows): string { return "sdnb_new\n" . count($rows); }
     public static function serialize_vac_pdf_from_csv(string $csv, string $end): string { return '%PDF-stub'; }
+    // INVOICE-DRAFT-SPREADSHEET 3a: the edit endpoint recomputes VAC derived
+    // values through the page's derived_display(), which calls THIS. A fixed
+    // sentinel keeps this a WIRING test (the real formula is proven against the
+    // real class in test-vac-compute-derived.php) — assert the values flow
+    // through, formatted, in the response.
+    public static function compute_vac_row_derived(array $row): array {
+        return [
+            'vet_mains_cost_cents'      => 15000,
+            'vac_total_cents'           => 15000,
+            'remaining_sides'           => 0,
+            'allowance_remaining_cents' => 0,
+        ];
+    }
 }
 
 require_once __DIR__ . '/../includes/class-autoloader.php';
@@ -546,6 +559,30 @@ chk(json_type(), 'success', 'T-11: cascade call returns success');
 chk($w->drafts[$idA]['status'], 'draft', 'T-11: A un-finalized after cascade');
 chk($w->drafts[$idB]['status'], 'draft', 'T-11: sibling B un-finalized after cascade');
 chk(count($w->audit), 2, 'T-11: an audit row for each un-finalized invoice');
+
+// ===========================================================================
+// T-12 (INVOICE-DRAFT-SPREADSHEET 3b): the edit response carries the
+// recomputed, formatted derived values for a VAC draft — and an empty map for
+// a pipeline with no money derivation (SDNB).
+// ===========================================================================
+$w = reset_env();
+$id = make_draft('vac');
+$_POST = ['draft_id' => $id, 'client_id' => '42', 'field' => 'resolved_rate', 'new_value' => '12.50'];
+MealsDB_Ajax_Invoice_Draft::edit_draft_field();
+chk(json_type(), 'success', 'T-12: VAC edit returns success');
+$derived = json_data()['derived'] ?? null;
+chk_true(is_array($derived), 'T-12: response carries a derived map');
+chk($derived['vet_mains_cost'] ?? null, '$150.00', 'T-12: vet_mains_cost formatted from compute (15000c)');
+chk($derived['vac_total'] ?? null,      '$150.00', 'T-12: vac_total formatted from compute (15000c)');
+chk($derived['remaining_sides'] ?? null, '0',       'T-12: remaining_sides formatted as a count');
+
+// SDNB pipeline has no curated map → empty derived map (portal/owner math).
+$w = reset_env();
+$id = make_draft('sdnb_legacy');
+$_POST = ['draft_id' => $id, 'client_id' => '42', 'field' => 'resolved_rate', 'new_value' => '12.50'];
+MealsDB_Ajax_Invoice_Draft::edit_draft_field();
+chk(json_type(), 'success', 'T-12: SDNB edit returns success');
+chk(json_data()['derived'] ?? 'MISSING', [], 'T-12: SDNB pipeline → empty derived map');
 
 // ---------------------------------------------------------------------------
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";

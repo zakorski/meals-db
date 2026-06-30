@@ -74,6 +74,7 @@
             }
 
             $cell.data('busy', true).prop('disabled', true);
+            var $editRow = $cell.closest('tr').addClass('mealsdb-row-saving');
 
             post('mealsdb_edit_draft_field', {
                 draft_id: $('#mealsdb-draft-grid').data('draft-id'),
@@ -90,6 +91,22 @@
                         // Drop any stale "was:" hint — the cell now reflects an edit.
                         $cell.siblings('.mealsdb-draft-was').remove();
                     }
+                    // Refresh the read-only derived cells in this row from the
+                    // SERVER recompute (3d). Money is NEVER computed in JS — we
+                    // only display the formatted strings the endpoint returned.
+                    var derived = resp.data.derived;
+                    if (derived && typeof derived === 'object') {
+                        Object.keys(derived).forEach(function (field) {
+                            var $dc = $editRow.find('[data-derived-field="' + field + '"]');
+                            if (!$dc.length) {
+                                return;
+                            }
+                            var $target = $dc.find('span').length ? $dc.find('span') : $dc;
+                            $target.text(derived[field]);
+                            $dc.addClass('mealsdb-recomputed');
+                            setTimeout(function () { $dc.removeClass('mealsdb-recomputed'); }, 600);
+                        });
+                    }
                 } else {
                     revert($cell, (resp && resp.data && resp.data.message) || i18n.genericErr);
                 }
@@ -101,6 +118,7 @@
                 revert($cell, message);
             }).always(function () {
                 $cell.data('busy', false).prop('disabled', false);
+                $editRow.removeClass('mealsdb-row-saving');
             });
         });
 

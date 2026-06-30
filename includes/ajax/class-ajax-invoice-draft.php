@@ -239,10 +239,24 @@ class MealsDB_Ajax_Invoice_Draft {
                 );
             }
 
+            // Live recompute (INVOICE-DRAFT-SPREADSHEET 3b): derive the
+            // pipeline's read-only money cells from the UPDATED row and return
+            // them so the grid refreshes in place — the SINGLE source of truth
+            // is the per-pipeline compute fn (here via the page's
+            // derived_display), NEVER recomputed in JS and NEVER persisted into
+            // `current` (finalize re-derives from the same fn). Apply the saved
+            // value to the in-memory row rather than re-decrypting the draft.
+            $updated_row          = $current[$client_id];
+            $updated_row[$field]  = $validated;
+            $derived = (class_exists('MealsDB_Invoice_Draft_Page'))
+                ? MealsDB_Invoice_Draft_Page::derived_display((string) ($draft['pipeline'] ?? ''), $updated_row)
+                : [];
+
             wp_send_json_success([
                 'field'   => $field,
                 'value'   => $validated,
                 'changed' => ($old !== $validated),
+                'derived' => $derived, // [derived_field => formatted]; [] when none
             ]);
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Invoice_Draft AJAX] edit failed: ' . $e->getMessage());
