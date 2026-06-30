@@ -966,6 +966,20 @@ CSS;
     }
 
     private function render_doc1_html(string $zone_name, string $delivery_date, array $batch): string {
+        $css  = $this->midland_doc_css();
+        $body = $this->doc1_body_html($zone_name, $delivery_date, $batch, false);
+        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
+    }
+
+    /**
+     * The DOC 1 cover BODY fragment (no <html> wrapper), so the combined
+     * Packing-Slips document can place it as page 1 ahead of the doc 2 slips.
+     * Standalone doc 1 passes $page_break=false (a lone page needs no break);
+     * the combined doc passes true so a page break separates the cover from the
+     * first packer slip. Page numbering ("Page 1 of {1+order_count}") is
+     * unchanged — the caller sets order_count to the count it wants reflected.
+     */
+    private function doc1_body_html(string $zone_name, string $delivery_date, array $batch, bool $page_break = false): string {
         $orders      = is_array($batch['orders'] ?? null) ? $batch['orders'] : [];
         $order_count = (int) ($batch['order_count'] ?? count($orders));
         $created_at  = (string) ($batch['created_at'] ?? '');
@@ -974,9 +988,10 @@ CSS;
         $zone_title   = $zone_number !== null ? 'Zone ' . $zone_number : self::esc($zone_name);
         $delivery_lbl = self::esc($this->format_long_date($delivery_date));
 
-        // Initials line: the delivery_initials of orders flagged take_from_hold
-        // at generation, joined " | ". NONE when none qualify (operator
-        // decision 2026-06-26 — explicit "none", not a blank line).
+        // Initials line: delivery_initials of orders flagged take_from_hold at
+        // generation, joined " | ". NONE when none qualify (operator decision
+        // 2026-06-26 — explicit "none", not a blank line). Always from the
+        // persisted snapshot, even in the combined doc.
         $initials = [];
         foreach ($orders as $o) {
             if (!empty($o['take_from_hold'])) {
@@ -1007,10 +1022,10 @@ CSS;
         }
 
         $page_y = 1 + $order_count; // cover is page 1; one page per order after.
-        $css    = $this->midland_doc_css();
+        $brk    = $page_break ? ' d2-break' : '';
 
-        $body = <<<HTML
-<div class="doc1-page">
+        return <<<HTML
+<div class="doc1-page{$brk}">
     <div class="d1-zone">{$zone_title}</div>
     <div class="d1-date">Delivery Date: {$delivery_lbl}</div>
     <div class="d1-gap"></div>
@@ -1030,8 +1045,6 @@ CSS;
     <div class="d1-footer">Page 1 of {$page_y}</div>
 </div>
 HTML;
-
-        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
     }
 
     // ----------------------------------------------------------------- //
@@ -1121,6 +1134,56 @@ HTML;
     <div class="d2-divider"></div>
 </div>
 HTML;
+    }
+
+    // ----------------------------------------------------------------- //
+    //  COMBINED — cover (page 1) + packer slips, one document.
+    // ----------------------------------------------------------------- //
+
+    /**
+     * Render ONE PDF = doc 1 cover (page 1) followed by the doc 2 packer slips.
+     * Both are produced by dompdf from the same batch, so we emit them into a
+     * SINGLE document — no PDF-concatenation dependency. The cover's "N Orders"
+     * and the global "Page X of Y" are derived from the LIVE packer slip count
+     * (not the batch snapshot) so the combined document numbers consistently
+     * even if orders changed since generation. The take-from-hold initials line
+     * still comes from the persisted snapshot ($batch['orders']).
+     *
+     * @param array $batch decoded batch: ['orders'=>array, 'created_at'=>UTC, ...]
+     */
+    public function generate_packing_slips_combined(string $zone_name, string $delivery_date, array $batch): string {
+        $clients = $this->client_query->get_clients_for_zones([$zone_name]);
+        $orders  = $this->fetch_orders_for_clients($clients, $delivery_date, $delivery_date);
+        $slips   = $this->build_slips($orders, $clients, false);
+        $html    = $this->render_packing_slips_combined_html($zone_name, $delivery_date, $batch, $slips);
+        return $this->render_with_dompdf($html);
+    }
+
+    /**
+     * The combined document HTML (dompdf-free, unit-testable). Cover body first
+     * with a page break after it (only when slips follow, so a zero-order batch
+     * doesn't emit a trailing blank page), then each packer slip page.
+     *
+     * @param array<int,array> $slips live packer slips from build_slips()
+     */
+    private function render_packing_slips_combined_html(string $zone_name, string $delivery_date, array $batch, array $slips): string {
+        $css   = $this->midland_doc_css();
+        $count = count($slips);
+        $y     = 1 + $count; // cover (1) + one page per order.
+
+        // Cover reflects the LIVE count; break after it only if slips follow.
+        $cover_batch = $batch;
+        $cover_batch['order_count'] = $count;
+        $body = $this->doc1_body_html($zone_name, $delivery_date, $cover_batch, $count > 0);
+
+        foreach ($slips as $i => $slip) {
+            $n       = $i + 1;       // order N within the zone batch
+            $page_x  = $n + 1;       // global page # (cover is page 1)
+            $is_last = ($i === $count - 1);
+            $body   .= $this->render_doc2_page($slip, $n, $count, $page_x, $y, $is_last);
+        }
+
+        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
     }
 
     // ----------------------------------------------------------------- //
