@@ -754,12 +754,12 @@ class MealsDB_Schema {
             // Midland packing-slip batches (directive 01). One row per generated
             // batch (zone + delivery date). `doc4_payload` is the encrypted JSON
             // array of per-order driver blocks (name/address/phone/collect),
-            // positional — element N pairs with doc 3 page N at merge time. It
+            // positional — element N is the driver block for order N, in the
+            // same order doc 2 (the packer slips) emits them. It
             // carries client PII, hence encryption at rest like the invoice
-            // draft payload. doc3_path/merged_path point at files under the
-            // protected mealsdb-slips/ upload subdir (NOT web-served). Additive
-            // table — STR-11 schema-sync ADDS it; it cannot ALTER an ENUM later,
-            // so the full status set is declared up front. Mirrors INVOICE_DRAFTS.
+            // draft payload. Additive table — STR-11 schema-sync ADDS it; it
+            // cannot ALTER an ENUM later, so the status set is declared up front
+            // (now a single 'generated' value). Mirrors INVOICE_DRAFTS.
             MealsDB_Tables::SLIP_BATCHES => [
                 'table'   => MealsDB_Tables::SLIP_BATCHES,
                 'engine'  => 'InnoDB',
@@ -772,13 +772,12 @@ class MealsDB_Schema {
                     // Encrypted JSON array of doc 4 driver-block payloads, one
                     // per order, in the SAME positional order doc 2 was emitted.
                     'doc4_payload'    => 'LONGTEXT NOT NULL',
-                    // Uploaded doc 3 scan: path to the stored PDF under
-                    // wp_upload_dir()/mealsdb-slips/doc3/ (protected dir).
-                    'doc3_path'       => 'TEXT NULL',
-                    'doc3_page_count' => 'INT UNSIGNED NULL',
-                    // Merged finished output: path under mealsdb-slips/merged/.
-                    'merged_path'     => 'TEXT NULL',
-                    'status'          => "ENUM('generated','doc3_uploaded','combined') NOT NULL DEFAULT 'generated'",
+                    // Only 'generated' is ever written (cancel() hard-deletes
+                    // the row). Schema_Sync is additive-only and cannot ALTER an
+                    // existing ENUM, so installs created before the status set
+                    // was narrowed to one value keep the old 3-value ENUM with
+                    // the dead values unused — harmless.
+                    'status'          => "ENUM('generated') NOT NULL DEFAULT 'generated'",
                     'created_by'      => 'BIGINT UNSIGNED NULL',
                     'created_at'      => 'DATETIME NOT NULL',
                     'updated_at'      => 'DATETIME NOT NULL',
