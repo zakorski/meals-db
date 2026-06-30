@@ -736,6 +736,31 @@ class MealsDB_Invoice_Draft_Page {
                 echo '</td>';
                 return;
 
+            case 'input-money-cents':
+                // Stored in cents, EDITED as dollars (SDNB new-portal
+                // contribution/tax). data-edit-as="dollars" drives the endpoint's
+                // dollars→cents conversion; the baseline is cents so the "was:"
+                // hint is compared in dollars.
+                $dollars = number_format((int) ($row[$field] ?? 0) / 100, 2, '.', '');
+                echo '<td class="mealsdb-col-input-money">';
+                if ($editable) {
+                    echo '<input type="text" class="mealsdb-draft-cell" '
+                        . 'data-client-id="' . esc_attr($client_id) . '" '
+                        . 'data-field="' . esc_attr($field) . '" data-edit-as="dollars" '
+                        . 'value="' . esc_attr($dollars) . '" />';
+                } else {
+                    echo '<span>$' . esc_html($dollars) . '</span>';
+                }
+                $gen_c = $gen_row[$field] ?? null;
+                if ($gen_c !== null && is_numeric($gen_c)) {
+                    $gen_cd = number_format((int) $gen_c / 100, 2, '.', '');
+                    if ($gen_cd !== $dollars) {
+                        echo '<div class="mealsdb-draft-was">' . esc_html__('was:', 'meals-db') . ' $' . esc_html($gen_cd) . '</div>';
+                    }
+                }
+                echo '</td>';
+                return;
+
             case 'identity':
             default:
                 $val     = $row[$field] ?? null;
@@ -862,7 +887,24 @@ class MealsDB_Invoice_Draft_Page {
                 ['field' => 'remaining_sides','label' => __('Sides Left', 'meals-db'),     'type' => 'derived-int',   'derived_key' => 'remaining_sides'],
             ];
         }
-        // SDNB legacy / new-portal: no curated map yet → fall back to raw grid.
+        if ($pipeline === MealsDB_Invoice_Draft::PIPELINE_SDNB_NEW) {
+            // Legibility + edit only: the SDNB portal computes the total from
+            // Units/Rate/Contribution/Tax on upload, so there is NO derived
+            // column and NO recompute round-trip for this pipeline (directive
+            // SDNB scope 3a — "do not invent a total the portal owns").
+            // contribution_cents / tax_cents are stored in cents but edited as
+            // dollars (input-money-cents), reusing the edit endpoint's
+            // dollars→cents conversion.
+            return [
+                ['field' => 'client',                  'label' => __('Client', 'meals-db'),             'type' => 'identity-name'],
+                ['field' => 'sdnb_service_request_id', 'label' => __('Service Request ID', 'meals-db'), 'type' => 'identity'],
+                ['field' => 'allocated_mains',         'label' => __('Units', 'meals-db'),              'type' => 'input-int'],
+                ['field' => 'resolved_rate',           'label' => __('Rate', 'meals-db'),               'type' => 'input-money'],
+                ['field' => 'contribution_cents',      'label' => __('Contribution', 'meals-db'),       'type' => 'input-money-cents'],
+                ['field' => 'tax_cents',               'label' => __('Tax', 'meals-db'),                'type' => 'input-money-cents'],
+            ];
+        }
+        // SDNB-legacy uses its own per-line model (sdnb_legacy_column_model).
         return null;
     }
 
