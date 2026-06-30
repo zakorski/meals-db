@@ -61,10 +61,24 @@ chk_true(!isset($by_field['contribution_cents']),  'contribution_cents is NOT a 
 chk_true(!isset($by_field['client_contribution']), 'client_contribution is NOT a curated column');
 chk_true(!isset($by_field['vac_portion']),         'vac_portion is NOT a curated column');
 
-// Pipelines without a curated map fall back (null) — SDNB unchanged this pass.
-chk(MealsDB_Invoice_Draft_Page::column_map('sdnb_legacy'),    null, 'sdnb_legacy has no curated map yet (fallback)');
-chk(MealsDB_Invoice_Draft_Page::column_map('sdnb_new_portal'), null, 'sdnb_new_portal has no curated map yet (fallback)');
-chk(MealsDB_Invoice_Draft_Page::column_map('bogus'),           null, 'unknown pipeline → null');
+// SDNB-legacy uses its own per-line model (sdnb_legacy_column_model), so the
+// flat column_map stays null for it. Unknown pipelines → null (raw fallback).
+chk(MealsDB_Invoice_Draft_Page::column_map('sdnb_legacy'), null, 'sdnb_legacy uses the per-line model, not the flat map');
+chk(MealsDB_Invoice_Draft_Page::column_map('bogus'),       null, 'unknown pipeline → null');
+
+// SDNB new-portal: a FLAT curated map (legibility + edit only). The portal
+// owns the total, so there are NO derived columns and NO recompute.
+$np = MealsDB_Invoice_Draft_Page::column_map('sdnb_new_portal');
+chk_true(is_array($np), 'new-portal has a curated map');
+$npf = [];
+foreach ((array) $np as $c) { $npf[$c['field']] = $c['type']; }
+chk($npf['client'] ?? null,             'identity-name',     'new-portal: client identity-name');
+chk($npf['allocated_mains'] ?? null,    'input-int',         'new-portal: Units (allocated_mains) is input-int');
+chk($npf['resolved_rate'] ?? null,      'input-money',       'new-portal: Rate is input-money');
+chk($npf['contribution_cents'] ?? null, 'input-money-cents', 'new-portal: Contribution edited dollars→cents');
+chk($npf['tax_cents'] ?? null,          'input-money-cents', 'new-portal: Tax edited dollars→cents');
+$np_derived = array_filter((array) $np, static function ($c) { return strncmp((string) $c['type'], 'derived', 7) === 0; });
+chk(count($np_derived), 0, 'new-portal: NO derived columns (portal owns the total)');
 
 // ---------------------------------------------------------------------------
 // SDNB-legacy uses a bespoke per-line "client block" model (NOT the flat
