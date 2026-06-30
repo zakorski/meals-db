@@ -33,6 +33,19 @@ class MealsDB_Slip_Merge {
     private const DPI      = 300;
 
     /**
+     * Last user-facing failure reason from combine(), or '' if none. combine()
+     * returns a bare '' sentinel; this lets the AJAX layer surface the SPECIFIC
+     * cause (e.g. "PDF image tool unavailable") instead of a generic message,
+     * without changing combine()'s return contract.
+     */
+    private static string $last_error_reason = '';
+
+    /** Read the last combine() failure reason (empty if the last call succeeded). */
+    public static function last_error_reason(): string {
+        return self::$last_error_reason;
+    }
+
+    /**
      * Validate an uploaded doc 3 PDF against a batch's order count. Used by the
      * AJAX layer to gate the Combine button.
      *
@@ -84,6 +97,7 @@ class MealsDB_Slip_Merge {
      * @param string           $doc3_path   absolute path to the uploaded doc 3 PDF
      */
     public static function combine(array $doc4_orders, string $doc3_path): string {
+        self::$last_error_reason = '';
         $bg_paths = [];
         try {
             $orders = array_values($doc4_orders);
@@ -94,7 +108,41 @@ class MealsDB_Slip_Merge {
             // Defensive re-check of the positional invariant (the AJAX upload
             // already validated, but combine must not composite a mismatch).
             $bg_paths = self::rasterize_doc3($doc3_path);
-            if (count($bg_paths) !== count($orders)) {
+            $got      = count($bg_paths);
+            $want     = count($orders);
+
+            // Case 1 — the rasterizer produced NOTHING. This is not a page-count
+            // mismatch; it means the PDF image tool (Imagick/Ghostscript) is
+            // unavailable or the PDF policy blocked it (rasterize_doc3() logs
+            // the specific cause, e.g. rasterize.no_imagick). Report it honestly
+            // and point the operator at the manual Doc 4 fallback.
+            if ($got === 0) {
+                self::$last_error_reason = __(
+                    'Doc 3 could not be processed on the server (the PDF image tool may be unavailable). You can still print Doc 4 and combine manually.',
+                    'meals-db'
+                );
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity'  => 'error',
+                        'category'  => 'slip_batch',
+                        'subsystem' => 'slip_merge',
+                        'event'     => 'combine.rasterize_failed',
+                        'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message'   => 'Could not rasterize Doc 3 (no pages produced) — the server PDF image tool may be unavailable.',
+                    ]);
+                }
+                return '';
+            }
+
+            // Case 2 — pages WERE produced but the count differs from the order
+            // count: a genuine positional mismatch (unchanged behavior).
+            if ($got !== $want) {
+                self::$last_error_reason = sprintf(
+                    /* translators: 1: pages rasterized, 2: orders in batch */
+                    __('Doc 3 has %1$d page(s) but the batch has %2$d order(s); they must match.', 'meals-db'),
+                    $got,
+                    $want
+                );
                 if (class_exists('MealsDB_Event_Log')) {
                     MealsDB_Event_Log::record([
                         'severity'  => 'error',
@@ -103,12 +151,13 @@ class MealsDB_Slip_Merge {
                         'event'     => 'combine.page_count_mismatch',
                         'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
                         'message'   => sprintf('Doc 3 rasterized to %d page(s); batch has %d order(s).',
-                            count($bg_paths), count($orders)),
+                            $got, $want),
                     ]);
                 }
                 return '';
             }
 
+            // Case 3 — match: composite.
             return self::render_overlay_pdf($bg_paths, $orders);
         } catch (\Throwable $e) {
             self::log_error('combine', $e);
