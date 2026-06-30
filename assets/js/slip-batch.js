@@ -116,6 +116,15 @@
                 rowMsg($row, msg);
                 notice('error', msg);
             }).always(function () {
+                // Clear the transient "Uploading…" indicator if no branch
+                // replaced it. The done/else/fail branches each set their own
+                // final message (empty on success, error text otherwise); this
+                // guard only removes a STUCK spinner — a success-but-not-valid
+                // shape or unexpected payload that never hit a message-setting
+                // branch — without clobbering a legitimate error message.
+                var $m = $row.find('.mealsdb-slip-row-msg');
+                var uploading = i18n.uploading || 'Uploading…';
+                if ($m.text() === uploading) { $m.text(''); }
                 // Reset the input so re-selecting the SAME file re-fires change.
                 input.value = '';
             });

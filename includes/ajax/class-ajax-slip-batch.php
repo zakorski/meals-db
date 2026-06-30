@@ -218,7 +218,17 @@ class MealsDB_Ajax_Slip_Batch {
 
             $bytes = MealsDB_Slip_Merge::combine($batch['orders'] ?? [], $doc3);
             if ($bytes === '') {
-                wp_send_json_error(['message' => __('The merge failed (see Event Log).', 'meals-db')]);
+                // Surface the SPECIFIC cause when the merge service knows it
+                // (e.g. the PDF image tool is unavailable, vs a page-count
+                // mismatch) so the operator isn't sent to the Event Log to
+                // guess. Falls back to the generic message otherwise.
+                $reason = method_exists('MealsDB_Slip_Merge', 'last_error_reason')
+                    ? MealsDB_Slip_Merge::last_error_reason()
+                    : '';
+                $message = $reason !== ''
+                    ? sprintf(__('The merge failed: %s', 'meals-db'), $reason)
+                    : __('The merge failed (see Event Log).', 'meals-db');
+                wp_send_json_error(['message' => $message]);
                 return;
             }
 
