@@ -948,28 +948,8 @@ CSS;
     }
 
     // ----------------------------------------------------------------- //
-    //  DOC 1 — cover sheet (per zone)
+    //  DOC 1 — cover sheet BODY builder (per zone)
     // ----------------------------------------------------------------- //
-
-    /**
-     * Render the per-zone cover sheet. Driven entirely by the persisted batch
-     * snapshot so the count / initials / export timestamp are reproducible.
-     *
-     * @param string $zone_name     the batch's zone (matches a schedule key)
-     * @param string $delivery_date 'Y-m-d'
-     * @param array  $batch         decoded batch: ['order_count'=>int,
-     *                              'orders'=>array<doc4 order>, 'created_at'=>UTC]
-     */
-    public function generate_doc1_cover_sheet(string $zone_name, string $delivery_date, array $batch): string {
-        $html = $this->render_doc1_html($zone_name, $delivery_date, $batch);
-        return $this->render_with_dompdf($html);
-    }
-
-    private function render_doc1_html(string $zone_name, string $delivery_date, array $batch): string {
-        $css  = $this->midland_doc_css();
-        $body = $this->doc1_body_html($zone_name, $delivery_date, $batch, false);
-        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
-    }
 
     /**
      * The DOC 1 cover BODY fragment (no <html> wrapper), so the combined
@@ -1048,41 +1028,8 @@ HTML;
     }
 
     // ----------------------------------------------------------------- //
-    //  DOC 2 — packer slip (item list left, blank-but-divider right)
+    //  DOC 2 — packer slip page renderer (item list left, divider right)
     // ----------------------------------------------------------------- //
-
-    /**
-     * Render the doc 2 packer slips for a zone batch: one page per order, the
-     * item list in the left region, the right region blank EXCEPT the drawn
-     * divider doc 4 later anchors to. Re-queried from live order data at
-     * download time (item tables are not persisted).
-     */
-    public function generate_doc2_packer_by_zones(array $zone_names, string $start_date, string $end_date): string {
-        $clients = $this->client_query->get_clients_for_zones($zone_names);
-        $orders  = $this->fetch_orders_for_clients($clients, $start_date, $end_date);
-        $slips   = $this->build_slips($orders, $clients, false);
-        $html    = $this->render_doc2_html($slips);
-        return $this->render_with_dompdf($html);
-    }
-
-    private function render_doc2_html(array $slips): string {
-        $css   = $this->midland_doc_css();
-        $count = count($slips);
-        $y     = 1 + $count; // global page count: cover (1) + one per order.
-
-        $body = '';
-        foreach ($slips as $i => $slip) {
-            $n          = $i + 1;            // order N within the zone batch
-            $page_x     = $n + 1;            // global page # (cover is page 1)
-            $is_last    = ($i === $count - 1);
-            $body      .= $this->render_doc2_page($slip, $n, $count, $page_x, $y, $is_last);
-        }
-        if ($body === '') {
-            $body = '<div class="doc2-page"><div class="d2-empty">No orders found for this selection.</div></div>';
-        }
-
-        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
-    }
 
     private function render_doc2_page(array $slip, int $n, int $m, int $page_x, int $page_y, bool $is_last): string {
         $initials      = self::esc((string) ($slip['initials'] ?? ''));
@@ -1194,8 +1141,7 @@ HTML;
      * Render the saved doc 4 driver blocks as standalone landscape pages — one
      * per order, the block alone at the calibrated right-region position, NO
      * item table and NO divider (this is the print-on-top manual fallback; the
-     * physical slip it overlays already carries the divider). Same source the
-     * merge engine composites, so standalone and merged output match.
+     * physical slip it overlays already carries the divider).
      *
      * @param array<int,array> $doc4_orders persisted, positional driver blocks
      */
@@ -1220,11 +1166,11 @@ HTML;
 
     /**
      * The doc 4 driver-block CONTENT fragment (no positioning, no divider).
-     * Shared single source of truth: the standalone doc 4 wraps it on a blank
-     * page; the merge engine (unit 03) wraps it over the doc 3 background — at
-     * the SAME calibrated coordinates (DOC4_BLOCK_* constants). Skips every
-     * empty field so an absent secondary phone / contact never prints a stray
-     * label or dangling "()".
+     * Single source of truth for the standalone Doc 4 driver blocks, which wrap
+     * it on a blank page at the calibrated DOC4_BLOCK_* coordinates for the
+     * team's manual overlay onto the printed packing slip. Skips every empty
+     * field so an absent secondary phone / contact never prints a stray label
+     * or dangling "()".
      *
      * @param array $order a persisted doc 4 order payload
      */
