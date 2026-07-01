@@ -36,6 +36,9 @@ class MealsDB_Product_Display_Sync {
 
         // AJAX endpoint for manual full sync from the settings page.
         add_action('wp_ajax_mealsdb_sync_product_display', [self::class, 'ajax_full_sync']);
+
+        // AJAX endpoint for the legacy case-size backfill (Data Ops button).
+        add_action('wp_ajax_mealsdb_case_count_sync', [self::class, 'ajax_case_count_sync']);
     }
 
     /**
@@ -180,6 +183,52 @@ class MealsDB_Product_Display_Sync {
             'message' => sprintf(
                 __('Synced %d products successfully.', 'meals-db'),
                 $result
+            ),
+        ]);
+    }
+
+    /**
+     * AJAX handler: backfill meals_products.case_size from legacy postmeta.
+     * Guard stack mirrors ajax_full_sync() verbatim (nonce → capability → rate limit).
+     */
+    public static function ajax_case_count_sync(): void {
+        $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
+        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Invalid request.', 'meals-db'),
+            ]);
+        }
+
+        $capability = class_exists('MealsDB_Permissions')
+            ? MealsDB_Permissions::required_capability()
+            : 'manage_woocommerce';
+        if (!current_user_can($capability)) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('You are not allowed to perform this action.', 'meals-db'),
+            ], 403);
+        }
+
+        // Rate-limit: this walks the whole published-product catalog and writes a
+        // meals_products row per filled product — same heavy-loop profile as the
+        // display sync, so reuse the bulk-backfill bucket.
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('settings_modify')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
+        $result = self::case_count_sync();
+
+        wp_send_json([
+            'success' => true,
+            'message' => sprintf(
+                /* translators: 1: scanned, 2: filled, 3: already correct, 4: no legacy, 5: failed */
+                __('Case Count Sync complete: %1$d products scanned, %2$d filled from legacy data, %3$d already correct, %4$d had no legacy value, %5$d failed to write.', 'meals-db'),
+                $result['scanned'], $result['filled'], $result['already_ok'], $result['no_legacy'], $result['failed']
             ),
         ]);
     }
