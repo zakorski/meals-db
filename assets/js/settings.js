@@ -347,6 +347,29 @@
         });
     });
 
+    // Case Count Sync — backfill case sizes from legacy data.
+    $('#mealsdb-case-count-sync').on('click', function () {
+        var $btn    = $(this);
+        var $result = $('#mealsdb-case-count-sync-result');
+        $btn.prop('disabled', true);
+        $result.text('Syncing case counts...'); tint($result, '#666');
+
+        $.post(ajaxUrl, {
+            action: 'mealsdb_case_count_sync',
+            nonce: nonces.general || ''
+        }, function (resp) {
+            $btn.prop('disabled', false);
+            if (resp && resp.success) {
+                $result.text(resp.message || 'Done.'); tint($result, '#46b450');
+            } else {
+                $result.text((resp && resp.message) || 'Sync failed.'); tint($result, '#dc3232');
+            }
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            $result.text('Request failed.'); tint($result, '#dc3232');
+        });
+    });
+
     // Save settings
     $('#mealsdb-settings-form').on('submit', function (e) {
         e.preventDefault();

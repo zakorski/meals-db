@@ -237,6 +237,17 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
             </button>
             <span id="mealsdb-sync-products-result" style="margin-left:12px;"></span>
         </p>
+
+        <h2><?php echo esc_html__( 'Case Count Sync', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'Fills in product case sizes from legacy data and writes them to the products table used by Purchase Orders. Safe to run repeatedly; it only fills missing (default) values and never overwrites, lowers, or deletes existing data.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-case-count-sync">
+                <?php echo esc_html__( 'Case Count Sync', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-case-count-sync-result" style="margin-left:12px;"></span>
+        </p>
 </div>
 
 <style>

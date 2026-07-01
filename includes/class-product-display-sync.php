@@ -36,6 +36,9 @@ class MealsDB_Product_Display_Sync {
 
         // AJAX endpoint for manual full sync from the settings page.
         add_action('wp_ajax_mealsdb_sync_product_display', [self::class, 'ajax_full_sync']);
+
+        // AJAX endpoint for the legacy case-size backfill (Data Ops button).
+        add_action('wp_ajax_mealsdb_case_count_sync', [self::class, 'ajax_case_count_sync']);
     }
 
     /**
@@ -185,6 +188,52 @@ class MealsDB_Product_Display_Sync {
     }
 
     /**
+     * AJAX handler: backfill meals_products.case_size from legacy postmeta.
+     * Guard stack mirrors ajax_full_sync() verbatim (nonce → capability → rate limit).
+     */
+    public static function ajax_case_count_sync(): void {
+        $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
+        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_nonce')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Invalid request.', 'meals-db'),
+            ]);
+        }
+
+        $capability = class_exists('MealsDB_Permissions')
+            ? MealsDB_Permissions::required_capability()
+            : 'manage_woocommerce';
+        if (!current_user_can($capability)) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('You are not allowed to perform this action.', 'meals-db'),
+            ], 403);
+        }
+
+        // Rate-limit: this walks the whole published-product catalog and writes a
+        // meals_products row per filled product — same heavy-loop profile as the
+        // display sync, so reuse the bulk-backfill bucket.
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('settings_modify')) {
+            wp_send_json([
+                'success' => false,
+                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
+            ], 429);
+        }
+
+        $result = self::case_count_sync();
+
+        wp_send_json([
+            'success' => true,
+            'message' => sprintf(
+                /* translators: 1: scanned, 2: filled, 3: already correct, 4: no legacy, 5: failed */
+                __('Case Count Sync complete: %1$d products scanned, %2$d filled from legacy data, %3$d already correct, %4$d had no legacy value, %5$d failed to write.', 'meals-db'),
+                $result['scanned'], $result['filled'], $result['already_ok'], $result['no_legacy'], $result['failed']
+            ),
+        ]);
+    }
+
+    /**
      * Run a full rebuild of display fields for all published WC products.
      *
      * @return int Number of products synced.
@@ -231,6 +280,91 @@ class MealsDB_Product_Display_Sync {
         self::mark_unlisted_products_unpublished();
 
         return $synced;
+    }
+
+    /**
+     * Backfill meals_products.case_size from the legacy bare `case_size` postmeta.
+     *
+     * Column-keyed, idempotent, non-destructive. Reads the CURRENT case size from the
+     * canonical meals_products.case_size COLUMN (via get_product_data) — NOT from the
+     * `_mealsdb_case_size` postmeta, which the plugin never persists (it is only a WC
+     * form-field name; the tab writes the column directly). Only FILLS the default
+     * (column <= 1) from a real legacy value (> 1); never lowers or overwrites a column
+     * that already holds a real value, and never touches the legacy meta. Running it
+     * twice changes nothing the second time.
+     *
+     * NOTE: a product legitimately having case_size 1 cannot be distinguished from the
+     * unset default 1 — acceptable because the real case sizes are 12/24/36/48/100 and
+     * the operation is non-destructive (a true-1 product simply stays 1).
+     *
+     * @return array{scanned:int, filled:int, already_ok:int, no_legacy:int, failed:int}
+     */
+    public static function case_count_sync(): array {
+        $stats = ['scanned' => 0, 'filled' => 0, 'already_ok' => 0, 'no_legacy' => 0, 'failed' => 0];
+
+        if (!function_exists('wc_get_products') || !class_exists('MealsDB_Quick_Order_Products')) {
+            return $stats;
+        }
+
+        $allowed_slugs = MealsDB_Quick_Order_Products::get_allowed_category_slugs();
+
+        $page     = 1;
+        $per_page = 100;
+
+        do {
+            $products = wc_get_products([
+                'status'   => 'publish',
+                'limit'    => $per_page,
+                'page'     => $page,
+                'orderby'  => 'ID',
+                'order'    => 'ASC',
+                'return'   => 'objects',
+                'category' => $allowed_slugs,
+            ]);
+
+            if (!is_array($products) || empty($products)) {
+                break;
+            }
+
+            foreach ($products as $product) {
+                if (!$product instanceof WC_Product) {
+                    continue;
+                }
+                $pid = (int) $product->get_id();
+                if ($pid <= 0) {
+                    continue;
+                }
+
+                $stats['scanned']++;
+
+                $existing = MealsDB_Products::get_product_data($pid);
+                $current  = (int) ($existing['case_size'] ?? 1);          // canonical COLUMN value
+                $legacy   = (int) get_post_meta($pid, 'case_size', true); // legacy bare key (READ ONLY)
+
+                if ($current > 1) {
+                    // Column already holds a real (non-default) case size — leave it ALONE.
+                    $stats['already_ok']++;
+                } elseif ($legacy > 1) {
+                    // Default column + real legacy value: fill the COLUMN via the existing
+                    // upsert so every column stays consistent. The legacy meta is left intact.
+                    // Reading/writing the column (never the empty _mealsdb_case_size postmeta)
+                    // is what keeps this idempotent and non-destructive.
+                    $ok = MealsDB_Products::save_product_data($pid, array_merge($existing, ['case_size' => $legacy]));
+                    if ($ok) {
+                        $stats['filled']++;
+                    } else {
+                        // Upsert refused (e.g. capability) — surface it, never report a phantom success.
+                        $stats['failed']++;
+                    }
+                } else {
+                    $stats['no_legacy']++;
+                }
+            }
+
+            $page++;
+        } while (count($products) === $per_page);
+
+        return $stats;
     }
 
     /**
