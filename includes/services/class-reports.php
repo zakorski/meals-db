@@ -189,19 +189,61 @@ class MealsDB_Reports {
             ARRAY_A
         );
 
-        if (!is_array($recent_rows) || empty($recent_rows)) {
-            return [];
+        // An empty recent-sales result must NOT empty the PO now — the full
+        // catalog is still forecast (everything just has zero recent demand and
+        // orders only to cover stock gaps). The empty($products) guard after the
+        // catalog seed + category exclusion (below) is the real gate.
+        if (!is_array($recent_rows)) {
+            $recent_rows = [];
         }
 
-        // Build per-product weekly history.
+        // --- Seed the product universe from the full active catalog. ---
+        // Forecast EVERY published meal/side product in meals_products, not just
+        // those sold in the trailing window — mirrors the validated back-test
+        // simulation, which never dropped a product for a quiet 12 weeks. Query A
+        // (below) only ATTACHES recent weekly history to these entries.
+        $products_table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+        $catalog = $this->wpdb->get_results(
+            "SELECT wc_product_id, product_type, case_size
+             FROM `{$products_table}`
+             WHERE product_type IN ('meal','side')
+               AND is_published = 1",
+            ARRAY_A
+        );
+
         $products = [];
+        if (is_array($catalog)) {
+            foreach ($catalog as $row) {
+                $pid = (int) $row['wc_product_id'];
+                if ($pid <= 0) {
+                    continue;
+                }
+                $products[$pid] = [
+                    'product_name'   => '',                 // filled from sales or WC below
+                    'weekly_history' => [],                 // zero until Query A fills weeks
+                    'case_size'      => (int) $row['case_size'],
+                ];
+            }
+        }
+
+        // Query A now ATTACHES recent weekly history to the catalog entries. A
+        // product SOLD but absent from meals_products (e.g. unsynced) is still
+        // included so we don't lose real demand (seeded with case_size 0, floored
+        // to 1 at row-build time).
         foreach ($recent_rows as $row) {
             $pid = (int) $row['wc_product_id'];
+            if ($pid <= 0) {
+                continue;
+            }
             if (!isset($products[$pid])) {
                 $products[$pid] = [
                     'product_name'   => (string) $row['product_name'],
                     'weekly_history' => [],
+                    'case_size'      => 0,
                 ];
+            }
+            if ($products[$pid]['product_name'] === '') {
+                $products[$pid]['product_name'] = (string) $row['product_name'];
             }
             $products[$pid]['weekly_history'][$row['year_week']] = (float) $row['weekly_qty'];
         }
@@ -278,6 +320,10 @@ class MealsDB_Reports {
         }
 
         // --- Build purchase order rows. ---
+        // NOTE: this loop now spans the FULL published catalog (~120+ products),
+        // not just the recently-sold subset — each iteration does a wc_get_product()
+        // + get_post_meta() (and has_term() in the exclusion step above). Acceptable
+        // for an on-demand report; batch-prime caches here if it ever drags.
         $po_rows = [];
         foreach ($products as $pid => $p) {
             // Layer 1: Weighted recent demand.
@@ -334,12 +380,29 @@ class MealsDB_Reports {
             $adjusted_weekly = round($weighted_avg * $seasonal_index, 2);
             $projected_need  = (int) ceil($adjusted_weekly * $coverage_weeks);
 
-            $meta   = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
-            $case_size = isset($meta['case_size']) && (int) $meta['case_size'] > 0
-                ? (int) $meta['case_size']
-                : ((int) get_post_meta($pid, 'case_size', true) ?: 1);
+            $meta = isset($product_meta[$pid]) ? $product_meta[$pid] : [];
+            // Prefer the catalog case_size (authoritative once Case Count Sync has
+            // run); fall back to the product-meta lookup, then the legacy postmeta,
+            // and finally a floor of 1 — NEVER 0. The units/case_size division
+            // below would divide by zero for a fallback-seeded (case_size 0)
+            // sold-but-uncatalogued product otherwise.
+            $catalog_case = (int) ($p['case_size'] ?? 0);
+            $meta_case    = isset($meta['case_size']) ? (int) $meta['case_size'] : 0;
+            if ($catalog_case > 0) {
+                $case_size = $catalog_case;
+            } elseif ($meta_case > 0) {
+                $case_size = $meta_case;
+            } else {
+                $case_size = (int) get_post_meta($pid, 'case_size', true) ?: 1;
+            }
 
             $wc_product    = wc_get_product($pid);
+            // Catalog products with no recent sales have an empty product_name;
+            // fall back to the WC product title (the WC object is already loaded
+            // here for SKU/stock).
+            $product_name  = $p['product_name'] !== ''
+                ? $p['product_name']
+                : ($wc_product ? $wc_product->get_name() : '');
             $sku           = $wc_product ? $wc_product->get_sku() : '';
             $current_stock = $wc_product ? max(0, (int) $wc_product->get_stock_quantity()) : 0;
             $future_inv    = max(0, (int) get_post_meta($pid, '_future_inventory_quantity', true));
@@ -364,7 +427,7 @@ class MealsDB_Reports {
 
             $po_rows[] = [
                 'sku'                 => $sku,
-                'product_name'        => $p['product_name'],
+                'product_name'        => $product_name,
                 'weighted_avg_weekly' => $weighted_avg,
                 'seasonal_index'      => round($seasonal_index, 2),
                 'adjusted_weekly'     => $adjusted_weekly,
