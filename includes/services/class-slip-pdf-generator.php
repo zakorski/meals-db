@@ -214,7 +214,7 @@ class MealsDB_Slip_PDF_Generator {
         ];
 
         if ($include_driver) {
-            $slip['driver'] = $this->build_driver_block($order, $client, $delivery_dt);
+            $slip['driver'] = $this->build_driver_block($order, $client, $delivery_dt, $fee_ids);
         }
 
         return $slip;
@@ -333,7 +333,7 @@ class MealsDB_Slip_PDF_Generator {
     /**
      * Build the driver-only block on a slip.
      */
-    private function build_driver_block(array $order, array $client, string $delivery_date): array {
+    private function build_driver_block(array $order, array $client, string $delivery_date, array $fee_ids): array {
         $client_type_raw = (string) ($client['client_type'] ?? '');
         $client_type     = strtolower($client_type_raw);
 
@@ -366,14 +366,25 @@ class MealsDB_Slip_PDF_Generator {
         $collect_amount = 0.0;
 
         if (in_array($client_type, ['sdnb', 'veteran'], true)) {
-            $is_first = $this->is_first_delivery_of_month(
-                (int) ($client['client_id'] ?? 0),
-                $delivery_date
+            // U06-slips-3: collect the monthly contribution on the delivery of
+            // the ORDER that carries it — the order the fee path billed the
+            // contribution fee product (SKU CONT) onto. apply_to_order adds that
+            // product to EXACTLY ONE order per client per billing month (the
+            // atomic claim in MealsDB_Order_Fees), so this signal collects the
+            // contribution once, on the right delivery, and can never over- or
+            // under-collect. The old signal (the contribution_applied summary
+            // flag) was set at ORDER time — before ANY delivery — so it was
+            // already 1 by the time the first slip generated, and the door
+            // contribution was silently never collected. Keying off the
+            // delivered order's own line items makes billed == collected.
+            $collect_contribution = self::order_carries_contribution(
+                $order,
+                (int) ($fee_ids['client_contribution'] ?? 0)
             );
             $gov = MealsDB_Collection_Calculator::for_government(
                 $delivery_fee,
                 $contribution,
-                $is_first
+                $collect_contribution
             );
 
             $breakdown[] = ['label' => 'Delivery Fee', 'amount' => round($delivery_fee, 2)];
@@ -423,65 +434,29 @@ class MealsDB_Slip_PDF_Generator {
     }
 
     /**
-     * Should the monthly client contribution be collected on this delivery?
+     * Whether the delivered order carries the monthly client-contribution fee
+     * line (the client_contribution fee product, rendered as SKU CONT).
      *
-     * The contribution is collected once per billing month, on the first
-     * delivery. Historically this was inferred from MIN(delivery_date) in
-     * meals_delivery_allocations — but those detail rows only exist after the
-     * allocation rebuilder has run (see LB-1). Before materialisation, the old
-     * code defaulted to TRUE and over-collected the contribution on every
-     * delivery (LB-4).
+     * This is the authoritative "collect the contribution on this delivery"
+     * signal (see build_driver_block). MealsDB_Order_Fees::apply_to_order bills
+     * that product onto EXACTLY ONE order per client per billing month via an
+     * atomic claim, so the driver collects the contribution once — on that
+     * order's delivery — with no possibility of over- or under-collection.
      *
-     * The authoritative signal is the contribution_applied flag on
-     * meals_client_allocations, set when the fee path bills the contribution.
-     * We use that as the source of truth: if the contribution has already been
-     * applied this month, do NOT collect again. When we genuinely cannot
-     * determine state, we fail to the financially-safe direction (do not
-     * over-collect).
+     * This replaced the previous contribution_applied summary-flag lookup (and
+     * the MIN(delivery_date) fallback), which read state set at ORDER time,
+     * before any delivery, and so silently suppressed door collection for every
+     * government client whose fee path had run.
      */
-    private function is_first_delivery_of_month(int $client_id, string $delivery_date): bool {
-        if ($client_id <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery_date)) {
-            return false; // can't identify the client/month — do not over-collect
-        }
-        if (!isset($GLOBALS['wpdb'])) {
-            return false; // no DB — do not over-collect
-        }
-
-        $wpdb          = $GLOBALS['wpdb'];
-        $billing_month = substr($delivery_date, 0, 7);
-        $summary_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-        $alloc_table   = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
-
-        // 1) Authoritative: has the contribution already been applied/collected
-        //    this month? If so, this is NOT a collect-the-contribution delivery.
-        $already_applied = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT contribution_applied FROM `{$summary_table}`
-             WHERE client_id = %d AND billing_month = %s",
-            $client_id,
-            $billing_month
-        ));
-        if ($already_applied === 1) {
+    private static function order_carries_contribution(array $order, int $contribution_product_id): bool {
+        if ($contribution_product_id <= 0) {
             return false;
         }
-
-        // 2) If allocation detail rows exist, use the genuine earliest-delivery
-        //    signal (correct once the rebuilder has materialised the month).
-        $earliest = $wpdb->get_var($wpdb->prepare(
-            "SELECT MIN(delivery_date) FROM `{$alloc_table}`
-             WHERE client_id = %d AND billing_month = %s",
-            $client_id,
-            $billing_month
-        ));
-        if ($earliest !== null && $earliest !== '') {
-            return (string) $earliest === $delivery_date;
+        foreach (($order['items'] ?? []) as $item) {
+            if ((int) ($item['wc_product_id'] ?? 0) === $contribution_product_id) {
+                return true;
+            }
         }
-
-        // 3) No allocation rows AND contribution not yet applied. We cannot
-        //    prove this is the earliest delivery. Per LB-4, do NOT default to
-        //    collecting (the old bug). Once LB-1 materialises allocations and/or
-        //    the fee path sets contribution_applied, the correct delivery will
-        //    collect it. Failing safe here means at worst a contribution is
-        //    collected one delivery later — never over-collected every visit.
         return false;
     }
 

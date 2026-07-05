@@ -1,8 +1,12 @@
 <?php
 /**
- * Phase T: government client, NOT first delivery of billing month.
+ * Phase T: government client, a delivery that does NOT collect the contribution.
  *
- * Breakdown drops Client Contribution; collect = delivery fee only.
+ * U06-slips-3: only the order carrying the contribution fee line (product 5675)
+ * collects it. This order's items are meals only — no contribution line — so the
+ * breakdown drops Client Contribution and collect = delivery fee only. This is
+ * also the LB-4 no-over-collection guarantee: an order without the CONT line can
+ * never collect the contribution, on any delivery.
  *
  * Run: php tests/test-pdf-slip-collection-govt-not-first-of-month.php
  */
@@ -15,13 +19,6 @@ $GLOBALS['_pdf_slip_options']['mealsdb_fee_product_ids'] = [
     'delivery_fee'        => 4122,
 ];
 $GLOBALS['_pdf_slip_terms'] = [101 => [35]];
-
-// MIN(delivery_date) for this client+month is earlier than today, so
-// today is NOT the first delivery → no contribution.
-global $wpdb;
-$wpdb->get_var_handler = static function ($query, $args) {
-    return '2025-02-06'; // earlier than the order's 2025-02-20
-};
 
 $wc_order = new WC_Order();
 $wc_order->total = 0.00;

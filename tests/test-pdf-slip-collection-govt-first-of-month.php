@@ -1,8 +1,14 @@
 <?php
 /**
- * Phase T: government client, FIRST delivery of billing month.
+ * Phase T: government client, the delivery that COLLECTS the monthly contribution.
  *
- * Breakdown shows Delivery Fee + Client Contribution; collect = sum.
+ * U06-slips-3: the door contribution is collected on the delivery of the ORDER
+ * that carries the client_contribution fee product (SKU CONT) — the one order
+ * per client per month that the fee path billed it onto. So this order's items
+ * include product 5675, and the breakdown shows Delivery Fee + Client
+ * Contribution; collect = sum. (Previously this was driven by the
+ * contribution_applied summary flag, which was already set at order time and so
+ * suppressed door collection entirely.)
  *
  * Run: php tests/test-pdf-slip-collection-govt-first-of-month.php
  */
@@ -15,18 +21,6 @@ $GLOBALS['_pdf_slip_options']['mealsdb_fee_product_ids'] = [
     'delivery_fee'        => 4122,
 ];
 $GLOBALS['_pdf_slip_terms'] = [101 => [35]];
-
-// is_first_delivery_of_month: contribution not yet applied this month, and the
-// MIN(delivery_date) equals today's delivery_date — so this IS the genuine first
-// delivery and the contribution should be collected (LB-4 case 3).
-global $wpdb;
-$wpdb->get_var_handler = static function ($query, $args) {
-    // Args: [client_id, billing_month]
-    if (strpos($query, 'contribution_applied') !== false) {
-        return 0; // contribution not yet applied this month
-    }
-    return '2025-02-20'; // earliest delivery in meals_delivery_allocations
-};
 
 $wc_order = new WC_Order();
 $wc_order->total = 0.00;
@@ -52,7 +46,13 @@ $orders = [[
     'order_id'         => 201,
     'wp_user_id'       => 22,
     'date_created_gmt' => '2025-02-20 12:00:00',
-    'items' => [['wc_product_id' => 101, 'quantity' => 5, 'order_item_name' => 'Meal']],
+    // This order carries the contribution fee line (product 5675) — the fee
+    // path billed the monthly contribution onto it, so this is the delivery
+    // that collects it at the door.
+    'items' => [
+        ['wc_product_id' => 101,  'quantity' => 5, 'order_item_name' => 'Meal'],
+        ['wc_product_id' => 5675, 'quantity' => 1, 'order_item_name' => 'Client Contribution'],
+    ],
 ]];
 
 $slips = pdf_slip_build_slips($orders, [22 => $client], true);
