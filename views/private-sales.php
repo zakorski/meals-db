@@ -38,125 +38,29 @@ MealsDB_Permissions::enforce();
 
 </div>
 
-<script>
-(function($) {
-    'use strict';
-
-    var nonce = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
-    var csvData = '';
-
-    function showStatus(msg, type) {
-        $('#private-status').show()
-            .removeClass('notice-info notice-success notice-error notice-warning')
-            .addClass('notice-' + type)
-            .empty()
-            .append($('<p></p>').text(msg));
-    }
-
-    function intText(v) {
-        return String(parseInt(v, 10) || 0);
-    }
-
-    function esc(str) {
-        var div = document.createElement('div');
-        div.appendChild(document.createTextNode(str || ''));
-        return div.innerHTML;
-    }
-
-    function fmt(val) {
-        return parseFloat(val).toFixed(2);
-    }
-
-    function exportCsv(csvString, filename) {
-        var blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-        var url  = URL.createObjectURL(blob);
-        var a    = document.createElement('a');
-        a.href     = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }
-
-    function buildTable(data) {
-        var rows   = data.rows || [];
-        var totals = data.grand_totals || {};
-
-        if (!rows.length) return '<p>No private customer data found for this date range.</p>';
-
-        var html = '<table class="wp-list-table widefat striped"><thead><tr>';
-        html += '<th>First Name</th><th>Last Name</th>';
-        html += '<th style="text-align:right">Total Mains</th>';
-        html += '<th style="text-align:right">Total Sides</th>';
-        html += '<th style="text-align:right">Total Before Tax</th>';
-        html += '<th style="text-align:right">Total Tax</th>';
-        html += '<th style="text-align:right">Final Total</th>';
-        html += '</tr></thead><tbody>';
-
-        $.each(rows, function(i, r) {
-            html += '<tr>';
-            html += '<td>' + esc(r.first_name) + '</td>';
-            html += '<td>' + esc(r.last_name) + '</td>';
-            html += '<td style="text-align:right">' + intText(r.total_mains) + '</td>';
-            html += '<td style="text-align:right">' + intText(r.total_sides) + '</td>';
-            html += '<td style="text-align:right">$' + fmt(r.total_before_tax) + '</td>';
-            html += '<td style="text-align:right">$' + fmt(r.total_tax) + '</td>';
-            html += '<td style="text-align:right">$' + fmt(r.final_total) + '</td>';
-            html += '</tr>';
-        });
-
-        html += '</tbody><tfoot><tr>';
-        html += '<th colspan="2">Grand Total</th>';
-        html += '<th style="text-align:right">' + intText(totals.total_mains) + '</th>';
-        html += '<th style="text-align:right">' + intText(totals.total_sides) + '</th>';
-        html += '<th style="text-align:right">$' + fmt(totals.total_before_tax || 0) + '</th>';
-        html += '<th style="text-align:right">$' + fmt(totals.total_tax || 0) + '</th>';
-        html += '<th style="text-align:right">$' + fmt(totals.final_total || 0) + '</th>';
-        html += '</tr></tfoot></table>';
-
-        return html;
-    }
-
-    $('#private-run').on('click', function() {
-        var start = $('#private-start').val();
-        var end   = $('#private-end').val();
-        if (!start || !end) {
-            showStatus('Please select both start and end dates.', 'error');
-            return;
-        }
-        showStatus('Running report...', 'info');
-        $('#private-output').hide().empty();
-        $('#private-export').hide();
-        csvData = '';
-
-        $.post(ajaxurl, {
-            action: 'mealsdb_private_customer_report',
-            nonce: nonce,
-            start_date: start,
-            end_date: end
-        }, function(resp) {
-            if (resp.success) {
-                $('#private-status').hide();
-                $('#private-output').show().html(buildTable(resp.data));
-                csvData = resp.csv || '';
-                if (csvData) {
-                    $('#private-export').show();
-                }
-            } else {
-                var msg = (resp.data && resp.data.message) ? resp.data.message : 'Report failed.';
-                showStatus(msg, 'error');
-            }
-        }).fail(function() {
-            showStatus('Request failed.', 'error');
-        });
-    });
-
-    $('#private-export').on('click', function() {
-        if (csvData) {
-            exportCsv(csvData, 'private-customer-report-' + $('#private-start').val() + '-' + $('#private-end').val() + '.csv');
-        }
-    });
-
-})(jQuery);
-</script>
+<?php
+// Server data for assets/js/private-sales.js. This view renders on the
+// Reports page where window.mealsdb is NOT localized, so the island carries
+// its own nonce + ajaxUrl. User-facing strings are translated here (JS reads
+// them from the island) so the client stays free of hardcoded English.
+$island_data = array(
+    'nonce'   => wp_create_nonce('mealsdb_nonce'),
+    'ajaxUrl' => admin_url('admin-ajax.php'),
+    'i18n'    => array(
+        'selectDates'       => __('Please select both start and end dates.', 'meals-db'),
+        'running'           => __('Running report...', 'meals-db'),
+        'reportFailed'      => __('Report failed.', 'meals-db'),
+        'requestFailed'     => __('Request failed.', 'meals-db'),
+        'noData'            => __('No private customer data found for this date range.', 'meals-db'),
+        'colFirstName'      => __('First Name', 'meals-db'),
+        'colLastName'       => __('Last Name', 'meals-db'),
+        'colTotalMains'     => __('Total Mains', 'meals-db'),
+        'colTotalSides'     => __('Total Sides', 'meals-db'),
+        'colTotalBeforeTax' => __('Total Before Tax', 'meals-db'),
+        'colTotalTax'       => __('Total Tax', 'meals-db'),
+        'colFinalTotal'     => __('Final Total', 'meals-db'),
+        'grandTotal'        => __('Grand Total', 'meals-db'),
+    ),
+);
+?>
+<script type="application/json" id="mealsdb-private-sales-data"><?php echo wp_json_encode($island_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>

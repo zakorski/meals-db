@@ -99,88 +99,26 @@ $form_schema = is_array($definition['form_schema'] ?? null) ? $definition['form_
     <div id="mealsdb-task-detail-status" class="notice" style="display:none;margin-top:12px;"></div>
 </div>
 
-<?php if ($definition !== null && !in_array($task['status'], MealsDB_Task_Engine::TERMINAL_STATUSES, true)): ?>
-<script>
-(function($) {
-    'use strict';
-    var nonce   = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
-    var ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
-    var taskId  = <?php echo (int) $task['task_id']; ?>;
-    var backUrl = <?php echo wp_json_encode($base_url); ?>;
-    var schema  = <?php echo wp_json_encode($form_schema); ?>;
-    var payload = <?php echo wp_json_encode($task['payload']); ?>;
-
-    if (window.MealsDBTaskForm) {
-        // Values (pre-filled from payload) and the full payload (for
-        // repeat_group items_from resolution) are the same object here.
-        window.MealsDBTaskForm.render('#mealsdb-task-form', schema, payload, payload);
-    }
-
-    function setStatus(msg, type) {
-        var $s = $('#mealsdb-task-detail-status');
-        $s.removeClass('notice-success notice-error notice-warning').addClass('notice-' + (type || 'info'));
-        $s.empty().append($('<p>').text(msg)).show(); // .text() — never inject server msg as HTML
-    }
-
-    $('#mealsdb-task-complete').on('click', function() {
-        if (!window.MealsDBTaskForm) return;
-        var data = window.MealsDBTaskForm.collect('#mealsdb-task-form', schema);
-        $.post(ajaxUrl, {
-            action: 'mealsdb_tasks_complete',
-            nonce: nonce,
-            task_id: taskId,
-            form_data: JSON.stringify(data)
-        }).done(function(resp) {
-            if (resp && resp.success) {
-                window.location.href = backUrl;
-            } else {
-                setStatus((resp && resp.data && resp.data.message) || 'Failed to complete.', 'error');
-            }
-        }).fail(function(xhr) {
-            setStatus((xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) || 'Failed to complete.', 'error');
-        });
-    });
-
-    function defer(newDate) {
-        $.post(ajaxUrl, {
-            action: 'mealsdb_tasks_defer',
-            nonce: nonce,
-            task_id: taskId,
-            new_date: newDate || ''
-        }).done(function(resp) {
-            if (resp && resp.success) {
-                window.location.href = backUrl;
-            } else {
-                setStatus((resp && resp.data && resp.data.message) || 'Failed to defer.', 'error');
-            }
-        }).fail(function() {
-            setStatus('Failed to defer.', 'error');
-        });
-    }
-
-    $('#mealsdb-task-defer-1').on('click', function() { defer(''); });
-    $('#mealsdb-task-defer-custom').on('click', function() {
-        var d = $('#mealsdb-task-defer-date').val();
-        if (!d) { setStatus('Pick a date first.', 'warning'); return; }
-        defer(d);
-    });
-
-    $('#mealsdb-task-skip').on('click', function() {
-        if (!confirm('<?php echo esc_js(__('Skip this task?', 'meals-db')); ?>')) return;
-        $.post(ajaxUrl, {
-            action: 'mealsdb_tasks_skip',
-            nonce: nonce,
-            task_id: taskId
-        }).done(function(resp) {
-            if (resp && resp.success) {
-                window.location.href = backUrl;
-            } else {
-                setStatus((resp && resp.data && resp.data.message) || 'Failed to skip.', 'error');
-            }
-        }).fail(function() {
-            setStatus('Failed to skip.', 'error');
-        });
-    });
-})(jQuery);
-</script>
+<?php if ($definition !== null && !in_array($task['status'], MealsDB_Task_Engine::TERMINAL_STATUSES, true)):
+    // Server data for assets/js/task-detail.js. Structured arrays (formSchema,
+    // payload) are emitted as real JSON — do NOT stringify twice. The JSON_HEX_*
+    // flags keep this safe inside a <script> tag; this is JSON data, not JS
+    // source, so esc_js is deliberately NOT used here.
+    $island_data = [
+        'nonce'      => wp_create_nonce('mealsdb_nonce'),
+        'ajaxUrl'    => admin_url('admin-ajax.php'),
+        'taskId'     => (int) $task['task_id'],
+        'baseUrl'    => $base_url,
+        'formSchema' => $form_schema,
+        'payload'    => $task['payload'],
+        'i18n'       => [
+            'failComplete' => __('Failed to complete.', 'meals-db'),
+            'failDefer'    => __('Failed to defer.', 'meals-db'),
+            'pickDate'     => __('Pick a date first.', 'meals-db'),
+            'skipConfirm'  => __('Skip this task?', 'meals-db'),
+            'failSkip'     => __('Failed to skip.', 'meals-db'),
+        ],
+    ];
+?>
+<script type="application/json" id="mealsdb-task-detail-data"><?php echo wp_json_encode($island_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>
 <?php endif; ?>

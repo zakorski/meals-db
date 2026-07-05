@@ -137,28 +137,15 @@ if ($results === null && $wpdb->last_error) {
     <?php endif; ?>
 </div>
 
-<script>
-jQuery(document).ready(function($) {
-    $('.delete-draft').on('click', function() {
-        if (!confirm('Are you sure you want to delete this draft?')) return;
-
-        const draftId = $(this).data('id');
-        const row = $('#draft-row-' + draftId);
-
-        $.post(ajaxurl, {
-            action: 'mealsdb_delete_draft',
-            nonce: '<?php echo esc_js(wp_create_nonce("mealsdb_nonce")); ?>',
-            id: draftId
-        }, function(response) {
-            if (response.success) {
-                row.fadeOut();
-                if (response.data && response.data.message) {
-                    alert(response.data.message);
-                }
-            } else {
-                alert('Failed to delete draft.');
-            }
-        });
-    });
-});
-</script>
+<?php
+// Server data for assets/js/drafts.js. The delete flow needs the AJAX endpoint,
+// the mealsdb_nonce, and the two user-facing strings the script shows. JSON_HEX_*
+// keeps this safe inside the <script> tag (do NOT esc_js — this is JSON, not JS).
+$drafts_island = [
+    'ajaxUrl'       => admin_url('admin-ajax.php'),
+    'nonce'         => wp_create_nonce('mealsdb_nonce'),
+    'confirmDelete' => __('Are you sure you want to delete this draft?', 'meals-db'),
+    'failMessage'   => __('Failed to delete draft.', 'meals-db'),
+];
+?>
+<script type="application/json" id="mealsdb-drafts-data"><?php echo wp_json_encode($drafts_island, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>

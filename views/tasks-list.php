@@ -186,57 +186,17 @@ $base_url = admin_url('admin.php?page=mealsdb&tab=tasks');
     <?php endif; ?>
 </div>
 
-<script>
-(function($) {
-    'use strict';
-
-    var nonce = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
-    var ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
-
-    function collectSelected() {
-        return $('.mealsdb-task-select:checked').map(function() { return this.value; }).get();
-    }
-
-    function refreshBulkState() {
-        var any = collectSelected().length > 0;
-        $('#mealsdb-tasks-bulk-skip,#mealsdb-tasks-bulk-defer').prop('disabled', !any);
-    }
-
-    $('.mealsdb-select-all').on('change', function() {
-        var checked = this.checked;
-        $(this).closest('table').find('.mealsdb-task-select').prop('checked', checked);
-        refreshBulkState();
-    });
-
-    $(document).on('change', '.mealsdb-task-select', refreshBulkState);
-
-    $('#mealsdb-tasks-bulk-skip').on('click', function() {
-        var ids = collectSelected();
-        if (!ids.length) return;
-        if (!confirm('<?php echo esc_js(__('Skip selected tasks?', 'meals-db')); ?>')) return;
-        $.post(ajaxUrl, {
-            action: 'mealsdb_tasks_bulk_skip',
-            nonce: nonce,
-            task_ids: JSON.stringify(ids)
-        }).done(function(resp) {
-            window.location.reload();
-        }).fail(function() {
-            alert('<?php echo esc_js(__('Bulk skip failed.', 'meals-db')); ?>');
-        });
-    });
-
-    $('#mealsdb-tasks-bulk-defer').on('click', function() {
-        var ids = collectSelected();
-        if (!ids.length) return;
-        $.post(ajaxUrl, {
-            action: 'mealsdb_tasks_bulk_defer',
-            nonce: nonce,
-            task_ids: JSON.stringify(ids)
-        }).done(function(resp) {
-            window.location.reload();
-        }).fail(function() {
-            alert('<?php echo esc_js(__('Bulk defer failed.', 'meals-db')); ?>');
-        });
-    });
-})(jQuery);
-</script>
+<?php
+// Server data for assets/js/tasks-list.js (bulk skip/defer). The inline
+// <script> that used to live here was extracted per CLAUDE.md's ban on inline
+// script logic blocks > 20 lines; the enqueue is wired centrally by the admin
+// UI. JSON_HEX_* keeps the payload safe inside the <script> tag.
+$island_data = [
+    'nonce'       => wp_create_nonce('mealsdb_nonce'),
+    'ajaxUrl'     => admin_url('admin-ajax.php'),
+    'confirmSkip' => __('Skip selected tasks?', 'meals-db'),
+    'skipFailed'  => __('Bulk skip failed.', 'meals-db'),
+    'deferFailed' => __('Bulk defer failed.', 'meals-db'),
+];
+?>
+<script type="application/json" id="mealsdb-tasks-list-data"><?php echo wp_json_encode($island_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>
