@@ -259,7 +259,38 @@ class MealsDB_Private_Intake {
         // shadow; uniqueness lookups read the plaintext column.
         $nickname = strtoupper(trim((string) get_user_meta($wp_user_id, 'nickname', true)));
         if (preg_match('/^[A-Z]{3}$/', $nickname) === 1) {
-            $payload['delivery_initials'] = $nickname;
+            // U09: enforce bag-initials uniqueness before copying a legacy
+            // nickname across — the way the client form already does. The schema
+            // index on delivery_initials is a plain INDEX, NOT UNIQUE, so nothing
+            // at the DB level stops two clients getting the same bag label, which
+            // is exactly the collision the initials subsystem exists to prevent.
+            // exists_in_db() fails CLOSED (a lookup error is treated as "taken"),
+            // so a transient DB error can't smuggle a duplicate through. On a
+            // clash we leave delivery_initials blank: these are skeleton rows an
+            // admin completes anyway, and a blank is safer than a shared label.
+            // (When MealsDB_Initials isn't loaded — e.g. a stripped test harness —
+            // we can't check, so we preserve the legacy copy-across behaviour.)
+            $initials_taken = class_exists('MealsDB_Initials')
+                && MealsDB_Initials::exists_in_db($nickname);
+            if ($initials_taken) {
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity'  => 'warning',
+                        'category'  => 'intake',
+                        'subsystem' => 'private_intake',
+                        'event'     => 'delivery_initials.collision',
+                        'outcome'   => 'degraded',
+                        'message'   => sprintf(
+                            'Skipped copying legacy nickname "%s" into delivery_initials for WP user %d — the code is already assigned to another client. Left blank for an admin to resolve.',
+                            $nickname,
+                            $wp_user_id
+                        ),
+                        'context'   => ['wp_user_id' => $wp_user_id, 'initials' => $nickname],
+                    ]);
+                }
+            } else {
+                $payload['delivery_initials'] = $nickname;
+            }
         }
 
         return $payload;

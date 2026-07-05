@@ -251,6 +251,43 @@ class MealsDB_Ajax_Clients {
             $existing_wp_user_id = (int) $raw_existing;
         }
 
+        // Duplicate-wp_user_id soft guard (audit MAJ-1 / U22-ajax-misc-2).
+        // wp_user_id is intentionally NOT UNIQUE — one WordPress user legitimately
+        // maps to two client rows (a dual SDNB/Veteran recipient, or a government
+        // client buying extra meals personally). But the allocation rebuilder routes
+        // orders via wp_user_id <-> wc_orders.customer_id, so a SILENT duplicate makes
+        // routing nondeterministic. The sibling guarded path (MealsDB_Sync_Mutate::
+        // link_meals_client_to_wc_user) warns-and-allows here; this direct-update path
+        // skipped the check entirely. Mirror the sibling: allow the link, but record a
+        // degraded trunk event so the duplicate is greppable rather than silent (an
+        // attempt/outcome -> the operational trunk, NOT the audit log below, which is
+        // reserved for the committed data change itself). 0 = unlink, never a duplicate.
+        if ($wp_user_id > 0) {
+            $duplicate_of = MealsDB_Clients_Repository::find_client_id_by_wp_user($wp_user_id);
+            if ($duplicate_of !== null && $duplicate_of !== $client_id
+                && class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'warning',
+                    'category'    => 'sync',
+                    'subsystem'   => 'ajax_clients',
+                    'event'       => 'link_wp_user.duplicate_allowed',
+                    'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'     => sprintf(
+                        'WP user %d now linked to multiple clients (existing %d, new %d) — dual-program; resolver routes orders by rate.',
+                        $wp_user_id,
+                        (int) $duplicate_of,
+                        $client_id
+                    ),
+                    'entity_type' => 'user',
+                    'entity_id'   => $wp_user_id,
+                    'context'     => [
+                        'existing_client' => (int) $duplicate_of,
+                        'new_client'      => $client_id,
+                    ],
+                ]);
+            }
+        }
+
         if (!$repository->update_client($client_id, ['wp_user_id' => $wp_user_id])) {
             wp_send_json_error(['message' => __('Failed to update Meals DB.', 'meals-db')]);
         }

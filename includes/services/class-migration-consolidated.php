@@ -1237,8 +1237,20 @@ class MealsDB_Migration_Consolidated {
     // =====================================================================
 
     /**
-     * Populate meals_client_allocations / meals_delivery_allocations from
-     * historical WC orders for active SDNB/Veteran clients.
+     * Backfill allocation SUMMARIES for active SDNB/Veteran clients from
+     * historical WC orders, and mark each touched client-month dirty so the
+     * rebuilder materialises the delivery-allocation DETAIL later.
+     *
+     * Under the current (mark-dirty) engine this phase does NOT write
+     * meals_delivery_allocations itself: allocate_order() only records
+     * (client_id, billing_month) in meals_client_month_dirty, and
+     * recalculate_month_totals() upserts the meals_client_allocations summary
+     * from whatever detail already exists. The detail rows are filled in later
+     * by MealsDB_Allocation_Rebuilder (nightly rebuild_all_dirty, invoice
+     * generation, or the manual "Recalculate Allocations" Data Ops action).
+     * That is why this phase reports client_months_marked_dirty rather than a
+     * count of created rows (allocations_created stays 0 — nothing is created
+     * here; the key is kept only because the Data Ops view reads it).
      *
      * THROWABLE FIX (was a low-severity bug): the original caught only
      * \Exception, so a PHP Error type (e.g. TypeError) thrown inside the
@@ -1277,7 +1289,7 @@ class MealsDB_Migration_Consolidated {
 
         if ($offset >= $total_months) {
             return [
-                'stats'    => ['months_processed' => 0, 'clients_processed' => 0, 'orders_processed' => 0, 'allocations_created' => 0],
+                'stats'    => ['months_processed' => 0, 'clients_processed' => 0, 'orders_processed' => 0, 'allocations_created' => 0, 'client_months_marked_dirty' => 0],
                 'offset'   => $offset + 1,
                 'total'    => $total_months,
                 'complete' => true,
@@ -1288,7 +1300,10 @@ class MealsDB_Migration_Consolidated {
 
         $clients_table        = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $allocations_table    = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-        $delivery_alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+        // NOTE: the DELIVERY_ALLOCATIONS table name is no longer resolved here.
+        // The old before/after row-count queries against it were removed —
+        // allocate_order() writes no delivery rows during this phase, so those
+        // COUNTs were structurally always equal (see the loop below).
 
         $clients = $wpdb->get_results($wpdb->prepare(
             "SELECT client_id, wp_user_id FROM {$clients_table}
@@ -1300,7 +1315,7 @@ class MealsDB_Migration_Consolidated {
         if (!is_array($clients) || empty($clients)) {
             // No clients to process — still a valid (empty) month.
             return [
-                'stats'    => ['months_processed' => 0, 'clients_processed' => 0, 'orders_processed' => 0, 'allocations_created' => 0],
+                'stats'    => ['months_processed' => 0, 'clients_processed' => 0, 'orders_processed' => 0, 'allocations_created' => 0, 'client_months_marked_dirty' => 0],
                 'offset'   => $offset + 1,
                 'total'    => $total_months,
                 'complete' => ($offset + 1) >= $total_months,
@@ -1311,7 +1326,7 @@ class MealsDB_Migration_Consolidated {
         $order_query   = new MealsDB_WC_Order_Query($wpdb);
         $finalized_set = self::get_finalized_months($wpdb, $allocations_table);
 
-        $stats = ['months_processed' => 0, 'clients_processed' => 0, 'orders_processed' => 0, 'allocations_created' => 0];
+        $stats = ['months_processed' => 0, 'clients_processed' => 0, 'orders_processed' => 0, 'allocations_created' => 0, 'client_months_marked_dirty' => 0];
 
         $year  = (int) substr($billing_month, 0, 4);
         $month = (int) substr($billing_month, 5, 2);
@@ -1328,12 +1343,15 @@ class MealsDB_Migration_Consolidated {
         $clients_in_month = 0;
         // Per-month dedup map. The original walked all months in one call
         // with a single cross-month map; chunking by month resets it each
-        // call. That's safe because allocate_order() is itself idempotent —
-        // it fingerprints existing delivery_allocations rows for the
-        // wc_order_id and skips the DELETE+INSERT when the desired state
-        // matches, and otherwise replaces (keyed by wc_order_id) rather than
-        // appending. So re-touching a spillover order in an adjacent month
-        // chunk is a no-op, not a double-count.
+        // call. That's safe because allocate_order() is now mark-dirty-only:
+        // it records (client_id, billing_month) in meals_client_month_dirty and
+        // writes NO delivery_allocations rows. (The old comment here described
+        // the deleted synchronous engine that DELETE+INSERTed rows keyed by
+        // wc_order_id — that behaviour no longer exists.) Marking the same
+        // client-month dirty more than once is idempotent — the rebuilder later
+        // recomputes it once from scratch — so re-touching a spillover order in
+        // an adjacent month chunk is a harmless no-op, not a double-count. The
+        // map just avoids redundant mark-dirty calls within this chunk.
         $allocated_orders = [];
 
         try {
@@ -1346,15 +1364,13 @@ class MealsDB_Migration_Consolidated {
                     continue;
                 }
 
-                $engine->calculate_permitted_for_month($client_id, $billing_month);
-
+                // calculate_permitted_for_month() is intentionally NOT called
+                // here. It is pure (the engine writes nothing) and
+                // recalculate_month_totals() below recomputes the permitted
+                // values internally, so an explicit call was dead work.
                 $orders = $order_query->get_orders_for_users([$wp_user_id], $prior_month_start, $month_end);
 
-                $order_count_before = (int) $wpdb->get_var($wpdb->prepare(
-                    "SELECT COUNT(*) FROM {$delivery_alloc_table} WHERE client_id = %d AND billing_month = %s",
-                    $client_id, $billing_month
-                ));
-
+                $client_marked_dirty = false;
                 if (is_array($orders)) {
                     foreach ($orders as $order) {
                         $order_id = (int) $order['order_id'];
@@ -1363,6 +1379,7 @@ class MealsDB_Migration_Consolidated {
                         }
                         $engine->allocate_order($order_id);
                         $allocated_orders[$order_id] = true;
+                        $client_marked_dirty = true;
                         $stats['orders_processed']++;
 
                         // NOTE: cleanup_finalized_spillover was removed here
@@ -1383,12 +1400,16 @@ class MealsDB_Migration_Consolidated {
 
                 $engine->recalculate_month_totals($client_id, $billing_month);
 
-                $order_count_after = (int) $wpdb->get_var($wpdb->prepare(
-                    "SELECT COUNT(*) FROM {$delivery_alloc_table} WHERE client_id = %d AND billing_month = %s",
-                    $client_id, $billing_month
-                ));
-
-                $stats['allocations_created'] += max(0, $order_count_after - $order_count_before);
+                // Truthful stat. This phase creates ZERO meals_delivery_
+                // allocations rows (allocate_order is mark-dirty-only), so the
+                // old before/after COUNT diff was structurally always 0 — two
+                // wasted queries per client per month for a number that could
+                // never move. Count the client-months we actually queued for
+                // the rebuilder instead. allocations_created stays 0 (kept only
+                // for the Data Ops display, which reads that key).
+                if ($client_marked_dirty) {
+                    $stats['client_months_marked_dirty']++;
+                }
                 $clients_in_month++;
             }
 

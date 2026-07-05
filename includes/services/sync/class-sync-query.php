@@ -201,10 +201,10 @@ class MealsDB_Sync_Query {
 
         if (is_array($results)) {
             foreach ($results as $row) {
-                $field  = $this->sanitize_ignore_value($row['field_name'] ?? '');
-                $source = $this->sanitize_ignore_value($row['source_value'] ?? '');
-                $target = $this->sanitize_ignore_value($row['target_value'] ?? '');
-                $ignored[$this->build_ignore_key($field, $source, $target)] = true;
+                $field  = MealsDB_Sync::sanitize_ignore_value($row['field_name'] ?? '');
+                $source = MealsDB_Sync::sanitize_ignore_value($row['source_value'] ?? '');
+                $target = MealsDB_Sync::sanitize_ignore_value($row['target_value'] ?? '');
+                $ignored[MealsDB_Sync::build_ignore_key($field, $source, $target)] = true;
             }
         } else {
             error_log('[MealsDB Sync] Failed to execute ignored conflicts query: ' . ($connection->last_error ?? 'unknown error'));
@@ -288,6 +288,9 @@ class MealsDB_Sync_Query {
         $first_name = isset($meals_client['first_name']) ? (string) $meals_client['first_name'] : '';
         $last_name  = isset($meals_client['last_name']) ? (string) $meals_client['last_name'] : '';
         $phone_raw  = isset($meals_client['phone_primary']) ? (string) $meals_client['phone_primary'] : '';
+        // Captured for the slow-query diagnostic below: log the client_id, never
+        // the client's name/phone (PII). See the warning block further down.
+        $client_id  = isset($meals_client['client_id']) ? (int) $meals_client['client_id'] : 0;
 
         // Request-scoped memoisation. The dashboard render loop calls
         // this once per unmatched mismatch, and identical (name, phone)
@@ -406,14 +409,25 @@ class MealsDB_Sync_Query {
         $results          = $wpdb->get_results($prepared, ARRAY_A);
         $elapsed          = microtime(true) - $query_started_at;
         if ($elapsed > 2.0) {
-            error_log(sprintf(
-                '[MealsDB Sync] find_candidate_wc_matches_for_client slow query: %.2fs (first=%s last=%s phone=%s). '
+            // Log the client_id only — never the client's first/last name or
+            // phone. This previously interpolated $first_name/$last_name/
+            // $normalized_phone straight into error_log(), writing cleartext
+            // PII (including a full 10-digit phone) into a server log that is
+            // often world-readable on shared cPanel hosting and which bypasses
+            // MealsDB_Logger's scrubber entirely. Route through
+            // MealsDB_Logger::error so its phone-fingerprinting scrub applies
+            // as a second layer; the client_id is enough to locate the row.
+            $message = sprintf(
+                '[MealsDB Sync] find_candidate_wc_matches_for_client slow query: %.2fs client_id=%d. '
                 . 'Consider denormalising wp_usermeta name lookups into a dedicated search table.',
                 $elapsed,
-                $first_name,
-                $last_name,
-                $normalized_phone
-            ));
+                $client_id
+            );
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error($message);
+            } else {
+                error_log($message);
+            }
         }
 
         if (!is_array($results)) {
@@ -578,32 +592,11 @@ class MealsDB_Sync_Query {
         ];
     }
 
-    /**
-     * Normalize ignore values before hashing.
-     *
-     * @param mixed $value
-     * @return string
-     */
-    private function sanitize_ignore_value($value): string {
-        if (!is_scalar($value)) {
-            $value = '';
-        }
-
-        $value = (string) $value;
-
-        if (function_exists('sanitize_text_field')) {
-            return sanitize_text_field($value);
-        }
-
-        return trim($value);
-    }
-
-    /**
-     * Build the lookup key used for ignored conflicts.
-     */
-    private function build_ignore_key(string $field, string $source, string $target): string {
-        return md5($field . '|' . $source . '|' . $target);
-    }
+    // sanitize_ignore_value() / build_ignore_key() were duplicated here and
+    // in MealsDB_Sync_Compare. Both must produce byte-identical md5 keys or
+    // filter_ignored() silently stops suppressing ignored conflicts, so they
+    // now live in one place: MealsDB_Sync::sanitize_ignore_value() /
+    // ::build_ignore_key(). See that facade for the full rationale.
 
     /**
      * Build a safe mapping of Meals DB columns to aliases for identity comparison.

@@ -35,7 +35,6 @@ class MealsDB_Quick_Order_Ajax {
         add_action('wp_ajax_mealsdb_qo_search_products', [self::class, 'search_products']);
         add_action('wp_ajax_mealsdb_qo_get_all_products', [self::class, 'get_all_products']);
         add_action('wp_ajax_mealsdb_qo_create_order', [self::class, 'create_order']);
-        add_action('wp_ajax_mealsdb_qo_clone_order', [self::class, 'clone_order']);
         add_action('wp_ajax_mealsdb_qo_clone_get_order', [self::class, 'clone_get_order']);
         add_action('wp_ajax_mealsdb_qo_get_client_allocation', [self::class, 'get_client_allocation']);
         add_action('wp_ajax_mealsdb_get_client_allocation_history', [self::class, 'get_client_allocation_history']);
@@ -331,7 +330,11 @@ class MealsDB_Quick_Order_Ajax {
             ? intval($_POST['wp_user_id'])
             : (isset($_POST['client_id']) ? intval($_POST['client_id']) : 0);
         $date      = isset($_POST['date']) ? sanitize_text_field(wp_unslash((string) $_POST['date'])) : '';
-        $items     = self::normalise_items($_POST['items'] ?? []);
+        // U07-quick-order-4: normalise_items() clamps any per-line qty to 100.
+        // Capture which lines were clamped so a silently-reduced order can be
+        // surfaced to the operator rather than reported as a plain success.
+        $clamped_items = [];
+        $items     = self::normalise_items($_POST['items'] ?? [], $clamped_items);
         $rate_id   = isset($_POST['rate_id']) ? intval($_POST['rate_id']) : 0;
         $order_date = self::parse_order_date($date);
 
@@ -384,7 +387,12 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         try {
-            $order = self::create_wc_order($items, $order_date, $wp_user_id, $client_id);
+            // U07-quick-order-4: create_wc_order() drops any line whose product
+            // no longer resolves (e.g. trashed while sitting in the 30-min QO
+            // transient cache) rather than failing the whole order. Capture the
+            // dropped lines so a short order isn't reported as a plain success.
+            $dropped_items = [];
+            $order = self::create_wc_order($items, $order_date, $wp_user_id, $client_id, $dropped_items);
             if (is_wp_error($order)) {
                 throw new Exception($order->get_error_message());
             }
@@ -442,137 +450,51 @@ class MealsDB_Quick_Order_Ajax {
                 );
             }
 
+            // U07-quick-order-4: an order can be SHORT of what the operator
+            // entered in two silent ways — a dropped line (product no longer
+            // resolves) or a clamped qty (> 100 reduced to 100). On a
+            // meal-delivery billing path a silently short order means a client
+            // does not get food, yet the operator otherwise sees a plain
+            // "Order created successfully". Record a degraded Event Log row
+            // (Pattern 7: swallowed a problem, kept going — don't pretend the
+            // work fully happened) so it surfaces on the dashboard/digest, and
+            // return the details in the payload so quick-order.js can warn.
+            if ((!empty($dropped_items) || !empty($clamped_items)) && class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'warning',
+                    'category'    => 'quick_order',
+                    'subsystem'   => 'quick_order_ajax',
+                    'event'       => 'create_order.partial',
+                    'outcome'     => 'degraded',
+                    'message'     => sprintf(
+                        'Quick Order %d saved short: %d dropped line(s), %d clamped qty(s).',
+                        $order_id,
+                        count($dropped_items),
+                        count($clamped_items)
+                    ),
+                    'entity_type' => 'wc_order',
+                    'entity_id'   => $order_id,
+                    'context'     => [
+                        'wp_user_id'    => $wp_user_id,
+                        'client_id'     => $client_id,
+                        'dropped_items' => $dropped_items,
+                        'clamped_items' => $clamped_items,
+                    ],
+                ]);
+            }
+
             wp_send_json([
                 'success' => true,
                 'order_id' => $order_id,
                 'order_link' => get_edit_post_link($order_id),
+                'dropped_items' => $dropped_items,
+                'clamped_items' => $clamped_items,
             ]);
         } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] Order error: ' . $e->getMessage());
             wp_send_json([
                 'success' => false,
                 'message' => __('Order creation failed. Please try again.', 'meals-db'),
-            ]);
-        }
-    }
-
-    /**
-     * AJAX endpoint to retrieve items from an existing WooCommerce order.
-     */
-    public static function clone_order(): void {
-        // Shadow mode: cloning also creates a live order. Disabled in shadow.
-        if (MealsDB_Shadow_Mode::is_enabled()) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('Quick Order is disabled while the system is running in shadow mode.', 'meals-db'),
-            ]);
-        }
-
-        self::verify_request();
-
-        // Rate limiting
-        if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
-            ], 429);
-        }
-
-        if (!self::woocommerce_is_available()) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('WooCommerce is required to clone orders.', 'meals-db'),
-            ]);
-        }
-
-        try {
-            $source_order_id = isset($_REQUEST['order_id']) ? intval($_REQUEST['order_id']) : 0;
-
-            // Generic error message to prevent enumeration
-            $source_order = wc_get_order($source_order_id);
-            if (!$source_order instanceof WC_Order || $source_order_id <= 0) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('Invalid order request.', 'meals-db'),
-                ]);
-            }
-
-            $items_map = [];
-
-            foreach ($source_order->get_items('line_item') as $item) {
-                if (!$item instanceof WC_Order_Item_Product) {
-                    continue;
-                }
-
-                $quantity = (int) $item->get_quantity();
-                if ($quantity <= 0) {
-                    continue;
-                }
-
-                $product = $item->get_product();
-                if (!$product instanceof WC_Product) {
-                    continue;
-                }
-
-                $payload = MealsDB_Quick_Order_Products::format_for_quick_order([$product]);
-                if (empty($payload) || !isset($payload[0]['product_id'])) {
-                    continue;
-                }
-
-                $product_id = (int) $payload[0]['product_id'];
-                if ($product_id <= 0) {
-                    continue;
-                }
-
-                if (isset($items_map[$product_id])) {
-                    $items_map[$product_id]['quantity'] += $quantity;
-                } else {
-                    $items_map[$product_id] = [
-                        'product'  => $payload[0],
-                        'quantity' => $quantity,
-                    ];
-                }
-            }
-
-            if (empty($items_map)) {
-                wp_send_json([
-                    'success' => false,
-                    'message' => __('No products were found on the source order.', 'meals-db'),
-                ]);
-            }
-
-            $order_date = '';
-            $created = $source_order->get_date_created();
-            if ($created instanceof WC_DateTime) {
-                $date = clone $created;
-                if (function_exists('wp_timezone')) {
-                    $date = $date->setTimezone(wp_timezone());
-                }
-
-                $order_date = $date->format('Y-m-d');
-            }
-
-            $client_id = intval($source_order->get_meta('mealsdb_client_id'));
-            if ($client_id <= 0) {
-                $client_id = null;
-            }
-
-            $order_number = method_exists($source_order, 'get_order_number') ? $source_order->get_order_number() : $source_order_id;
-            $message = sprintf(__('Products from order %s have been loaded into Quick Order.', 'meals-db'), $order_number);
-
-            wp_send_json([
-                'success'    => true,
-                'message'    => $message,
-                'items'      => array_values($items_map),
-                'client_id'  => $client_id,
-                'order_date' => $order_date,
-                'order_id'   => $source_order_id,
-            ]);
-        } catch (\Throwable $e) {
-            error_log('[MealsDB QuickOrder] clone_order error: ' . $e->getMessage());
-            wp_send_json([
-                'success' => false,
-                'message' => __('An error occurred. Please try again.', 'meals-db'),
             ]);
         }
     }
@@ -848,10 +770,12 @@ class MealsDB_Quick_Order_Ajax {
      * Normalise the posted items list.
      *
      * @param mixed $raw_items Raw item payload from the request.
+     * @param array $clamped   Out-param: lines whose qty was clamped to 100,
+     *                         as {product_id, requested, applied}. U07-quick-order-4.
      *
      * @return array<int, array<string, int>>
      */
-    private static function normalise_items($raw_items): array {
+    private static function normalise_items($raw_items, array &$clamped = []): array {
         if (is_string($raw_items)) {
             $decoded = json_decode($raw_items, true);
             if (is_array($decoded)) {
@@ -879,8 +803,18 @@ class MealsDB_Quick_Order_Ajax {
 
             // Cap per-line quantity so a fat-fingered "5000" can't create a
             // runaway order at catalog price. 100 meals/line is well past any
-            // real single-client order.
-            $quantity = min($quantity, 100);
+            // real single-client order. U07-quick-order-4: record the clamp so
+            // the caller can WARN the operator — silently mutating a deliberate
+            // large order down to 100 reads as "created successfully" while
+            // billing/delivering fewer meals.
+            if ($quantity > 100) {
+                $clamped[] = [
+                    'product_id' => $product_id,
+                    'requested'  => $quantity,
+                    'applied'    => 100,
+                ];
+                $quantity = 100;
+            }
 
             $items[] = [
                 'product_id'   => $product_id,
@@ -899,10 +833,13 @@ class MealsDB_Quick_Order_Ajax {
      * @param DateTimeImmutable|null         $order_date
      * @param int                            $wp_user_id WordPress user ID assigned as the order customer.
      * @param int                            $client_id  meals_clients.client_id (PK); 0 if the customer has no meals client record.
+     * @param array                          $dropped_items Out-param (U07-quick-order-4): lines skipped because
+     *                                                      wc_get_product() returned nothing, as
+     *                                                      {product_id, variation_id, quantity}.
      *
      * @return WC_Order|WP_Error
      */
-    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $wp_user_id = 0, int $client_id = 0) {
+    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $wp_user_id = 0, int $client_id = 0, array &$dropped_items = []) {
         if (!function_exists('wc_create_order') || !class_exists('WC_Order')) {
             return new WP_Error('mealsdb_missing_woocommerce', __('WooCommerce is required to create orders.', 'meals-db'));
         }

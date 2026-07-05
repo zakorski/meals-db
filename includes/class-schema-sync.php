@@ -156,7 +156,81 @@ class MealsDB_Schema_Sync {
             }
         }
 
+        self::surface_sync_report($results);
+
         return $results;
+    }
+
+    /**
+     * SURFACE drift and failures rather than silently discarding them
+     * (U11-schema-3). Schema_Sync is additive-only — it ADDs missing tables
+     * and columns but NEVER issues ALTER ... MODIFY — so a column
+     * type/ENUM/width or PRIMARY KEY mismatch on a deployed install is
+     * invisible unless we say so. Historically every caller threw the
+     * computed report away: install() checked only is_wp_error(), and the
+     * Data-Ops handler showed an unconditional "updated successfully" notice.
+     * Logging here makes drift/failures visible to EVERY caller regardless of
+     * what it does with the returned array.
+     *
+     * We deliberately do NOT auto-ALTER: silently rewriting a column type on a
+     * live billing DB is far riskier than the drift it would fix. The
+     * documented convention is an explicit ALTER migration, and this log is
+     * the trigger to write one. column_mismatches are surfaced but are NOT
+     * treated as a hard failure by callers (a retry can't fix them); ['errors']
+     * are genuine DDL failures (failed table create / column add).
+     *
+     * @param array<string, mixed> $results The run_full_sync() result array.
+     */
+    private static function surface_sync_report(array $results): void {
+        $mismatches = isset($results['column_mismatches']) && is_array($results['column_mismatches'])
+            ? $results['column_mismatches']
+            : [];
+        $errors = isset($results['errors']) && is_array($results['errors'])
+            ? $results['errors']
+            : [];
+
+        if (empty($mismatches) && empty($errors)) {
+            return;
+        }
+
+        $mismatch_count = count($mismatches);
+        $error_count    = count($errors);
+
+        $detail = function_exists('wp_json_encode')
+            ? wp_json_encode(['column_mismatches' => $mismatches, 'errors' => $errors])
+            : json_encode(['column_mismatches' => $mismatches, 'errors' => $errors]);
+
+        error_log(sprintf(
+            '[MealsDB Schema Sync] schema drift/failures detected: %d column/PK mismatch(es), %d error(s). Detail: %s',
+            $mismatch_count,
+            $error_count,
+            (string) $detail
+        ));
+
+        if (class_exists('MealsDB_Event_Log')) {
+            // outcome='degraded': the sync CONTINUED but swallowed a problem
+            // (drift it cannot fix, or a failed column-add) — exactly the case
+            // the degraded outcome exists for. It lands on the Event Log
+            // dashboard + daily digest (failed|degraded) so the operator sees
+            // it. record() is fail-safe (swallows its own wpdb errors), so a
+            // missing event-log table during a fresh install can't break sync.
+            MealsDB_Event_Log::record([
+                'severity'  => $error_count > 0 ? 'error' : 'warning',
+                'category'  => 'schema',
+                'subsystem' => 'schema_sync',
+                'event'     => 'schema.drift_detected',
+                'outcome'   => 'degraded',
+                'message'   => sprintf(
+                    'Schema sync found %d column/PK mismatch(es) and %d error(s). The additive sync cannot MODIFY existing columns; write an explicit ALTER migration for the mismatches.',
+                    $mismatch_count,
+                    $error_count
+                ),
+                'context'   => [
+                    'column_mismatches' => $mismatches,
+                    'errors'            => $errors,
+                ],
+            ]);
+        }
     }
 
     /**

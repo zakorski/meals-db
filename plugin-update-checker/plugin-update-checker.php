@@ -205,13 +205,23 @@ namespace {
             }
 
             /**
-             * Pull a "SHA256: <hex>" line out of GitHub release notes (mirrors
-             * MealsDB_Updates::extract_sha256_from_release_body).
+             * Pull a "SHA256: <hex>" line out of GitHub release notes.
+             *
+             * Delegates to the ONE canonical implementation
+             * (MealsDB_Updates::extract_sha256_from_release_body) so the two
+             * GitHub-release stacks can no longer drift apart (audit
+             * U12-bootstrap-6). Falls back to the identical regex inline when
+             * this shim is loaded standalone — the autoloader (and thus
+             * MealsDB_Updates) is not registered under the update-checker unit
+             * test, which requires only this file.
              *
              * @param string $body
              * @return string lowercase 64-hex, or ''.
              */
             public static function extractSha256FromBody($body) {
+                if (class_exists('MealsDB_Updates')) {
+                    return \MealsDB_Updates::extract_sha256_from_release_body(is_string($body) ? $body : '');
+                }
                 if (!is_string($body) || $body === '') {
                     return '';
                 }
@@ -348,16 +358,50 @@ namespace {
             }
 
             private function normalizeVersion($version) {
-                return preg_replace('/[^0-9.]/', '', (string) $version);
+                // ONE normalize semantics, shared with
+                // MealsDB_Updates::normalize_version(), so this native WP
+                // updater and the admin "check for updates" flow give the SAME
+                // newer-than answer. This method previously stripped ALL
+                // non-[0-9.] characters, turning a pre-release tag like
+                // v1.0.0-beta1 into "1.0.01" (a HIGHER version than 1.0.0),
+                // while MealsDB_Updates only ltrim()'d the leading "v" and kept
+                // "-beta1" (which version_compare() reads as a pre-release) —
+                // so the two updaters disagreed. Real meals-db tags are plain
+                // "vX.Y.Z", for which both approaches are identical, so this
+                // change is behaviour-neutral for actual releases and only
+                // fixes the pre-release edge case. Delegate to the canonical
+                // implementation; the autoloader has long since registered by
+                // the time this hook fires, with an identical-semantics inline
+                // fallback for standalone loads (e.g. unit tests).
+                if (class_exists('MealsDB_Updates')) {
+                    return \MealsDB_Updates::normalize_version((string) $version);
+                }
+                return ltrim(trim((string) $version), 'vV');
             }
         }
     }
 }
 
 namespace YahnisElsts\PluginUpdateChecker\v5 {
-    class PucFactory {
-        public static function buildUpdateChecker($metadataUrl, $pluginFile, $slug) {
-            return new \MealsDBGithubUpdateChecker($metadataUrl, $pluginFile, $slug);
+    // Guard this facade: it squats the REAL Plugin Update Checker v5 namespace,
+    // which many WP/WooCommerce plugins bundle. Declaring it unconditionally
+    // fatals with "Cannot declare class ... already in use" (admin WSOD) when a
+    // genuine PUC v5 co-tenant loads first. class_exists(..., false) — no
+    // autoload — lets a real PucFactory win when present (it can update this
+    // plugin from GitHub perfectly well) and only installs this thin facade
+    // over MealsDBGithubUpdateChecker when nothing else has claimed the name.
+    //
+    // Caveat: if meals-db loads FIRST, a later genuine PUC v5 (which guards its
+    // own declaration the same way) will skip its own and other plugins'
+    // buildUpdateChecker() calls will route through OUR checker. The complete
+    // fix is to call \MealsDBGithubUpdateChecker directly from the caller and
+    // drop this facade entirely (see the require in meals-db-main.php); that
+    // caller is outside this file's scope, so here we remove the fatal only.
+    if (!class_exists('YahnisElsts\\PluginUpdateChecker\\v5\\PucFactory', false)) {
+        class PucFactory {
+            public static function buildUpdateChecker($metadataUrl, $pluginFile, $slug) {
+                return new \MealsDBGithubUpdateChecker($metadataUrl, $pluginFile, $slug);
+            }
         }
     }
 }

@@ -1486,10 +1486,48 @@
                     '';
                 const successMessage = this.getResponseMessage(response, 'Order created successfully!');
 
-                qoShowToast(successMessage, 'success');
+                // U07-quick-order-4: the server saves the order even when it is
+                // SHORT of what was entered — lines whose product no longer
+                // resolves are dropped, and any per-line qty over 100 is clamped.
+                // On a meal-delivery billing path that means a client may not get
+                // food, so warn instead of a plain "success" toast. The success
+                // banner (showOrderSuccess) still confirms the order was created;
+                // qoShowToast reuses a single toast element, so show the warning
+                // in place of the success toast rather than have it overwritten.
+                const droppedItems =
+                    (payload && payload.dropped_items) || response.dropped_items || [];
+                const clampedItems =
+                    (payload && payload.clamped_items) || response.clamped_items || [];
+                const hasDropped = Array.isArray(droppedItems) && droppedItems.length > 0;
+                const hasClamped = Array.isArray(clampedItems) && clampedItems.length > 0;
+
+                if (hasDropped || hasClamped) {
+                    const parts = [];
+                    if (hasDropped) {
+                        parts.push(`${droppedItems.length} item(s) could not be added and were dropped`);
+                    }
+                    if (hasClamped) {
+                        parts.push(`${clampedItems.length} line(s) were reduced to the 100-per-line limit`);
+                    }
+                    qoShowToast(`Order saved, but ${parts.join('; ')}. Review the order before delivery.`, 'warning');
+                } else {
+                    qoShowToast(successMessage, 'success');
+                }
+
                 this.showOrderSuccess(successMessage, orderId, orderLink);
 
-                jQuery('html, body').animate({ scrollTop: jQuery('#qo-order-success').offset().top - 30 }, 300);
+                // J1-quick-order-js-1: #qo-order-success is not present in every
+                // rendered view — when it's absent showOrderSuccess() falls back to
+                // addNotice() into $notices. Calling .offset().top on an empty
+                // jQuery set returns undefined and throws a TypeError inside this
+                // .done() callback, which previously skipped the .always() cleanup
+                // and left the Create button stuck disabled with its spinner after
+                // a *successful* order. Scroll to whichever element actually rendered.
+                const $scrollTarget =
+                    this.$orderSuccess && this.$orderSuccess.length ? this.$orderSuccess : this.$notices;
+                if ($scrollTarget && $scrollTarget.length && $scrollTarget.offset()) {
+                    jQuery('html, body').animate({ scrollTop: $scrollTarget.offset().top - 30 }, 300);
+                }
             }).fail(() => {
                 qoShowToast('Error creating order. Please try again.', 'error');
             }).always(() => {

@@ -168,10 +168,10 @@ class MealsDB_Sync_Compare {
             $kept_fields = [];
 
             foreach ($conflict['fields'] as $field => $values) {
-                $field_key  = $this->sanitize_ignore_value($field);
-                $source_val = $this->sanitize_ignore_value($values['meals_db'] ?? '');
-                $target_val = $this->sanitize_ignore_value($values['woocommerce'] ?? '');
-                $ignore_key = $this->build_ignore_key($field_key, $source_val, $target_val);
+                $field_key  = MealsDB_Sync::sanitize_ignore_value($field);
+                $source_val = MealsDB_Sync::sanitize_ignore_value($values['meals_db'] ?? '');
+                $target_val = MealsDB_Sync::sanitize_ignore_value($values['woocommerce'] ?? '');
+                $ignore_key = MealsDB_Sync::build_ignore_key($field_key, $source_val, $target_val);
 
                 if (isset($ignored[$ignore_key])) {
                     continue;
@@ -628,29 +628,9 @@ class MealsDB_Sync_Compare {
         return $score;
     }
 
-    /**
-     * Normalize ignore values before hashing.
-     *
-     * @param mixed $value
-     */
-    private function sanitize_ignore_value($value): string {
-        if (!is_scalar($value)) {
-            $value = '';
-        }
-
-        $value = (string) $value;
-
-        if (function_exists('sanitize_text_field')) {
-            return sanitize_text_field($value);
-        }
-
-        return trim($value);
-    }
-
-    /**
-     * Build the lookup key used for ignored conflicts.
-     */
-    private function build_ignore_key(string $field, string $source, string $target): string {
-        return md5($field . '|' . $source . '|' . $target);
-    }
+    // sanitize_ignore_value() / build_ignore_key() were duplicated here and
+    // in MealsDB_Sync_Query. Both must produce byte-identical md5 keys or
+    // filter_ignored() (above) silently stops suppressing ignored conflicts,
+    // so they now live in one place: MealsDB_Sync::sanitize_ignore_value() /
+    // ::build_ignore_key(). See that facade for the full rationale.
 }

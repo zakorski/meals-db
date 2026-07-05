@@ -222,6 +222,18 @@ class MealsDB_Updates {
 
         try {
             MealsDB_Installer::install();
+        } catch (\Throwable $e) {
+            // U11-schema-2: install() now THROWS on a real CREATE / schema-sync
+            // failure (so the admin_init auto-upgrade skips the version bump and
+            // retries). This user-facing endpoint must keep its documented
+            // array|WP_Error contract rather than let a fatal escape to the AJAX
+            // layer — convert the throw to a WP_Error so update_database()
+            // renders a clean "update failed" response.
+            error_log('[MealsDB Updates] Database maintenance failed: ' . $e->getMessage());
+            return new WP_Error(
+                'mealsdb_schema_install_failed',
+                __('The database update did not complete. It will be retried automatically; check the error log for details.', 'meals-db')
+            );
         } finally {
             if (function_exists('mealsdb_release_install_lock')) {
                 mealsdb_release_install_lock();
@@ -742,8 +754,13 @@ class MealsDB_Updates {
      * archive checksum; without it, the updater falls back to a less-safe
      * "trust HTTPS only" path that requires the explicit
      * MEALSDB_ALLOW_UNVERIFIED_RELEASE constant to opt in.
+     *
+     * Public + static so the bundled update-checker shim
+     * (MealsDBGithubUpdateChecker::extractSha256FromBody) can delegate here
+     * instead of maintaining a second, drift-prone copy of the same regex
+     * (audit U12-bootstrap-6).
      */
-    private static function extract_sha256_from_release_body(string $body): string {
+    public static function extract_sha256_from_release_body(string $body): string {
         if ($body === '') {
             return '';
         }
@@ -822,8 +839,18 @@ class MealsDB_Updates {
 
     /**
      * Normalize a semantic version string by trimming whitespace and removing any leading "v".
+     *
+     * This is the ONE canonical normalize used by both GitHub-release stacks:
+     * the admin "check for updates" flow (this class) and the native WP updater
+     * (MealsDBGithubUpdateChecker::normalizeVersion delegates here). It only
+     * strips a leading "v"/"V" and keeps any pre-release suffix (e.g.
+     * "-beta1"), which version_compare() understands — unlike a strip-all
+     * approach that would turn "v1.0.0-beta1" into "1.0.01" (a HIGHER version
+     * than 1.0.0) and make the two updaters disagree (audit U12-bootstrap-6).
+     *
+     * Public + static so the update-checker shim can consume it.
      */
-    private static function normalize_version(string $version): string {
+    public static function normalize_version(string $version): string {
         $normalized = trim($version);
         if ($normalized === '') {
             return '';
