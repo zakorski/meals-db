@@ -30,16 +30,6 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
-     * Check if a client type is a government client (SDNB or Veteran).
-     *
-     * Only government clients are stored in the external encrypted database.
-     * Private clients exist solely as WordPress/WooCommerce users.
-     */
-    private function is_government_client(string $client_type): bool {
-        return $client_type === 'SDNB' || $client_type === 'Veteran';
-    }
-
-    /**
      * Whether a wp_usermeta key is allowed to be written from a sync
      * override. Derived from the canonical field-to-meta map at request
      * time; cached per-process.
@@ -199,11 +189,14 @@ class MealsDB_Sync_Mutate {
             return $connection;
         }
 
-        // Type gate: Private clients have no external DB record — silently succeed
-        $client_type = $this->get_client_type($connection, $client_id);
-        if ($client_type !== null && !$this->is_government_client($client_type)) {
-            return true;
-        }
+        // NO client-type gate here. Private clients used to be rejected because
+        // they had no record in the old external encrypted DB. Since Phase S
+        // Private customers are first-class rows in meals_clients (created by
+        // MealsDB_Private_Intake) and the sync SELECTs include them (see
+        // class-sync.php nightly + real-time WHERE client_type IN
+        // ('SDNB','Veteran','Private')). The old gate made this method a silent
+        // no-op that still reported "synced", leaving the Private row stale
+        // forever. Government and Private clients are written identically here.
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $available_columns = $this->get_table_columns($connection, $clients_table);
@@ -379,11 +372,8 @@ class MealsDB_Sync_Mutate {
             return false;
         }
 
-        // Type gate: verify the existing record is not a Private client
-        $client_type = $this->get_client_type($connection, $client_id);
-        if ($client_type !== null && !$this->is_government_client($client_type)) {
-            return false;
-        }
+        // No client-type gate: Private clients are first-class meals_clients
+        // rows since Phase S and must be updatable here (see push_to_meals_db).
 
         try {
             $fields = MealsDB_Encryption::encrypt_columns($fields);
@@ -479,14 +469,9 @@ class MealsDB_Sync_Mutate {
             return false;
         }
 
-        // Type gate: Private clients are not stored in the external database
-        $client_type = $fields['client_type'] ?? '';
-        if (is_string($client_type) && !$this->is_government_client($client_type)) {
-            return new WP_Error(
-                'mealsdb_sync_private_client',
-                __('Private clients are not stored in the Meals DB external database.', 'meals-db')
-            );
-        }
+        // No client-type gate: Private clients are first-class meals_clients
+        // rows since Phase S (see push_to_meals_db). Government and Private
+        // clients are inserted identically.
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $available_columns = $this->get_table_columns($connection, $clients_table);
@@ -500,6 +485,14 @@ class MealsDB_Sync_Mutate {
                 continue;
             }
             $row[$column_map[$field]] = $value;
+        }
+
+        // client_type is not an identity field in build_identity_column_map,
+        // but it is a NOT-NULL discriminator column: pass it through verbatim
+        // when the caller supplied it, so a created row records whether it is
+        // SDNB / Veteran / Private instead of being dropped silently.
+        if (isset($fields['client_type']) && is_string($fields['client_type']) && isset($available_columns['client_type'])) {
+            $row['client_type'] = $fields['client_type'];
         }
 
         try {
@@ -614,14 +607,10 @@ class MealsDB_Sync_Mutate {
             return $connection;
         }
 
-        // Type gate: Private clients are not stored in the external database
-        $client_type = $this->get_client_type($connection, $client_id);
-        if ($client_type !== null && !$this->is_government_client($client_type)) {
-            return new WP_Error(
-                'mealsdb_sync_private_client',
-                __('Private clients are not stored in the Meals DB external database.', 'meals-db')
-            );
-        }
+        // No client-type gate: Private clients are first-class meals_clients
+        // rows since Phase S and the admin link UI must work for them (see
+        // push_to_meals_db). The duplicate-wp_user_id soft guard below still
+        // applies to every client type.
 
         $wp_user = get_userdata($user_id);
         if (!$wp_user instanceof WP_User) {
@@ -829,33 +818,6 @@ class MealsDB_Sync_Mutate {
         $wp_user_id = $connection->get_var($connection->prepare($sql, $client_id));
 
         return is_numeric($wp_user_id) ? (int) $wp_user_id : 0;
-    }
-
-    /**
-     * Look up the client_type for a given client_id.
-     *
-     * @return string|null The client_type value, or null if the record cannot be found.
-     */
-    private function get_client_type(wpdb $connection, int $client_id): ?string {
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $available_columns = $this->get_table_columns($connection, $clients_table);
-
-        if (!isset($available_columns['client_type'])) {
-            return null;
-        }
-
-        $primary_key = $this->resolve_primary_key_column($available_columns);
-        if ($primary_key === null) {
-            return null;
-        }
-
-        $escaped_table = str_replace('`', '``', $clients_table);
-        $escaped_pk    = str_replace('`', '``', $primary_key);
-        $sql  = sprintf('SELECT `client_type` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_table, $escaped_pk);
-
-        $type = $connection->get_var($connection->prepare($sql, $client_id));
-
-        return is_string($type) ? $type : null;
     }
 
     /**

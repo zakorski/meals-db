@@ -77,3 +77,6 @@ clients_with_initials.csv
 # Backup files
 backup_*.csv
 export_*.csv
+
+# Audit output (reports, findings.json, workflow checkpoints) — local artifacts
+/audit-2026-07/
