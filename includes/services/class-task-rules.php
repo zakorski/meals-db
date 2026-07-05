@@ -526,7 +526,22 @@ class MealsDB_Task_Rules {
                 if (empty($days)) {
                     return null;
                 }
-                // Search up to (interval*7 + 7) days ahead to find the next matching weekday.
+                // Honour the every-N-weeks interval (audit U17-tasks-core-1).
+                // Previously this branch used $interval only to SIZE the search
+                // window and returned the FIRST matching weekday after $after, so
+                // 'every 2 weeks on Monday' silently fired every Monday —
+                // over-spawning tasks. For interval === 1 every week is "on", so
+                // there is nothing to anchor and behaviour is unchanged. For
+                // interval > 1 we need an anchor to know WHICH weeks are on: the
+                // recurrence start_date when supplied, else a fixed reference so
+                // the phase is at least deterministic across runs (an operator
+                // who wants a specific "on" week sets start_date).
+                $anchor_week = null;
+                if ($interval > 1) {
+                    $anchor_week = self::week_ordinal(self::weekly_anchor($recurrence, $tz));
+                }
+                // Search up to (interval*7 + 7) days ahead — always enough to
+                // reach the next in-phase matching weekday.
                 $search_start = $after_local->setTime($hour, $min, 0);
                 for ($i = 0; $i <= ($interval * 7 + 7); $i++) {
                     $candidate_try = $search_start->modify(sprintf('+%d day', $i));
@@ -534,10 +549,20 @@ class MealsDB_Task_Rules {
                     if (!in_array($dow, $days, true)) {
                         continue;
                     }
-                    if ($candidate_try > $after_local) {
-                        $candidate = $candidate_try;
-                        break;
+                    if ($candidate_try <= $after_local) {
+                        continue;
                     }
+                    if ($anchor_week !== null) {
+                        // Accept only weeks whose whole-week offset from the
+                        // anchor is a multiple of $interval. Normalised modulo so
+                        // a candidate earlier than the anchor still buckets right.
+                        $delta = self::week_ordinal($candidate_try) - $anchor_week;
+                        if ((($delta % $interval) + $interval) % $interval !== 0) {
+                            continue;
+                        }
+                    }
+                    $candidate = $candidate_try;
+                    break;
                 }
                 break;
 
@@ -701,5 +726,48 @@ class MealsDB_Task_Rules {
     public static function dow_index_to_name(int $index): string {
         $names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         return $names[$index] ?? 'Sunday';
+    }
+
+    /**
+     * Resolve the anchor date for a biweekly-or-longer weekly recurrence
+     * (audit U17-tasks-core-1). Uses the recurrence start_date when it is a
+     * valid Y-m-d; otherwise a fixed reference date so the N-week phase is
+     * deterministic across runs. The exact reference is irrelevant to
+     * correctness — week_ordinal() snaps every date to the Monday of its ISO
+     * week — it only fixes WHICH weeks count as "on".
+     *
+     * @param array<string, mixed> $recurrence
+     */
+    private static function weekly_anchor(array $recurrence, DateTimeZone $tz): DateTimeImmutable {
+        $start_str = isset($recurrence['start_date']) ? (string) $recurrence['start_date'] : '';
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $start_str)) {
+            try {
+                return new DateTimeImmutable($start_str, $tz);
+            } catch (Throwable $e) {
+                // Malformed date slipped past the regex — fall through to the
+                // fixed reference rather than throwing out of a scheduler path.
+            }
+        }
+        // 2000-01-03 was a Monday; any fixed date works since week_ordinal()
+        // snaps to the containing Monday.
+        return new DateTimeImmutable('2000-01-03', $tz);
+    }
+
+    /**
+     * Whole-week ordinal for a date: the number of 7-day weeks between a fixed
+     * epoch Monday and the Monday of this date's ISO week. Computed at UTC
+     * midnight so DST can never turn a 7-day span into a 6-day diff. Two dates
+     * in the same Mon–Sun week share an ordinal regardless of weekday, so the
+     * every-N-weeks modulo groups by calendar week correctly. The epoch cancels
+     * out when two ordinals are subtracted, so its exact value is immaterial.
+     */
+    private static function week_ordinal(DateTimeImmutable $date): int {
+        $utc    = new DateTimeZone('UTC');
+        $monday = $date->modify('monday this week')->format('Y-m-d');
+        $epoch  = new DateTimeImmutable('1970-01-05', $utc); // a Monday
+        $target = new DateTimeImmutable($monday, $utc);
+        $diff   = $epoch->diff($target);
+        $days   = (int) $diff->days * ($diff->invert === 1 ? -1 : 1);
+        return intdiv($days, 7);
     }
 }

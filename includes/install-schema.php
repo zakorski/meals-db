@@ -19,6 +19,18 @@ class MealsDB_Installer {
     public static function install(): void {
         global $wpdb;
 
+        // U11-schema-2: collect genuine failures so we can THROW at the end.
+        // The caller mealsdb_maybe_upgrade_schema() only skips
+        // update_option('mealsdb_db_version', ...) when install() throws (its
+        // try/catch logs and lets the next admin_init retry); previously
+        // install() returned void unconditionally, so a partially-built schema
+        // got recorded as up-to-date and was never retried until the next
+        // version bump (recon-01 known bug). Every step below is idempotent
+        // (CREATE TABLE IF NOT EXISTS, existence-guarded column adds and
+        // migrations), so we run the whole routine and throw ONCE at the end
+        // rather than bailing mid-build.
+        $failures = [];
+
         $schemas = MealsDB_Schema::get_canonical_schema();
         foreach ($schemas as $schema) {
             $sql = MealsDB_Schema::generate_create_table_sql($schema);
@@ -26,12 +38,26 @@ class MealsDB_Installer {
             $wpdb->query($sql);
             if ($wpdb->last_error) {
                 error_log(sprintf('[MealsDB Installer] Failed creating %s: %s', $schema['table'], $wpdb->last_error));
+                $failures[] = sprintf('create %s: %s', $schema['table'], $wpdb->last_error);
             }
         }
 
         $sync_result = MealsDB_Schema_Sync::run_full_sync();
         if (is_wp_error($sync_result)) {
             error_log('[MealsDB Installer] Schema sync failed: ' . $sync_result->get_error_message());
+            $failures[] = 'schema sync: ' . $sync_result->get_error_message();
+        } elseif (is_array($sync_result) && !empty($sync_result['errors'])) {
+            // run_full_sync() continues past individual table-create / ADD
+            // COLUMN failures and returns them in ['errors']; inspect that
+            // array, not just is_wp_error() (the recommendation). NOTE:
+            // ['column_mismatches'] is deliberately NOT treated as a failure
+            // here — the additive sync can't MODIFY an existing column, so a
+            // retry would never clear the mismatch; blocking the version bump
+            // on it would loop forever. Mismatches are surfaced/logged inside
+            // run_full_sync() and require an explicit ALTER migration.
+            $error_count = count($sync_result['errors']);
+            error_log(sprintf('[MealsDB Installer] Schema sync reported %d table/column error(s).', $error_count));
+            $failures[] = sprintf('schema sync: %d table/column error(s)', $error_count);
         }
 
         // Run one-time migrations
@@ -43,6 +69,18 @@ class MealsDB_Installer {
         // something to exercise the cron pass with. Safe to call on every
         // install — it no-ops when the seed rule already exists.
         self::seed_task_engine();
+
+        // U11-schema-2: a failed table/column create must NOT be recorded as
+        // "schema up-to-date". Throwing makes mealsdb_maybe_upgrade_schema
+        // skip the version bump (and retry next admin_init) and converts
+        // run_database_maintenance()'s previously-silent success into a
+        // surfaced error. Thrown AFTER the idempotent migrations/seed so a
+        // retry starts from the furthest-along state.
+        if (!empty($failures)) {
+            throw new RuntimeException(
+                '[MealsDB Installer] schema install/upgrade incomplete: ' . implode('; ', $failures)
+            );
+        }
     }
 
     /**

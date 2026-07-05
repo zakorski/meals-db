@@ -95,7 +95,32 @@ jobs:
         run: |
           mkdir build
           mkdir build/meals-db-main
-          rsync -av --exclude='.git' --exclude='build' --exclude='.github' ./ build/meals-db-main/
+          # The production zip is web-served under wp-content/plugins/meals-db-main/,
+          # so anything copied here is fetchable by anyone. Ship ONLY runtime code.
+          # Excluded (audit DEPS-2): internal/dev artifacts that either leak a map of
+          # known weaknesses or are directly invokable PHP on the webserver:
+          #   - tests/         102 PHP files with NO ABSPATH guard that assert/fwrite/exit
+          #                    at file scope, i.e. self-executing when fetched over HTTP.
+          #   - directives/    remediation + full-codebase audit docs (known-bug catalogue).
+          #   - docs/, DEV-NOTES-*  internal design/inventory notes.
+          #   - CLAUDE.md      documents DB prefix, encryption/index weaknesses, rate quotas.
+          #   - .claude/       agent scratch files.
+          #   - composer.json/.lock, .gitignore, .gitattributes  build/VCS metadata, not runtime.
+          rsync -av \
+            --exclude='.git' \
+            --exclude='build' \
+            --exclude='.github' \
+            --exclude='tests' \
+            --exclude='directives' \
+            --exclude='docs' \
+            --exclude='.claude' \
+            --exclude='CLAUDE.md' \
+            --exclude='DEV-NOTES-*' \
+            --exclude='composer.json' \
+            --exclude='composer.lock' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            ./ build/meals-db-main/
           cd build
           zip -r meals-db-main.zip meals-db-main
           cd ..

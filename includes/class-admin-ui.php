@@ -640,7 +640,12 @@ class MealsDB_Admin_UI {
                 'data' => [
                     'ajaxUrl' => admin_url('admin-ajax.php'),
                     'nonce'   => wp_create_nonce('mealsdb_nonce'),
-                    'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&id='),
+                    // edit-client.php reads $_GET['client_id'] (matching the
+                    // canonical add_query_arg('client_id', ...) link builder in
+                    // views/view-clients.php and the allocation-history enqueue
+                    // above). '&id=' left every fee-reconciliation client link on
+                    // "Invalid client specified." — use client_id.
+                    'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&client_id='),
                 ],
             ],
             'mealsdb-order-errors' => [
@@ -778,7 +783,10 @@ class MealsDB_Admin_UI {
             $data = [
                 'ajaxUrl' => admin_url('admin-ajax.php'),
                 'nonce'   => wp_create_nonce('mealsdb_nonce'),
-                'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&id='),
+                // Duplicate of the Reports-bundle editUrl above: edit-client.php
+                // reads $_GET['client_id'], so '&id=' broke every reconciliation
+                // client link ("Invalid client specified."). Use client_id.
+                'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&client_id='),
             ];
             wp_add_inline_script(
                 'mealsdb-fee-reconciliation',
@@ -860,18 +868,28 @@ class MealsDB_Admin_UI {
 
         // POST handlers relocated from render_main_page (schema update,
         // force rebuild). Delete-non-admin-users was removed entirely.
+        //
+        // Results are accumulated into $notices_html and echoed inline below,
+        // NOT registered on the 'admin_notices' hook. This method is the
+        // add_submenu_page render callback, which WP invokes via
+        // do_action($page_hook) AFTER admin-header.php has already fired
+        // 'admin_notices'/'all_admin_notices'. An add_action('admin_notices',
+        // ...) here bound too late and never executed — the operator dropped
+        // and recreated every plugin table and saw zero feedback, including the
+        // force-rebuild failure report that exists precisely because CREATE
+        // errors are otherwise silent (recon-01), and permission-denied
+        // WP_Errors from the manage_options service checks, so a
+        // baseline-capability user saw the op silently "succeed".
+        $notices_html = '';
+
         if (isset($_POST['mealsdb_action']) && $_POST['mealsdb_action'] === 'update_schema') {
             check_admin_referer('mealsdb_update_schema', 'mealsdb_update_schema_nonce');
             require_once MEALS_DB_PLUGIN_DIR . 'includes/class-schema-sync.php';
             $result = MealsDB_Schema_Sync::run_full_sync();
             if (is_wp_error($result)) {
-                add_action('admin_notices', function() use ($result) {
-                    echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
-                });
+                $notices_html .= '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
             } else {
-                add_action('admin_notices', function() {
-                    echo '<div class="notice notice-success"><p>' . esc_html__('Database schema updated successfully.', 'meals-db') . '</p></div>';
-                });
+                $notices_html .= '<div class="notice notice-success"><p>' . esc_html__('Database schema updated successfully.', 'meals-db') . '</p></div>';
             }
         }
 
@@ -883,18 +901,20 @@ class MealsDB_Admin_UI {
                 : '';
             $result = MealsDB_Schema_Rebuild::run($confirmation);
             if (is_wp_error($result)) {
-                add_action('admin_notices', function() use ($result) {
-                    echo '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
-                });
+                $notices_html .= '<div class="notice notice-error"><p>' . esc_html($result->get_error_message()) . '</p></div>';
             } else {
-                add_action('admin_notices', function() use ($result) {
-                    echo MealsDB_Admin_UI::render_force_rebuild_summary($result);
-                });
+                $notices_html .= MealsDB_Admin_UI::render_force_rebuild_summary($result);
             }
         }
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Data Ops', 'meals-db') . '</h1>';
+        // Echo the POST-handler notices here, inside the render callback, so
+        // they actually reach the page (see the hook-timing note above). Each
+        // fragment was escaped at build time (esc_html / esc_html__ /
+        // render_force_rebuild_summary, which returns pre-escaped HTML), exactly
+        // as the previous admin_notices closures emitted it.
+        echo $notices_html;
         echo '<div class="mealsdb-tab-content">';
         include MealsDB_Plugin::path('views/data-ops.php');
         echo '</div></div>';

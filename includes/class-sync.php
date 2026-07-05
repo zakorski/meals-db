@@ -566,12 +566,28 @@ class MealsDB_Sync {
             MealsDB_Logger::log('sync_nightly_complete', 0, 'summary', null, $summary !== false ? $summary : null);
 
             if ($log_id > 0) {
-                MealsDB_Job_Logger::finish($log_id, [
+                $stats = [
                     'records_processed' => $synced_count + $skipped_count + $error_count,
                     'records_updated'   => $synced_count,
                     'records_skipped'   => $skipped_count,
                     'records_errored'   => $error_count,
-                ]);
+                ];
+
+                // A nightly run that swallowed per-field push failures
+                // ($error_count > 0, incremented above where push_to_meals_db
+                // returned a WP_Error) must NOT log as a clean success:
+                // the Event Log dashboard/digest default to failed|degraded,
+                // so MealsDB_Job_Logger::finish() (which maps to 'succeeded')
+                // would hide a nightly sync that failed to push government-
+                // client identity fields — the records_errored counter alone
+                // never surfaces. Record 'degraded' so the swallowed errors
+                // show up. See CLAUDE.md Pattern 6 and the explicit warning
+                // in MealsDB_Job_Logger::finish()'s docblock.
+                if ($error_count > 0) {
+                    MealsDB_Event_Log::finish_job($log_id, $stats, MealsDB_Event_Log::OUTCOME_DEGRADED);
+                } else {
+                    MealsDB_Job_Logger::finish($log_id, $stats);
+                }
             }
         } catch (\Throwable $e) {
             if ($log_id > 0) {
@@ -805,5 +821,46 @@ class MealsDB_Sync {
      */
     private static function normalize_for_comparison(string $value): string {
         return strtolower(trim($value));
+    }
+
+    /**
+     * Normalize a value before it is folded into an ignored-conflict key.
+     *
+     * Shared single source of truth for the two halves of the
+     * ignore-conflict contract: MealsDB_Sync_Query builds keys from the
+     * stored IGNORED_CONFLICTS rows, while MealsDB_Sync_Compare builds
+     * keys from live mismatch values. filter_ignored() only suppresses a
+     * mismatch when BOTH sides md5 to the identical key, so the sanitizer
+     * and the key format MUST stay byte-identical on both paths. These
+     * used to be duplicated as private copies in each service class; a
+     * future edit to one copy (a different separator, a different
+     * sanitizer) would have silently broken conflict-ignoring with no
+     * error — previously-ignored mismatches would just reappear. Keeping
+     * one home on the facade both service classes already run through
+     * removes that two-sources-of-truth trap.
+     *
+     * @param mixed $value
+     */
+    public static function sanitize_ignore_value($value): string {
+        if (!is_scalar($value)) {
+            $value = '';
+        }
+
+        $value = (string) $value;
+
+        if (function_exists('sanitize_text_field')) {
+            return sanitize_text_field($value);
+        }
+
+        return trim($value);
+    }
+
+    /**
+     * Build the lookup key used for ignored conflicts. See
+     * sanitize_ignore_value() for why this canonical implementation lives
+     * on the facade instead of being duplicated in the sync services.
+     */
+    public static function build_ignore_key(string $field, string $source, string $target): string {
+        return md5($field . '|' . $source . '|' . $target);
     }
 }

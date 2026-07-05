@@ -105,11 +105,20 @@ class MealsDB_Delivery_Slip_Generator {
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         // delivery_day + delivery_frequency drive the delivery-basis order
         // filter (delivery_occurrence_for_order, MAJ-6).
+        // delivery_postal_code / client_phone_2 / alternate_contact_name /
+        // alternate_contact_phone_1 / alternate_contact_phone_2 feed
+        // MealsDB_Slip_PDF_Generator::build_driver_block (the Midland doc-4
+        // driver block). Previously unselected, so postal, secondary phone and
+        // the alternate contact rendered blank on the slip and its persisted
+        // batch snapshot (U06-slips-1); the skip-empty renderer hid it. None
+        // are in ENCRYPTED_CLIENT_COLUMNS, so no decrypt step is needed.
         $sql   = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
                     client_contribution, payment_method, client_type,
+                    delivery_postal_code, client_phone_2, alternate_contact_name,
+                    alternate_contact_phone_1, alternate_contact_phone_2,
                     delivery_day, delivery_frequency
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s",
@@ -203,11 +212,20 @@ class MealsDB_Delivery_Slip_Generator {
 
         // delivery_day + delivery_frequency drive the delivery-occurrence
         // filter for the zone/range slip (GUI-SLIP-RANGE).
+        // delivery_postal_code / client_phone_2 / alternate_contact_name /
+        // alternate_contact_phone_1 / alternate_contact_phone_2 feed
+        // MealsDB_Slip_PDF_Generator::build_driver_block (the Midland doc-4
+        // driver block). Previously unselected, so postal, secondary phone and
+        // the alternate contact rendered blank on the slip and its persisted
+        // batch snapshot (U06-slips-1); the skip-empty renderer hid it. None
+        // are in ENCRYPTED_CLIENT_COLUMNS, so no decrypt step is needed.
         $sql = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
                     client_contribution, payment_method, client_type,
+                    delivery_postal_code, client_phone_2, alternate_contact_name,
+                    alternate_contact_phone_1, alternate_contact_phone_2,
                     delivery_day, delivery_frequency
              FROM `{$table}`
              WHERE active = 1 AND wp_user_id > 0 AND delivery_area_name IN ({$placeholders})",

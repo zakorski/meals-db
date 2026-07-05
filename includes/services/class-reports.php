@@ -1015,10 +1015,19 @@ class MealsDB_Reports {
             return ['errors' => [], 'summary' => $empty_summary];
         }
 
-        // Valid zones from option or default list.
-        $valid_zones = get_option('mealsdb_valid_zones', [
-            'Zone 1', 'Zone 2', 'Zone 3', 'Zone 4', 'Zone 5', 'Zone 6',
-        ]);
+        // Valid zones for the invalid_zone check are the keys of the
+        // operator-editable delivery schedule (mealsdb_zone_delivery_schedule),
+        // which is keyed by delivery_area_name — the same vocabulary this report
+        // validates against. The old mealsdb_valid_zones option was READ here but
+        // written nowhere (no settings UI, no update_option), so once an operator
+        // added or renamed a zone in the schedule this check kept validating
+        // against a frozen default and emitted false 'invalid_zone' positives —
+        // two sources of truth (audit U05-reports-8). Fall back to the historical
+        // default list only when the schedule is empty/unset.
+        $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
+        $valid_zones   = (is_array($zone_schedule) && !empty($zone_schedule))
+            ? array_keys($zone_schedule)
+            : ['Zone 1', 'Zone 2', 'Zone 3', 'Zone 4', 'Zone 5', 'Zone 6'];
 
         // 1. Batch-fetch all orders in the date range from HPOS.
         $orders_table = $this->wpdb->prefix . 'wc_orders';
@@ -1065,6 +1074,43 @@ class MealsDB_Reports {
             }
         }
 
+        // 2b. Batch-fetch the WC billing name + shipping address_1 for EVERY
+        // order in ONE query against the HPOS addresses table, instead of a
+        // per-order wc_get_order() inside the loop below. The loop only ever
+        // reads three string fields (billing first/last name, shipping
+        // address_1), but wc_get_order() fully hydrates each order (items,
+        // meta, every address); on a wide range (~16k orders/yr) that was up to
+        // 16k HPOS fetches in one synchronous request, risking
+        // max_execution_time. This mirrors the batching private_customer_report
+        // already uses above (audit U05-reports-9 / X4-sql-efficiency-1).
+        $billing_names  = []; // order_id => ['first' => string, 'last' => string]
+        $shipping_addr1 = []; // order_id => string
+        $all_order_ids  = array_map('intval', array_column($order_rows, 'id'));
+        if (!empty($all_order_ids)) {
+            $addresses_table = $this->wpdb->prefix . 'wc_order_addresses';
+            $addr_ph         = implode(',', array_fill(0, count($all_order_ids), '%d'));
+            $addr_rows = $this->wpdb->get_results($this->wpdb->prepare(
+                "SELECT order_id, address_type, first_name, last_name, address_1
+                 FROM `{$addresses_table}`
+                 WHERE order_id IN ({$addr_ph})
+                   AND address_type IN ('billing', 'shipping')",
+                ...$all_order_ids
+            ), ARRAY_A);
+            if (is_array($addr_rows)) {
+                foreach ($addr_rows as $ar) {
+                    $oid = (int) $ar['order_id'];
+                    if ($ar['address_type'] === 'billing') {
+                        $billing_names[$oid] = [
+                            'first' => (string) $ar['first_name'],
+                            'last'  => (string) $ar['last_name'],
+                        ];
+                    } elseif ($ar['address_type'] === 'shipping') {
+                        $shipping_addr1[$oid] = (string) $ar['address_1'];
+                    }
+                }
+            }
+        }
+
         // 3. Run checks per order.
         $errors       = [];
         $error_counts = [];
@@ -1076,43 +1122,42 @@ class MealsDB_Reports {
             $order_date  = substr($orow['date_created_gmt'], 0, 10);
             $client      = isset($clients_map[$customer_id]) ? $clients_map[$customer_id] : null;
 
+            // WC billing/shipping fields from the batched maps (2b) — a missing
+            // address row means the field is genuinely empty, which is exactly
+            // what WC_Order::get_billing_first_name() etc. returned before and is
+            // itself one of the errors this report flags.
+            $billing_first = $billing_names[$order_id]['first'] ?? '';
+            $billing_last  = $billing_names[$order_id]['last'] ?? '';
+            $ship_addr1    = $shipping_addr1[$order_id] ?? '';
+
             $order_errors = [];
 
             if (!$client && $customer_id > 0) {
-                // No meals_clients record — still check WC fields via wc_get_order.
-                $wc_order = wc_get_order($order_id);
-                if ($wc_order) {
-                    $customer_name = trim($wc_order->get_billing_first_name() . ' ' . $wc_order->get_billing_last_name());
+                // No meals_clients record — still check WC fields.
+                $customer_name = trim($billing_first . ' ' . $billing_last);
 
-                    if (empty(trim($wc_order->get_billing_first_name()))) {
-                        $order_errors[] = ['type' => 'missing_first_name', 'detail' => 'Billing first name is empty'];
-                    }
-                    if (empty(trim($wc_order->get_billing_last_name()))) {
-                        $order_errors[] = ['type' => 'missing_last_name', 'detail' => 'Billing last name is empty'];
-                    }
-                    if (empty(trim($wc_order->get_shipping_address_1()))) {
-                        $order_errors[] = ['type' => 'missing_address', 'detail' => 'No shipping/delivery address'];
-                    }
-
-                    $order_errors[] = ['type' => 'no_client_record', 'detail' => 'Customer not found in meals_clients'];
-                } else {
-                    $customer_name = 'Unknown';
-                    $order_errors[] = ['type' => 'no_client_record', 'detail' => 'Customer not found in meals_clients'];
+                if (empty(trim($billing_first))) {
+                    $order_errors[] = ['type' => 'missing_first_name', 'detail' => 'Billing first name is empty'];
                 }
+                if (empty(trim($billing_last))) {
+                    $order_errors[] = ['type' => 'missing_last_name', 'detail' => 'Billing last name is empty'];
+                }
+                if (empty(trim($ship_addr1))) {
+                    $order_errors[] = ['type' => 'missing_address', 'detail' => 'No shipping/delivery address'];
+                }
+
+                $order_errors[] = ['type' => 'no_client_record', 'detail' => 'Customer not found in meals_clients'];
             } elseif ($client) {
                 // Have a meals_clients record — check against it.
-                $wc_order = wc_get_order($order_id);
-                $customer_name = $wc_order
-                    ? trim($wc_order->get_billing_first_name() . ' ' . $wc_order->get_billing_last_name())
-                    : 'Unknown';
+                $customer_name = trim($billing_first . ' ' . $billing_last);
 
                 // Check 1: Missing first name.
-                if ($wc_order && empty(trim($wc_order->get_billing_first_name()))) {
+                if (empty(trim($billing_first))) {
                     $order_errors[] = ['type' => 'missing_first_name', 'detail' => 'Billing first name is empty'];
                 }
 
                 // Check 2: Missing last name.
-                if ($wc_order && empty(trim($wc_order->get_billing_last_name()))) {
+                if (empty(trim($billing_last))) {
                     $order_errors[] = ['type' => 'missing_last_name', 'detail' => 'Billing last name is empty'];
                 }
 
@@ -1134,8 +1179,7 @@ class MealsDB_Reports {
                 // Check 5: Missing address.
                 $address = $client['delivery_street_name'] ?? '';
                 if (empty(trim($address))) {
-                    $wc_address = $wc_order ? $wc_order->get_shipping_address_1() : '';
-                    if (empty(trim($wc_address))) {
+                    if (empty(trim($ship_addr1))) {
                         $order_errors[] = ['type' => 'missing_address', 'detail' => 'No shipping/delivery address'];
                     }
                 }
@@ -1149,10 +1193,7 @@ class MealsDB_Reports {
                 }
             } else {
                 // Guest order (customer_id = 0).
-                $wc_order = wc_get_order($order_id);
-                $customer_name = $wc_order
-                    ? trim($wc_order->get_billing_first_name() . ' ' . $wc_order->get_billing_last_name())
-                    : 'Guest';
+                $customer_name = trim($billing_first . ' ' . $billing_last);
 
                 $order_errors[] = ['type' => 'no_client_record', 'detail' => 'Guest order — no customer account'];
             }

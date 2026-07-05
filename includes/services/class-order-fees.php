@@ -122,12 +122,36 @@ class MealsDB_Order_Fees {
                 $billing_month = self::contribution_month_for_timestamp(
                     $created ? $created->getTimestamp() : null
                 );
-                if (!self::contribution_applied_this_month($client_id, $billing_month)
-                    && !self::order_has_product($order, $fee_ids['client_contribution'])) {
 
-                    if (self::add_fee_product($order, $fee_ids['client_contribution'], $client_contribution)) {
-                        $dirty = true;
-                        self::mark_contribution_applied($client_id, $billing_month, $wc_order_id);
+                // Idempotency: never stack a second contribution line onto the
+                // SAME order across repeated hook fires (pending -> processing ->
+                // completed all fire allocate_order), nor onto an order that
+                // already carries one for any reason.
+                if (!self::order_has_product($order, $fee_ids['client_contribution'])) {
+                    // U04: CLAIM the month ATOMICALLY *before* adding the fee
+                    // line. The previous code did SELECT (applied?) then, only
+                    // after add, mark — a check-then-act gap: two orders for the
+                    // same client transitioning to active in concurrent requests
+                    // (webhook + admin, two admins, a REST call) could BOTH pass
+                    // the SELECT before either marked, so both added the
+                    // contribution product and the client's monthly contribution
+                    // was deducted twice on the government invoice. Worse, the
+                    // flag only ever stored the LAST order_id, so deallocating one
+                    // order could never release the duplicate fee line — it stuck
+                    // permanently. claim_contribution_month() collapses check-and-
+                    // mark into ONE atomic INSERT..ON DUPLICATE KEY UPDATE on the
+                    // (client_id, billing_month) UNIQUE key; exactly one concurrent
+                    // caller wins, and only the winner adds the fee line.
+                    if (self::claim_contribution_month($client_id, $billing_month, $wc_order_id)) {
+                        if (self::add_fee_product($order, $fee_ids['client_contribution'], $client_contribution)) {
+                            $dirty = true;
+                        } else {
+                            // Claim won but the fee line did not attach (missing/
+                            // invalid fee product). Release the month so a later
+                            // qualifying order can win it, rather than the
+                            // contribution being silently dropped for the month.
+                            self::release_contribution_claim($client_id, $billing_month, $wc_order_id);
+                        }
                     }
                 }
             }
@@ -393,37 +417,74 @@ class MealsDB_Order_Fees {
     }
 
     /**
-     * Whether this client's monthly contribution is already recorded for
-     * the billing month.
+     * Atomically CLAIM this client's monthly contribution for the billing
+     * month, tagging the order that will carry it. Returns true ONLY if THIS
+     * call won the claim (and must therefore add the fee line); false if the
+     * month was already applied by another order, or the claim errored.
+     *
+     * U04: this replaces the old SELECT-then-mark pair, which was a
+     * check-then-act race — two orders for the same client transitioning to
+     * active concurrently could both read "not applied" before either wrote,
+     * double-billing the contribution. The claim is a single atomic
+     * INSERT..ON DUPLICATE KEY UPDATE on the (client_id, billing_month) UNIQUE
+     * key (idx_client_month), with the UPDATE branch conditioned so it is a
+     * NO-OP when the month is already claimed (contribution_applied = 1). We
+     * then read the connection's affected-rows count (returned by
+     * $wpdb->query): WordPress connects WITHOUT CLIENT_FOUND_ROWS, so
+     * "rows changed" semantics apply —
+     *     1 = a new summary row was inserted        -> we won
+     *     2 = an existing row flipped 0 -> 1        -> we won
+     *     0 = the month was already applied (no-op) -> another order owns it
+     *   false = query error -> (int) 0 -> claim NOT won -> fail CLOSED (do not
+     *           add the fee; an under-bill is recoverable, the double-bill this
+     *           guard exists to prevent is not).
+     *
+     * Assignment ORDER inside ON DUPLICATE KEY UPDATE is load-bearing: MySQL
+     * evaluates SET targets left-to-right and a later target sees the NEW value
+     * written by an earlier one, so contribution_order_id is set FIRST (while
+     * contribution_applied still holds its OLD value) and contribution_applied
+     * is flipped SECOND. Reversing them would make the order_id guard read the
+     * already-updated flag and never store the id.
+     *
+     * The summary-row shape written here (only the claim columns; every other
+     * allocation column at its default) is identical to what the old mark path
+     * inserted, so the rebuilder fills the rest exactly as before.
      */
-    private static function contribution_applied_this_month(int $client_id, string $billing_month): bool {
+    private static function claim_contribution_month(int $client_id, string $billing_month, int $wc_order_id): bool {
         global $wpdb;
         $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-        $applied = (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT contribution_applied FROM {$alloc_table}
-             WHERE client_id = %d AND billing_month = %s",
-            $client_id,
-            $billing_month
-        ));
-        return $applied === 1;
-    }
-
-    /**
-     * Record that the contribution has been applied for the month, tagging
-     * the order that carries it. deallocate_order() clears this (resets to
-     * 0 / NULL keyed on contribution_order_id) when that order is
-     * cancelled/refunded, releasing the month for the next qualifying order.
-     */
-    private static function mark_contribution_applied(int $client_id, string $billing_month, int $wc_order_id): void {
-        global $wpdb;
-        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
-        $wpdb->query($wpdb->prepare(
+        $result = $wpdb->query($wpdb->prepare(
             "INSERT INTO {$alloc_table} (client_id, billing_month, contribution_applied, contribution_order_id)
              VALUES (%d, %s, 1, %d)
-             ON DUPLICATE KEY UPDATE contribution_applied = 1, contribution_order_id = %d",
+             ON DUPLICATE KEY UPDATE
+                 contribution_order_id = IF(contribution_applied = 0, %d, contribution_order_id),
+                 contribution_applied  = IF(contribution_applied = 0, 1, contribution_applied)",
             $client_id,
             $billing_month,
             $wc_order_id,
+            $wc_order_id
+        ));
+        $affected = (int) $result; // false (query error) -> 0 -> claim NOT won.
+        return $affected === 1 || $affected === 2;
+    }
+
+    /**
+     * Release a contribution claim this order made but could not back with a
+     * fee line (add_fee_product failed). Resets the month to unclaimed so the
+     * next qualifying order re-applies it. Guarded on contribution_order_id so
+     * we only ever release OUR OWN claim, never clobber another order's — the
+     * same discipline MealsDB_Allocation_Engine::deallocate_order() uses when
+     * a cancelled/refunded carrier releases the month.
+     */
+    private static function release_contribution_claim(int $client_id, string $billing_month, int $wc_order_id): void {
+        global $wpdb;
+        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+        $wpdb->query($wpdb->prepare(
+            "UPDATE {$alloc_table}
+                SET contribution_applied = 0, contribution_order_id = NULL
+              WHERE client_id = %d AND billing_month = %s AND contribution_order_id = %d",
+            $client_id,
+            $billing_month,
             $wc_order_id
         ));
     }

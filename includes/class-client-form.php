@@ -450,6 +450,14 @@ class MealsDB_Client_Form {
             'delivery_frequency' => 'Delivery frequency must be a number.',
             'freezer_capacity'   => 'Freezer capacity must be a number.',
             'delivery_fee'       => 'Delivery fee must be a number.',
+            // client_contribution was missing here, so the range check below
+            // (which does `if (!is_numeric($value)) continue;`) silently
+            // skipped a non-numeric value like "$25.00"/"25,00". It then reached
+            // the DECIMAL(10,2) insert and either failed with a generic
+            // repository DB error (strict SQL) or coerced to 0.00 (non-strict) —
+            // a per-client BILLING input becoming zero with no operator-visible
+            // error. Reject non-numeric contribution up front.
+            'client_contribution' => 'Client contribution must be a number.',
         ];
 
         foreach ($numeric_fields as $field => $message) {
@@ -500,9 +508,25 @@ class MealsDB_Client_Form {
             'client_email' => 255,
             'diet_concerns' => 5000,
             'client_comments' => 5000,
-            'delivery_address' => 500,
-            'delivery_city' => 100,
-            'delivery_postal' => 20,
+            // Address + contact fields. The previous keys
+            // ('delivery_address'/'delivery_city'/'delivery_postal') matched NO
+            // form field — sanitize_payload() only emits the form-side names in
+            // self::$db_columns — so these VARCHAR(255) columns had ZERO length
+            // validation and an over-long paste failed only at $wpdb->insert
+            // ("Data too long") or truncated silently under non-strict SQL: the
+            // exact GUI-F3F5 failure class this table's length checks exist to
+            // prevent. Keys are now the real form-side names and widths mirror
+            // class-schema.php exactly (street/city 255, postal 10). The main
+            // address street/city and the two remaining email fields were never
+            // guarded at all; added here.
+            'address_street_name' => 255,
+            'address_city' => 255,
+            'delivery_address_street_name' => 255,
+            'delivery_address_city' => 255,
+            'delivery_address_postal' => 10,
+            'alt_contact_name' => 255,
+            'social_worker_email' => 255,
+            'alt_contact_email' => 255,
             'individual_id' => 50,
             'requisition_id' => 50,
             // Phone + province were previously unmapped, so an over-long

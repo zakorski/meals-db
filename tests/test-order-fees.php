@@ -142,9 +142,28 @@ class OrderFeesWpdb {
     }
     public function insert($table, $data, $formats = null) { return 1; }
     public function query($q) {
+        // U04 atomic claim: INSERT .. ON DUPLICATE KEY UPDATE on
+        // (client_id, billing_month). Emulate MySQL rows-changed semantics
+        // (WP connects without CLIENT_FOUND_ROWS): a claim on an UNCLAIMED
+        // month wins (returns 1) and tags the carrier order; a claim on an
+        // ALREADY-applied month is a conditional no-op (returns 0), which is
+        // how claim_contribution_month() detects it must NOT add a second fee.
         if (stripos($q, 'INSERT') !== false && stripos($q, 'contribution_applied') !== false) {
+            if ($this->contribution_applied === 1) {
+                return 0; // ON DUPLICATE KEY UPDATE IF(applied=0,...) is a no-op
+            }
             $this->contribution_applied = 1;
-            if (preg_match_all('/\d+/', $q, $m)) { $this->contribution_order_id = (int) end($m[0]); }
+            // contribution_order_id is the 4th VALUES(...) column (the order id).
+            if (preg_match("/VALUES\s*\(\s*\d+\s*,\s*'[^']*'\s*,\s*1\s*,\s*(\d+)\s*\)/i", $q, $m)) {
+                $this->contribution_order_id = (int) $m[1];
+            }
+            return 1;
+        }
+        // release_contribution_claim(): UPDATE .. SET contribution_applied = 0.
+        if (stripos($q, 'UPDATE') !== false && stripos($q, 'contribution_applied = 0') !== false) {
+            $this->contribution_applied = 0;
+            $this->contribution_order_id = null;
+            return 1;
         }
         return 1;
     }

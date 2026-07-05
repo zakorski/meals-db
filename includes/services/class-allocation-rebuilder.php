@@ -33,6 +33,26 @@ class MealsDB_Allocation_Rebuilder {
     /** @var MealsDB_WC_Order_Query */
     private $order_query;
 
+    /**
+     * X4 (SQL efficiency): per-instance memo caches for load_deliveries_for_months.
+     * A rebuilder instance lives only for the duration of ONE batch — every
+     * consumer does `new MealsDB_Allocation_Rebuilder()` for its run (see
+     * rebuild_all_dirty / rebuild_for_invoice / the nightly allocation sync) —
+     * and that batch never writes the products, clients, order-meta or rate rows
+     * these lookups read, so their results are stable for the instance's life.
+     * Caching collapses the nested N+1 in the loader: the same product SKU, the
+     * same (client, month) delivery schedule, and the same candidate order id all
+     * recur across the overlapping 4-month windows of adjacent dirty client-months
+     * on the nightly / invoice paths.
+     *
+     * @var array<int,int|null> wc_order_id => resolved client_id
+     */
+    private $resolved_client_cache = [];
+    /** @var array<int,array|null> wc_product_id => products row (product_type/taxable), or null when unknown. */
+    private $product_type_cache = [];
+    /** @var array<string,array> "client_id|YYYY-MM" => delivery schedule. */
+    private $schedule_cache = [];
+
     public function __construct() {
         global $wpdb;
         $this->wpdb        = $wpdb;
@@ -558,7 +578,15 @@ class MealsDB_Allocation_Rebuilder {
                 $date_hi
             ), ARRAY_A);
             foreach ((array) $candidate_orders as $co) {
-                if ($this->engine->resolve_client_id_for_order((int) $co['id']) === $client_id) {
+                $oid = (int) $co['id'];
+                // X4: resolve fires 1-4 queries and its inputs (order meta, client
+                // links, rates) are not mutated by the rebuild, so memoise per
+                // order id — the same candidate recurs across adjacent client-
+                // months' overlapping windows on the nightly / invoice paths.
+                if (!array_key_exists($oid, $this->resolved_client_cache)) {
+                    $this->resolved_client_cache[$oid] = $this->engine->resolve_client_id_for_order($oid);
+                }
+                if ($this->resolved_client_cache[$oid] === $client_id) {
                     $by_customer[] = $co;
                 }
             }
@@ -581,6 +609,31 @@ class MealsDB_Allocation_Rebuilder {
         $products_table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
         $deliveries = [];
 
+        // Legacy overage products: the OLD system injects these SKUs into
+        // orders for its own accounting. The new system must NOT count them
+        // (they would inflate mains/sides during the parallel run). We
+        // exclude by product ID — the products' meals_products rows are left
+        // intact (the old system still needs them), so this is the ONLY
+        // place they are filtered out of the new allocation count. IDs come
+        // from the canonical constants, not hardcoded here.
+        //
+        // Filter the UNION of the operator-CONFIGURED overage IDs
+        // (mealsdb_overage_product_ids, via overage_product_ids()) and the
+        // seed defaults: on installs where the operator re-pointed an
+        // overage SKU, the configured ID is what the old system now injects,
+        // while orders placed before the change still carry the seed ID —
+        // both appear within the parallel-run window and both must be
+        // excluded. Overage SKUs are never legitimate meals, so a superset
+        // filter can never under-count a real main/side.
+        //
+        // X4: this set is invariant per call — computed ONCE here as an
+        // id=>true membership map rather than rebuilt (and array_unique'd) on
+        // every order iteration as it was before.
+        $overage_ids = array_fill_keys(array_map('intval', array_merge(
+            array_values(MealsDB_Operational_Constants::overage_product_ids()),
+            array_values(MealsDB_Operational_Constants::default_overage_product_ids())
+        )), true);
+
         foreach ($orders as $o) {
             $wc_order_id = (int) $o['id'];
             $order_date  = (string) $o['order_date'];
@@ -590,35 +643,23 @@ class MealsDB_Allocation_Rebuilder {
                 continue;
             }
             $mains = 0; $tax_sides = 0; $nontax_sides = 0;
-            // Legacy overage products: the OLD system injects these SKUs into
-            // orders for its own accounting. The new system must NOT count them
-            // (they would inflate mains/sides during the parallel run). We
-            // exclude by product ID — the products' meals_products rows are left
-            // intact (the old system still needs them), so this is the ONLY
-            // place they are filtered out of the new allocation count. IDs come
-            // from the canonical constants, not hardcoded here.
-            //
-            // Filter the UNION of the operator-CONFIGURED overage IDs
-            // (mealsdb_overage_product_ids, via overage_product_ids()) and the
-            // seed defaults: on installs where the operator re-pointed an
-            // overage SKU, the configured ID is what the old system now injects,
-            // while orders placed before the change still carry the seed ID —
-            // both appear within the parallel-run window and both must be
-            // excluded. Overage SKUs are never legitimate meals, so a superset
-            // filter can never under-count a real main/side.
-            $overage_ids = array_values(array_unique(array_map('intval', array_merge(
-                array_values(MealsDB_Operational_Constants::overage_product_ids()),
-                array_values(MealsDB_Operational_Constants::default_overage_product_ids())
-            ))));
             foreach ($items as $it) {
                 $wc_pid = (int) $it['wc_product_id'];
-                if (in_array($wc_pid, $overage_ids, true)) {
+                if (isset($overage_ids[$wc_pid])) {
                     continue; // legacy overage SKU — never counted by the new system
                 }
-                $pd = $this->wpdb->get_row($this->wpdb->prepare(
-                    "SELECT product_type, taxable FROM `{$products_table}` WHERE wc_product_id = %d",
-                    $wc_pid
-                ), ARRAY_A);
+                // X4: memoise the product-type/taxable read per wc_product_id.
+                // The products table is static config the rebuild never writes,
+                // so the same SKU (the standard main/side) recurs across many
+                // orders and items and would otherwise fire an identical
+                // single-row SELECT each time — the dominant N+1 here.
+                if (!array_key_exists($wc_pid, $this->product_type_cache)) {
+                    $this->product_type_cache[$wc_pid] = $this->wpdb->get_row($this->wpdb->prepare(
+                        "SELECT product_type, taxable FROM `{$products_table}` WHERE wc_product_id = %d",
+                        $wc_pid
+                    ), ARRAY_A);
+                }
+                $pd = $this->product_type_cache[$wc_pid];
                 if (!$pd) continue;
                 $qty = (int) $it['quantity'];
                 if ($pd['product_type'] === 'meal') {
@@ -633,8 +674,16 @@ class MealsDB_Allocation_Rebuilder {
             }
 
             // Delivery date: match to the schedule for the order's month.
+            // X4: the schedule is deterministic per (client, month) and client_id
+            // is fixed for this call, so memoise it — several orders share a month
+            // and the same (client, month) recurs across adjacent dirty months'
+            // overlapping 4-month windows.
             $order_month   = substr($order_date, 0, 7);
-            $schedule      = $this->engine->calculate_delivery_schedule($client_id, $order_month);
+            $sched_key     = $client_id . '|' . $order_month;
+            if (!array_key_exists($sched_key, $this->schedule_cache)) {
+                $this->schedule_cache[$sched_key] = $this->engine->calculate_delivery_schedule($client_id, $order_month);
+            }
+            $schedule      = $this->schedule_cache[$sched_key];
             $delivery_date = $order_date;
             $coverage_end  = $order_date;
             foreach ($schedule as $delivery) {

@@ -59,13 +59,30 @@ class MealsDB_Schema_Rebuild {
 
         $schemas = MealsDB_Schema::get_canonical_schema();
         $create_order = self::determine_create_order();
-        $drop_order   = array_reverse($create_order);
+
+        // Preserve the append-only audit log across a force rebuild
+        // (U11-schema-1). run() audit-logs THIS destructive op above so a
+        // compromise or mistake is traceable — but dropping meals_audit_log
+        // would destroy that very row AND the entire compliance history the
+        // log exists to keep, letting a sanctioned UI path wipe all audit
+        // trail. Excluding it from the drop order keeps the log intact; the
+        // CREATE loop below is a no-op for it because
+        // generate_create_table_sql emits CREATE TABLE IF NOT EXISTS, so the
+        // surviving table is simply not recreated. Every OTHER plugin table
+        // is still dropped and rebuilt.
+        $drop_order = array_values(array_diff(
+            array_reverse($create_order),
+            [MealsDB_Tables::AUDIT_LOG]
+        ));
 
         $results = [
             'dropped'       => [],
             'drop_errors'   => [],
             'created'       => [],
             'create_errors' => [],
+            // Tables deliberately left in place (not dropped) so the operator
+            // sees the audit log was preserved, not silently skipped.
+            'preserved'     => [MealsDB_DB::get_table_name(MealsDB_Tables::AUDIT_LOG)],
         ];
 
         foreach ($drop_order as $table_key) {
