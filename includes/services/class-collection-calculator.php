@@ -56,20 +56,22 @@ class MealsDB_Collection_Calculator {
      *
      * Government orders settle via the program, not at the door. The
      * driver still collects the delivery fee per delivery, plus the
-     * client's monthly contribution on the first delivery of each
-     * billing month.
+     * client's monthly contribution once a month. The caller decides which
+     * delivery collects the contribution and passes $collect_contribution
+     * accordingly — the slip generator keys it off the order that carries the
+     * contribution fee line (see MealsDB_Slip_PDF_Generator::order_carries_contribution).
      *
      * @return array{collect: float, contribution_due: float, is_prepaid: bool}
      */
     public static function for_government(
         float $delivery_fee,
         float $client_contribution,
-        bool $is_first_delivery_of_month
+        bool $collect_contribution
     ): array {
         $delivery_fee        = max(0.0, $delivery_fee);
         $client_contribution = max(0.0, $client_contribution);
 
-        $contribution_due = ($is_first_delivery_of_month && $client_contribution > 0)
+        $contribution_due = ($collect_contribution && $client_contribution > 0)
             ? $client_contribution
             : 0.0;
 
