@@ -705,17 +705,24 @@ class MealsDB_Sync_Mutate {
         $result = $connection->query($connection->prepare($update_sql, $user_id, $client_id));
 
         if ($result === false) {
-            $message = $connection->last_error ?: __('Unknown database error.', 'meals-db');
+            // Route the MySQL error through redact_sql_error() like every other
+            // DB-failure path in this file (237, 433, 441, 548, 558): classic
+            // MySQL errors embed row-level values in single quotes, which can be
+            // cleartext PII that must not land in a shared error log. And surface
+            // a GENERIC message to the caller — the AJAX handler echoes
+            // WP_Error::get_error_message() straight to the browser, so the raw
+            // (even redacted) DB error must stay in the log only (audit U08-sync-services-9).
+            $redacted = self::redact_sql_error($connection->last_error ?: '');
 
             if ($transaction_started) {
                 $connection->query('ROLLBACK');
             }
 
-            error_log('[MealsDB Sync] Failed executing client link statement: ' . $message);
+            error_log('[MealsDB Sync] Failed executing client link statement: ' . $redacted);
 
             return new WP_Error(
                 'mealsdb_link_execute_failed',
-                sprintf(__('Unable to link the client to the WordPress user: %s', 'meals-db'), $message)
+                __('Unable to link the client to the WordPress user due to a database error.', 'meals-db')
             );
         }
 

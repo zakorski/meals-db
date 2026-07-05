@@ -183,6 +183,15 @@ class MealsDB_Clients_Repository {
         // an INSERT rejection. filter_to_known_columns logs anything it drops.
         $data = self::filter_to_known_columns($data);
 
+        // filter_to_known_columns now fails CLOSED (U09-clients-repo-15): an
+        // empty result means the canonical schema could not be loaded and no key
+        // could be validated. Mirror update_client's post-filter empty check so
+        // a degraded schema aborts the create rather than issuing a blank INSERT.
+        if (empty($data)) {
+            error_log('[MealsDB Clients Repository] Create aborted: no recognised columns supplied.');
+            return false;
+        }
+
         try {
             $result = $wpdb->insert($this->table_name, $data);
 
@@ -906,10 +915,23 @@ class MealsDB_Clients_Repository {
         }
 
         if (empty($allowed)) {
-            // Schema lookup failed — return as-is rather than silently
-            // dropping every column. The wpdb->update call still goes
-            // through wpdb's own escaping.
-            return $data;
+            // Fail CLOSED (U09-clients-repo-15). When the canonical schema is
+            // unavailable we CANNOT validate the caller's keys against the
+            // hardcoded column whitelist. wpdb->insert/update interpolate array
+            // keys into SQL as backticked identifiers WITHOUT escaping embedded
+            // backticks, so forwarding unvalidated keys in this degraded state
+            // inverts the plugin's documented "hardcoded whitelist before
+            // concatenation" rule. Return [] rather than $data — create_client
+            // and update_client both treat empty data as a hard write failure —
+            // so an unvalidated key can never reach identifier position. The
+            // previous fail-open behavior only mattered when the schema lookup
+            // was already broken; failing the write is the safe choice there.
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error(
+                    '[MealsDB Repository] filter_to_known_columns could not load the canonical schema; failing closed (rejecting the write).'
+                );
+            }
+            return [];
         }
 
         $unknown_keys = array_keys(array_diff_key($data, $allowed));

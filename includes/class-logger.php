@@ -15,7 +15,8 @@ class MealsDB_Logger {
      * Log an error message to the error log with a Meals DB prefix.
      *
      * Replaces long base64-looking blobs and obvious PII fragments
-     * (emails, NANP phone numbers, 9+-digit government-ID runs, and
+     * (emails, NANP phone numbers, 9+-digit government-ID runs — bare or
+     * 3-3-3 separator-grouped like a "123-456-789" SIN — and
      * encrypted-payload-shaped strings) with fingerprints so server error
      * logs (often world-readable on shared hosts) don't leak ciphertext,
      * names, or contact details when callers helpfully pass through
@@ -62,6 +63,29 @@ class MealsDB_Logger {
             static function ($m) {
                 $digits = preg_replace('/\D/', '', $m[0]);
                 return '[phone:' . substr(hash('sha256', (string) $digits), 0, 8) . ']';
+            },
+            $message
+        );
+        if ($step === null || preg_last_error() !== PREG_NO_ERROR) {
+            return '[REDACTED — log scrubber regex failed]';
+        }
+        $message = $step;
+
+        // Replace separator-grouped 9-digit government IDs (SIN / health-card in
+        // the common 3-3-3 form: "123-456-789", "123 456 789", "123.456.789")
+        // with a fingerprint. The bare-run pass below requires an UNBROKEN run of
+        // >= 9 digits, so a hyphen/space/dot-grouped ID slipped every pass and
+        // reached world-readable logs + the failure-digest email verbatim. Run
+        // this BEFORE the bare-run pass and fingerprint the digits-only form
+        // (strip separators first, like the phone pass) so the same ID hashes
+        // identically however it was formatted — and matches the bare-run
+        // fingerprint for the same digits. Phones (10-digit 3-3-4) were already
+        // fingerprinted above and can't match this 3-3-3 shape.
+        $step = preg_replace_callback(
+            '/(?<!\d)\d{3}[-. ]\d{3}[-. ]\d{3}(?!\d)/',
+            static function ($m) {
+                $digits = preg_replace('/\D/', '', $m[0]);
+                return '[id:' . substr(hash('sha256', (string) $digits), 0, 8) . ']';
             },
             $message
         );
@@ -258,15 +282,20 @@ class MealsDB_Logger {
         // Audit rows include fingerprints of PII changes. Even with the
         // redaction in log(), a reader who can correlate many
         // [redacted:sha256=abcdef] fingerprints against known-value
-        // candidates can still rainbow-match them. Gate the read so
-        // only users who can reach the plugin's admin surface can
-        // retrieve the audit log — a low-privilege caller reaching
-        // this method directly (future REST endpoint, CLI consumer
-        // forgetting to gate) shouldn't trivially enumerate the
-        // whole audit trail.
+        // candidates can still rainbow-match them. Gate the read to
+        // manage_options — matching the ONLY consumer, the Event Log page
+        // (class-event-log-page.php), which deliberately requires
+        // manage_options because "operational logs can name clients and
+        // orders, so keep the audience tight" (CLAUDE.md calls the audit
+        // log "sensitive to read"). The prior baseline (can_access_plugin
+        // → manage_woocommerce) was one tier weaker than its own consumer,
+        // so a future baseline-capability caller (REST route, report widget)
+        // hitting this method directly could enumerate 200 audit rows below
+        // the tier the operator chose for the same data. Keep the
+        // function_exists guard so CLI/test contexts (no capability API)
+        // aren't blocked.
         if (function_exists('current_user_can')
-            && class_exists('MealsDB_Permissions')
-            && !MealsDB_Permissions::can_access_plugin()) {
+            && !current_user_can('manage_options')) {
             return [];
         }
 

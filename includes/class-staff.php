@@ -213,6 +213,21 @@ class MealsDB_Staff {
 
         $staff_id = isset($_POST['staff_id']) ? absint($_POST['staff_id']) : 0;
 
+        // Pattern 1 (CLAUDE.md): the form-handler layer carries nonce +
+        // capability + rate limit. enforce() and check_admin_referer() above
+        // cover the first two; this is the missing third leg. A staff save is
+        // a low-frequency admin action, so the shared settings_modify bucket
+        // (20/hour) is the right ceiling to cap a runaway script/loop before
+        // it reaches the DB write. class_exists-guarded so CLI/test contexts
+        // without the limiter still run; the limiter itself fails CLOSED for
+        // mutating actions when its backend is unavailable.
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('settings_modify')) {
+            self::add_notice('error', __('Rate limit exceeded. Please try again later.', 'meals-db'));
+            wp_safe_redirect(self::get_form_redirect_url($mode, $staff_id));
+            exit;
+        }
+
         $first_name = isset($_POST['first_name']) ? sanitize_text_field(wp_unslash($_POST['first_name'])) : '';
         $last_name = isset($_POST['last_name']) ? sanitize_text_field(wp_unslash($_POST['last_name'])) : '';
         $email = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';

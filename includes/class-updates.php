@@ -251,6 +251,24 @@ class MealsDB_Updates {
      * @return array<string, mixed>|WP_Error
      */
     public static function fetch_products_from_woocommerce() {
+        // Service-layer capability re-check (defense in depth, layer 3). This
+        // INSERTs rows into the meals products table; its three sibling methods
+        // (check_for_updates / pull_updates / run_database_maintenance) all carry
+        // this guard, but this one had none — only a function_exists() check. The
+        // sole current caller (class-ajax-sync.php) gates with nonce +
+        // can_access_plugin() + rate limit, but a future WP-CLI/REST caller that
+        // bypasses the AJAX handler must not reach the write ungated (U12-bootstrap-4).
+        // Baseline tier (can_access_plugin) because this is product CRUD, not a
+        // manage_options operation like the siblings.
+        if (!is_user_logged_in()
+            || !class_exists('MealsDB_Permissions')
+            || !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error(
+                'mealsdb_forbidden',
+                __('You do not have permission to synchronize products.', 'meals-db')
+            );
+        }
+
         if (!function_exists('wc_get_products')) {
             return new WP_Error(
                 'mealsdb_woocommerce_missing',

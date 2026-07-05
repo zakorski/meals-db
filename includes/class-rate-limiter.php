@@ -170,17 +170,20 @@ class MealsDB_Rate_Limiter {
             // counter. The previous order had a window where the counter
             // could be cleared while the old timeout still pointed at the
             // past, letting subsequent increments grow unbounded.
+            // Row-alias form (INSERT ... AS new): VALUES(col) in ON DUPLICATE KEY
+            // UPDATE is deprecated as of MySQL 8.0.20; new.col is the equivalent
+            // replacement (needs MySQL 8.0.19+, deployment target is MySQL 8.x).
             $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$wpdb->options} (option_name, option_value, autoload)
-                 VALUES (%s, %s, 'no')
-                 ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)",
+                 VALUES (%s, %s, 'no') AS new
+                 ON DUPLICATE KEY UPDATE option_value = new.option_value",
                 $timeout_key,
                 (string) $expiry
             ));
             $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$wpdb->options} (option_name, option_value, autoload)
-                 VALUES (%s, %s, 'no')
-                 ON DUPLICATE KEY UPDATE option_value = VALUES(option_value)",
+                 VALUES (%s, %s, 'no') AS new
+                 ON DUPLICATE KEY UPDATE option_value = new.option_value",
                 $option_name,
                 '0'
             ));

@@ -463,9 +463,17 @@ class MealsDB_Event_Log {
         if (is_array($value)) {
             $out = [];
             foreach ($value as $k => $v) {
-                if (is_string($k) && self::is_sensitive_key($k) && (is_string($v) || is_numeric($v))) {
-                    $sval = (string) $v;
-                    $out[$k] = $sval === '' ? $sval : '[redacted:sha256=' . substr(hash('sha256', $sval), 0, 12) . ']';
+                if (is_string($k) && self::is_sensitive_key($k)) {
+                    if (is_string($v) || is_numeric($v)) {
+                        $sval = (string) $v;
+                        $out[$k] = $sval === '' ? $sval : '[redacted:sha256=' . substr(hash('sha256', $sval), 0, 12) . ']';
+                    } else {
+                        // A sensitive key holding an array/object must NOT fall through to
+                        // recursion: sanitize_for_log only catches emails/phones/9+digit IDs/blobs,
+                        // not free-text PII (names, streets, postal codes, diet-note prose). Redact
+                        // the whole value so nothing under a sensitive key reaches the trunk raw.
+                        $out[$k] = '[redacted:non-scalar]';
+                    }
                     continue;
                 }
                 $out[$k] = self::scrub_context($v, $depth + 1);

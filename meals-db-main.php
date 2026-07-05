@@ -322,6 +322,21 @@ add_action('admin_notices', function () {
     $opts = get_option('mealsdb_settings', []);
     $key  = is_array($opts) && !empty($opts['encryption_key']) ? (string) $opts['encryption_key'] : '';
 
+    // Only reveal the LIVE key on the plugin's own Settings screen
+    // (admin.php?page=mealsdb&tab=settings) — the one place the operator can
+    // already see it (the encryption_key field in views/settings.php). This
+    // admin_notices hook fires on EVERY wp-admin page; echoing the secret into
+    // the DOM of unrelated pages (dashboard, posts, plugins, …) needlessly
+    // widened its exposure to browser extensions with page-read access, support
+    // screenshots/screen shares, and page caches. Everywhere else we render the
+    // placeholder line only; the migration guidance itself is unchanged.
+    $on_settings_screen = false;
+    if (isset($_GET['page'])) {
+        $current_page = sanitize_key(wp_unslash((string) $_GET['page']));
+        $current_tab  = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : '';
+        $on_settings_screen = ($current_page === 'mealsdb' && $current_tab === 'settings');
+    }
+
     echo '<div class="notice notice-warning"><p><strong>';
     echo esc_html__('Meals Database: encryption key is stored in wp_options.', 'meals-db');
     echo '</strong></p><p>';
@@ -330,7 +345,7 @@ add_action('admin_notices', function () {
         'meals-db'
     );
     echo '</p><p><code>';
-    if ($key !== '') {
+    if ($on_settings_screen && $key !== '') {
         echo "define('MEALS_DB_KEY', '" . esc_html($key) . "');";
     } else {
         echo "define('MEALS_DB_KEY', 'base64:YOUR_KEY_HERE');";

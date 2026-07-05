@@ -1677,7 +1677,10 @@ class MealsDB_Admin_UI {
         ];
 
         $case_management_fields = [
-            '__attributes' => 'data-client-type="sdnb,veteran"',
+            // Typed-array form: render_field_group emits each entry as
+            // name="esc_attr(value)". The bare-string form is no longer
+            // accepted (kses does not sanitise a bare attribute fragment).
+            '__attributes' => ['data-client-type' => 'sdnb,veteran'],
             static function (array $client) {
                 ?>
                 <tr>
@@ -1712,7 +1715,7 @@ class MealsDB_Admin_UI {
         ];
 
         $requisition_fields = [
-            '__attributes' => 'data-client-type="sdnb"',
+            '__attributes' => ['data-client-type' => 'sdnb'],
             static function (array $client) {
                 ?>
                 <tr>
@@ -1732,7 +1735,7 @@ class MealsDB_Admin_UI {
         ];
 
         $sdnb_program_fields = [
-            '__attributes' => 'data-client-type="sdnb"',
+            '__attributes' => ['data-client-type' => 'sdnb'],
             static function (array $client) {
                 ?>
                 <tr>
@@ -1784,7 +1787,7 @@ class MealsDB_Admin_UI {
         ];
 
         $veteran_fields = [
-            '__attributes' => 'data-client-type="veteran"',
+            '__attributes' => ['data-client-type' => 'veteran'],
             static function (array $client) {
                 ?>
                 <tr data-required-for="veteran">
@@ -2195,12 +2198,20 @@ class MealsDB_Admin_UI {
         $attributes = $fields['__attributes'] ?? '';
         unset($fields['__before'], $fields['__after'], $fields['__attributes']);
 
-        // __attributes is today always hardcoded inside this file (e.g.
-        // data-client-type="sdnb"), but run any string through
-        // wp_kses_data + esc_attr-safe filtering to protect future
-        // callers that might feed user-controlled data through. The
-        // typed-array branch is preferred and avoids the free-form
-        // string path entirely.
+        // __attributes MUST be the typed-array form (e.g.
+        // ['data-client-type' => 'sdnb']). Each entry is emitted as
+        // name="esc_attr(value)" with the name reduced to an HTML-attribute
+        // charset, so a caller can never break out of the attribute or inject
+        // an event handler through a value.
+        //
+        // A free-form STRING is deliberately NOT rendered. The previous code
+        // ran the string through wp_kses_data and claimed that made it safe
+        // for "future callers that might feed user-controlled data through" —
+        // that claim was WRONG. wp_kses_data only filters <tag> constructs; a
+        // bare attribute fragment like onmouseover="alert(1)" contains no tag,
+        // passes through unchanged, and would be concatenated live into the
+        // <div> below. All in-file callers now pass the array form, so any
+        // non-array value is dropped rather than echoed unsanitised.
         if (is_array($attributes)) {
             $attributes_html = '';
             foreach ($attributes as $attr_name => $attr_value) {
@@ -2214,8 +2225,6 @@ class MealsDB_Admin_UI {
                 $attributes_html .= ' ' . $attr_name . '="' . esc_attr((string) $attr_value) . '"';
             }
             $attributes = $attributes_html;
-        } elseif (is_string($attributes) && $attributes !== '') {
-            $attributes = ' ' . wp_kses_data(trim($attributes));
         } else {
             $attributes = '';
         }
