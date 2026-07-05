@@ -12,18 +12,36 @@
 (function(window) {
     'use strict';
 
-    // Prefer the shared MealsDBReport.esc (STR-2 consolidation); fall back to an
-    // identical DOM round-trip. Both escape & < > (the text-context vectors);
-    // neither escapes quotes — unchanged from this file's prior behaviour for
-    // the attribute interpolations below.
+    // Attribute-safe HTML escaper. Escapes & < > AND both quote characters, so
+    // one helper is safe in BOTH text contexts and the many double-quoted
+    // attribute interpolations below (value="..." / data-*="...").
+    //
+    // SECURITY (was a high-severity XSS): the previous version escaped only
+    // & < > and left quotes intact, matching MealsDBReport.esc / the DOM
+    // round-trip. Field values are interpolated raw into value="..." attributes,
+    // and a task-payload value can carry a double-quote — e.g. a WooCommerce
+    // customer's name flows through private intake (which bypasses the
+    // client-form validator) and is substituted verbatim by
+    // MealsDB_Task_Rules::apply_placeholders. A value like `" onfocus=...
+    // autofocus="` would break out of the attribute and run script in the
+    // admin's session. Encoding quotes here closes that; it is harmless in text
+    // contexts because the browser decodes the entities on render and on
+    // input.value / getAttribute read-back (so collect() still round-trips).
     function esc(str) {
         if (str === null || typeof str === 'undefined') return '';
+        var base;
         if (window.MealsDBReport && typeof window.MealsDBReport.esc === 'function') {
-            return window.MealsDBReport.esc(str);
+            base = window.MealsDBReport.esc(str);
+        } else {
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(String(str)));
+            base = div.innerHTML;
         }
-        var div = document.createElement('div');
-        div.appendChild(document.createTextNode(String(str)));
-        return div.innerHTML;
+        // MealsDBReport.esc and the DOM round-trip both encode & < > but NOT
+        // quotes; add the attribute-context quote escaping on top. (If a future
+        // MealsDBReport.esc already encodes quotes, there are no raw quotes left
+        // to match, so this stays correct with no double-encoding.)
+        return base.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function resolveItemsFrom(path, payload) {

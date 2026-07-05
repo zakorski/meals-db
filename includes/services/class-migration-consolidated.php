@@ -1131,11 +1131,13 @@ class MealsDB_Migration_Consolidated {
      * Private rows. Promotion + field mapping are delegated to
      * MealsDB_Private_Intake (the same code path the live order hook uses).
      *
-     * Chunking model: we resolve the full eligibility list once (it's a
-     * single grouped query) and slice it by $offset. enrich_existing runs
-     * in the SAME phase after promotion completes, gated on the slice so we
-     * don't re-scan all Private clients every chunk — it runs only on the
-     * final chunk (when the promotion slice is the last one).
+     * Chunking model: private_preview() is a self-clearing set on LIVE runs
+     * (promoting a user removes them from the next call's result), so — like
+     * run_phase_create_rates — the cursor advances only past users we could
+     * NOT promote, not by a flat BATCH_SIZE, otherwise a shrinking list under
+     * a moving offset silently skips users. Dry runs promote nobody, so they
+     * page with the incoming $offset. enrich_existing runs in the SAME phase
+     * after promotion, only on the final chunk.
      *
      * @param array<string,mixed> $args { lookback_months?: int }
      */
@@ -1184,12 +1186,36 @@ class MealsDB_Migration_Consolidated {
             }
         }
 
-        $complete = ($offset + self::BATCH_SIZE) >= $total;
+        if ($dry_run) {
+            // A dry run promotes nobody, so private_preview() never shrinks:
+            // page with the incoming $offset exactly as the generic driver
+            // expects, and finish when the cursor passes the fixed total.
+            $next_offset = $offset + self::BATCH_SIZE;
+            $complete    = $next_offset >= $total;
+        } else {
+            // PAGINATION FIX (was a high-severity bug): a LIVE promotion
+            // removes that user from private_preview() on the next call
+            // (get_all_wp_user_ids() then includes them), so the eligible list
+            // shrinks by 'promoted' every chunk. The original advanced $offset
+            // by BATCH_SIZE against that shrinking list, stepping over ~one
+            // batch of users per chunk and ending early against the shrunken
+            // $total — e.g. 250 eligible yielded only ~150 promoted, silently.
+            // This mirrors the phase-2 self-clearing-set fix: advance the
+            // cursor ONLY past the users we could not promote (skipped/errors);
+            // successfully promoted users fall out of the list on their own, so
+            // the next chunk's fixed window pulls fresh users while
+            // unpromotable ones can't wedge the cursor. Done when the cursor
+            // passes the shrinking tail. Every eligible user is attempted once.
+            $stuck       = $stats['skipped'] + $stats['errors'];
+            $next_offset = $offset + $stuck;
+            $complete    = $next_offset >= $total;
+        }
 
         // On the final chunk, run the enrichment pass over existing Private
         // rows (fill-only, per-field nullity, delegates field mapping to
         // Private_Intake::build_field_payload). enrich_existing is a single
-        // pass; fold its stats into this phase.
+        // pass; fold its stats into this phase. (Computed AFTER the cursor
+        // decision above so enrich's skipped-count can't perturb $stuck.)
         if ($complete) {
             $enrich = self::enrich_existing($dry_run);
             $stats['enriched'] += (int) ($enrich['enriched'] ?? 0);
@@ -1199,7 +1225,7 @@ class MealsDB_Migration_Consolidated {
 
         return [
             'stats'    => $stats,
-            'offset'   => $offset + self::BATCH_SIZE,
+            'offset'   => $next_offset,
             'total'    => max($total, 1),
             'complete' => $complete,
         ];
@@ -1339,10 +1365,19 @@ class MealsDB_Migration_Consolidated {
                         $allocated_orders[$order_id] = true;
                         $stats['orders_processed']++;
 
-                        self::cleanup_finalized_spillover(
-                            $wpdb, $delivery_alloc_table, $allocations_table,
-                            $order_id, $client_id, $finalized_set
-                        );
+                        // NOTE: cleanup_finalized_spillover was removed here
+                        // (was a high-severity bug). It was written for the old
+                        // synchronous allocate_order that WROTE delivery rows
+                        // during this phase; it deleted any row that landed in a
+                        // finalized month. allocate_order is now mark-dirty-only
+                        // (writes zero delivery_allocations rows), so every row
+                        // that helper could match was PRE-EXISTING, submitted
+                        // invoice detail — deleting it corrupted finalized
+                        // months (summary kept its counts, detail vanished),
+                        // breaking the LB-3 immutability invariant. The post-LB-3
+                        // rebuilder already refuses to write into finalized
+                        // months, so the guard is enforced where rows are
+                        // actually written; no per-order cleanup is needed here.
                     }
                 }
 
@@ -1542,58 +1577,6 @@ class MealsDB_Migration_Consolidated {
     }
 
     /**
-     * Remove delivery-allocation rows just written into a finalized month.
-     * Ported from MealsDB_Backfill_Allocations_Engine::cleanup_finalized_spillover.
-     *
-     * @param wpdb                 $wpdb
-     * @param array<string,bool>   $finalized_set
-     */
-    private static function cleanup_finalized_spillover(
-        $wpdb,
-        string $delivery_alloc_table,
-        string $allocations_table,
-        int $order_id,
-        int $client_id,
-        array $finalized_set
-    ): void {
-        // No finalized months at all => nothing to clean (avoids a per-order
-        // SELECT on virgin databases). Matches the original short-circuit.
-        if (empty($finalized_set)) {
-            return;
-        }
-
-        // The delivery-allocation table keys the order as wc_order_id.
-        $alloc_months = $wpdb->get_col($wpdb->prepare(
-            "SELECT DISTINCT billing_month FROM {$delivery_alloc_table}
-             WHERE wc_order_id = %d AND client_id = %d",
-            $order_id, $client_id
-        ));
-
-        if (!is_array($alloc_months)) {
-            return;
-        }
-
-        foreach ($alloc_months as $alloc_month) {
-            $key = $client_id . ':' . $alloc_month;
-            if (isset($finalized_set[$key])) {
-                $wpdb->delete(
-                    $delivery_alloc_table,
-                    [
-                        'wc_order_id'   => $order_id,
-                        'client_id'     => $client_id,
-                        'billing_month' => $alloc_month,
-                    ],
-                    ['%d', '%d', '%s']
-                );
-                error_log(sprintf(
-                    '[MealsDB Consolidated] Removed spillover rows for order %d into finalized month %s (client %d).',
-                    $order_id, $alloc_month, $client_id
-                ));
-            }
-        }
-    }
-
-    /**
      * Run the next-dates phase to completion in one call, returning a
      * single accumulated stats array. Retained for the settings-page
      * single-shot button (the old MealsDB_Backfill_Next_Dates::run()
@@ -1694,6 +1677,7 @@ class MealsDB_Migration_Consolidated {
               AND o.date_created_gmt >= %s
               AND TRIM(COALESCE(a.address_1, '')) <> ''
             GROUP BY o.customer_id
+            ORDER BY o.customer_id ASC
         ";
 
         $params   = $active_statuses;
