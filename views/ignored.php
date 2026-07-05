@@ -137,29 +137,15 @@ unset($item);
     <?php endif; ?>
 </div>
 
-<script>
-jQuery(document).ready(function($) {
-    $('.unignore-btn').on('click', function() {
-        const $btn = $(this);
-        const rowId = $btn.data('id');
-        const field = $btn.data('field');
-        const source = $btn.data('source');
-        const target = $btn.data('target');
-
-        $.post(ajaxurl, {
-            action: 'mealsdb_toggle_ignore',
-            nonce: '<?php echo esc_js(wp_create_nonce("mealsdb_nonce")); ?>',
-            field: field,
-            source: source,
-            target: target,
-            ignored: false
-        }, function(response) {
-            if (response.success) {
-                $('#ignore-row-' + rowId).fadeOut();
-            } else {
-                alert('Failed to unignore.');
-            }
-        });
-    });
-});
-</script>
+<?php
+// Server data for assets/js/ignored.js. The inline unignore-button script
+// was extracted per the CLAUDE.md ban on inline logic blocks > 20 lines;
+// the nonce and user-facing fail string travel via this JSON island so the
+// JS carries no PHP interpolation. JSON_HEX_* keeps it safe in a <script>.
+$island_data = [
+    'nonce'       => wp_create_nonce('mealsdb_nonce'),
+    'ajaxUrl'     => admin_url('admin-ajax.php'),
+    'failMessage' => __('Failed to unignore.', 'meals-db'),
+];
+?>
+<script type="application/json" id="mealsdb-ignored-data"><?php echo wp_json_encode($island_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>

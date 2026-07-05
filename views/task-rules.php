@@ -119,92 +119,20 @@ $base_url = admin_url('admin.php?page=mealsdb&tab=tasks');
     <div id="mealsdb-rules-status" class="notice" style="display:none;margin-top:12px;"></div>
 </div>
 
-<script>
-(function($) {
-    'use strict';
-    var nonce   = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
-    var ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
-
-    function setStatus(msg, type) {
-        var $s = $('#mealsdb-rules-status');
-        $s.removeClass('notice-success notice-error notice-warning').addClass('notice-' + (type || 'info'));
-        $s.empty().append($('<p>').text(msg)).show(); // .text() — never inject server msg as HTML
-    }
-
-    $('#mealsdb-rule-form').on('submit', function(e) {
-        e.preventDefault();
-
-        var payload = { action: 'mealsdb_rules_create', nonce: nonce };
-        payload.name = $('#mealsdb-rule-name').val();
-        payload.task_type = $('#mealsdb-rule-type').val();
-        payload.spawn_type = $('#mealsdb-rule-spawn').val();
-
-        try {
-            payload.recurrence = $('#mealsdb-rule-recurrence').val();
-            JSON.parse(payload.recurrence);
-            payload.payload_template = $('#mealsdb-rule-payload').val();
-            JSON.parse(payload.payload_template);
-            var criteria = $('#mealsdb-rule-criteria').val().trim();
-            if (criteria) {
-                JSON.parse(criteria);
-                payload.query_criteria = criteria;
-            }
-        } catch (err) {
-            setStatus('Invalid JSON: ' + err.message, 'error');
-            return;
-        }
-
-        var tagsRaw = $('#mealsdb-rule-tags').val().trim();
-        if (tagsRaw) {
-            payload.tags = JSON.stringify(tagsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean));
-        }
-        var role = $('#mealsdb-rule-role').val();
-        if (role) payload.assignee_role = role;
-
-        $.post(ajaxUrl, payload).done(function(resp) {
-            if (resp && resp.success) {
-                window.location.reload();
-            } else {
-                setStatus((resp && resp.data && resp.data.message) || 'Create failed.', 'error');
-            }
-        }).fail(function() {
-            setStatus('Create failed.', 'error');
-        });
-    });
-
-    $(document).on('click', '.mealsdb-rule-run-now', function() {
-        var id = $(this).data('rule-id');
-        $.post(ajaxUrl, {
-            action: 'mealsdb_rules_run_now',
-            nonce: nonce,
-            rule_id: id
-        }).done(function(resp) {
-            if (resp && resp.success) {
-                setStatus('Created ' + (resp.data.created || 0) + ' tasks.', 'success');
-            } else {
-                setStatus('Run-now failed.', 'error');
-            }
-        }).fail(function() {
-            setStatus('Run-now failed.', 'error');
-        });
-    });
-
-    $(document).on('click', '.mealsdb-rule-delete', function() {
-        if (!confirm('<?php echo esc_js(__('Delete this rule? Existing spawned tasks will remain.', 'meals-db')); ?>')) return;
-        var id = $(this).data('rule-id');
-        $.post(ajaxUrl, {
-            action: 'mealsdb_rules_delete',
-            nonce: nonce,
-            rule_id: id
-        }).done(function(resp) {
-            if (resp && resp.success) {
-                window.location.reload();
-            } else {
-                setStatus('Delete failed.', 'error');
-            }
-        }).fail(function() {
-            setStatus('Delete failed.', 'error');
-        });
-    });
-})(jQuery);
-</script>
+<?php
+// Server data for assets/js/task-rules.js. JSON island (not esc_js) — the
+// JSON_HEX_* flags neutralise <, >, &, ', " so it is safe inside <script>.
+$island_data = array(
+    'nonce'   => wp_create_nonce('mealsdb_nonce'),
+    'ajaxUrl' => admin_url('admin-ajax.php'),
+    'i18n'    => array(
+        'confirmDelete' => __('Delete this rule? Existing spawned tasks will remain.', 'meals-db'),
+        'invalidJson'   => __('Invalid JSON: %s', 'meals-db'),
+        'createFailed'  => __('Create failed.', 'meals-db'),
+        'created'       => __('Created %d tasks.', 'meals-db'),
+        'runNowFailed'  => __('Run-now failed.', 'meals-db'),
+        'deleteFailed'  => __('Delete failed.', 'meals-db'),
+    ),
+);
+?>
+<script type="application/json" id="mealsdb-task-rules-data"><?php echo wp_json_encode($island_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>

@@ -67,6 +67,81 @@ class MealsDB_Admin_UI {
     }
 
     /**
+     * Register the shared report-utils helper (window.MealsDBReport: esc, fmt,
+     * csvCell, csvRow, exportCsv, showStatus) and return its handle, so any
+     * admin page can declare it as a dependency. Extracted view scripts that
+     * reuse the shared escaper / CSV export depend on this handle instead of
+     * hand-rolling their own copies.
+     */
+    public static function register_report_utils_script(): string {
+        $handle = 'mealsdb-report-utils';
+        if (!wp_script_is($handle, 'registered')) {
+            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/report-utils.js';
+            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
+            wp_register_script(
+                $handle,
+                MEALS_DB_PLUGIN_URL . 'assets/js/report-utils.js',
+                ['jquery'],
+                $version,
+                true
+            );
+        }
+
+        return $handle;
+    }
+
+    /**
+     * Enqueue the extracted per-tab view scripts on the main plugin page.
+     *
+     * Each of these was previously a large inline <script> block inside the
+     * matching view (CLAUDE.md bans inline logic blocks > 20 lines). The view
+     * now emits a <script type="application/json"> data island and the enqueued
+     * file reads it by element id, so nothing here needs wp_add_inline_script.
+     * Gated per tab/action so only the visible view's script loads.
+     */
+    private function enqueue_tab_view_scripts(string $tab, string $action): void {
+        $enqueue = static function (string $slug, array $extra_deps = []): void {
+            $path = MEALS_DB_PLUGIN_DIR . 'assets/js/' . $slug . '.js';
+            if (!file_exists($path)) {
+                return;
+            }
+            wp_enqueue_script(
+                'mealsdb-view-' . $slug,
+                MEALS_DB_PLUGIN_URL . 'assets/js/' . $slug . '.js',
+                array_merge(['jquery'], $extra_deps),
+                filemtime($path),
+                true
+            );
+        };
+
+        switch ($tab) {
+            case 'drafts':
+                $enqueue('drafts');
+                break;
+            case 'ignored':
+                $enqueue('ignored');
+                break;
+            case 'slips':
+                $enqueue('daily-slips', [self::register_report_utils_script()]);
+                break;
+            case 'po':
+                $enqueue('purchase-order', [self::register_report_utils_script()]);
+                break;
+            case 'tasks':
+                if ($action === 'detail') {
+                    // task-form.js (handle mealsdb-task-form) is already enqueued
+                    // for the tasks tab; task-detail.js renders through it.
+                    $enqueue('task-detail', ['mealsdb-task-form']);
+                } elseif ($action === 'rules') {
+                    $enqueue('task-rules');
+                } else {
+                    $enqueue('tasks-list');
+                }
+                break;
+        }
+    }
+
+    /**
      * Register admin hooks for menus and assets.
      */
     public function register_hooks(): void {
@@ -602,6 +677,11 @@ class MealsDB_Admin_UI {
         // and share a single implementation of the CSV-quoting rules
         // via assets/js/report-utils.js.
         $this->enqueue_report_scripts($tab);
+
+        // Extracted per-tab view scripts (drafts, ignored, daily-slips,
+        // purchase-order, tasks list/detail/rules) — replaces the inline
+        // <script> blocks those views used to carry.
+        $this->enqueue_tab_view_scripts($tab, $action);
     }
 
     /**
@@ -618,9 +698,11 @@ class MealsDB_Admin_UI {
      * sub-tabs switch between them client-side / via ?sub=).
      */
     private function enqueue_reports_page_scripts(): void {
-        // Private Sales uses inline JS in its view (ajaxurl + own nonce), so
-        // it only needs jQuery present. Fee Reconciliation and Order Errors
-        // have dedicated JS files enqueued below with report-utils.
+        // Fee Reconciliation, Order Errors, Spillover, and Private Sales each
+        // have a dedicated JS file enqueued below with report-utils. Private
+        // Sales reads its nonce + i18n from a JSON data island its view emits
+        // (window.mealsdb is not present on the Reports page), so it takes no
+        // wp_add_inline_script here.
         wp_enqueue_script('jquery');
 
         $report_utils_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/report-utils.js';
@@ -632,6 +714,19 @@ class MealsDB_Admin_UI {
             $report_utils_version,
             true
         );
+
+        // Private Sales: data comes from the view's JSON island, not inline
+        // config — so it is enqueued here rather than in the $bundles loop.
+        $private_sales_path = MEALS_DB_PLUGIN_DIR . 'assets/js/private-sales.js';
+        if (file_exists($private_sales_path)) {
+            wp_enqueue_script(
+                'mealsdb-view-private-sales',
+                MEALS_DB_PLUGIN_URL . 'assets/js/private-sales.js',
+                ['jquery', 'mealsdb-report-utils'],
+                filemtime($private_sales_path),
+                true
+            );
+        }
 
         $bundles = [
             'mealsdb-fee-reconciliation' => [

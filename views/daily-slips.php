@@ -71,105 +71,21 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
     <div id="mealsdb-slip-status" class="notice" style="display:none;"></div>
 </div>
 
-<script>
-(function($) {
-    'use strict';
-
-    var nonce = '<?php echo esc_js(wp_create_nonce('mealsdb_nonce')); ?>';
-
-    // Mode toggle visibility.
-    $('input[name="slip-mode"]').on('change', function() {
-        if ($(this).val() === 'zone') {
-            $('#mealsdb-zone-controls').show();
-            $('#mealsdb-day-controls').hide();
-        } else {
-            $('#mealsdb-zone-controls').hide();
-            $('#mealsdb-day-controls').show();
-        }
-    });
-
-    // All Zones quick-select.
-    $('#mealsdb-select-all-zones').on('click', function() {
-        $('#mealsdb-zone-select option').prop('selected', true);
-    });
-
-    function getMode() {
-        return $('input[name="slip-mode"]:checked').val();
-    }
-
-    function showStatus(msg, type) {
-        $('#mealsdb-slip-status').show()
-            .removeClass('notice-info notice-success notice-error notice-warning')
-            .addClass('notice-' + type).empty().append($('<p>').text(msg)); // .text() — no HTML injection
-    }
-
-    // Submit a hidden form so the browser handles the binary PDF
-    // download instead of trying to parse it as JSON in-tab.
-    function submitDownloadForm(action, fields) {
-        var $form = $('<form>', {
-            method: 'POST',
-            action: ajaxurl,
-            target: '_self'
-        });
-        $form.append($('<input>', { type: 'hidden', name: 'action', value: action }));
-        $form.append($('<input>', { type: 'hidden', name: 'nonce',  value: nonce }));
-        $.each(fields, function(name, value) {
-            if (Array.isArray(value)) {
-                value.forEach(function(item) {
-                    $form.append($('<input>', { type: 'hidden', name: name + '[]', value: item }));
-                });
-            } else {
-                $form.append($('<input>', { type: 'hidden', name: name, value: value }));
-            }
-        });
-        // .trigger('submit') rather than the deprecated .submit() shorthand
-        // (JQMIGRATE warns on jQuery.fn.submit() as an event-binding alias).
-        $form.appendTo('body').trigger('submit').remove();
-    }
-
-    function buildRequestForMode(kind) {
-        var mode = getMode();
-        var fields = {};
-        var action;
-
-        if (mode === 'zone') {
-            var zones = $('#mealsdb-zone-select').val();
-            var start = $('#mealsdb-zone-start').val();
-            var end   = $('#mealsdb-zone-end').val();
-            if (!zones || !zones.length) {
-                showStatus('Please select at least one zone.', 'warning');
-                return null;
-            }
-            if (!start || !end) {
-                showStatus('Please select a start and end date.', 'warning');
-                return null;
-            }
-            action = (kind === 'packer') ? 'mealsdb_zone_packer_pdf' : 'mealsdb_zone_driver_pdf';
-            fields.zones      = zones;
-            fields.start_date = start;
-            fields.end_date   = end;
-        } else {
-            var date = $('#mealsdb-slip-date').val();
-            if (!date) {
-                showStatus('Please select a date.', 'warning');
-                return null;
-            }
-            action = (kind === 'packer') ? 'mealsdb_packer_pdf' : 'mealsdb_driver_pdf';
-            fields.delivery_date = date;
-        }
-
-        return { action: action, fields: fields };
-    }
-
-    function generate(kind) {
-        var req = buildRequestForMode(kind);
-        if (!req) return;
-
-        showStatus('Generating PDF — your download will start shortly.', 'info');
-        submitDownloadForm(req.action, req.fields);
-    }
-
-    $('#mealsdb-gen-packer-pdf').on('click', function() { generate('packer'); });
-    $('#mealsdb-gen-driver-pdf').on('click', function() { generate('driver'); });
-})(jQuery);
-</script>
+<?php
+// Server data for assets/js/daily-slips.js. The inline behaviour script was
+// extracted per CLAUDE.md (no inline <script> logic blocks > 20 lines); the
+// nonce, ajax URL, and translated status strings the script interpolated from
+// PHP now travel through this JSON island. JSON_HEX_* makes it safe inside the
+// <script> tag — do NOT use esc_js here (this is JSON data, not JS source).
+$daily_slips_data = array(
+    'nonce'   => wp_create_nonce('mealsdb_nonce'),
+    'ajaxUrl' => admin_url('admin-ajax.php'),
+    'i18n'    => array(
+        'selectZone'  => __('Please select at least one zone.', 'meals-db'),
+        'selectDates' => __('Please select a start and end date.', 'meals-db'),
+        'selectDate'  => __('Please select a date.', 'meals-db'),
+        'generating'  => __('Generating PDF — your download will start shortly.', 'meals-db'),
+    ),
+);
+?>
+<script type="application/json" id="mealsdb-daily-slips-data"><?php echo wp_json_encode($daily_slips_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?></script>
