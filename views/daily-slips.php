@@ -13,6 +13,19 @@ defined('ABSPATH') || exit;
 
 MealsDB_Permissions::enforce();
 
+// U06-slips-16 / U22-ajax-misc-4: the packer/driver PDF downloads generated from
+// this page stream DECRYPTED client PII (name, address, phone). Per the
+// operator, only administrators print these documents, so gate the view at
+// manage_options too — matching the AJAX endpoints (verify_request()) and the
+// Midland slip-batch page. enforce() only checks the baseline plugin cap.
+if (!current_user_can('manage_options')) {
+    wp_die(
+        esc_html__('You do not have permission to generate delivery slips.', 'meals-db'),
+        esc_html__('Access Denied', 'meals-db'),
+        ['back_link' => true]
+    );
+}
+
 $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
 ?>
 <div id="mealsdb-daily-slips" class="mealsdb-daily-slips">
