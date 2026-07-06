@@ -157,7 +157,11 @@ class MealsDB_WP_User_Mapper {
      * Normalise a province input to its 2-letter code via the form's canonical
      * normaliser (single source of truth — no reimplementation here).
      */
-    private static function normalize_province(string $value): string {
+    // public (U09-clients-repo-10): MealsDB_Private_Intake shares these
+    // normalizers so intake-created rows are stored in the same form-valid
+    // shapes the Pull-Data path produces, instead of raw values that later fail
+    // MealsDB_Client_Form::validate().
+    public static function normalize_province(string $value): string {
         $value = trim($value);
         if ($value === '') {
             return '';
@@ -173,7 +177,7 @@ class MealsDB_WP_User_Mapper {
      * no spaces). Leaves an unrecognisable value uppercased/stripped so the
      * operator sees validate()'s named error rather than a silent drop.
      */
-    private static function normalize_postal(string $value): string {
+    public static function normalize_postal(string $value): string {
         $stripped = preg_replace('/[^A-Za-z0-9]/', '', strtoupper(trim($value)));
         return substr((string) $stripped, 0, 6);
     }
@@ -185,7 +189,7 @@ class MealsDB_WP_User_Mapper {
      * number, and only reformats when exactly 10 digits remain; otherwise the
      * trimmed original is returned so the operator can correct it on screen.
      */
-    private static function normalize_phone(string $value): string {
+    public static function normalize_phone(string $value): string {
         $value = trim($value);
         if ($value === '') {
             return '';

@@ -196,19 +196,26 @@ class MealsDB_Private_Intake {
             (string) get_user_meta($wp_user_id, 'shipping_address_2', true),
         ]);
 
+        // U09-clients-repo-10: normalise phone / province / postal into the
+        // form-valid shapes ((###)-###-####, 2-letter code, A1A1A1) using the
+        // SAME helpers the Pull-Data mapper uses, so an intake-created row is
+        // not later rejected by MealsDB_Client_Form::validate() (which enforces
+        // those exact shapes). Uses the shared MealsDB_WP_User_Mapper
+        // normalizers — no reimplementation.
+        $normalize = class_exists('MealsDB_WP_User_Mapper');
         $payload = [
             'first_name'            => $first_name,
             'last_name'             => $last_name,
-            'client_phone_1'        => $phone,
+            'client_phone_1'        => $normalize ? MealsDB_WP_User_Mapper::normalize_phone($phone) : $phone,
             'client_email'          => $email,
             'street_name'           => $billing_address['address_1'],
             'city'                  => $billing_address['city'],
-            'province'              => $billing_address['state'],
-            'postal_code'           => $billing_address['postcode'],
+            'province'              => $normalize ? MealsDB_WP_User_Mapper::normalize_province($billing_address['state']) : $billing_address['state'],
+            'postal_code'           => $normalize ? MealsDB_WP_User_Mapper::normalize_postal($billing_address['postcode']) : $billing_address['postcode'],
             'delivery_street_name'  => $shipping_address['address_1'],
             'delivery_city'         => $shipping_address['city'],
-            'delivery_province'     => $shipping_address['state'],
-            'delivery_postal_code'  => $shipping_address['postcode'],
+            'delivery_province'     => $normalize ? MealsDB_WP_User_Mapper::normalize_province($shipping_address['state']) : $shipping_address['state'],
+            'delivery_postal_code'  => $normalize ? MealsDB_WP_User_Mapper::normalize_postal($shipping_address['postcode']) : $shipping_address['postcode'],
             'delivery_area_name'    => $delivery_area_name,
         ];
 

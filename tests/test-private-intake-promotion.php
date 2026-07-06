@@ -202,11 +202,13 @@ assert_equal('promoted@example.com', $data['client_email'] ?? null, 'email from 
 assert_equal('12 Order Lane', $data['street_name'] ?? null, 'street_name from order billing_address_1');
 assert_equal('Order City', $data['city'] ?? null, 'city from order billing_city');
 assert_equal('NB', $data['province'] ?? null, 'province from order billing_state');
-assert_equal('E1A 1A1', $data['postal_code'] ?? null, 'postal_code from order billing_postcode');
+// U09-clients-repo-10: intake now normalises postal codes to the form-valid
+// A1A1A1 shape (no space) via MealsDB_WP_User_Mapper::normalize_postal.
+assert_equal('E1A1A1', $data['postal_code'] ?? null, 'postal_code normalized from order billing_postcode');
 assert_equal('34 Ship Way', $data['delivery_street_name'] ?? null, 'delivery_street_name from order shipping_address_1');
 assert_equal('Ship City', $data['delivery_city'] ?? null, 'delivery_city: order beats usermeta when both set');
 assert_equal('NS', $data['delivery_province'] ?? null, 'delivery_province from order shipping_state');
-assert_equal('B2B 2B2', $data['delivery_postal_code'] ?? null, 'delivery_postal_code from order shipping_postcode');
+assert_equal('B2B2B2', $data['delivery_postal_code'] ?? null, 'delivery_postal_code normalized from order shipping_postcode');
 
 // Delivery zone (shipping_address_2) — order priority again.
 assert_equal('Zone 3', $data['delivery_area_name'] ?? null, 'delivery_area_name from order shipping_address_2');

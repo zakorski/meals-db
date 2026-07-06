@@ -27,10 +27,14 @@ class MealsDB_Ajax_Reports {
     private static function enforce_rate_limit(): void {
         if (class_exists('MealsDB_Rate_Limiter')
             && !MealsDB_Rate_Limiter::check_rate_limit('quick_order_read')) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('Rate limit exceeded. Please try again later.', 'meals-db'),
-            ], 429);
+            // U05-reports-11: use wp_send_json_error (message under data.message)
+            // so the shape matches the other handlers and the report consumers,
+            // which all read resp.data.message. The old top-level 'message' shape
+            // never displayed.
+            wp_send_json_error(
+                ['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')],
+                429
+            );
         }
     }
 
@@ -45,10 +49,11 @@ class MealsDB_Ajax_Reports {
             $capability = 'manage_woocommerce';
         }
         if (!current_user_can($capability)) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('You are not allowed to perform this action.', 'meals-db'),
-            ], 403);
+            // U05-reports-11: match the data.message shape the consumers read.
+            wp_send_json_error(
+                ['message' => __('You are not allowed to perform this action.', 'meals-db')],
+                403
+            );
         }
 
         self::enforce_rate_limit();
