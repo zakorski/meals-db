@@ -362,11 +362,18 @@ class MealsDB_Admin_UI {
      * @param string $hook
      */
     public function enqueue_assets(string $hook): void {
-        $is_main_page        = in_array($hook, ['toplevel_page_mealsdb', 'toplevel_page_meals-db'], true);
-        $is_staff_page       = in_array($hook, ['mealsdb_page_meals-db-staff', 'meals-db_page_meals-db-staff'], true);
-        $is_quick_order_page = in_array($hook, ['mealsdb_page_mealsdb_quick_order', 'meals-db_page_mealsdb_quick_order', 'meals-db_page_meals-db-quick-order'], true);
-        $is_reports_page     = in_array($hook, ['mealsdb_page_mealsdb-reports', 'meals-db_page_mealsdb-reports'], true);
-        $is_data_ops_page    = in_array($hook, ['mealsdb_page_mealsdb-data-ops', 'meals-db_page_mealsdb-data-ops'], true);
+        // WP derives these admin-page hook suffixes deterministically: the
+        // top-level page is toplevel_page_{menu_slug} and every submenu hook is
+        // {sanitize_title(parent MENU TITLE)}_page_{submenu_slug}. The parent
+        // menu title 'Meals DB' sanitises to 'meals-db', so the submenu prefix
+        // is 'meals-db_page_' (NOT 'mealsdb_page_', which would key off the
+        // slug). Each of these is the single hook WP can actually emit for the
+        // page; the former alternate spellings never matched.
+        $is_main_page        = ($hook === 'toplevel_page_mealsdb');
+        $is_staff_page       = ($hook === 'meals-db_page_meals-db-staff');
+        $is_quick_order_page = ($hook === 'meals-db_page_mealsdb_quick_order');
+        $is_reports_page     = ($hook === 'meals-db_page_mealsdb-reports');
+        $is_data_ops_page    = ($hook === 'meals-db_page_mealsdb-data-ops');
 
         if (!$is_main_page && !$is_staff_page && !$is_quick_order_page && !$is_reports_page && !$is_data_ops_page) {
             return;
@@ -685,13 +692,6 @@ class MealsDB_Admin_UI {
     }
 
     /**
-     * Enqueue the per-tab JS for report / settings pages.
-     *
-     * Keeps the dispatch out of the main enqueue_assets body so each
-     * branch stays a self-contained "register utils, enqueue page JS,
-     * attach config" unit.
-     */
-    /**
      * Enqueue scripts for the Reports submenu page. Mirrors the per-tab
      * enqueue the reports used as tabs, just keyed to the new page. Loads
      * the shared report-utils plus all three report scripts (the page
@@ -820,100 +820,42 @@ class MealsDB_Admin_UI {
         );
     }
 
+    /**
+     * Enqueue the settings-tab JS for the main admin page.
+     *
+     * Keeps the dispatch out of the main enqueue_assets body. The Fee
+     * Reconciliation and Order Errors reports formerly handled here moved to
+     * the Reports submenu (enqueue_reports_page_scripts); the main page has no
+     * fees/errors tab, so only the settings tab remains live.
+     */
     private function enqueue_report_scripts(string $tab): void {
-        if (!in_array($tab, ['settings', 'fees', 'errors'], true)) {
+        if ($tab !== 'settings') {
             return;
         }
 
-        // Shared helpers — register once, enqueue on demand below.
-        $report_utils_path    = MEALS_DB_PLUGIN_DIR . 'assets/js/report-utils.js';
-        $report_utils_version = file_exists($report_utils_path) ? filemtime($report_utils_path) : MEALS_DB_VERSION;
-        wp_register_script(
-            'mealsdb-report-utils',
-            MEALS_DB_PLUGIN_URL . 'assets/js/report-utils.js',
+        $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/settings.js';
+        $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
+        wp_enqueue_script(
+            'mealsdb-settings',
+            MEALS_DB_PLUGIN_URL . 'assets/js/settings.js',
             ['jquery'],
-            $report_utils_version,
+            $version,
             true
         );
-
-        if ($tab === 'settings') {
-            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/settings.js';
-            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
-            wp_enqueue_script(
-                'mealsdb-settings',
-                MEALS_DB_PLUGIN_URL . 'assets/js/settings.js',
-                ['jquery'],
-                $version,
-                true
-            );
-            // Two nonces: one for the settings AJAX surface, one for
-            // the general mealsdb AJAX surface (backfill, product sync).
-            $data = [
-                'ajaxUrl' => admin_url('admin-ajax.php'),
-                'nonces'  => [
-                    'settings' => wp_create_nonce('mealsdb_settings_nonce'),
-                    'general'  => wp_create_nonce('mealsdb_nonce'),
-                ],
-            ];
-            wp_add_inline_script(
-                'mealsdb-settings',
-                'window.mealsdbSettings = ' . wp_json_encode($data) . ';',
-                'before'
-            );
-            return;
-        }
-
-        if ($tab === 'fees') {
-            wp_enqueue_script('mealsdb-report-utils');
-
-            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/fee-reconciliation.js';
-            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
-            wp_enqueue_script(
-                'mealsdb-fee-reconciliation',
-                MEALS_DB_PLUGIN_URL . 'assets/js/fee-reconciliation.js',
-                ['jquery', 'mealsdb-report-utils'],
-                $version,
-                true
-            );
-            $data = [
-                'ajaxUrl' => admin_url('admin-ajax.php'),
-                'nonce'   => wp_create_nonce('mealsdb_nonce'),
-                // Duplicate of the Reports-bundle editUrl above: edit-client.php
-                // reads $_GET['client_id'], so '&id=' broke every reconciliation
-                // client link ("Invalid client specified."). Use client_id.
-                'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&client_id='),
-            ];
-            wp_add_inline_script(
-                'mealsdb-fee-reconciliation',
-                'window.mealsdbFeeReconciliation = ' . wp_json_encode($data) . ';',
-                'before'
-            );
-            return;
-        }
-
-        if ($tab === 'errors') {
-            wp_enqueue_script('mealsdb-report-utils');
-
-            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/order-errors.js';
-            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
-            wp_enqueue_script(
-                'mealsdb-order-errors',
-                MEALS_DB_PLUGIN_URL . 'assets/js/order-errors.js',
-                ['jquery', 'mealsdb-report-utils'],
-                $version,
-                true
-            );
-            $data = [
-                'ajaxUrl' => admin_url('admin-ajax.php'),
-                'nonce'   => wp_create_nonce('mealsdb_nonce'),
-                'editUrl' => admin_url('post.php?action=edit&post='),
-            ];
-            wp_add_inline_script(
-                'mealsdb-order-errors',
-                'window.mealsdbOrderErrors = ' . wp_json_encode($data) . ';',
-                'before'
-            );
-        }
+        // Two nonces: one for the settings AJAX surface, one for
+        // the general mealsdb AJAX surface (backfill, product sync).
+        $data = [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonces'  => [
+                'settings' => wp_create_nonce('mealsdb_settings_nonce'),
+                'general'  => wp_create_nonce('mealsdb_nonce'),
+            ],
+        ];
+        wp_add_inline_script(
+            'mealsdb-settings',
+            'window.mealsdbSettings = ' . wp_json_encode($data) . ';',
+            'before'
+        );
     }
 
     /**
@@ -1202,9 +1144,10 @@ class MealsDB_Admin_UI {
         $args = array_merge($defaults, $args);
 
         $form_mode = $args['form_mode'] === 'edit' ? 'edit' : 'add';
-        $submit_label = (string) ($args['submit_label'] ?: ($form_mode === 'edit'
-            ? __('Update Client', 'meals-db')
-            : __('Submit', 'meals-db')));
+        // 'submit_label' has a non-empty default and the sole caller
+        // (views/partials/client-form.php) always passes an explicit,
+        // mode-aware label, so a fallback ternary here never governed.
+        $submit_label = (string) $args['submit_label'];
         $show_draft_button = (bool) $args['show_draft_button'];
         $resumed_draft_id = intval($args['resumed_draft_id']);
         $client_id = intval($args['client_id']);
@@ -1227,25 +1170,9 @@ class MealsDB_Admin_UI {
                 return ucfirst(strtolower($value));
             }
 
-            // Special case for service_zone: strip "zone " prefix if present (handles "zone A" -> "A")
-            if ($field_name === 'service_zone') {
-                $value = preg_replace('/^zone\s*/i', '', $value);
-                return strtoupper(trim($value));
-            }
-
-            // Special case for meal_type: convert "meal" to "main"
-            if ($field_name === 'meal_type') {
-                $normalized = strtolower($value);
-                if ($normalized === 'meal') {
-                    return 'main';
-                }
-                return $normalized;
-            }
-
             // Map of field names to their expected UI case format
             $field_formats = [
                 'gender' => 'title',                // Male, Female, Other
-                'service_course' => 'keep',         // 1, 2 (numeric, keep as-is)
                 'requisition_period' => 'lower',    // day, week, month
                 'delivery_day' => 'upper',          // WED AM, THURS AM, etc.
                 'ordering_contact_method' => 'upper', // AUTO-RENEW, BULK EMAIL, PHONE
@@ -1271,7 +1198,6 @@ class MealsDB_Admin_UI {
 
         $delivery_day_options = MealsDB_Client_Form::get_allowed_options('delivery_day');
         $ordering_contact_method_options = MealsDB_Client_Form::get_allowed_options('ordering_contact_method');
-        $service_zone_options = MealsDB_Client_Form::get_allowed_options('service_zone');
 
         $format_enum_option_label = static function (string $value): string {
             $label = ucwords(strtolower($value));
@@ -1314,9 +1240,7 @@ class MealsDB_Admin_UI {
         $delivery_initials_value = $form_values['delivery_initials'] ?? '';
         $delivery_day_value = $normalize_field_value('delivery_day', $form_values['delivery_day'] ?? '');
         $ordering_contact_method_value = $normalize_field_value('ordering_contact_method', $form_values['ordering_contact_method'] ?? '');
-        $service_zone_value = $normalize_field_value('service_zone', $form_values['service_zone'] ?? '');
         $gender_value = $normalize_field_value('gender', $form_values['gender'] ?? '');
-        $meal_type_value = $normalize_field_value('meal_type', $form_values['meal_type'] ?? '');
         $requisition_period_value = $normalize_field_value('requisition_period', $form_values['requisition_period'] ?? '');
         $form_classes = ['mealsdb-client-form'];
         if ($client_type !== '') {
@@ -1596,10 +1520,6 @@ class MealsDB_Admin_UI {
                     <th><label for="required_start_date"><?php esc_html_e('Required Start Date *', 'meals-db'); ?></label></th>
                     <td><input type="date" name="required_start_date" id="required_start_date" class="mealsdb-datepicker" required data-base-required="1" value="<?php echo esc_attr($client['required_start_date'] ?? ''); ?>" /></td>
                 </tr>
-                <?php
-            },
-            static function (array $client) {
-                ?>
                 <?php
             },
             static function (array $client) {

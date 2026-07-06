@@ -7,8 +7,6 @@ class MealsDB_Plugin {
     private static $instance = null;
 
     public $path;
-    public $url;
-    public $basename;
 
     public static function init() {
         if ( self::$instance === null ) {
@@ -18,16 +16,10 @@ class MealsDB_Plugin {
     }
 
     private function __construct() {
-        $this->path     = plugin_dir_path( __FILE__ ) . '../'; 
-        $this->url      = plugin_dir_url( __FILE__ ) . '../';
-        $this->basename = plugin_basename( dirname( __FILE__, 2 ) . '/meals-db-main.php' );
+        $this->path     = plugin_dir_path( __FILE__ ) . '../';
     }
 
     public static function path( $file = '' ) {
         return self::$instance->path . ltrim( $file, '/' );
-    }
-
-    public static function url( $file = '' ) {
-        return self::$instance->url . ltrim( $file, '/' );
     }
 }

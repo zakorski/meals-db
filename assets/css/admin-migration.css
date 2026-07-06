@@ -37,26 +37,6 @@
     flex-shrink: 0;
 }
 
-.mealsdb-mig-phase-icon.running {
-    color: #0073aa;
-    animation: mig-spin 1s linear infinite;
-}
-
-.mealsdb-mig-phase-icon.done {
-    color: #46b450;
-    font-weight: bold;
-}
-
-.mealsdb-mig-phase-icon.error {
-    color: #dc3232;
-    font-weight: bold;
-}
-
-@keyframes mig-spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
-}
-
 .mealsdb-mig-phase-label {
     flex: 0 0 200px;
     font-weight: 600;
@@ -106,28 +86,4 @@
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-all;
-}
-
-/* Source tabs */
-.mealsdb-mig-source-tabs {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 16px;
-}
-
-.mealsdb-mig-source-tabs .mig-tab.active {
-    background: #0073aa;
-    color: #fff;
-    border-color: #0073aa;
-}
-
-.mealsdb-mig-tab-content {
-    margin-bottom: 16px;
-}
-
-/* Options */
-.mealsdb-mig-options {
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid #f0f0f0;
 }

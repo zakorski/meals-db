@@ -176,8 +176,6 @@ if (!class_exists('PdfSlipFakeClientQuery')) {
     class PdfSlipFakeClientQuery extends MealsDB_Delivery_Slip_Generator {
         public array $clients_for_date = [];
         public array $clients_for_driver = [];
-        public array $clients_for_zones = [];
-        public array $clients_for_zones_driver = [];
         public array $orders = [];
 
         public function __construct() {
@@ -190,15 +188,6 @@ if (!class_exists('PdfSlipFakeClientQuery')) {
         public function get_clients_for_driver_slips(string $delivery_date): array {
             return $this->clients_for_driver;
         }
-        public function get_clients_for_zones(array $zone_names): array {
-            return $this->clients_for_zones;
-        }
-        public function get_clients_for_zones_driver(array $zone_names): array {
-            return $this->clients_for_zones_driver;
-        }
-        public function get_orders_for_date(array $wp_user_ids, string $delivery_date): array {
-            return $this->orders;
-        }
         public function get_orders_for_delivery_date(array $clients, string $delivery_date): array {
             // Tests hand a fixed dataset; the delivery-basis filtering itself
             // is covered by tests/test-slips-delivery-date.php.
@@ -207,9 +196,6 @@ if (!class_exists('PdfSlipFakeClientQuery')) {
         public function get_orders_for_delivery_range(array $clients, string $start_date, string $end_date): array {
             // Both slip paths now flow through here (GUI-SLIP-RANGE); the
             // occurrence filtering itself is covered by the dedicated tests.
-            return $this->orders;
-        }
-        public function get_orders_for_range(array $wp_user_ids, string $start_date, string $end_date): array {
             return $this->orders;
         }
     }

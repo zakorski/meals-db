@@ -202,10 +202,15 @@ class MealsDB_Encryption_Migrator {
     /**
      * Re-encrypt every legacy-format value under the current authenticated format.
      *
-     * Runs row-by-row with a per-row transaction so a failure on one client
-     * does not affect others. The legacy decrypt branch in
-     * MealsDB_Encryption::decrypt() is what makes this possible; keep it in
-     * place until inventory() reports zero legacy rows on every environment.
+     * Runs row-by-row. Each row is written by a single-statement UPDATE, which
+     * is already atomic on InnoDB, and the loop isolates a per-row failure from
+     * the rest — so a failure on one client does not affect others regardless
+     * of the explicit transaction around the write (that wrapper spans one
+     * statement, so it is belt-and-suspenders / future-proofing for a
+     * multi-statement per-row write, not the source of the isolation). The
+     * legacy decrypt branch in MealsDB_Encryption::decrypt() is what makes the
+     * re-encrypt possible; keep it in place until inventory() reports zero
+     * legacy rows on every environment.
      *
      * Circuit-breaker: once $stats['failed'] reaches the supplied
      * $failure_threshold (default 50) the run aborts. The stats array
@@ -361,8 +366,10 @@ class MealsDB_Encryption_Migrator {
      *   2. STR-10a — recompute every deterministic `*_index` column with the
      *      keyed v2 HMAC, derived from the decrypted (or, for the plaintext
      *      delivery_initials source, raw) source value.
-     * Both happen inside one per-row transaction, so a row is never left with a
-     * re-encrypted blob but a stale index (or vice versa).
+     * Both columns are written by one multi-column UPDATE, and that single
+     * atomic statement is what guarantees a row is never left with a
+     * re-encrypted blob but a stale index (or vice versa); the explicit
+     * transaction wrapped around it is redundant belt-and-suspenders.
      *
      * Cursor-based: processes rows with `client_id > $after_client_id`, ordered
      * ascending, up to $batch_size. Returns `last_client_id` (feed it back to

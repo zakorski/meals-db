@@ -43,61 +43,6 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
-     * Render product tiles in the same structure as the category loader.
-     *
-     * @param array<int, array<string, mixed>> $products
-     */
-    private static function render_product_tiles(array $products): string {
-        if (empty($products)) {
-            return '<p>' . esc_html__('No products matched your search.', 'meals-db') . '</p>';
-        }
-
-        $buffer = '<div class="mealsdb-quick-order__product-grid mealsdb-qo-grid" id="mealsdb-qo-grid">';
-
-        foreach ($products as $product) {
-            $product_id = isset($product['product_id']) ? intval($product['product_id']) : 0;
-            if ($product_id <= 0) {
-                continue;
-            }
-
-            $name       = isset($product['name']) ? (string) $product['name'] : sprintf(__('Product #%d', 'meals-db'), $product_id);
-            $price      = isset($product['price']) ? (float) $product['price'] : 0.0;
-            $image_url  = isset($product['image_url']) ? (string) $product['image_url'] : '';
-            $json_data  = wp_json_encode($product);
-            $price_html = function_exists('wc_price') ? wc_price($price) : number_format($price, 2);
-
-            $buffer .= '<div class="mealsdb-qo-tile">';
-            $buffer .= '<div class="mealsdb-quick-order__product" data-product-id="' . esc_attr((string) $product_id) . '"';
-            if (!empty($json_data)) {
-                $buffer .= ' data-product="' . esc_attr($json_data) . '"';
-            }
-            $buffer .= '>';
-
-            if ($image_url !== '') {
-                $buffer .= '<div class="mealsdb-quick-order__product-image">';
-                $buffer .= '<img src="' . esc_url($image_url) . '" alt="' . esc_attr($name) . '" class="mealsdb-qo-image" loading="lazy" />';
-                $buffer .= '</div>';
-            }
-
-            $buffer .= '<div class="mealsdb-quick-order__product-content">';
-            $buffer .= '<h3 class="mealsdb-quick-order__product-title">' . esc_html($name) . '</h3>';
-            $buffer .= '<div class="mealsdb-quick-order__product-price">' . wp_kses_post($price_html) . '</div>';
-            $buffer .= '<div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls">';
-            $buffer .= '<button type="button" class="button mealsdb-quick-order__qty-decrease mealsdb-qo-btn" aria-label="' . esc_attr__('Decrease quantity', 'meals-db') . '">-</button>';
-            $buffer .= '<input type="number" min="0" class="small-text mealsdb-quick-order__qty-input mealsdb-qo-qty" value="0" />';
-            $buffer .= '<button type="button" class="button mealsdb-quick-order__qty-increase mealsdb-qo-btn" aria-label="' . esc_attr__('Increase quantity', 'meals-db') . '">+</button>';
-            $buffer .= '</div>';
-            $buffer .= '</div>';
-            $buffer .= '</div>';
-            $buffer .= '</div>';
-        }
-
-        $buffer .= '</div>';
-
-        return $buffer;
-    }
-
-    /**
      * AJAX endpoint to fetch product categories.
      */
     public static function get_categories(): void {
@@ -275,9 +220,6 @@ class MealsDB_Quick_Order_Ajax {
         wp_send_json(['success' => true, 'clients' => $clients]);
     }
 
-    /**
-     * AJAX endpoint to create a new WooCommerce order for a Meals DB client.
-     */
     /**
      * Create a WC order via Quick Order.
      *
@@ -934,9 +876,6 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
-     * Validate that a rate_id belongs to a given client in meals_client_rates.
-     */
-    /**
      * Resolve the active meals_clients.client_id that owns a given rate FOR a
      * given WP user, or 0 if the rate does not belong to an active client of
      * that user.
@@ -1162,8 +1101,7 @@ class MealsDB_Quick_Order_Ajax {
         global $wpdb;
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $client = $wpdb->get_row($wpdb->prepare(
-            "SELECT client_id, client_type, allowance_mains, allowance_sides,
-                    delivery_day, delivery_frequency, requisition_period,
+            "SELECT client_id, client_type, delivery_frequency,
                     delivery_fee, client_contribution
              FROM {$clients_table}
              WHERE wp_user_id = %d AND active = 1

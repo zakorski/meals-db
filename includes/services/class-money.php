@@ -120,16 +120,4 @@ class MealsDB_Money {
         }
         return -1 * (int) floor((-$value) + 0.5);
     }
-
-    /**
-     * Sum an array of integer cent values. Harmless but makes call
-     * sites read more clearly than array_sum().
-     */
-    public static function sum(array $cents_list): int {
-        $total = 0;
-        foreach ($cents_list as $c) {
-            $total += (int) $c;
-        }
-        return $total;
-    }
 }

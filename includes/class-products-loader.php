@@ -121,24 +121,6 @@ class MealsDB_Products_Loader {
     }
 
     /**
-     * Determine whether a client can order a product based on allergens.
-     */
-    public static function client_can_order(array $client_allergens, array $product_allergens): bool {
-        // Use an explicit !=='' filter rather than array_filter() with no
-        // callback. The default callback drops empty strings AND '0', so an
-        // allergen literally named "0" would be silently lost.
-        $non_empty = static function ($v) { return $v !== ''; };
-        $client    = array_filter(array_map('strval', $client_allergens), $non_empty);
-        $product   = array_filter(array_map('strval', $product_allergens), $non_empty);
-
-        if (empty($client) || empty($product)) {
-            return true;
-        }
-
-        return empty(array_intersect($client, $product));
-    }
-
-    /**
      * Fetch product metadata for multiple product IDs in a single query.
      *
      * @param array<int, int> $product_ids

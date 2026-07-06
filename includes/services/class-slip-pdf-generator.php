@@ -42,9 +42,6 @@ class MealsDB_Slip_PDF_Generator {
     public const DOC4_BLOCK_TOP_IN   = 4.62;
     public const DOC4_BLOCK_WIDTH_IN = 3.2;
 
-    /** WC product_cat term IDs that resolve to "Side" on the slip. */
-    private const SIDE_CATEGORY_IDS = [43, 37, 23, 25, 98];
-
     /** WC product_cat term ID for Mains. */
     private const MAIN_CATEGORY_ID = 35;
 
@@ -53,20 +50,15 @@ class MealsDB_Slip_PDF_Generator {
      */
     private $client_query;
 
-    /**
-     * @var MealsDB_Collection_Calculator
-     *
-     * Held only to satisfy the directive's constructor signature; all
-     * methods on the calculator are static and called directly.
-     */
-    private $calculator;
-
     public function __construct(
         MealsDB_Delivery_Slip_Generator $client_query,
         MealsDB_Collection_Calculator $calculator
     ) {
+        // $calculator is accepted to preserve the directive's constructor
+        // signature (and existing callers), but not stored: every method on
+        // MealsDB_Collection_Calculator is static and called directly.
+        unset($calculator);
         $this->client_query = $client_query;
-        $this->calculator   = $calculator;
     }
 
     // -----------------------------------------------------------------
@@ -304,11 +296,10 @@ class MealsDB_Slip_PDF_Generator {
         if (has_term(self::MAIN_CATEGORY_ID, 'product_cat', $product_id)) {
             return 'Main';
         }
-        foreach (self::SIDE_CATEGORY_IDS as $cat_id) {
-            if (has_term($cat_id, 'product_cat', $product_id)) {
-                return 'Side';
-            }
-        }
+        // Anything not tagged Mains lands in the side group (see method
+        // docblock): a missing/other taxonomy is more often a data issue than
+        // a real non-meal product, so operators want it visible on the slip
+        // rather than dropped.
         return 'Side';
     }
 

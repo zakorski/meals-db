@@ -82,7 +82,6 @@ function assert_equals($a, $e, string $l) {
     if ($a === $e) { $passed++; }
     else { $failures[] = sprintf('[%s] expected %s got %s', $l, var_export($e, true), var_export($a, true)); }
 }
-function assert_true($v, $l) { assert_equals((bool) $v, true, $l); }
 
 // Seed three clients: one empty (eligible), one with next_order_date already
 // set (should be preserved), and one missing last_order_date meta (skipped).

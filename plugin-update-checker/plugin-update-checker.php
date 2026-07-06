@@ -6,11 +6,12 @@
 namespace {
     if (!class_exists('MealsDBGithubVcsApi')) {
         class MealsDBGithubVcsApi {
-            private $checker;
             private $releaseAssets = false;
 
+            // The parent checker is accepted for Plugin Update Checker API
+            // shape compatibility but not stored — this shim only exposes the
+            // release-asset toggle below, which never needs a back-reference.
             public function __construct($checker) {
-                $this->checker = $checker;
             }
 
             public function enableReleaseAssets() {
@@ -27,7 +28,6 @@ namespace {
             private $metadataUrl;
             private $pluginFile;
             private $slug;
-            private $branch = 'main';
             private $pluginBasename;
             private $vcsApi;
 
@@ -47,9 +47,11 @@ namespace {
             }
 
             public function setBranch($branch) {
-                if (!empty($branch)) {
-                    $this->branch = $branch;
-                }
+                // No-op: this shim only supports release-based updates —
+                // fetchLatestRelease() always queries `releases/latest`, so a
+                // configured branch has no effect on where updates come from.
+                // The setter is retained purely for Plugin Update Checker API
+                // compatibility with the meals-db-main.php caller.
             }
 
             public function getVcsApi() {

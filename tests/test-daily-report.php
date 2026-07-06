@@ -202,13 +202,6 @@ function assert_true($v, string $label) {
 // ---------------------------------------------------------------------------
 $GLOBALS['__test_latest'] = [];
 
-// Force "yesterday" to be a midweek business day so the anomaly path
-// is active for test 8 below. 2026-05-13 is a Wednesday.
-$tz = new DateTimeZone('UTC');
-class FixedDailyReportClock extends MealsDB_Daily_Report {
-    // (no-op subclass; we drive the date via the wpdb queries' fixtures)
-}
-
 $report = MealsDB_Daily_Report::build_report();
 $missed = 0;
 foreach ($report['jobs'] as $job) {

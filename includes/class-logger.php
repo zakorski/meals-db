@@ -175,10 +175,6 @@ class MealsDB_Logger {
     ];
 
     /**
-     * Replace the raw value of a sensitive field with a short
-     * non-reversible fingerprint suitable for diff-style audit review.
-     */
-    /**
      * Produce the audit fingerprint of a single value (same shape redact_value
      * emits for a sensitive field). Public so callers that log a COMPOSITE blob
      * — e.g. the delete_client snapshot, whose 'record' field name bypasses the
@@ -197,6 +193,10 @@ class MealsDB_Logger {
         return '[redacted:sha256=' . substr(hash('sha256', $value), 0, 12) . ']';
     }
 
+    /**
+     * Replace the raw value of a sensitive field with a short
+     * non-reversible fingerprint suitable for diff-style audit review.
+     */
     private static function redact_value(string $field, ?string $value): ?string {
         if ($value === null || $value === '') {
             return $value;

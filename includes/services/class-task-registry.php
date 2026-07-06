@@ -13,20 +13,6 @@ defined('ABSPATH') || exit;
 class MealsDB_Task_Registry {
 
     /**
-     * Supported form field types in R1.
-     */
-    public const SUPPORTED_FIELD_TYPES = [
-        'text',
-        'textarea',
-        'number',
-        'date',
-        'yesno',
-        'select',
-        'checkbox',
-        'repeat_group',
-    ];
-
-    /**
      * @var array<string, array<string, mixed>>
      */
     private static $types = [];

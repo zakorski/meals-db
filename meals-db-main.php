@@ -33,12 +33,13 @@ if (!defined('MEALS_DB_PLUGIN_URL')) {
 if (!defined('MEALS_DB_VERSION')) {
     // get_plugin_data() lives in wp-admin/includes/plugin.php, which
     // isn't loaded automatically from every entry point — WP-CLI and
-    // cron contexts hit this file before wp-admin is available. Guard
-    // the require with a defined-ABSPATH check AND fall back cleanly
-    // when the helper still can't be loaded, otherwise activation via
-    // WP-CLI (`wp plugin activate meals-db`) fatals on a missing
-    // function.
-    if (!function_exists('get_plugin_data') && defined('ABSPATH') && is_readable(ABSPATH . 'wp-admin/includes/plugin.php')) {
+    // cron contexts hit this file before wp-admin is available. Load it
+    // when readable, and fall back cleanly when the helper still can't
+    // be loaded, otherwise activation via WP-CLI (`wp plugin activate
+    // meals-db`) fatals on a missing function. (ABSPATH is already
+    // guaranteed defined by the line-19 `defined('ABSPATH') || exit;`
+    // guard above, so it needs no re-check here.)
+    if (!function_exists('get_plugin_data') && is_readable(ABSPATH . 'wp-admin/includes/plugin.php')) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
     if (function_exists('get_plugin_data')) {

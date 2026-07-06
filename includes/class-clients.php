@@ -161,16 +161,18 @@ class MealsDB_Clients {
             $success = false;
         }
 
-        if ($transaction_started) {
-            if ($success) {
-                if ($wpdb->query('COMMIT') === false) {
-                    error_log('[MealsDB] Failed to commit client deletion transaction.');
-                    $wpdb->query('ROLLBACK');
-                    $success = false;
-                }
-            } else {
+        // $transaction_started is guaranteed true here: a failed
+        // START TRANSACTION returns above, so no guard is needed. The
+        // transaction currently wraps a single DELETE and only earns its
+        // keep if delete_client() regains a multi-statement cascade.
+        if ($success) {
+            if ($wpdb->query('COMMIT') === false) {
+                error_log('[MealsDB] Failed to commit client deletion transaction.');
                 $wpdb->query('ROLLBACK');
+                $success = false;
             }
+        } else {
+            $wpdb->query('ROLLBACK');
         }
 
         if ($success) {

@@ -136,8 +136,14 @@ class MealsDB_Operational_Constants {
     // annually-changing number — Janet edits it on the Rate Definitions page
     // (10.64 → 11.14 at cutover), not here. VAC_SIDES_CONVERSION_RATE and
     // VAC_SIDES_HST_RATE are NOT rates that move on a business cadence and are
-    // NOT moved to Definitions. The actual VAC consumption of the accessor
-    // values is wired in INV-DRAFT-3; this directive only exposes them.
+    // NOT moved to Definitions.
+    //
+    // NOTE: as of INV-DRAFT-3, neither VAC_SIDES_CONVERSION_RATE nor
+    // VAC_SIDES_HST_RATE has a live consumer — the invoice generator folds VAC
+    // sides by hand and sources HST from WooCommerce (LB-7; see
+    // MealsDB_Invoice_Generator, "do NOT reintroduce a VAC HST constant"). They
+    // are retained as the documented default should a future VAC-side pricing
+    // path need them.
 
     const VAC_PER_MAIN_ALLOWANCE     = 10.64;
     const VAC_RATE_SIDE              = 4.10;
@@ -169,7 +175,11 @@ class MealsDB_Operational_Constants {
     //
     // Source: confirmed with Janet (May 2026).
 
-    /** Standard Apetito pallet size in cases. */
+    /**
+     * Standard Apetito pallet size in cases. The documented single source of
+     * truth for pallet size (CLAUDE.md); no code reads it yet — the PO /
+     * Apetito forecast is the intended consumer (TODO: wire it there).
+     */
     const APETITO_CASES_PER_PALLET = 75;
 
     // -------------------------------------------------------------

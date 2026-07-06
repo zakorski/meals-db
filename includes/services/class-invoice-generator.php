@@ -412,7 +412,12 @@ class MealsDB_Invoice_Generator {
             ? MealsDB_Money::percent_of(MealsDB_Money::multiply($tax_sides_on_line_2, $side_rate), $hst_rate)
             : 0;
 
-        $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2 + $hst_line_2_cents) > 0;
+        // $hst_line_2_cents is intentionally NOT summed here: it is nonzero only
+        // when $tax_sides_on_line_2 > 0 (see above), which is already a term of
+        // this sum, so it can never change the > 0 outcome — and it is money
+        // cents, not a unit count, so mixing it in would be a units/money
+        // confusion for the next reader.
+        $has_second_line = ($mains_on_line_2 + $tax_sides_on_line_2 + $nontax_sides_on_line_2) > 0;
 
         // Line-2 rate from constants, not the deleted tier table. (LB-7)
         // A line-2 carrying mains bills at the secondary main rate; a
@@ -692,7 +697,7 @@ class MealsDB_Invoice_Generator {
         $sql = "SELECT client_id, wp_user_id, first_name, last_name, client_type, requisition_id,
                     vet_health_card, requisition_period, client_contribution, default_rate_id,
                     street_name, city, postal_code, client_phone_1,
-                    allowance_mains, allowance_sides, individual_id, individual_id_index
+                    individual_id, individual_id_index
              FROM `{$clients_table}`
              WHERE client_type = %s AND active = 1 AND wp_user_id > 0";
 
@@ -724,7 +729,7 @@ class MealsDB_Invoice_Generator {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $sql = "SELECT client_id, wp_user_id, first_name, last_name, client_type, service_id, requisition_id,
                     individual_id, individual_id_index, client_contribution, delivery_area_zone,
-                    default_rate_id, allowance_mains, allowance_sides, requisition_period
+                    default_rate_id
              FROM `{$clients_table}`
              WHERE client_type = %s AND use_legacy_billing = 1
                AND delivery_area_zone = %s AND active = 1 AND wp_user_id > 0";
@@ -795,9 +800,10 @@ class MealsDB_Invoice_Generator {
      * Build the VAC per-client billing-row map for a draft.
      *
      * @param string $start_date Y-m-d (first day of billing month).
-     * @param string $end_date   Y-m-d (last day). Accepted for API parity with
-     *                           generate_vac_csv; the row figures key off the
-     *                           billing month derived from $start_date.
+     * @param string $end_date   Y-m-d (last day). Kept for signature parity with
+     *                           the sibling build_*_draft_rows() entry points and
+     *                           used for the new-user check; the billing month
+     *                           itself keys off $start_date.
      * @return array<int,array> client_id => phase-2 row (+ identity fields).
      */
     public static function build_vac_draft_rows($start_date, $end_date): array {
@@ -918,38 +924,6 @@ class MealsDB_Invoice_Generator {
         }
         $billing_month = substr($start_date, 0, 7);
         return self::get_phase2_billing_data($client_rows, $billing_month);
-    }
-
-    /**
-     * Generate SDNB Legacy Zone-Based Invoice
-     *
-     * @param string $zone Zone code (M=Moncton, S=Sussex)
-     * @param string $start_date Start date (Y-m-d format)
-     * @param string $end_date End date (Y-m-d format)
-     * @return string CSV content
-     */
-    public static function generate_sdnb_legacy($zone, $start_date, $end_date, $weeks_in_month = 4) {
-        // Shared top-half (INV-DRAFT-1 Step 5): query → dirty-rebuild →
-        // decrypt → phase-2 assemble. The SAME per-client rows the draft
-        // builder produces (refactor, don't fork).
-        $rows = self::build_sdnb_legacy_draft_rows($zone, $start_date, $end_date);
-
-        // Pure serialization (INV-DRAFT-3 Step 1): rows → CSV with no DB
-        // access, so the draft-finalize path can run Janet's EDITED rows
-        // through the IDENTICAL formatter.
-        $csv = self::serialize_sdnb_legacy($rows, [
-            'zone'       => $zone,
-            'start_date' => $start_date,
-            'end_date'   => $end_date,
-        ]);
-
-        // finalize_month moved OUT of the serializer into the caller
-        // (Step 1): the serializer must be side-effect-free. The
-        // draft-finalize path finalizes separately (idempotent — LB-3), so
-        // neither path double-finalizes harmfully.
-        self::finalize_months_for_rows($rows, substr($start_date, 0, 7));
-
-        return $csv;
     }
 
     /**
@@ -1192,49 +1166,6 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
-     * Shared finalize helper (INV-DRAFT-3 Step 1): freeze the billing month
-     * for every client_id in a row map via the LB-3 finalize_month path.
-     * Called by the direct-download generators AFTER serializing; the
-     * draft-finalize path finalizes on its own (idempotent). Kept out of the
-     * serializers so those stay pure rows→string functions.
-     *
-     * @param array<int|string,mixed> $rows          row map keyed by client_id.
-     * @param string                  $billing_month 'YYYY-MM'.
-     */
-    private static function finalize_months_for_rows(array $rows, string $billing_month): void {
-        if ($billing_month === '' || !class_exists('MealsDB_Allocation_Engine')) {
-            return;
-        }
-        $engine = new MealsDB_Allocation_Engine();
-        foreach (array_keys($rows) as $cid) {
-            $cid_int = (int) $cid;
-            if ($cid_int > 0) {
-                $engine->finalize_month($cid_int, $billing_month);
-            }
-        }
-    }
-
-    /**
-     * Generate SDNB New Portal Format Invoice
-     *
-     * @param string $start_date Start date (Y-m-d format)
-     * @param string $end_date End date (Y-m-d format)
-     * @return string CSV content
-     */
-    public static function generate_sdnb_new_portal($start_date, $end_date) {
-        // Shared top-half (INV-DRAFT-1 Step 5): query → dirty-rebuild →
-        // phase-2 assemble. The SAME rows the draft builder produces.
-        $rows = self::build_sdnb_new_portal_draft_rows($start_date, $end_date);
-
-        $csv = self::serialize_sdnb_new_portal($rows);
-
-        // finalize_month moved OUT of the serializer (Step 1).
-        self::finalize_months_for_rows($rows, substr($start_date, 0, 7));
-
-        return $csv;
-    }
-
-    /**
      * Pure serializer for the SDNB new-portal CSV (INV-DRAFT-3 Step 1).
      * Takes phase-2 rows (build or a draft's edited `current`) → CSV string.
      * NO DB access, NO finalize — byte-identical to the pre-refactor output
@@ -1299,31 +1230,6 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
-     * Generate VAC CSV Invoice
-     *
-     * @param string $start_date Start date (Y-m-d format)
-     * @param string $end_date End date (Y-m-d format)
-     * @return string CSV content
-     */
-    public static function generate_vac_csv($start_date, $end_date) {
-        // Shared top-half + corrected-model augmentation (INV-DRAFT-3 Step 4a):
-        // build_vac_draft_rows runs the SAME query → dirty-rebuild → decrypt →
-        // phase-2 pass the draft builder does, then attaches the editable
-        // mains-only billing fields. The SAME rows a draft carries.
-        $rows = self::build_vac_draft_rows($start_date, $end_date);
-        if (empty($rows)) {
-            return '';
-        }
-
-        $csv = self::serialize_vac_csv($rows);
-
-        // finalize_month moved OUT of the serializer into the caller (Step 1).
-        self::finalize_months_for_rows($rows, substr($start_date, 0, 7));
-
-        return $csv;
-    }
-
-    /**
      * Pure serializer for the VAC data CSV (INV-DRAFT-3 Steps 1 + 4b).
      *
      * Takes VAC draft rows (from build_vac_draft_rows OR a draft's edited
@@ -1340,7 +1246,8 @@ class MealsDB_Invoice_Generator {
      * hand-entered on the grid.
      *
      * COLUMN LAYOUT: positions 0-35 are the legacy 36-column Blue Cross layout
-     * and are LOAD-BEARING — generate_vac_pdf maps positionally onto indices
+     * and are LOAD-BEARING — the VAC PDF renderer (serialize_vac_pdf_from_csv →
+     * build_vac_pdf_html) maps positionally onto indices
      * 0-6 (identity), 11 (Bill Mains = meal count), 32 (Bill HST = fold_hst),
      * 33 (New Total = vac_total). DO NOT reorder or remove a column before
      * index 33 or the PDF stamps the wrong cells. "Fold Amount" is APPENDED at
@@ -1510,53 +1417,12 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
-     * Generate the VAC reimbursement PDF — one form per veteran, merged into
-     * a single multi-page Legal-size PDF for submission to Blue Cross /
-     * Veterans Affairs.
-     *
-     * STAGE 2 of the VAC pipeline: generate_vac_csv (phase 2) produces the
-     * data CSV; this method stamps each row onto a pre-printed Blue Cross
-     * "Provider Reimbursement Form / Access to Nutrition" template.
-     *
-     * Approach: HTML + CSS absolute positioning rendered by dompdf, with the
-     * blank Blue Cross form as a full-page background image. Field
-     * coordinates are ported from the legacy print.php (FPDF) generator —
-     * the background image is the same 2550x4200 px (Legal ratio) scan it
-     * was calibrated against, so positions transfer 1:1 in Legal points.
-     *
-     * Column mapping into the phase-2 VAC CSV (one row per veteran):
-     *   data[0]  K# (Health Identification Card no)
-     *   data[1]  Client Last Name
-     *   data[2]  Client First Name
-     *   data[3]  Billing Address 1
-     *   data[4]  Billing City
-     *   data[5]  Billing Postcode
-     *   data[6]  Billing Phone
-     *   data[11] Bill Mains (Number of Meals)
-     *   data[32] Bill HST
-     *   data[33] New Total
-     *
-     * @param string $start_date YYYY-MM-DD (first day of billing month).
-     * @param string $end_date   YYYY-MM-DD (last day of billing month —
-     *                           also stamped as the date of service / signature date).
-     * @return string PDF bytes (caller writes to disk or streams).
-     */
-    public static function generate_vac_pdf($start_date, $end_date) {
-        // STAGE 1 → STAGE 2: build the data CSV, then render it. The PDF is a
-        // PURE renderer over the CSV (serialize_vac_pdf_from_csv) so the
-        // draft-finalize path can stamp Janet's EDITED CSV — not a fresh
-        // generation — onto the form (INV-DRAFT-3 Step 2).
-        $csv_content = self::generate_vac_csv($start_date, $end_date);
-        return self::serialize_vac_pdf_from_csv($csv_content, $end_date);
-    }
-
-    /**
      * Render a VAC reimbursement PDF from an already-built VAC data CSV
      * (INV-DRAFT-3 Step 2). PURE renderer: it parses the CSV and stamps each
      * row onto the Blue Cross form — it does NOT query the DB or regenerate
-     * the data. Called by generate_vac_pdf (direct path, fresh CSV) AND by the
-     * draft-finalize path (the draft's edited CSV), so the bytes a finalized
-     * draft yields are exactly the bytes Janet reviewed.
+     * the data. Called by the draft-finalize path (the draft's edited CSV),
+     * so the bytes a finalized draft yields are exactly the bytes Janet
+     * reviewed.
      *
      * The signature date stamped on the form (date of service / signature) is
      * the billing-period END — passed in rather than re-derived, since the
@@ -1637,8 +1503,8 @@ class MealsDB_Invoice_Generator {
 
     /**
      * Build the multi-page HTML document that dompdf renders into the VAC
-     * PDF. Extracted from generate_vac_pdf() so it can be tested without
-     * touching the DB or dompdf.
+     * PDF. Extracted from the VAC PDF render path (serialize_vac_pdf_from_csv)
+     * so it can be tested without touching the DB or dompdf.
      *
      * Field coordinates are in Legal points (612 wide x 1008 tall), sourced
      * verbatim from the legacy print.php positions array — the background

@@ -56,7 +56,6 @@
             this.$products = $('#mealsdb-quick-order-products');
             this.$grid = $('#mealsdb-qo-grid');
             this.$summary = $('#mealsdb-quick-order-summary');
-            this.$summaryContent = this.$summary.find('.mealsdb-quick-order__summary-content');
             this.$summaryEmpty = $('#mealsdb-quick-order-summary-empty');
             this.$summaryContent = $('#mealsdb-quick-order-summary-content');
             this.$summaryClient = $('#mealsdb-quick-order-summary-client');
@@ -72,8 +71,6 @@
             this.$createOrder = $('#qo-create-order');
             this.$orderSuccess = $('#qo-order-success');
             this.$qoItemsCount = $('#mealsdb-quick-order-summary-items');
-            this.$qoSubtotal = $();
-            this.$qoTax = $();
             this.$qoTotal = $('#mealsdb-quick-order-summary-total');
 
             this.$notices = $('<div class="mealsdb-quick-order__notices" />');
@@ -884,39 +881,6 @@
                     }
                 });
                 qoShowToast('Connection error — click to retry.', 'warning');
-            });
-        },
-
-        fetchAllProducts() {
-            this.renderProductsLoading();
-
-            if (this.state.categoryProducts && Array.isArray(this.state.categoryProducts['all'])) {
-                this.renderProducts(this.state.categoryProducts['all']);
-                return $.Deferred().resolve().promise();
-            }
-
-            return $.ajax({
-                url: this.getAjaxUrl(),
-                method: 'GET',
-                dataType: 'json',
-                data: {
-                    action: 'mealsdb_qo_get_all_products',
-                    nonce: this.getSecurityNonce(),
-                },
-            }).done((response) => {
-                const payload = this.getResponsePayload(response);
-
-                if (!this.isSuccessfulResponse(response) || !Array.isArray(payload.products)) {
-                    const message = this.getResponseMessage(response, 'Unable to load products.');
-                    this.renderProductsError(message);
-                    return;
-                }
-
-                this.state.categoryProducts = this.state.categoryProducts || {};
-                this.state.categoryProducts['all'] = payload.products;
-                this.renderProducts(payload.products);
-            }).fail(() => {
-                this.renderProductsError('Unable to load products.');
             });
         },
 
@@ -2004,16 +1968,6 @@
                 this.$qoItemsCount.text(totalItems);
             }
 
-            if (this.$qoSubtotal && this.$qoSubtotal.length) {
-                this.$qoSubtotal.text(govInvoiced ? '' : this.formatPrice(subtotal));
-                this.$qoSubtotal.toggle(!govInvoiced);
-            }
-
-            if (this.$qoTax && this.$qoTax.length) {
-                this.$qoTax.text(govInvoiced ? '' : this.formatPrice(taxAmount));
-                this.$qoTax.toggle(!govInvoiced);
-            }
-
             if (this.$qoTotal && this.$qoTotal.length) {
                 this.$qoTotal.text(govInvoiced ? '' : this.formatPrice(total));
                 this.$qoTotal.toggle(!govInvoiced);
@@ -2059,7 +2013,6 @@
                 },
             }).done((response) => {
                 if (response && response.success) {
-                    this.state.clientType = response.client_type || null;
                     this.state.allocation = response.allocation || null;
                     this.state.clientFees = response.fees || null;
                     this.state.nextDelivery = response.next_delivery || null;
@@ -2143,16 +2096,15 @@
                 $panel.empty().hide();
             }
             this.state.allocation = null;
-            this.state.clientType = null;
             this.state.clientFees = null;
         },
 
         hideProductPrices() {
-            $('.mealsdb-qo-tile__price, .mealsdb-quick-order__summary-total').hide();
+            $('.mealsdb-quick-order__summary-total').hide();
         },
 
         showProductPrices() {
-            $('.mealsdb-qo-tile__price, .mealsdb-quick-order__summary-total').show();
+            $('.mealsdb-quick-order__summary-total').show();
         },
 
         updateAllocationWithCart() {
@@ -2440,15 +2392,6 @@
             }
         }
 
-        if (event.key === '+') {
-            event.preventDefault();
-            jQuery(this).find('.mealsdb-qo-btn[data-action="plus"]').click();
-        }
-
-        if (event.key === '-') {
-            event.preventDefault();
-            jQuery(this).find('.mealsdb-qo-btn[data-action="minus"]').click();
-        }
     });
 
     jQuery(function ($) {

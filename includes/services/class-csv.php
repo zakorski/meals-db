@@ -53,8 +53,7 @@ class MealsDB_CSV {
         // negatives, which previously tripped the guard (audit MAJ-3). A leading
         // '-' (or '+', '@', etc.) in a NON-numeric string is still neutralised:
         // "-2+3" typed into a name field is a real injection vector and stays
-        // quoted. cell_strict() is intentionally NOT changed — it strips for the
-        // handful of exports that must never contain a formula at any cost.
+        // quoted.
         $is_plain_number = ($string !== '') && preg_match(self::NUMERIC_VALUE, $string) === 1;
 
         if (!$is_plain_number
@@ -81,50 +80,5 @@ class MealsDB_CSV {
      */
     public static function row(array $cells): string {
         return implode(',', array_map([self::class, 'cell'], $cells));
-    }
-
-    /**
-     * Strict-mode cell: drop formula-trigger leading characters
-     * instead of prepending a single quote.
-     *
-     * The default cell() helper neutralises =, +, -, @, tab, and CR
-     * by prepending a single quote — safe in every current Excel /
-     * Numbers / Sheets build, but some older or less-common
-     * spreadsheet engines treat the leading quote as literal data
-     * and still evaluate the formula. For the handful of high-risk
-     * exports (government invoice body, customer PII surfaces),
-     * callers can opt into strict mode which strips leading trigger
-     * characters entirely. Data loss in exchange for absolute
-     * confidence the cell will never be interpreted as a formula.
-     *
-     * Quoting for commas / quotes / newlines behaves the same way
-     * as cell() so the output stays RFC-4180 valid.
-     */
-    public static function cell_strict($value): string {
-        if ($value === null || $value === false) {
-            return '';
-        }
-
-        $string = is_scalar($value) ? (string) $value : '';
-
-        // Strip every leading trigger until we land on a safe char.
-        while ($string !== '' && in_array($string[0], self::FORMULA_TRIGGERS, true)) {
-            $string = substr($string, 1);
-        }
-
-        if (strpbrk($string, ",\"\r\n") !== false) {
-            $string = '"' . str_replace('"', '""', $string) . '"';
-        }
-
-        return $string;
-    }
-
-    /**
-     * Strict-mode row: routes every cell through cell_strict().
-     *
-     * @param array<int, mixed> $cells
-     */
-    public static function row_strict(array $cells): string {
-        return implode(',', array_map([self::class, 'cell_strict'], $cells));
     }
 }

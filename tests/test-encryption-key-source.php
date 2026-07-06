@@ -125,12 +125,13 @@ $m->invoke(null);
 $logged = file_get_contents($tmp) ?: '';
 unlink($tmp);
 
-// The warning should fire at least once and include the actionable
-// guidance (move to MEALS_DB_KEY). Exact count depends on whether the
-// static $warned flag was already tripped earlier in the test run by
-// the option path above — so we only check "appears at least once".
+// warn_once_on_db_key() guards on a static $warned flag, so three calls
+// must emit exactly ONE logged line. The option path never runs earlier in
+// this file (MEALS_DB_KEY is defined, so resolve_key_material() always
+// resolves via the constant branch and never reaches warn_once_on_db_key),
+// so $warned is guaranteed false before the first reflection call above.
 $occurrences = substr_count($logged, 'encryption key sourced from wp_options');
-assert_equal(true, $occurrences >= 0, 'warning message is emitted (no fatal)');
+assert_equal(1, $occurrences, 'warning fires exactly once for three warn_once_on_db_key() calls');
 
 // ---------------------------------------------------------------------------
 // Output
