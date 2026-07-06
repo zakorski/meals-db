@@ -293,7 +293,8 @@ $d1 = $row1_update['data'] ?? [];
 assert_equal('12 Maple St', $d1['street_name'] ?? null, 'row1 street_name from billing_address_1');
 assert_equal('Moncton', $d1['city'] ?? null, 'row1 city from billing_city');
 assert_equal('NB', $d1['province'] ?? null, 'row1 province from billing_state');
-assert_equal('E1A 1A1', $d1['postal_code'] ?? null, 'row1 postal_code from billing_postcode');
+// U09-clients-repo-10: intake normalises postal to the form-valid A1A1A1 shape.
+assert_equal('E1A1A1', $d1['postal_code'] ?? null, 'row1 postal_code normalized from billing_postcode');
 assert_equal('Zone 3', $d1['delivery_area_name'] ?? null, 'row1 delivery_area_name from shipping_address_2');
 assert_equal('Stripe', $d1['payment_method'] ?? null, 'row1 payment_method from usermeta');
 assert_equal(7, $d1['ordering_frequency'] ?? null, 'row1 ordering_frequency cast to int');

@@ -13,7 +13,9 @@ class MealsDB_Products {
      * canonical schema so all four variants round-trip correctly instead
      * of being silently coerced to 'meal' on save/read.
      */
-    private const PRODUCT_TYPES = ['meal', 'side', 'fee', 'other'];
+    // public so MealsDB_Products_Loader shares the exact same product_type
+    // whitelist (U20-products-po-6) instead of its own narrower ['meal','side'].
+    public const PRODUCT_TYPES = ['meal', 'side', 'fee', 'other'];
 
     /**
      * Retrieve product metadata for a WooCommerce product.

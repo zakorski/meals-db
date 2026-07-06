@@ -1655,7 +1655,12 @@ class MealsDB_Migration_Consolidated {
         do {
             $result = self::run_phase_next_dates($offset, false);
             if (isset($result['error'])) {
-                return $result;
+                // Shape-consistent return (U03-migration-14): keep the declared
+                // stats keys (accumulated so far) AND surface the error, so the
+                // AJAX caller can detect the failure. Returning the raw
+                // ['error'=>...] chunk array made backfill_next_dates report a
+                // failed run to the UI as success.
+                return array_merge($totals, ['error' => (string) $result['error']]);
             }
             $stats = $result['stats'] ?? [];
             foreach (['processed', 'order_updated', 'delivery_updated', 'skipped', 'errors'] as $k) {

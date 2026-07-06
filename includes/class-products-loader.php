@@ -158,7 +158,11 @@ class MealsDB_Products_Loader {
                 $id = (int) $row['wc_product_id'];
                 $rows[$id] = [
                     'wc_product_id'   => $id,
-                    'product_type'    => in_array($row['product_type'], ['meal', 'side'], true) ? (string) $row['product_type'] : 'meal',
+                    // U20-products-po-6: honour all product types (meal/side/fee/
+                    // other) that MealsDB_Products::get_product_data() persists —
+                    // the old ['meal','side'] whitelist silently coerced fee/other
+                    // rows to 'meal'.
+                    'product_type'    => in_array($row['product_type'], MealsDB_Products::PRODUCT_TYPES, true) ? (string) $row['product_type'] : 'meal',
                     'taxable'         => (int) $row['taxable'],
                     'main_ingredient' => (string) $row['main_ingredient'],
                     'dietary_tags'    => self::decode_json_field($row['dietary_tags']),
@@ -201,7 +205,8 @@ class MealsDB_Products_Loader {
         return [
             'wc_product_id'   => (int) $merged['wc_product_id'],
             'product_name'    => (string) $merged['product_name'],
-            'product_type'    => in_array($merged['product_type'], ['meal', 'side'], true)
+            // U20-products-po-6: share MealsDB_Products' full type whitelist.
+            'product_type'    => in_array($merged['product_type'], MealsDB_Products::PRODUCT_TYPES, true)
                 ? (string) $merged['product_type']
                 : 'meal',
             'taxable'         => (int) (!empty($merged['taxable'])),

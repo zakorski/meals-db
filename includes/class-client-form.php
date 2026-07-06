@@ -1594,7 +1594,20 @@ class MealsDB_Client_Form {
 
             $exists = $repository->column_value_exists($column, $value_for_query, $exclude_id);
 
-            if ($exists) {
+            if ($exists === null) {
+                // U09-clients-repo-14: the uniqueness lookup could not run (DB
+                // error). These *_index / delivery_initials columns have no
+                // backing DB UNIQUE constraint, so proceeding would fail OPEN and
+                // could admit a duplicate. Fail CLOSED: block the save with a
+                // clear "try again" message instead of a misleading "already
+                // exists".
+                $label = ucfirst(str_replace('_', ' ', $field));
+                $errors[] = sprintf(
+                    /* translators: %s: field label (e.g. "Vet health card") */
+                    __('Could not verify that %s is unique (a database error occurred). Please try again.', 'meals-db'),
+                    $label
+                );
+            } elseif ($exists === true) {
                 $errors[] = ucfirst(str_replace('_', ' ', $field)) . ' already exists in another client.';
             }
         }

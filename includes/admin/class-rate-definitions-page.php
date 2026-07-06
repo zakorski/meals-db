@@ -134,6 +134,15 @@ class MealsDB_Rate_Definitions_Page {
 
         foreach (self::groups() as $group_label => $fields) {
             echo '<h2>' . esc_html($group_label) . '</h2>';
+            // U21-rates-money-1: only the Main rate in these two groups is read by
+            // billing (resolve_program_rate). The Side and Main + side combo
+            // values are informational — private/Veteran product pricing lives in
+            // WooCommerce. Say so rather than presenting dead billing controls.
+            if ($group_label === 'Private prices' || $group_label === 'Veteran prices') {
+                echo '<p class="description" style="max-width:48em;">'
+                    . esc_html__('Only the Main rate is used by billing. The Side and Main + side combo values here are informational — actual private/Veteran pricing is set in WooCommerce product pricing.', 'meals-db')
+                    . '</p>';
+            }
             echo '<table class="form-table" role="presentation"><tbody>';
             foreach ($fields as $key => $label) {
                 $value = isset($current[$key]) ? (float) $current[$key] : 0.0;

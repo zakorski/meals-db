@@ -140,6 +140,11 @@ class MealsDB_Ajax_Settings {
         }
 
         $result = MealsDB_Migration_Consolidated::drain_phase_next_dates();
+        // U03-migration-14: a chunk error surfaces as ['error'=>...] alongside
+        // the partial stats — report it as a failure instead of success:true.
+        if ( isset( $result['error'] ) ) {
+            wp_send_json_error( [ 'message' => $result['error'] ] );
+        }
         wp_send_json_success( $result );
     }
 

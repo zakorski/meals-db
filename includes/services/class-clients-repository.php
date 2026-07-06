@@ -573,14 +573,20 @@ class MealsDB_Clients_Repository {
      * @param string   $column      Column name to check.
      * @param mixed    $value       Value to search for.
      * @param int|null $exclude_id  Optional client ID to exclude from the check.
-     * @return bool True if a match exists, false otherwise.
+     * @return bool|null true = a matching row exists; false = no match;
+     *   NULL = the check could NOT run (DB unavailable / query error).
+     *   U09-clients-repo-14: the old bool return gave false ("no duplicate") for
+     *   BOTH "not found" AND a failed query, so a transient DB error made the
+     *   caller's uniqueness gate fail OPEN. These columns have no backing DB
+     *   UNIQUE constraint, so MealsDB_Client_Form::check_unique_fields treats
+     *   null as "could not verify" and fails the save closed.
      */
-    public function column_value_exists(string $column, $value, ?int $exclude_id = null): bool {
+    public function column_value_exists(string $column, $value, ?int $exclude_id = null): ?bool {
         global $wpdb;
 
         if (!$this->ensure_table_name()) {
             error_log('[MealsDB Clients Repository] Database connection unavailable when checking unique fields.');
-            return false;
+            return null;
         }
 
         try {
@@ -601,10 +607,17 @@ class MealsDB_Clients_Repository {
 
             $result = $wpdb->get_var($sql);
 
+            // A null result WITH a non-empty last_error is a query failure, not a
+            // genuine "not found" — surface it as "could not verify" (null).
+            if ($result === null && (string) $wpdb->last_error !== '') {
+                error_log('[MealsDB Clients Repository] Uniqueness check query failed for column ' . $column . ': ' . $wpdb->last_error);
+                return null;
+            }
+
             return $result !== null;
         } catch (Throwable $e) {
             error_log('[MealsDB Clients Repository] Exception while checking unique field for column ' . $column . ': ' . $e->getMessage());
-            return false;
+            return null;
         }
     }
 
