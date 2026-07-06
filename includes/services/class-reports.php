@@ -758,9 +758,18 @@ class MealsDB_Reports {
             }
         }
 
-        // WC category IDs for fallback: Mains=35, Sides=25,23,37,43.
-        $mains_cat_ids = [35];
-        $sides_cat_ids = [25, 23, 37, 43];
+        // WC category IDs for fallback. Sourced from MealsDB_Operational_Constants
+        // (the documented single source of truth for category IDs) so a taxonomy
+        // rebuild that shifts an ID is fixed in one place instead of silently
+        // misclassifying mains/sides here (U05-reports-7). Values are identical to
+        // the previous literals: Mains=35; Sides=25,23,37,43 (Dessert,Cereal,Muffins,Soup).
+        $mains_cat_ids = [MealsDB_Operational_Constants::CATEGORY_ID_MAINS];
+        $sides_cat_ids = [
+            MealsDB_Operational_Constants::CATEGORY_ID_DESSERT,
+            MealsDB_Operational_Constants::CATEGORY_ID_CEREAL,
+            MealsDB_Operational_Constants::CATEGORY_ID_MUFFINS,
+            MealsDB_Operational_Constants::CATEGORY_ID_SOUP,
+        ];
 
         // 3. Date range for WC order query.
         // Half-open interval [start, end_exclusive): start of the start day to
@@ -1317,12 +1326,14 @@ class MealsDB_Reports {
             return [];
         }
 
-        // Strict month validation: the bare \d{2} would accept impossible
-        // months like 2025-13 (DateTime throws -> 500) and 2025-00 (DateTime
-        // silently normalises to the previous December, querying the wrong
-        // month). Constrain to 01-12 so bad input is rejected cleanly here
-        // and at the AJAX boundary before any DateTime/SQL work.
-        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
+        // Strict month validation: a bare \d{2} would accept impossible months
+        // like 2025-13 (DateTime throws -> 500) and 2025-00 (DateTime silently
+        // normalises to the previous December, querying the wrong month).
+        // MealsDB_Helpers::is_valid_ym() applies the same YYYY-MM + 01-12 check
+        // used at the AJAX boundary, so bad input is rejected cleanly here
+        // before any DateTime/SQL work (U05-reports-12; behavior-identical to
+        // the previous inline /^\d{4}-(0[1-9]|1[0-2])$/).
+        if (!MealsDB_Helpers::is_valid_ym($billing_month)) {
             return [];
         }
 

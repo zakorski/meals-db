@@ -5,14 +5,12 @@ $active_tab = isset($active_tab)
     ? $active_tab
     : (isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : 'sync');
 
-if (!isset($tabs) || !is_array($tabs)) {
-    $tabs = [
-        'sync' => __('Sync Dashboard', 'meals-db'),
-        'add' => __('Add New Client', 'meals-db'),
-        'drafts' => __('Drafts', 'meals-db'),
-        'ignored' => __('Ignored Conflicts', 'meals-db'),
-    ];
-}
+// $tabs is always supplied by the sole includer, MealsDB_Admin_UI::render_tabs(),
+// which seeds the canonical 10-entry tab list before the include. A local fallback
+// list used to live here but had drifted to a stale 4-entry copy (missing clients,
+// slips, po, tasks, po_admin, settings) — a second, wrong source of truth that could
+// only render if a future caller forgot to seed $tabs. Removed so render_tabs() is
+// the single source of truth for the nav.
 
 echo '<nav class="nav-tab-wrapper">';
 foreach ($tabs as $key => $label) {

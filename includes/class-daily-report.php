@@ -346,6 +346,28 @@ class MealsDB_Daily_Report {
     }
 
     /**
+     * U16-observability-3: shared tail for the reconciliation checks below.
+     * Each check builds its own prepared SQL selecting a single id column;
+     * this runs it, intval-normalises the rows, and returns the uniform
+     * {count, sample_ids} shape so the three checks don't each re-implement
+     * the get_col / array_map('intval') / count+slice boilerplate.
+     *
+     * @param string $prepared_sql Already $wpdb->prepare()'d SQL.
+     * @return array{count: int, sample_ids: array<int, int>}
+     */
+    private static function run_recon_id_query(string $prepared_sql): array {
+        global $wpdb;
+
+        $ids = $wpdb->get_col($prepared_sql);
+        $ids = is_array($ids) ? array_map('intval', $ids) : [];
+
+        return [
+            'count'      => count($ids),
+            'sample_ids' => array_slice($ids, 0, 10),
+        ];
+    }
+
+    /**
      * Check #1: orders created yesterday with mealsdb_client_user_id
      * meta but no row in meals_delivery_allocations for that order.
      * meals_delivery_allocations is the per-order table; client_allocations
@@ -390,13 +412,7 @@ class MealsDB_Daily_Report {
             $start_utc,
             $end_utc
         );
-        $ids = $wpdb->get_col($sql);
-        $ids = is_array($ids) ? array_map('intval', $ids) : [];
-
-        return [
-            'count'      => count($ids),
-            'sample_ids' => array_slice($ids, 0, 10),
-        ];
+        return self::run_recon_id_query($sql);
     }
 
     /**
@@ -446,13 +462,7 @@ class MealsDB_Daily_Report {
             $start_utc,
             $end_utc
         );
-        $ids = $wpdb->get_col($sql);
-        $ids = is_array($ids) ? array_map('intval', $ids) : [];
-
-        return [
-            'count'      => count($ids),
-            'sample_ids' => array_slice($ids, 0, 10),
-        ];
+        return self::run_recon_id_query($sql);
     }
 
     /**
@@ -511,13 +521,7 @@ class MealsDB_Daily_Report {
             $start_utc,
             $end_utc
         );
-        $ids = $wpdb->get_col($sql);
-        $ids = is_array($ids) ? array_map('intval', $ids) : [];
-
-        return [
-            'count'      => count($ids),
-            'sample_ids' => array_slice($ids, 0, 10),
-        ];
+        return self::run_recon_id_query($sql);
     }
 
     /**

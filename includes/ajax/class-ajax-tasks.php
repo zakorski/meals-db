@@ -124,9 +124,9 @@ class MealsDB_Ajax_Tasks {
             if ($task === null) {
                 wp_send_json_error(['message' => __('Task not found.', 'meals-db')], 404);
             }
-            try {
-                $new_date = (new DateTimeImmutable($task['next_run_date']))->modify('+1 day')->format('Y-m-d');
-            } catch (Throwable $e) {
+            $new_date = self::default_defer_date($task);
+            if ($new_date === null) {
+                // Unparseable due date — fall back to one day from now.
                 $new_date = gmdate('Y-m-d', strtotime('+1 day'));
             }
         }
@@ -185,9 +185,9 @@ class MealsDB_Ajax_Tasks {
                 if ($task === null) {
                     continue;
                 }
-                try {
-                    $target_date = (new DateTimeImmutable($task['next_run_date']))->modify('+1 day')->format('Y-m-d');
-                } catch (Throwable $e) {
+                $target_date = self::default_defer_date($task);
+                if ($target_date === null) {
+                    // Unparseable due date — skip this task in the bulk sweep.
                     continue;
                 }
             }
@@ -333,6 +333,21 @@ class MealsDB_Ajax_Tasks {
     // ---------------------------------------------------------------------
     // Input helpers
     // ---------------------------------------------------------------------
+
+    /**
+     * Default defer target: the task's current due date (next_run_date) + 1 day,
+     * or null when next_run_date can't be parsed. Shared by defer_task (which
+     * then falls back to "tomorrow") and bulk_defer (which skips the task) —
+     * only the null-handling differs, so it stays at the call sites
+     * (U17-tasks-core-6). The successful +1-day computation is identical in both.
+     */
+    private static function default_defer_date(array $task): ?string {
+        try {
+            return (new DateTimeImmutable($task['next_run_date']))->modify('+1 day')->format('Y-m-d');
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
 
     private static function read_task_filters(): array {
         $filters = [];

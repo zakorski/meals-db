@@ -627,13 +627,13 @@ class MealsDB_Ajax_Invoice_Draft {
         return 'text';
     }
 
-    /** The three pipeline identifiers a draft can target. */
+    /**
+     * The pipeline identifiers a draft can target. Delegates to the service's
+     * canonical MealsDB_Invoice_Draft::PIPELINES so the enumeration lives in
+     * one place instead of being rebuilt here (U10-invoice-draft-4).
+     */
     private static function pipelines(): array {
-        return [
-            MealsDB_Invoice_Draft::PIPELINE_VAC,
-            MealsDB_Invoice_Draft::PIPELINE_SDNB_LEGACY,
-            MealsDB_Invoice_Draft::PIPELINE_SDNB_NEW,
-        ];
+        return MealsDB_Invoice_Draft::PIPELINES;
     }
 
     /**

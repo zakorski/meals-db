@@ -332,10 +332,20 @@ class MealsDB_Order_Fees {
                 'delivery_fee'        => (int) ($ids['delivery_fee'] ?? 0),
             ];
         }
+        // Fallback (invoice generator unavailable): overlay the
+        // mealsdb_fee_product_ids option on the seed defaults, exactly as the
+        // canonical MealsDB_Invoice_Generator::get_fee_product_ids() and the
+        // slip generator's fallback do. The previous branch read only the
+        // defaults, so a configured override would have been silently ignored
+        // on this path (U04-billing-7 — keep the override).
         $defaults = MealsDB_Operational_Constants::default_fee_product_ids();
+        $saved = get_option('mealsdb_fee_product_ids', []);
+        if (!is_array($saved)) {
+            $saved = [];
+        }
         return [
-            'client_contribution' => (int) $defaults['client_contribution'],
-            'delivery_fee'        => (int) $defaults['delivery_fee'],
+            'client_contribution' => (int) ($saved['client_contribution'] ?? $defaults['client_contribution']),
+            'delivery_fee'        => (int) ($saved['delivery_fee'] ?? $defaults['delivery_fee']),
         ];
     }
 

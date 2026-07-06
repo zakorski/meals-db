@@ -30,7 +30,12 @@ class MealsDB_Invoice_Draft {
     public const PIPELINE_SDNB_LEGACY = 'sdnb_legacy';
     public const PIPELINE_SDNB_NEW    = 'sdnb_new_portal';
 
-    private const PIPELINES = [
+    /**
+     * The pipeline enumeration — the single source of truth. Public so the
+     * AJAX + admin layers reuse it instead of re-listing the PIPELINE_*
+     * constants in their own arrays (U10-invoice-draft-4).
+     */
+    public const PIPELINES = [
         self::PIPELINE_VAC,
         self::PIPELINE_SDNB_LEGACY,
         self::PIPELINE_SDNB_NEW,
