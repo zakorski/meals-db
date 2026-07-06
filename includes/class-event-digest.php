@@ -106,7 +106,11 @@ class MealsDB_Event_Digest {
      * @param array<int, array<string, mixed>> $events
      */
     private static function send_digest(array $events, string $since_utc, string $until_utc, bool $window_incomplete = false): bool {
-        $recipients = self::recipients();
+        // U16-observability-2: recipient parsing has ONE implementation —
+        // MealsDB_Daily_Report::get_recipients() (same OPT_RECIPIENTS option,
+        // same preg_split/trim/is_email validation, plus array_unique and the
+        // function_exists('is_email') guard this copy previously lacked).
+        $recipients = MealsDB_Daily_Report::get_recipients();
         if (empty($recipients)) {
             return false;
         }
@@ -178,21 +182,6 @@ class MealsDB_Event_Digest {
             }
         }
         return $ok;
-    }
-
-    /**
-     * @return string[] Validated recipient addresses.
-     */
-    private static function recipients(): array {
-        $raw = (string) get_option(MealsDB_Daily_Report::OPT_RECIPIENTS, '');
-        $out = [];
-        foreach (preg_split('/[\s,;]+/', $raw) ?: [] as $c) {
-            $c = trim($c);
-            if ($c !== '' && is_email($c)) {
-                $out[] = $c;
-            }
-        }
-        return $out;
     }
 
     private static function min_severity_rank(): int {

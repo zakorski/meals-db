@@ -667,9 +667,11 @@ class MealsDB_Sync {
      * @return true|WP_Error
      */
     public static function link_client_to_user(int $client_id, int $user_id) {
-        $mutate = new MealsDB_Sync_Mutate();
-
-        return $mutate->link_meals_client_to_wc_user($client_id, $user_id);
+        // U13-sync-core-4: thin alias over link_client_to_wordpress_user so the
+        // two public facades (this one called from views/dashboard.php, the
+        // other from ajax/class-ajax-clients.php) share ONE body — a guard
+        // added to the canonical can't be silently missing here.
+        return self::link_client_to_wordpress_user($client_id, $user_id);
     }
 
     /**

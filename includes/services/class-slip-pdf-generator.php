@@ -42,8 +42,11 @@ class MealsDB_Slip_PDF_Generator {
     public const DOC4_BLOCK_TOP_IN   = 4.62;
     public const DOC4_BLOCK_WIDTH_IN = 3.2;
 
-    /** WC product_cat term ID for Mains. */
-    private const MAIN_CATEGORY_ID = 35;
+    // WC product_cat term ID for Mains is sourced from the documented single
+    // source of truth (MealsDB_Operational_Constants::CATEGORY_ID_MAINS = 35)
+    // rather than a local copy, so a taxonomy-rebuild ID shift is a one-place
+    // edit and slip categorization can't drift from reports/PO (U06-slips-13,
+    // U23-admin-pages-2). The value is unchanged (35).
 
     /**
      * @var MealsDB_Delivery_Slip_Generator
@@ -293,7 +296,7 @@ class MealsDB_Slip_PDF_Generator {
         if ($product_id <= 0 || !function_exists('has_term')) {
             return 'Side';
         }
-        if (has_term(self::MAIN_CATEGORY_ID, 'product_cat', $product_id)) {
+        if (has_term(MealsDB_Operational_Constants::CATEGORY_ID_MAINS, 'product_cat', $product_id)) {
             return 'Main';
         }
         // Anything not tagged Mains lands in the side group (see method

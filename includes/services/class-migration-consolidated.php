@@ -68,6 +68,31 @@ class MealsDB_Migration_Consolidated {
     const DEFAULT_LOOKBACK_MONTHS = 24;
 
     /**
+     * WC order statuses that count as "active"/eligible for the promotion,
+     * deactivation-sweep, and recent-order enrichment queries. Hoisted to one
+     * place (U03-migration-5): the identical list previously appeared verbatim
+     * in private_preview, deactivation_sweep_preview, and
+     * recent_orders_for_users — three edit points for one business rule, so
+     * drift here would silently desync who gets promoted vs deactivated.
+     *
+     * @var string[]
+     */
+    private const ACTIVE_ORDER_STATUSES = ['wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid'];
+
+    /**
+     * Legacy Enzebra service cadence (lowercased) -> normalised period label.
+     * Hoisted to one place (U03-migration-5): the same map was declared inline
+     * in phase 1 (create_clients) and phase 3 (allowances). Lookups are
+     * order-independent, so a single source cannot drift.
+     *
+     * @var array<string,string>
+     */
+    private const PERIOD_MAP = [
+        'day' => 'Day', 'week' => 'Week', 'weekly' => 'Week',
+        'month' => 'Month', 'monthly' => 'Month', 'daily' => 'Day',
+    ];
+
+    /**
      * customer_group (lowercased) -> meals_clients.client_type. Ported
      * verbatim from class-migration.php so create_clients keeps mapping the
      * legacy Enzebra groups identically.
@@ -357,7 +382,7 @@ class MealsDB_Migration_Consolidated {
             $payment    = $meta['payment_method'] ?? null;
             $service_id = $meta['service_id'] ?? null;
             $req_period = $meta['service'] ?? null;
-            $period_map = ['day' => 'Day', 'week' => 'Week', 'month' => 'Month', 'weekly' => 'Week', 'monthly' => 'Month', 'daily' => 'Day'];
+            $period_map = self::PERIOD_MAP;
             $req_period = isset($period_map[strtolower(trim($req_period ?? ''))]) ? $period_map[strtolower(trim($req_period))] : $req_period;
             $units      = !empty($meta['requisition_units']) ? (int) $meta['requisition_units'] : null;
             $contrib    = !empty($meta['contribution']) ? (float) $meta['contribution'] : null;
@@ -769,10 +794,7 @@ class MealsDB_Migration_Consolidated {
             }
         }
 
-        $period_map = [
-            'day' => 'Day', 'week' => 'Week', 'weekly' => 'Week',
-            'month' => 'Month', 'monthly' => 'Month', 'daily' => 'Day',
-        ];
+        $period_map = self::PERIOD_MAP;
 
         foreach ($clients as $client) {
             $wp_user_id = (int) $client['wp_user_id'];
@@ -1731,7 +1753,7 @@ class MealsDB_Migration_Consolidated {
         }
 
         // wc- prefixed statuses: HPOS stores them prefixed in wc_orders.status.
-        $active_statuses = ['wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid'];
+        $active_statuses = self::ACTIVE_ORDER_STATUSES;
         $placeholders    = implode(',', array_fill(0, count($active_statuses), '%s'));
 
         $sql = "
@@ -2004,7 +2026,7 @@ class MealsDB_Migration_Consolidated {
             return [];
         }
 
-        $active_statuses     = ['wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid'];
+        $active_statuses     = self::ACTIVE_ORDER_STATUSES;
         $status_placeholders = implode(',', array_fill(0, count($active_statuses), '%s'));
 
         $stale = [];
@@ -2093,7 +2115,7 @@ class MealsDB_Migration_Consolidated {
             return [];
         }
 
-        $active_statuses = ['wc-pending', 'wc-processing', 'wc-on-hold', 'wc-completed', 'wc-paid'];
+        $active_statuses = self::ACTIVE_ORDER_STATUSES;
         $status_ph       = implode(',', array_fill(0, count($active_statuses), '%s'));
         $user_ph         = implode(',', array_fill(0, count($user_ids), '%d'));
 

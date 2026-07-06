@@ -1344,12 +1344,22 @@ class MealsDB_Client_Form {
         $user_id = get_current_user_id();
 
         if ($draft_id && $draft_id > 0) {
-            if (!self::draft_exists($draft_id)) {
+            // U01-client-form-11: one lookup answers both "does it exist?" and
+            // "is it owned by this user?" (previously two draft_exists() SELECTs
+            // whose only purpose was distinguishing the two log messages). The
+            // UPDATE below is still scoped by `created_by = %d`, so this SELECT
+            // only decides the wording. A NULL created_by is treated as
+            // not-owned, matching the UPDATE's `created_by = %d` semantics
+            // (NULL never equals an int).
+            $owner_row = $wpdb->get_row(
+                $wpdb->prepare("SELECT created_by FROM `{$drafts_table}` WHERE id = %d LIMIT 1", $draft_id),
+                ARRAY_A
+            );
+            if ($owner_row === null) {
                 error_log('[MealsDB] Draft update failed: draft ID ' . $draft_id . ' not found.');
                 return false;
             }
-
-            if (!self::draft_exists($draft_id, $user_id)) {
+            if ($owner_row['created_by'] === null || (int) $owner_row['created_by'] !== $user_id) {
                 error_log('[MealsDB] Draft update failed: user ' . $user_id . ' does not own draft ID ' . $draft_id . '.');
                 return false;
             }
@@ -1418,14 +1428,23 @@ class MealsDB_Client_Form {
 
         $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
 
-        if (!self::draft_exists($draft_id)) {
+        $user_id = get_current_user_id();
+
+        // U01-client-form-11: single lookup for both "does it exist?" and "is
+        // it owned by this user?" (previously two draft_exists() SELECTs whose
+        // only purpose was distinguishing the two log messages). The DELETE
+        // below is still scoped by `created_by = %d`, so this SELECT only
+        // decides the wording. A NULL created_by counts as not-owned, matching
+        // the DELETE's `created_by = %d` semantics (NULL never equals an int).
+        $owner_row = $wpdb->get_row(
+            $wpdb->prepare("SELECT created_by FROM `{$drafts_table}` WHERE id = %d LIMIT 1", $draft_id),
+            ARRAY_A
+        );
+        if ($owner_row === null) {
             error_log('[MealsDB] Draft delete failed: draft ID ' . $draft_id . ' not found.');
             return false;
         }
-
-        $user_id = get_current_user_id();
-
-        if (!self::draft_exists($draft_id, $user_id)) {
+        if ($owner_row['created_by'] === null || (int) $owner_row['created_by'] !== $user_id) {
             error_log('[MealsDB] Draft delete failed: user ' . $user_id . ' does not own draft ID ' . $draft_id . '.');
             return false;
         }
@@ -1503,39 +1522,6 @@ class MealsDB_Client_Form {
         // plaintext branch (and a draft that needs decryption can't be read
         // without it anyway).
         return MealsDB_Encryption::decode_payload($stored);
-    }
-
-    /**
-     * Determine whether a draft exists.
-     *
-     * @param int       $draft_id
-     * @param int|null  $owner_id Restrict check to a specific owner when provided.
-     * @return bool
-     */
-    private static function draft_exists(int $draft_id, ?int $owner_id = null): bool {
-        global $wpdb;
-        if (!$wpdb) {
-            return false;
-        }
-
-        $drafts_table = MealsDB_DB::get_table_name(MealsDB_Tables::DRAFTS);
-
-        if ($owner_id !== null) {
-            $sql = $wpdb->prepare(
-                "SELECT id FROM `{$drafts_table}` WHERE id = %d AND created_by = %d LIMIT 1",
-                $draft_id,
-                $owner_id
-            );
-        } else {
-            $sql = $wpdb->prepare(
-                "SELECT id FROM `{$drafts_table}` WHERE id = %d LIMIT 1",
-                $draft_id
-            );
-        }
-
-        $row = $wpdb->get_var($sql);
-
-        return $row !== null;
     }
 
     /**

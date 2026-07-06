@@ -39,16 +39,43 @@ class MealsDB_Ajax_Reports {
     }
 
     /**
+     * Read + validate the start_date/end_date POST pair shared by the four
+     * date-ranged reconciliation reports (U05-reports-10). On failure it emits
+     * the SAME wp_send_json_error the four handlers used inline and returns
+     * null, so the caller returns without running the report; on success it
+     * returns [start_date, end_date]. Keeping the send-error-then-return
+     * contract preserves each handler's original control flow byte-for-byte.
+     *
+     * @return array{0:string,1:string}|null
+     */
+    private static function require_date_range(): ?array {
+        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
+        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
+
+        if (!$start_date || !$end_date) {
+            wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+            return null;
+        }
+
+        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
+            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
+            return null;
+        }
+
+        return [$start_date, $end_date];
+    }
+
+    /**
      * Generate a seasonally-adjusted purchase order projection.
      */
     public static function generate_purchase_order(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
 
-        $capability = MealsDB_Permissions::required_capability();
-        if (!is_string($capability) || $capability === '') {
-            $capability = 'manage_woocommerce';
-        }
-        if (!current_user_can($capability)) {
+        // can_access_plugin() already resolves the required capability (filter +
+        // whitelist + non-empty fallback) and checks it — no inline fallback
+        // copy to drift out of lockstep (U05-reports-10). A logged-out user
+        // fails current_user_can() too, so the reject set is unchanged.
+        if (!MealsDB_Permissions::can_access_plugin()) {
             // U05-reports-11: match the data.message shape the consumers read.
             wp_send_json_error(
                 ['message' => __('You are not allowed to perform this action.', 'meals-db')],
@@ -87,18 +114,11 @@ class MealsDB_Ajax_Reports {
 
         self::enforce_rate_limit();
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
-
-        if (!$start_date || !$end_date) {
-            wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+        $range = self::require_date_range();
+        if ($range === null) {
             return;
         }
-
-        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
-            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
-            return;
-        }
+        [$start_date, $end_date] = $range;
 
         $reports = new MealsDB_Reports($GLOBALS['wpdb']);
         $result  = $reports->contribution_reconciliation($start_date, $end_date);
@@ -131,18 +151,11 @@ class MealsDB_Ajax_Reports {
 
         self::enforce_rate_limit();
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
-
-        if (!$start_date || !$end_date) {
-            wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+        $range = self::require_date_range();
+        if ($range === null) {
             return;
         }
-
-        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
-            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
-            return;
-        }
+        [$start_date, $end_date] = $range;
 
         $reports = new MealsDB_Reports($GLOBALS['wpdb']);
         $result  = $reports->delivery_fee_reconciliation($start_date, $end_date);
@@ -163,18 +176,11 @@ class MealsDB_Ajax_Reports {
 
         self::enforce_rate_limit();
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
-
-        if (!$start_date || !$end_date) {
-            wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+        $range = self::require_date_range();
+        if ($range === null) {
             return;
         }
-
-        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
-            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
-            return;
-        }
+        [$start_date, $end_date] = $range;
 
         $reports = new MealsDB_Reports($GLOBALS['wpdb']);
         $result  = $reports->private_customer_report($start_date, $end_date);
@@ -200,18 +206,11 @@ class MealsDB_Ajax_Reports {
 
         self::enforce_rate_limit();
 
-        $start_date = isset($_POST['start_date']) ? sanitize_text_field(wp_unslash($_POST['start_date'])) : '';
-        $end_date   = isset($_POST['end_date']) ? sanitize_text_field(wp_unslash($_POST['end_date'])) : '';
-
-        if (!$start_date || !$end_date) {
-            wp_send_json_error(['message' => __('Start date and end date are required.', 'meals-db')]);
+        $range = self::require_date_range();
+        if ($range === null) {
             return;
         }
-
-        if (!MealsDB_Helpers::is_valid_ymd($start_date) || !MealsDB_Helpers::is_valid_ymd($end_date)) {
-            wp_send_json_error(['message' => __('Dates must be in YYYY-MM-DD format.', 'meals-db')]);
-            return;
-        }
+        [$start_date, $end_date] = $range;
 
         $reports = new MealsDB_Reports($GLOBALS['wpdb']);
         $result  = $reports->order_error_report($start_date, $end_date);
@@ -228,11 +227,10 @@ class MealsDB_Ajax_Reports {
     public static function spillover_report(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
 
-        $capability = MealsDB_Permissions::required_capability();
-        if (!is_string($capability) || $capability === '') {
-            $capability = 'manage_woocommerce';
-        }
-        if (!current_user_can($capability)) {
+        // can_access_plugin() encapsulates the required-capability resolution
+        // (filter + whitelist + non-empty fallback) and the check — one place,
+        // no inline copy (U05-reports-10).
+        if (!MealsDB_Permissions::can_access_plugin()) {
             wp_send_json_error(['message' => __('You are not allowed to perform this action.', 'meals-db')], 403);
             return;
         }
@@ -244,8 +242,10 @@ class MealsDB_Ajax_Reports {
             : '';
         // Constrain the month to 01-12: a bare \d{2} would let 2025-13 or
         // 2025-00 through to the service layer, where DateTime either throws
-        // (500) or silently normalises to the wrong month.
-        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $billing_month)) {
+        // (500) or silently normalises to the wrong month. is_valid_ym()
+        // enforces exactly that (format + 01-12 range) — one implementation
+        // shared with the sibling YMD handlers (U05-reports-12).
+        if (!MealsDB_Helpers::is_valid_ym($billing_month)) {
             wp_send_json_error(['message' => __('Month must be in YYYY-MM format.', 'meals-db')]);
             return;
         }

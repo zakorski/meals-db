@@ -152,6 +152,21 @@ class ClientFormWpdb extends wpdb {
         return [];
     }
 
+    public function get_row($sql, $output = ARRAY_A) {
+        $sql = (string) $sql;
+        // U01-client-form-11: delete_draft()/save_draft() now do ONE
+        // "SELECT created_by FROM ... drafts WHERE id = %d" owner lookup
+        // (was two draft_exists() SELECTs). Model the single draft row.
+        if (stripos($sql, 'draft') !== false && stripos($sql, 'created_by') !== false) {
+            $id = preg_match('/id = (\d+)/', $sql, $m) ? (int) $m[1] : 0;
+            if ($id !== $this->draftId) {
+                return null; // draft not found
+            }
+            return ['created_by' => $this->draftOwner];
+        }
+        return null;
+    }
+
     public function query($sql) {
         $sql = (string) $sql;
 
