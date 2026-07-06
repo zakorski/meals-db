@@ -404,7 +404,6 @@ class MealsDB_Schema_Sync {
      */
     private static function normalize_expected_definition(string $definition): array {
         $trimmed = trim($definition);
-        $lower   = strtolower($trimmed);
 
         // ENUM('a','b','default','c') would otherwise be cut at the
         // " default " inside the parens. Substitute the parenthesised
@@ -423,12 +422,18 @@ class MealsDB_Schema_Sync {
             }
         }
 
+        // U11-schema-11: probe the MASKED lowercase form for these keywords, not
+        // the raw unmasked lowercase. The masking (above) blanks parenthesised
+        // content so an ENUM('a','not null','default') value list can't be misread
+        // as a real NOT NULL / DEFAULT / AUTO_INCREMENT attribute. Masking
+        // preserves string length, so a position found in $masked_lower indexes
+        // identically into the original $trimmed for slicing out the default value.
         $type           = self::normalize_column_type(substr($trimmed, 0, $cut_position));
-        $nullable       = stripos($lower, 'not null') === false;
-        $auto_increment = stripos($lower, 'auto_increment') !== false;
+        $nullable       = stripos($masked_lower, 'not null') === false;
+        $auto_increment = stripos($masked_lower, 'auto_increment') !== false;
         $default        = null;
 
-        $default_position = stripos($lower, 'default');
+        $default_position = stripos($masked_lower, 'default');
         if ($default_position !== false) {
             $default_value = trim(substr($trimmed, $default_position + strlen('default')));
             $space_pos     = strpos($default_value, ' ');

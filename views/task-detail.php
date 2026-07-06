@@ -54,9 +54,17 @@ $form_schema = is_array($definition['form_schema'] ?? null) ? $definition['form_
             <?php if (!empty($task['completed_at'])): ?>
                 <tr><th><?php esc_html_e('Completed', 'meals-db'); ?></th>
                     <td><?php echo esc_html($task['completed_at']); ?>
-                    <?php if ((int) $task['completed_by'] > 0): ?>
-                        (<?php echo esc_html((string) get_user_by('id', (int) $task['completed_by'])->display_name ?? ''); ?>)
-                    <?php endif; ?>
+                    <?php
+                    // get_user_by() returns WP_User|false; a since-deleted
+                    // completer yields false, so guard before reading
+                    // ->display_name (avoids a PHP 8 "read property on bool"
+                    // warning). No user => render nothing rather than empty ().
+                    if ((int) $task['completed_by'] > 0):
+                        $completed_by_user = get_user_by('id', (int) $task['completed_by']);
+                        if ($completed_by_user):
+                    ?>
+                        (<?php echo esc_html((string) $completed_by_user->display_name); ?>)
+                    <?php endif; endif; ?>
                     </td></tr>
             <?php endif; ?>
         </tbody>

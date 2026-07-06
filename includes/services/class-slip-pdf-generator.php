@@ -481,20 +481,18 @@ class MealsDB_Slip_PDF_Generator {
      * @return int[]
      */
     private function get_overage_product_ids(): array {
-        $saved = get_option('mealsdb_fee_product_ids', []);
-        if (!is_array($saved)) {
-            $saved = [];
-        }
-        $defaults = [
-            'overage_main'             => MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_MAIN,
-            'overage_sides_taxable'    => MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_SIDE_NONTAX,
-            'overage_sides_nontaxable' => MealsDB_Operational_Constants::PRODUCT_ID_OVERAGE_SIDE_TAX,
-        ];
-        $ids = [];
-        foreach ($defaults as $key => $default) {
-            $ids[] = (int) ($saved[$key] ?? $default);
-        }
-        return array_values(array_filter($ids, static function ($id) { return $id > 0; }));
+        // U06-slips-2: this previously read option `mealsdb_fee_product_ids`
+        // with keys (overage_main / overage_sides_taxable /
+        // overage_sides_nontaxable) that option never carries — the
+        // operator-configured overage IDs live in `mealsdb_overage_product_ids`
+        // with keys mains/taxable_sides/nontax_sides. So a re-pointed overage
+        // SKU always missed the lookup and printed on the slip as an item,
+        // inflating total_sides. Defer to the single source of truth, which
+        // overlays that option on the seed constants with the correct keys.
+        return array_values(array_filter(
+            MealsDB_Operational_Constants::overage_product_ids(),
+            static function ($id) { return (int) $id > 0; }
+        ));
     }
 
     /**

@@ -94,9 +94,15 @@ class MealsDB_Sync_Query {
                 }
 
                 // client_id must always be in the SELECT list so the
-                // extractor below can read the cursor value. Force it
-                // in if the column map didn't include it.
-                if (!isset($column_map['client_id'])) {
+                // extractor below can read the cursor value. The map is
+                // keyed by COLUMN NAME with the ALIAS as the value, and the
+                // primary key column is aliased to 'client_id' (which may be
+                // a differently-named column, e.g. `id`). Check for the
+                // ALIAS, not a literal 'client_id' column key — otherwise a
+                // schema whose PK isn't literally named client_id would
+                // inject a nonexistent `client_id` column into the SELECT
+                // and fail the query.
+                if (!in_array('client_id', $column_map, true)) {
                     $column_map = ['client_id' => 'client_id'] + $column_map;
                 }
 
@@ -147,11 +153,14 @@ class MealsDB_Sync_Query {
                 return $rows;
             },
             // Extract the cursor from the last row of each batch.
-            // Returns 0 rather than null for a missing / zero client_id
-            // so the loop doesn't infinite-spin on a malformed row.
+            // Returns NULL (not 0) for a missing / zero client_id: the loop
+            // in keyset_batched_query breaks on `$last_key === null` (its
+            // terminating signal), whereas returning 0 would reset the
+            // cursor to `client_id > 0` and re-fetch the first batch forever
+            // (accumulating into $results until OOM) on a malformed row.
             static function (array $row) {
                 $id = isset($row['client_id']) ? (int) $row['client_id'] : 0;
-                return $id > 0 ? $id : 0;
+                return $id > 0 ? $id : null;
             }
         );
 
@@ -505,7 +514,7 @@ class MealsDB_Sync_Query {
      * the same batch forever — not a safety issue but a hang.
      *
      * @param callable(int $batch_size, int|string|null $last_key): array $callback
-     * @param callable(array $row): (int|string)                          $key_extractor
+     * @param callable(array $row): (int|string|null)                     $key_extractor
      */
     private function keyset_batched_query(callable $callback, callable $key_extractor, int $batch_size = 500): array {
         $results  = [];

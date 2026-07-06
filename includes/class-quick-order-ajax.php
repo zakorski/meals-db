@@ -428,7 +428,12 @@ class MealsDB_Quick_Order_Ajax {
             wp_send_json([
                 'success' => true,
                 'order_id' => $order_id,
-                'order_link' => get_edit_post_link($order_id),
+                // U07-quick-order-5: the site is HPOS-exclusive, so orders are
+                // not real posts. get_edit_post_link() resolves against the
+                // 'shop_order_placehold' stub and only yields a working URL via
+                // WC's legacy post.php redirect shim (and can return null).
+                // WC_Order::get_edit_order_url() is the HPOS-correct edit URL.
+                'order_link' => $order->get_edit_order_url(),
                 'dropped_items' => $dropped_items,
                 'clamped_items' => $clamped_items,
             ]);
@@ -719,7 +724,13 @@ class MealsDB_Quick_Order_Ajax {
      */
     private static function normalise_items($raw_items, array &$clamped = []): array {
         if (is_string($raw_items)) {
-            $decoded = json_decode($raw_items, true);
+            // U07-quick-order-6: WordPress slash-escapes all of $_POST
+            // (wp_magic_quotes), so a JSON payload arrives as [{\"product_id\":5}]
+            // and json_decode() fails on the backslashes without wp_unslash().
+            // Today all callers post a form-encoded array (this branch is not
+            // taken), but unslash first so the JSON path actually works for any
+            // future caller instead of silently decoding to null and returning [].
+            $decoded = json_decode(function_exists('wp_unslash') ? wp_unslash($raw_items) : $raw_items, true);
             if (is_array($decoded)) {
                 $raw_items = $decoded;
             }
@@ -805,6 +816,29 @@ class MealsDB_Quick_Order_Ajax {
 
             $product = $variation_id > 0 ? wc_get_product($variation_id) : wc_get_product($product_id);
             if (!$product instanceof WC_Product) {
+                $dropped_items[] = [
+                    'product_id'   => $product_id,
+                    'variation_id' => $variation_id,
+                    'quantity'     => $quantity,
+                ];
+                continue;
+            }
+
+            // U07-quick-order-16: wc_get_product() still returns TRASHED
+            // products, so a product trashed while it was sitting in the 30-min
+            // QO transient cache would otherwise be added to the new order at its
+            // stale price. Treat a trashed product (or a variation whose parent
+            // product is trashed) as a dropped line so the operator is WARNED
+            // (Pattern 7 degraded event, U07-quick-order-4 infra) rather than
+            // silently sold a deleted item. The cache-invalidation hooks in
+            // class-quick-order-products.php normally evict it first; this is the
+            // race-window backstop.
+            $is_trashed = $product->get_status() === 'trash';
+            if (!$is_trashed && $product instanceof WC_Product_Variation) {
+                $parent = wc_get_product($product->get_parent_id());
+                $is_trashed = $parent instanceof WC_Product && $parent->get_status() === 'trash';
+            }
+            if ($is_trashed) {
                 $dropped_items[] = [
                     'product_id'   => $product_id,
                     'variation_id' => $variation_id,
@@ -1053,12 +1087,16 @@ class MealsDB_Quick_Order_Ajax {
             wp_send_json_error(['message' => __('Client record not found.', 'meals-db')]);
         }
 
+        // U07-quick-order-8: anchor date math in the site timezone (matching
+        // parse_order_date()), not the server default TZ. Otherwise the "now"
+        // fallback resolves to tomorrow late in the local evening in Moncton.
+        $tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone('UTC');
         try {
             $order_date = preg_match('/^\d{4}-\d{2}-\d{2}$/', $order_date_str)
-                ? new DateTimeImmutable($order_date_str)
-                : new DateTimeImmutable('now');
+                ? new DateTimeImmutable($order_date_str, $tz)
+                : new DateTimeImmutable('now', $tz);
         } catch (Throwable $e) {
-            $order_date = new DateTimeImmutable('now');
+            $order_date = new DateTimeImmutable('now', $tz);
         }
 
         $ordering_freq = (int) ($client['ordering_frequency'] ?? 0);
@@ -1075,8 +1113,12 @@ class MealsDB_Quick_Order_Ajax {
             'next_delivery_date'    => $client['next_delivery_date'] ?: null,
             'rule_default_order'    => $rule_order,
             'rule_default_delivery' => $rule_delivery,
-            'ordering_frequency'    => $ordering_days,
-            'delivery_frequency'    => $delivery_days,
+            // U07-quick-order-1: these two keys previously emitted the
+            // never-defined $ordering_days / $delivery_days — an E_WARNING on
+            // every call and a null field for any consumer. Emit the actual
+            // integer frequencies resolved above (matching the key names).
+            'ordering_frequency'    => $ordering_freq,
+            'delivery_frequency'    => $delivery_freq,
         ]);
     }
 
@@ -1115,7 +1157,13 @@ class MealsDB_Quick_Order_Ajax {
 
         $client_id   = (int) $client['client_id'];
         $client_type = $client['client_type'];
-        $billing_month = gmdate('Y-m');
+        // U07-quick-order-8: orders are dated in the SITE timezone
+        // (parse_order_date() uses wp_timezone()), so the allocation summary is
+        // keyed on the site-local month. Deriving the preview month with UTC
+        // gmdate() would query NEXT month's (empty) summary for the last few
+        // evening hours of each month in Moncton (UTC-3/-4). Use current_time()
+        // so the preview matches how orders are actually bucketed.
+        $billing_month = current_time('Y-m');
 
         if (!in_array($client_type, ['SDNB', 'Veteran'], true)) {
             wp_send_json(['success' => true, 'allocation' => null, 'client_type' => $client_type]);
@@ -1130,7 +1178,10 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         $schedule = $engine->calculate_delivery_schedule($client_id, $billing_month);
-        $today    = gmdate('Y-m-d');
+        // U07-quick-order-8: "next delivery" is compared against today's date;
+        // use the site-local day (matching order dating) rather than UTC so the
+        // comparison doesn't roll to tomorrow late in the local evening.
+        $today    = current_time('Y-m-d');
         $next_delivery = null;
         foreach ($schedule as $delivery) {
             if ($delivery['delivery_date'] >= $today) {

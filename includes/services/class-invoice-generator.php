@@ -845,6 +845,17 @@ class MealsDB_Invoice_Generator {
                 ? MealsDB_Encryption::safe_decrypt($row['vet_health_card'])
                 : '';
 
+            // U04-billing-9: get_phase2_billing_data() computes tax_cents from the
+            // SDNB side rate for ANY row with taxable sides, but collect_vac_client_rows()
+            // never selects delivery_area_zone — so a veteran's tax_cents is an
+            // urban-SDNB-rate figure with no meaning under the corrected VAC model
+            // (VAC is billed mains-only; HST rides on the hand-entered fold_hst).
+            // serialize_vac_csv() and compute_vac_row_derived() ignore tax_cents,
+            // and the VAC draft grid omits it, so zeroing it changes NO output — it
+            // just stops a bogus SDNB-derived value from riding on the encrypted VAC
+            // draft row for a future consumer to trust. Shape-stable (keeps the key).
+            $row['tax_cents'] = 0;
+
             // --- Editable corrected-model fields (Step 4a) ---
             $row['bill_mains'] = (int) ($row['allocated_mains'] ?? 0);
             // bill_rate: the per-main dollar figure ON THE WIRE.

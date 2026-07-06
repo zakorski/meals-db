@@ -270,6 +270,13 @@ class MealsDB_Ajax_Invoice_Draft {
             $value_display = is_scalar($validated) ? (string) $validated : '';
             if ($edited_as_dollars && is_int($validated)) {
                 $value_display = number_format($validated / 100, 2, '.', '');
+            } elseif (is_float($validated)) {
+                // Dollars-stored money fields (VAC bill_rate/fold_amount/
+                // fold_hst) hold a rounded float; (string) 9.0 => '9', which
+                // flips the grid cell out of the 2dp form it first rendered in
+                // (number_format(...,2)). Keep 2dp so the input stays '9.00'
+                // after a save. Cosmetic only — the stored value is unchanged.
+                $value_display = number_format((float) $validated, 2, '.', '');
             }
 
             wp_send_json_success([
@@ -558,7 +565,11 @@ class MealsDB_Ajax_Invoice_Draft {
             if (!is_scalar($raw) || !is_numeric($raw) || (float) $raw != floor((float) $raw)) {
                 return new WP_Error('bad_count', __('Value must be a non-negative whole number.', 'meals-db'));
             }
-            $int = (int) $raw;
+            // Derive the int from the numeric VALUE, not a raw (int) cast:
+            // (int) '1e3' stops at 'e' and yields 1, silently storing a wrong
+            // count on a government invoice. round() maps scientific/edge forms
+            // to their intended magnitude; plain integers are unaffected.
+            $int = (int) round((float) $raw);
             if ($int < 0 || $int > self::MAX_COUNT) {
                 return new WP_Error('bad_count', __('Value is out of the allowed range.', 'meals-db'));
             }

@@ -144,7 +144,17 @@ class MealsDB_Ajax_Delivery_Slips {
         $updated = 0;
 
         foreach ($schedule as $zone_name => $config) {
-            $day = strtolower($config['day']);
+            // The zone schedule is an operator-set option; don't trust its
+            // shape. A malformed entry (non-array, or missing 'day') is skipped
+            // rather than emitting a PHP 8 warning / strtolower(null) deprecation
+            // and clobbering delivery_day with an empty string.
+            if (!is_array($config)) {
+                continue;
+            }
+            $day = strtolower((string) ($config['day'] ?? ''));
+            if ($day === '') {
+                continue;
+            }
 
             $sql = $wpdb->prepare(
                 "UPDATE `{$clients_table}`

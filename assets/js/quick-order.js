@@ -1516,8 +1516,12 @@
                 return '#';
             }
 
-            const baseUrl = window.ajaxurl ? window.ajaxurl.replace(/admin-ajax\.php/i, 'post.php') : (window.location.origin + '/wp-admin/post.php');
-            return `${baseUrl}?post=${orderId}&action=edit`;
+            // HPOS-exclusive: orders live in wc_orders, so the edit screen is
+            // admin.php?page=wc-orders&action=edit&id=ID. The legacy
+            // post.php?post=ID URL does not open a wc_orders record under HPOS.
+            // This fallback only runs when the server omits order_link.
+            const baseUrl = window.ajaxurl ? window.ajaxurl.replace(/admin-ajax\.php/i, 'admin.php') : (window.location.origin + '/wp-admin/admin.php');
+            return `${baseUrl}?page=wc-orders&action=edit&id=${orderId}`;
         },
 
         setCreateOrderBusy(isBusy) {
@@ -1663,7 +1667,11 @@
             if (clientData && typeof clientData === 'object') {
                 const parsedId = parseInt(clientData.id, 10);
                 clientId = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
-                clientType = clientData.client_type || clientData.client_type || '';
+                // Accept the canonical snake_case key, then a camelCase
+                // clientType fallback. The original duplicated `client_type`
+                // twice, making the second operand dead (a caller passing
+                // camelCase silently got '').
+                clientType = clientData.client_type || clientData.clientType || '';
 
                 if (Array.isArray(clientData.allergens)) {
                     clientAllergens = clientData.allergens;

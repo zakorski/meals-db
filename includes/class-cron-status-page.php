@@ -50,7 +50,14 @@ class MealsDB_Cron_Status_Page {
 
         echo '<div class="wrap"><h1>' . esc_html__('Meals DB — Cron Status', 'meals-db') . '</h1>';
 
-        if (isset($_GET['mealsdb_notice']) && check_admin_referer('mealsdb_cron_notice')) {
+        // Use wp_verify_nonce (returns false) rather than check_admin_referer
+        // (which wp_die()s via wp_nonce_ays on a bad/missing nonce). This guards
+        // only the optional info notice, so a hand-crafted link with an invalid
+        // _wpnonce must simply skip the notice — not kill the whole page with
+        // "link expired". The notice link is built by redirect_with_notice()
+        // with the matching wp_create_nonce('mealsdb_cron_notice') in _wpnonce.
+        if (isset($_GET['mealsdb_notice'])
+            && wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'] ?? '')), 'mealsdb_cron_notice')) {
             $notice = sanitize_text_field((string) $_GET['mealsdb_notice']);
             if ($notice !== '') {
                 echo '<div class="notice notice-info is-dismissible"><p>' . esc_html($notice) . '</p></div>';

@@ -293,7 +293,54 @@ class MealsDB_Clients_Repository {
                 // attribute the failure to a field, mirroring create_client.
                 // Directive GUI-F3F5 STEP 3.
                 self::$last_failed_column = self::parse_failed_column($last);
+                // STR-LOG parity with create_client (U09-clients-repo-18): a
+                // rejected UPDATE was previously visible only in the PHP error
+                // log. Surface it on the operational trunk too — only the
+                // offending COLUMN name travels in context, never the raw value
+                // (PII) or the raw $wpdb error (schema detail).
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity'  => 'error',
+                        'category'  => 'client',
+                        'subsystem' => 'clients_repository',
+                        'event'     => 'client.update.db_error',
+                        'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message'   => 'Client UPDATE was rejected by the database.',
+                        'context'   => ['last_failed_column' => self::$last_failed_column],
+                    ]);
+                }
                 return false;
+            }
+
+            // U09-clients-repo-18: $wpdb->update() returns 0 both when the values
+            // were UNCHANGED and when NO row matched client_id (WP connects
+            // without CLIENT_FOUND_ROWS, so the count is rows CHANGED, not rows
+            // MATCHED). Returning true on 0 here reports success for an update
+            // against a deleted/nonexistent client — and callers such as
+            // MealsDB_Clients::set_client_active_status then audit-log a status
+            // change that never happened. Disambiguate: on 0 affected rows,
+            // confirm the target row exists. A genuine no-op update (unchanged
+            // values, row present) stays a success; a missing row is a failure.
+            if ((int) $result === 0) {
+                $exists = $wpdb->get_var($wpdb->prepare(
+                    sprintf('SELECT 1 FROM `%s` WHERE client_id = %%d LIMIT 1', $this->escape_table_name()),
+                    $client_id
+                ));
+                if ($exists === null) {
+                    error_log('[MealsDB Clients Repository] Update affected 0 rows: client_id ' . $client_id . ' does not exist.');
+                    if (class_exists('MealsDB_Event_Log')) {
+                        MealsDB_Event_Log::record([
+                            'severity'  => 'error',
+                            'category'  => 'client',
+                            'subsystem' => 'clients_repository',
+                            'event'     => 'client.update.missing_row',
+                            'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                            'message'   => 'Client UPDATE matched no existing client row.',
+                            'context'   => ['client_id' => $client_id],
+                        ]);
+                    }
+                    return false;
+                }
             }
 
             return true;

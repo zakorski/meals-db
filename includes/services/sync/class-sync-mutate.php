@@ -119,9 +119,17 @@ class MealsDB_Sync_Mutate {
         // leaves the two systems diverged. Capture the outcome so callers
         // (and a future reconciliation job) can see which writes landed
         // incompletely, instead of silently discarding the return value.
-        $client_id = $this->get_client_id_from_wp_user($woo_user_id);
+        // A WP user can legitimately map to MORE THAN ONE client row
+        // (dual-program: an SDNB recipient who is also a Veteran — see the
+        // duplicate-wp_user_id soft guard in link_meals_client_to_wc_user
+        // and directive MAJ-1). A WP-authoritative identity change applies
+        // to EVERY client linked to this account, so reconcile all of them.
+        // The previous LIMIT-1 lookup reconciled one arbitrary row and left
+        // the sibling diverged until the nightly per-row sync healed it;
+        // this makes the real-time path consistent with what nightly does.
+        $client_ids = $this->get_client_ids_from_wp_user($woo_user_id);
 
-        if ($client_id > 0) {
+        if (!empty($client_ids)) {
             $connection = $this->require_connection();
 
             if (!is_wp_error($connection)) {
@@ -132,24 +140,26 @@ class MealsDB_Sync_Mutate {
                 // Only update if the field exists in the client table
                 if (isset($column_map[$field])) {
                     $column = $column_map[$field];
-                    $reconciled = $this->update_meals_client($client_id, [
-                        $column => $new_value,
-                    ]);
-                    if ($reconciled === false) {
-                        self::record_partial_sync_failure(
-                            $woo_user_id,
-                            $client_id,
-                            $field,
-                            $new_value,
-                            'wp_to_meals_db',
-                            'WP user update succeeded but Meals DB client reconciliation failed'
-                        );
+                    foreach ($client_ids as $client_id) {
+                        $reconciled = $this->update_meals_client($client_id, [
+                            $column => $new_value,
+                        ]);
+                        if ($reconciled === false) {
+                            self::record_partial_sync_failure(
+                                $woo_user_id,
+                                $client_id,
+                                $field,
+                                $new_value,
+                                'wp_to_meals_db',
+                                'WP user update succeeded but Meals DB client reconciliation failed'
+                            );
+                        }
                     }
                 }
             } else {
                 self::record_partial_sync_failure(
                     $woo_user_id,
-                    $client_id,
+                    (int) reset($client_ids),
                     $field,
                     $new_value,
                     'wp_to_meals_db',
@@ -609,9 +619,12 @@ class MealsDB_Sync_Mutate {
             );
         }
 
-        $transaction_started = false;
-        $connection->query('START TRANSACTION');
-        $transaction_started = true;
+        // Capture the START TRANSACTION result like the sibling paths
+        // (update_meals_client / create_meals_client). If the statement
+        // fails we must NOT later believe we had transactional protection
+        // and issue ROLLBACK/COMMIT against no transaction — the guarded
+        // if ($transaction_started) branches below then correctly skip.
+        $transaction_started = $connection->query('START TRANSACTION') !== false;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $available_columns = $this->get_table_columns($connection, $clients_table);
@@ -744,16 +757,21 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
-     * Get the Meals DB client ID associated with a WordPress user.
+     * Get every Meals DB client ID linked to a WordPress user.
+     *
+     * Returns an array because a single WP user can legitimately map to
+     * more than one client row (dual-program — see directive MAJ-1 and the
+     * duplicate-wp_user_id soft guard in link_meals_client_to_wc_user). A
+     * LIMIT-1 lookup here would silently reconcile only one arbitrary row.
      *
      * @param int $wp_user_id WordPress user ID
-     * @return int Client ID, or 0 if not found
+     * @return array<int, int> Client IDs (empty when none / on failure)
      */
-    private function get_client_id_from_wp_user(int $wp_user_id): int {
+    private function get_client_ids_from_wp_user(int $wp_user_id): array {
         $connection = $this->require_connection();
 
         if (is_wp_error($connection)) {
-            return 0;
+            return [];
         }
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -762,17 +780,26 @@ class MealsDB_Sync_Mutate {
         $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
 
         if ($primary_key === null || $wp_column === null) {
-            return 0;
+            return [];
         }
 
         $escaped_table = str_replace('`', '``', $clients_table);
         $escaped_pk = str_replace('`', '``', $primary_key);
         $escaped_wp_col = str_replace('`', '``', $wp_column);
-        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_pk, $escaped_table, $escaped_wp_col);
+        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d ORDER BY `%s` ASC', $escaped_pk, $escaped_table, $escaped_wp_col, $escaped_pk);
 
-        $client_id = $connection->get_var($connection->prepare($sql, $wp_user_id));
+        $rows = $connection->get_col($connection->prepare($sql, $wp_user_id));
 
-        return is_numeric($client_id) ? (int) $client_id : 0;
+        $client_ids = [];
+        if (is_array($rows)) {
+            foreach ($rows as $value) {
+                if (is_numeric($value) && (int) $value > 0) {
+                    $client_ids[] = (int) $value;
+                }
+            }
+        }
+
+        return $client_ids;
     }
 
     /**

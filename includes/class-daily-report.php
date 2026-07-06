@@ -527,6 +527,7 @@ class MealsDB_Daily_Report {
         $job_failures = 0;
         $job_missed   = 0;
         $job_hung     = 0;
+        $job_degraded = 0;
         foreach ($jobs as $j) {
             if ($j['status'] === 'FAILURE') {
                 $job_failures++;
@@ -536,6 +537,14 @@ class MealsDB_Daily_Report {
             }
             if ($j['status'] === 'HUNG') {
                 $job_hung++;
+            }
+            // 'degraded' is the STR-LOG first-class "continued but swallowed a
+            // problem" outcome (Job_Logger::outcome_to_status() -> 'degraded',
+            // uppercased here). build_jobs_section already renders it as
+            // [DEGRADED]; count it so a degraded nightly job can't roll up to
+            // CLEAR and be suppressed by should_suppress_on_clear.
+            if ($j['status'] === 'DEGRADED') {
+                $job_degraded++;
             }
         }
 
@@ -556,7 +565,7 @@ class MealsDB_Daily_Report {
         $overall = 'CLEAR';
         if ($job_failures > 0 || $job_hung > 0) {
             $overall = 'FAILURES';
-        } elseif ($job_missed > 0 || $hook_anomalies > 0 || $recon_findings > 0) {
+        } elseif ($job_missed > 0 || $job_degraded > 0 || $hook_anomalies > 0 || $recon_findings > 0) {
             $overall = 'WARNINGS';
         }
 
@@ -565,9 +574,10 @@ class MealsDB_Daily_Report {
             'job_failures'   => $job_failures,
             'job_missed'     => $job_missed,
             'job_hung'       => $job_hung,
+            'job_degraded'   => $job_degraded,
             'hook_anomalies' => $hook_anomalies,
             'recon_findings' => $recon_findings,
-            'anomaly_count'  => $job_failures + $job_missed + $job_hung + $hook_anomalies + $recon_findings,
+            'anomaly_count'  => $job_failures + $job_missed + $job_hung + $job_degraded + $hook_anomalies + $recon_findings,
         ];
     }
 

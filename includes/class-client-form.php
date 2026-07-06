@@ -898,7 +898,15 @@ class MealsDB_Client_Form {
         }
 
         // Format date fields (assume already validated) - using database column names after mapping
-        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_termination_date', 'termination_date', 'most_recent_renewal_termination_date'];
+        // next_order_date / next_delivery_date are DATE NULL columns in the
+        // schema and are whitelisted in $db_columns, so a form submission (or a
+        // direct save/update caller) can carry them — include them in the
+        // normalization list so they get the same strtotime() + empty-string
+        // handling as every other date column instead of an unnormalized value
+        // (e.g. '' -> a strict-mode DATE insert failure). Today the client
+        // add/edit UI does not render them (Quick Order manages them via
+        // MealsDB_Client_Dates), but the whitelist makes them reachable.
+        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_termination_date', 'termination_date', 'most_recent_renewal_termination_date', 'next_order_date', 'next_delivery_date'];
         foreach ($date_fields as $field) {
             if (!empty($encrypted[$field])) {
                 $timestamp = strtotime($encrypted[$field]);
@@ -1123,7 +1131,15 @@ class MealsDB_Client_Form {
         }
 
         // Using database column names after mapping
-        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_termination_date', 'termination_date', 'most_recent_renewal_termination_date'];
+        // next_order_date / next_delivery_date are DATE NULL columns in the
+        // schema and are whitelisted in $db_columns, so a form submission (or a
+        // direct save/update caller) can carry them — include them in the
+        // normalization list so they get the same strtotime() + empty-string
+        // handling as every other date column instead of an unnormalized value
+        // (e.g. '' -> a strict-mode DATE insert failure). Today the client
+        // add/edit UI does not render them (Quick Order manages them via
+        // MealsDB_Client_Dates), but the whitelist makes them reachable.
+        $date_fields = ['birth_date', 'open_date', 'required_start_date', 'service_commence_date', 'expected_termination_date', 'initial_renewal_termination_date', 'termination_date', 'most_recent_renewal_termination_date', 'next_order_date', 'next_delivery_date'];
         foreach ($date_fields as $field) {
             if (array_key_exists($field, $encrypted)) {
                 if (!empty($encrypted[$field])) {
@@ -1802,9 +1818,18 @@ class MealsDB_Client_Form {
                     break;
                 }
 
-                $digits = preg_replace('/[^0-9]/', '', $value);
-                $digits = ltrim($digits, '0');
-                $value = $digits === '' ? '' : $digits;
+                // Only CANONICALISE a value that is already purely digits (strip
+                // leading zeros). Previously we stripped EVERY non-digit
+                // character, which silently rewrote a typo instead of rejecting
+                // it: 'user#7' -> '7', '12.5' -> '125'. validate() /
+                // validate_wp_user_link() then confirmed the WRONG (but real) WP
+                // user existed and mis-linked the client — and wp_user_id drives
+                // the order->client allocation routing (MAJ-1). Leave a
+                // non-numeric value verbatim so validate()'s ctype_digit check
+                // rejects it with a named "must be a positive integer" error.
+                if (ctype_digit($value)) {
+                    $value = ltrim($value, '0');
+                }
                 break;
             case 'diet_concerns':
             case 'client_comments':
@@ -1824,14 +1849,14 @@ class MealsDB_Client_Form {
                     break;
                 }
 
-                $units = (int) $value;
-                if ($units < 0) {
-                    $units = 0;
-                }
-                if ($units > 31) {
-                    $units = 31;
-                }
-                $value = (string) $units;
+                // Normalise to an integer STRING but do NOT clamp to the 1-31
+                // range here. sanitize runs before validate(), so clamping
+                // (e.g. 45 -> 31) silently rewrote an out-of-range entry and
+                // made validate()'s "must be between 1 and 31" range check
+                // unreachable — the operator's 45 was stored as 31 with no
+                // error. Leave the out-of-range value for validate() to reject
+                // by name.
+                $value = (string) (int) $value;
                 break;
             default:
                 if (function_exists('sanitize_text_field')) {
@@ -2138,7 +2163,7 @@ class MealsDB_Client_Form {
         $legacyIndexRows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escapedLegacy}'", ARRAY_A);
         if (is_array($legacyIndexRows) && count($legacyIndexRows) > 0) {
             if ($wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$legacyIndexName}`") === false
-                && strpos($wpdb->last_error, '1091') === false) {
+                && !self::ddl_error_is_benign($wpdb->last_error, 'check that column/key exists', '1091')) {
                 self::record_index_event(
                     'index.legacy_drop_failed',
                     'Could not drop legacy deterministic index ' . $legacyIndexName . '; continuing.',
@@ -2165,7 +2190,7 @@ class MealsDB_Client_Form {
 
         if (!$indexExists) {
             $createIndexSql = "CREATE UNIQUE INDEX `{$indexName}` ON `{$clients_table}` (`{$indexColumn}`)";
-            if ($wpdb->query($createIndexSql) === false && strpos($wpdb->last_error, '1061') === false) {
+            if ($wpdb->query($createIndexSql) === false && !self::ddl_error_is_benign($wpdb->last_error, 'Duplicate key name', '1061')) {
                 // errno 1062 (duplicate data) is the staging case: genuine
                 // duplicate values among migrated clients. Per Part A this is a
                 // WARNING, not a save-killer — the hash column still populates
@@ -2194,7 +2219,7 @@ class MealsDB_Client_Form {
             $rows = $wpdb->get_results("SHOW INDEX FROM `{$clients_table}` WHERE Key_name = '{$escaped}'", ARRAY_A);
             if (is_array($rows) && count($rows) > 0) {
                 if ($wpdb->query("ALTER TABLE `{$clients_table}` DROP INDEX `{$indexName}`") === false
-                    && strpos($wpdb->last_error, '1091') === false) {
+                    && !self::ddl_error_is_benign($wpdb->last_error, 'check that column/key exists', '1091')) {
                     self::record_index_event(
                         'index.constraint_drop_failed',
                         'Could not drop unwanted unique index ' . $indexName . ' (allow-and-warn column); continuing.',
@@ -2203,6 +2228,27 @@ class MealsDB_Client_Form {
                 }
             }
         }
+    }
+
+    /**
+     * Decide whether a failed DDL statement's $wpdb->last_error describes a
+     * BENIGN race we should tolerate silently (index already exists on CREATE;
+     * index missing on DROP) rather than log as a degraded Event-Log entry.
+     *
+     * $wpdb->last_error carries mysqli_error()'s message TEXT only — the numeric
+     * errno ('1061' / '1091') never appears in it — so the old
+     * `strpos($wpdb->last_error, '1061') === false` guards could never match and
+     * fired the record_index_event() call for the benign cases too. Match on the
+     * driver's message wording (like class-task-engine.php::is_duplicate_key_error
+     * does for 1062), keeping the errno digits as a belt-and-suspenders in case a
+     * future driver ever surfaces them.
+     */
+    private static function ddl_error_is_benign(string $last_error, string $wording, string $errno): bool {
+        if ($last_error === '') {
+            return false;
+        }
+        return stripos($last_error, $wording) !== false
+            || strpos($last_error, $errno) !== false;
     }
 
     /**

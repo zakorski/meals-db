@@ -9,6 +9,14 @@
 
 defined('ABSPATH') || exit;
 
+/**
+ * NOTE (X1-orphan-files-3): this file is named install-schema.php but defines
+ * MealsDB_Installer. The autoloader derives filenames from the class slug
+ * (MealsDB_Installer -> class-installer.php), which does not exist, so this
+ * class is NOT autoloadable. Every caller MUST require_once this file before
+ * use (see meals-db-main.php and includes/class-updates.php, which do). Do not
+ * reference MealsDB_Installer expecting the autoloader to resolve it.
+ */
 class MealsDB_Installer {
 
     /**
@@ -195,15 +203,45 @@ class MealsDB_Installer {
             ];
         }
 
+        // U11-schema-10: seed each rule at most ONCE per install, tracked by name
+        // in a persisted ledger. install() runs on every version bump, so the old
+        // per-name existence check re-created any seed rule the operator had
+        // DELETED (resurrecting it with is_active=1 — the query-spawn rules then
+        // immediately resumed spawning tasks against live clients). A per-seed
+        // ledger makes a deliberate delete/rename STICK across upgrades while
+        // still letting a genuinely NEW seed added in a future version deploy to
+        // existing installs (its name won't be in the ledger yet). The existence
+        // check is retained so pre-ledger installs (rules already present) are
+        // recorded as done without duplicating.
+        $seeds_done = function_exists('get_option') ? get_option('mealsdb_task_seeds_done', []) : [];
+        if (!is_array($seeds_done)) {
+            $seeds_done = [];
+        }
+        $ledger_changed = false;
+
         foreach ($seeds as $seed) {
+            if (in_array($seed['name'], $seeds_done, true)) {
+                // Already planted once — never recreate, so an operator's delete
+                // or rename is permanent.
+                continue;
+            }
+
             $existing = $wpdb->get_var($wpdb->prepare(
                 "SELECT rule_id FROM `{$rules_table}` WHERE name = %s LIMIT 1",
                 $seed['name']
             ));
-            if ($existing) {
-                continue;
+            if (!$existing) {
+                $rules->create_rule($seed);
             }
-            $rules->create_rule($seed);
+
+            // Record the seed as planted whether we created it now or found it
+            // already present, so intact pre-ledger installs also mark done.
+            $seeds_done[]   = $seed['name'];
+            $ledger_changed = true;
+        }
+
+        if ($ledger_changed && function_exists('update_option')) {
+            update_option('mealsdb_task_seeds_done', array_values(array_unique($seeds_done)), false);
         }
     }
 

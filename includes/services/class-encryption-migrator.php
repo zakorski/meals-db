@@ -284,7 +284,23 @@ class MealsDB_Encryption_Migrator {
                     $after = (int) $row['client_id'];
                     $stats['processed']++;
 
-                    if (MealsDB_Encryption::classify_payload((string) $row['v']) !== 'legacy') {
+                    // U14-encryption-3: mirror inventory()'s legacy detection.
+                    // classify_payload() is purely structural and calls anything
+                    // >= 49 raw bytes 'new', so a LONG pre-HMAC legacy value (IV +
+                    // multi-block ciphertext — e.g. a lengthy diet_concerns /
+                    // customer_comments) is misclassified 'new' and would be
+                    // skipped here, yet inventory() (via is_authenticated_payload)
+                    // counts it as legacy — so the admin notice could never reach
+                    // zero and this tool could never clear those rows. Confirm a
+                    // structural 'new' verdict against an actual HMAC: if it does
+                    // not authenticate it is really legacy, and decrypt() reads it
+                    // through its legacy IV+ciphertext fall-through branch.
+                    $value = (string) $row['v'];
+                    $kind  = MealsDB_Encryption::classify_payload($value);
+                    if ($kind === 'new' && !MealsDB_Encryption::is_authenticated_payload($value)) {
+                        $kind = 'legacy';
+                    }
+                    if ($kind !== 'legacy') {
                         continue;
                     }
 
@@ -396,9 +412,6 @@ class MealsDB_Encryption_Migrator {
 
         $table       = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $encrypted   = MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS;
-        $index_map   = class_exists('MealsDB_Client_Form')
-            ? MealsDB_Client_Form::deterministic_index_map()
-            : [];
 
         $stats = [
             'processed'      => 0,
@@ -411,6 +424,25 @@ class MealsDB_Encryption_Migrator {
             'last_client_id' => $after_client_id,
             'done'           => true,
         ];
+
+        // U14-encryption-9: FAIL CLOSED when the deterministic index map is
+        // unavailable. Without MealsDB_Client_Form we cannot recompute any
+        // `*_index`, yet run_full_harden() would still flip the live index format
+        // to v2 on a "clean" (zero-failure) run — leaving every existing index at
+        // v1 while lookups start computing v2, so every exact-match search (dedup,
+        // client lookup) would miss every row. Refuse rather than silently reindex
+        // nothing: abort so run_full_harden() leaves the flag at v1. In production
+        // class_exists() triggers the autoloader, so this only guards a
+        // degraded/bare-harness invocation — but the empty-map fallback's failure
+        // mode was the worst possible state instead of a refusal.
+        if (!class_exists('MealsDB_Client_Form')) {
+            $stats['aborted']      = true;
+            $stats['abort_reason'] = 'Index map unavailable: MealsDB_Client_Form not loaded — refusing to re-encrypt without recomputing *_index.';
+            $stats['done']         = false;
+            error_log('[MealsDB Encryption Migrator] ' . $stats['abort_reason']);
+            return $stats;
+        }
+        $index_map = MealsDB_Client_Form::deterministic_index_map();
 
         // Column projection: client_id, every encrypted blob, every index
         // source column, and the index columns themselves (to diff against).

@@ -11,8 +11,10 @@
 defined('ABSPATH') || exit;
 MealsDB_Permissions::enforce();
 
-// Default the picker to the current month.
-$default_month = date('Y-m');
+// Default the picker to the current month in the SITE timezone (this is a
+// display-layer default the operator works in, not a stored value) — server-
+// local date() can pre-select the wrong month near a boundary.
+$default_month = wp_date('Y-m');
 ?>
 <div id="mealsdb-spillover-report">
 
