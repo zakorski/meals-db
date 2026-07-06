@@ -22,6 +22,22 @@ class MealsDB_Schema_Sync {
             return new WP_Error('forbidden', 'You do not have permission to update the schema.');
         }
 
+        // Rate-limit this op-heavy endpoint (U11-schema-18). run_full_sync runs
+        // DDL (CREATE TABLE / ALTER TABLE ADD COLUMN) plus a SHOW TABLES and two
+        // INFORMATION_SCHEMA scans per canonical table, so a scripted or replayed
+        // admin request (WP nonces are reusable within 24h) can hammer the DB with
+        // metadata scans and DDL attempts. Its destructive siblings already have
+        // buckets (force-rebuild 2/hr, migration phases 5/hr); the additive schema
+        // update belongs on the settings_modify bucket (20/hr). Mirrors the
+        // class_exists-guarded pattern in MealsDB_Schema_Rebuild::run.
+        if (class_exists('MealsDB_Rate_Limiter')
+            && !MealsDB_Rate_Limiter::check_rate_limit('settings_modify')) {
+            return new WP_Error(
+                'rate_limited',
+                'Schema update rate limit exceeded. Wait before retrying.'
+            );
+        }
+
         global $wpdb;
 
         if (!$wpdb) {

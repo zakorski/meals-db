@@ -841,7 +841,11 @@ CSS;
         }
 
         $options = new \Dompdf\Options();
-        $options->set('isHtml5ParserEnabled', true);
+        // isHtml5ParserEnabled is @deprecated in the bundled dompdf 3.x and
+        // already defaults to true (the HTML5 parser is the only parser since
+        // dompdf 2.0), so setting it is a no-op that a future major could turn
+        // into a fatal — omitted deliberately. isRemoteEnabled(false) + chroot
+        // below are load-bearing security settings; keep them.
         $options->set('isRemoteEnabled', false);
         $options->set('chroot', defined('MEALS_DB_PLUGIN_DIR') ? MEALS_DB_PLUGIN_DIR : __DIR__);
 

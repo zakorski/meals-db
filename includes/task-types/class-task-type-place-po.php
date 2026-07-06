@@ -54,7 +54,11 @@ class MealsDB_Task_Type_Place_PO {
             if ($line === '') {
                 continue;
             }
-            $parts = str_getcsv($line);
+            // Pass explicit delimiter/enclosure/escape. PHP 8.4 deprecates
+            // relying on the default proprietary $escape for str_getcsv(); an
+            // empty escape ('') also stops backslashes in a SKU/name from being
+            // mangled by the legacy escaping.
+            $parts = str_getcsv($line, ',', '"', '');
             if (count($parts) < 3) {
                 continue;
             }

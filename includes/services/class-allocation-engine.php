@@ -490,20 +490,24 @@ class MealsDB_Allocation_Engine {
 
         // Upsert into meals_client_allocations.
         $this->wpdb->query($this->wpdb->prepare(
+            // Row-alias form (INSERT ... AS new): the legacy VALUES(col)
+            // referencing form inside ON DUPLICATE KEY UPDATE is deprecated
+            // as of MySQL 8.0.20 and emits warnings. The alias is equivalent
+            // and requires MySQL 8.0.19+ (the deployment target is MySQL 8.x).
             "INSERT INTO {$allocations_table}
                 (client_id, billing_month, permitted_mains, permitted_sides,
                  used_mains, used_sides, used_tax_sides, used_nontax_sides,
                  overage_mains, overage_sides)
-             VALUES (%d, %s, %d, %d, %d, %d, %d, %d, %d, %d)
+             VALUES (%d, %s, %d, %d, %d, %d, %d, %d, %d, %d) AS new
              ON DUPLICATE KEY UPDATE
-                 permitted_mains = VALUES(permitted_mains),
-                 permitted_sides = VALUES(permitted_sides),
-                 used_mains = VALUES(used_mains),
-                 used_sides = VALUES(used_sides),
-                 used_tax_sides = VALUES(used_tax_sides),
-                 used_nontax_sides = VALUES(used_nontax_sides),
-                 overage_mains = VALUES(overage_mains),
-                 overage_sides = VALUES(overage_sides)",
+                 permitted_mains = new.permitted_mains,
+                 permitted_sides = new.permitted_sides,
+                 used_mains = new.used_mains,
+                 used_sides = new.used_sides,
+                 used_tax_sides = new.used_tax_sides,
+                 used_nontax_sides = new.used_nontax_sides,
+                 overage_mains = new.overage_mains,
+                 overage_sides = new.overage_sides",
             $client_id, $billing_month,
             $permitted_mains, $permitted_sides,
             $used_mains, $used_sides, $used_tax_sides, $used_nontax_sides,

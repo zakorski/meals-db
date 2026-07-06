@@ -1298,6 +1298,13 @@ class MealsDB_Client_Form {
      * @return int|false Draft identifier on success, false on failure
      */
     public static function save_draft(array $data, ?int $draft_id = null) {
+        // Service-layer capability re-check (defense-in-depth Layer 3): drafts persist the
+        // same encrypted PII payload as save()/update(), so a future ungated caller
+        // (WP-CLI/REST/import) must not be able to write one without the plugin capability.
+        if (!self::is_authorized_to_modify_clients()) {
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) {
             error_log('[MealsDB] Draft save aborted: database connection unavailable.');
@@ -1376,6 +1383,13 @@ class MealsDB_Client_Form {
      * @return bool
      */
     public static function delete_draft(int $draft_id): bool {
+        // Service-layer capability re-check (defense-in-depth Layer 3): matches save()/update()
+        // so a future ungated caller cannot destroy a client's draft PII payload without the
+        // plugin capability. Ownership (created_by) is still enforced separately in SQL below.
+        if (!self::is_authorized_to_modify_clients()) {
+            return false;
+        }
+
         if ($draft_id <= 0) {
             return false;
         }

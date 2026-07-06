@@ -167,6 +167,39 @@ class MealsDB_Encryption_Migrator {
     private const FAILURE_THRESHOLD = 50;
 
     /**
+     * Service-layer authorization for the whole-table PII rewrites
+     * (reencrypt_legacy / run_full_harden). These methods rewrite every
+     * encrypted PII blob in meals_clients and flip the live index-format flag,
+     * yet have no HTTP entry point today — WP-CLI is the only invoker. But the
+     * file header anticipates "a one-off admin action" wrapper. Per the
+     * codebase's defense-in-depth convention (Pattern 1, cf.
+     * MealsDB_Client_Form::is_authorized_to_modify_clients, which exists so "a
+     * future caller ... that reaches these methods without going through the
+     * view layer" is still gated), re-check capability here so a future
+     * AJAX/admin-post wrapper that relies solely on its own gating can't rewrite
+     * every PII blob if that gating is missing.
+     *
+     * Allowed when running under WP-CLI (trusted, server-level access) OR when no
+     * user context is bootstrapped (get_current_user_id() === 0 — e.g. a cron /
+     * site-health invocation before auth). Otherwise manage_options is required,
+     * mirroring the migration_destructive tier for a whole-table PII rewrite.
+     */
+    private static function authorize_pii_rewrite(): bool {
+        if (defined('WP_CLI') && WP_CLI) {
+            return true;
+        }
+        if (function_exists('get_current_user_id') && get_current_user_id() === 0) {
+            return true;
+        }
+        if (function_exists('current_user_can')) {
+            return current_user_can('manage_options');
+        }
+        // No capability API available (bare test harness) — treat as the
+        // unbootstrapped case above and allow.
+        return true;
+    }
+
+    /**
      * Re-encrypt every legacy-format value under the current authenticated format.
      *
      * Runs row-by-row with a per-row transaction so a failure on one client
@@ -186,6 +219,20 @@ class MealsDB_Encryption_Migrator {
      * @return array{processed:int, reencrypted:int, failed:int, aborted:bool, abort_reason:?string, columns:array<string,int>}
      */
     public static function reencrypt_legacy(int $batch_size = 200, bool $dry_run = false, int $failure_threshold = self::FAILURE_THRESHOLD): array {
+        // Service-layer capability re-check (Pattern 1 defense-in-depth). See
+        // authorize_pii_rewrite(). Surfaces as an aborted run so the caller
+        // reports the refusal via the same abort_reason channel as a real abort.
+        if (!self::authorize_pii_rewrite()) {
+            return [
+                'processed'    => 0,
+                'reencrypted'  => 0,
+                'failed'       => 0,
+                'aborted'      => true,
+                'abort_reason' => 'Insufficient capability: manage_options required.',
+                'columns'      => array_fill_keys(MealsDB_Encryption::ENCRYPTED_CLIENT_COLUMNS, 0),
+            ];
+        }
+
         global $wpdb;
 
         $table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -263,7 +310,12 @@ class MealsDB_Encryption_Migrator {
                     } catch (\Throwable $e) {
                         $wpdb->query('ROLLBACK');
                         $stats['failed']++;
-                        error_log(sprintf(
+                        // Route through MealsDB_Logger::error() so the exception
+                        // message — which carries $wpdb->last_error (a failed
+                        // UPDATE can embed row values, e.g. "Duplicate entry
+                        // '<value>' for key") — is PII/blob-scrubbed before it
+                        // reaches the (often world-readable) server error log.
+                        MealsDB_Logger::error(sprintf(
                             '[MealsDB Encryption Migrator] client_id=%d column=%s failed: %s',
                             (int) $row['client_id'],
                             $col,
@@ -438,7 +490,9 @@ class MealsDB_Encryption_Migrator {
                 }
             } catch (\Throwable $e) {
                 $stats['failed']++;
-                error_log(sprintf(
+                // Scrub via MealsDB_Logger::error(): $e->getMessage() may carry
+                // decrypt-failure text / $wpdb->last_error with embedded row values.
+                MealsDB_Logger::error(sprintf(
                     '[MealsDB Encryption Migrator] harden client_id=%d failed: %s',
                     $client_id,
                     $e->getMessage()
@@ -481,7 +535,9 @@ class MealsDB_Encryption_Migrator {
             } catch (\Throwable $e) {
                 $wpdb->query('ROLLBACK');
                 $stats['failed']++;
-                error_log(sprintf(
+                // Scrub via MealsDB_Logger::error(): $e->getMessage() carries
+                // $wpdb->last_error, which can embed row values on a failed UPDATE.
+                MealsDB_Logger::error(sprintf(
                     '[MealsDB Encryption Migrator] harden write client_id=%d failed: %s',
                     $client_id,
                     $e->getMessage()
@@ -535,6 +591,25 @@ class MealsDB_Encryption_Migrator {
         bool $dry_run = false,
         int $failure_threshold = self::FAILURE_THRESHOLD
     ): array {
+        // Service-layer capability re-check (Pattern 1 defense-in-depth). This is
+        // the whole-table STR-10 harden entry point (rewrites every encrypted
+        // blob AND flips the live index-format flag), so gate it like a
+        // migration_destructive op. A dry run is still gated — it decrypts every
+        // PII blob to compute its report. See authorize_pii_rewrite().
+        if (!self::authorize_pii_rewrite()) {
+            return [
+                'processed'          => 0,
+                'reencrypted'        => 0,
+                'reindexed'          => 0,
+                'rows_changed'       => 0,
+                'failed'             => 0,
+                'aborted'            => true,
+                'abort_reason'       => 'Insufficient capability: manage_options required.',
+                'batches'            => 0,
+                'index_v2_activated' => false,
+            ];
+        }
+
         $totals = [
             'processed'          => 0,
             'reencrypted'        => 0,

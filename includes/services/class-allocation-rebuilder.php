@@ -750,17 +750,23 @@ class MealsDB_Allocation_Rebuilder {
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::ALLOCATION_ERRORS);
         $now   = gmdate('Y-m-d H:i:s');
         $sql = $this->wpdb->prepare(
+            // Row-alias form (INSERT ... AS new): the VALUES(col) referencing
+            // form inside ON DUPLICATE KEY UPDATE is deprecated in MySQL 8.0.20
+            // (warning-only, removal-path). new.col is the equivalent replacement
+            // and needs MySQL 8.0.19+ (deployment target is MySQL 8.x). The
+            // occurrence_count bump reads the EXISTING column (not new.), so it
+            // stays as-is; first_seen_at remains omitted from the UPDATE clause.
             "INSERT INTO `{$table}`
                 (client_id, billing_month, wc_order_id, error_type,
                  mains_unplaced, sides_unplaced, message,
                  occurrence_count, first_seen_at, last_seen_at)
-             VALUES (%d, %s, %d, %s, %d, %d, %s, 1, %s, %s)
+             VALUES (%d, %s, %d, %s, %d, %d, %s, 1, %s, %s) AS new
              ON DUPLICATE KEY UPDATE
-                mains_unplaced   = VALUES(mains_unplaced),
-                sides_unplaced   = VALUES(sides_unplaced),
-                message          = VALUES(message),
+                mains_unplaced   = new.mains_unplaced,
+                sides_unplaced   = new.sides_unplaced,
+                message          = new.message,
                 occurrence_count = occurrence_count + 1,
-                last_seen_at     = VALUES(last_seen_at)",
+                last_seen_at     = new.last_seen_at",
             $client_id, $billing_month, $wc_order_id, 'multi_month_spillover',
             $mains_unplaced, $sides_unplaced, $message, $now, $now
         );

@@ -923,31 +923,31 @@ class MealsDB_Migration_Consolidated {
             if (empty($client['delivery_area_name']) && $billing_address_2 !== '') {
                 $set_clauses[] = 'delivery_area_name = %s';
                 $bind_values[] = $billing_address_2;
-                $changes[]     = "delivery_area_name={$billing_address_2}";
+                $changes[]     = 'delivery_area_name';
             }
 
             if ($has_apartment_col && !empty($client['apartment_number']) && strpos($client['apartment_number'], 'Zone') === 0) {
                 $set_clauses[] = 'apartment_number = NULL';
-                $changes[]     = 'apartment_number=NULL';
+                $changes[]     = 'apartment_number';
             }
 
             if ($has_delivery_apartment_col && !empty($client['delivery_apartment_number']) && strpos($client['delivery_apartment_number'], 'Zone') === 0) {
                 $set_clauses[] = 'delivery_apartment_number = NULL';
-                $changes[]     = 'delivery_apartment_number=NULL';
+                $changes[]     = 'delivery_apartment_number';
             }
 
             $billing_address_1 = $meta['billing_address_1'] ?? '';
             if ($billing_address_1 !== '' && (empty($client['street_name']) || $client['street_name'] !== $billing_address_1)) {
                 $set_clauses[] = 'street_name = %s';
                 $bind_values[] = $billing_address_1;
-                $changes[]     = "street_name={$billing_address_1}";
+                $changes[]     = 'street_name';
             }
 
             $shipping_address_1 = $meta['shipping_address_1'] ?? '';
             if ($shipping_address_1 !== '' && ($client['delivery_street_name'] ?? '') !== $shipping_address_1) {
                 $set_clauses[] = 'delivery_street_name = %s';
                 $bind_values[] = $shipping_address_1;
-                $changes[]     = "delivery_street_name={$shipping_address_1}";
+                $changes[]     = 'delivery_street_name';
             }
 
             if (empty($client['default_rate_id'])) {
@@ -959,7 +959,7 @@ class MealsDB_Migration_Consolidated {
                     $rate_id       = (int) $rate_row['rate_id'];
                     $set_clauses[] = 'default_rate_id = %d';
                     $bind_values[] = $rate_id;
-                    $changes[]     = "default_rate_id={$rate_id}";
+                    $changes[]     = 'default_rate_id';
                 }
             }
 
@@ -968,17 +968,27 @@ class MealsDB_Migration_Consolidated {
                 continue;
             }
 
+            // $changes holds column NAMES only (never values) — the values are
+            // client home addresses and must not reach the dry-run error_log
+            // below. Match the exact column name for the per-field stats.
             foreach ($changes as $change) {
-                if (strpos($change, 'delivery_area_name=') === 0) {
+                if ($change === 'delivery_area_name') {
                     $stats['zones_fixed']++;
-                } elseif (strpos($change, 'street_name=') === 0 || strpos($change, 'delivery_street_name=') === 0) {
+                } elseif ($change === 'street_name' || $change === 'delivery_street_name') {
                     $stats['addresses_fixed']++;
-                } elseif (strpos($change, 'default_rate_id=') === 0) {
+                } elseif ($change === 'default_rate_id') {
                     $stats['rates_linked']++;
                 }
             }
 
             if ($dry_run) {
+                // Log column NAMES only, never the values: these rows carry
+                // vulnerable clients' home addresses (street_name /
+                // delivery_street_name / delivery_area_name). Emitting the values
+                // would land them in the raw PHP error log — often more broadly
+                // readable/retained on shared cPanel hosting than the DB row
+                // itself, and outside the plugin's scrubbed logging paths (audit
+                // U03-migration-9). Mirrors enrich_existing's names-only dry-run log.
                 error_log(sprintf(
                     '[MealsDB Consolidated] DRY RUN addresses: client_id=%d wp_user_id=%d -> %s',
                     $client_id, $wp_user_id, implode(', ', $changes)

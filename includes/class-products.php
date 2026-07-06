@@ -85,16 +85,19 @@ class MealsDB_Products {
         $table = MealsDB_DB::get_table_name(self::TABLE);
 
         $sql = $wpdb->prepare(
+            // Row-alias form (INSERT ... AS new): VALUES(col) inside ON DUPLICATE
+            // KEY UPDATE is deprecated as of MySQL 8.0.20; new.col is the
+            // equivalent replacement (needs MySQL 8.0.19+, target is MySQL 8.x).
             "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
-                VALUES (%d, %s, %d, %s, %s, %s, %d, %f)
+                VALUES (%d, %s, %d, %s, %s, %s, %d, %f) AS new
                 ON DUPLICATE KEY UPDATE
-                    product_type = VALUES(product_type),
-                    taxable = VALUES(taxable),
-                    main_ingredient = VALUES(main_ingredient),
-                    dietary_tags = VALUES(dietary_tags),
-                    allergen_flags = VALUES(allergen_flags),
-                    case_size = VALUES(case_size),
-                    unit_cost = VALUES(unit_cost)",
+                    product_type = new.product_type,
+                    taxable = new.taxable,
+                    main_ingredient = new.main_ingredient,
+                    dietary_tags = new.dietary_tags,
+                    allergen_flags = new.allergen_flags,
+                    case_size = new.case_size,
+                    unit_cost = new.unit_cost",
             $prepared['wc_product_id'],
             $prepared['product_type'],
             $prepared['taxable'],
@@ -190,6 +193,17 @@ class MealsDB_Products {
      * @return bool True on success.
      */
     public static function update_display_fields(int $product_id, array $display): bool {
+        // Defence-in-depth (mirrors save_product_data): a future caller
+        // (WP-CLI, REST, bulk editor) reaching this service writer directly
+        // must not be able to poison the display cache (name/price/is_published
+        // surfaced in Quick Order) without the appropriate WC capability.
+        if (function_exists('current_user_can')
+            && !current_user_can('edit_product', $product_id)
+            && !current_user_can('manage_woocommerce')) {
+            error_log(sprintf('[MealsDB Products] update_display_fields blocked: insufficient capability for product_id=%d', $product_id));
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) {
             return false;
@@ -209,15 +223,18 @@ class MealsDB_Products {
         }
 
         $sql = $wpdb->prepare(
+            // Row-alias form (INSERT ... AS new): VALUES(col) inside ON DUPLICATE
+            // KEY UPDATE is deprecated as of MySQL 8.0.20; new.col is the
+            // equivalent replacement (needs MySQL 8.0.19+, target is MySQL 8.x).
             "INSERT INTO `{$table}` (wc_product_id, product_name, price, image_url, sku, category_data, is_published, product_type, taxable, main_ingredient, case_size, buffer, unit_cost)
-                VALUES (%d, %s, %f, %s, %s, %s, %d, 'meal', 0, '', 1, 0, 0.00)
+                VALUES (%d, %s, %f, %s, %s, %s, %d, 'meal', 0, '', 1, 0, 0.00) AS new
                 ON DUPLICATE KEY UPDATE
-                    product_name = VALUES(product_name),
-                    price = VALUES(price),
-                    image_url = VALUES(image_url),
-                    sku = VALUES(sku),
-                    category_data = VALUES(category_data),
-                    is_published = VALUES(is_published)",
+                    product_name = new.product_name,
+                    price = new.price,
+                    image_url = new.image_url,
+                    sku = new.sku,
+                    category_data = new.category_data,
+                    is_published = new.is_published",
             $product_id,
             $product_name,
             $price,
@@ -241,6 +258,15 @@ class MealsDB_Products {
      * @return bool True on success.
      */
     public static function set_published(int $product_id, bool $is_published): bool {
+        // Defence-in-depth (mirrors save_product_data): a future direct caller
+        // must not be able to flip is_published without the appropriate WC cap.
+        if (function_exists('current_user_can')
+            && !current_user_can('edit_product', $product_id)
+            && !current_user_can('manage_woocommerce')) {
+            error_log(sprintf('[MealsDB Products] set_published blocked: insufficient capability for product_id=%d', $product_id));
+            return false;
+        }
+
         global $wpdb;
         if (!$wpdb) {
             return false;
