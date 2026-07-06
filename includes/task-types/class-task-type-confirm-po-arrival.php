@@ -113,7 +113,7 @@ class MealsDB_Task_Type_Confirm_PO_Arrival {
      * @param array<int, array<string, mixed>> $items
      */
     public static function apply_inventory_bump(array $items): void {
-        if (!function_exists('wc_get_product_id_by_sku') || !function_exists('wc_get_product')) {
+        if (!function_exists('wc_get_product_id_by_sku') || !function_exists('wc_get_product') || !function_exists('wc_update_product_stock')) {
             error_log('[MealsDB Task confirm_po_arrival] WooCommerce not available; skipping inventory bump.');
             return;
         }
@@ -138,9 +138,16 @@ class MealsDB_Task_Type_Confirm_PO_Arrival {
                 continue;
             }
             $current = (int) $product->get_stock_quantity();
-            $new_total = $current + $qty;
-            $product->set_stock_quantity($new_total);
-            $product->save();
+            // Atomic DB-level increment (SQL `stock = stock + qty`) instead of a
+            // read-modify-write set/save, which clobbers a concurrent stock
+            // change (e.g. an order placed between our read and our write).
+            $new_stock = wc_update_product_stock($product, $qty, 'increase');
+            if ($new_stock === null) {
+                // Product does not manage stock — nothing changed; skip the
+                // audit line rather than log a bogus old->new pair.
+                continue;
+            }
+            $new_total = (int) $new_stock;
 
             if (class_exists('MealsDB_Logger')) {
                 MealsDB_Logger::log(

@@ -80,6 +80,18 @@ class MealsDB_Initials_Validator {
 		// makes it invalid — there is no address escape hatch.
 		$existing_clients = self::get_clients_with_initials($initials_upper);
 
+		// FAIL CLOSED on an unverifiable lookup (DB error). Previously the failed
+		// query returned array() -> empty() -> 'valid: true', so a transient DB
+		// error could pass a duplicate code through this app-level check. Treat
+		// it as "could not verify" and reject, matching exists_in_db().
+		if ($existing_clients === false) {
+			return array(
+				'valid'  => false,
+				'error'  => __('Could not verify initials right now — please try again.', 'meals-db'),
+				'shared' => false,
+			);
+		}
+
 		// Remove current client from check (when editing)
 		if ($current_client_id) {
 			$existing_clients = array_filter($existing_clients, function($client) use ($current_client_id) {
@@ -225,7 +237,9 @@ class MealsDB_Initials_Validator {
 	 * Get all clients with specific initials
 	 *
 	 * @param string $initials Initials to search for.
-	 * @return array Array of client data (id, first_name, last_name).
+	 * @return array|false Array of client data (id, first_name, last_name), or
+	 *                     false when the lookup could not be executed (DB error)
+	 *                     so callers can fail closed.
 	 */
 	private static function get_clients_with_initials($initials) {
 		global $wpdb;
@@ -244,7 +258,14 @@ class MealsDB_Initials_Validator {
 		$results = $wpdb->get_results($sql, ARRAY_A);
 		if (!is_array($results)) {
 			error_log('[MealsDB] Failed to execute initials lookup query: ' . ($wpdb->last_error ?: 'unknown error'));
-			return array();
+			// FAIL CLOSED: signal an unverifiable lookup with a distinct sentinel
+			// (false) instead of array(). Returning array() made validate() see
+			// empty($existing_clients) and report the code AVAILABLE on a DB
+			// error, so a transient failure during save could pass a DUPLICATE
+			// through the app-level check (only the hard UNIQUE index backstops
+			// it). This matches the sibling MealsDB_Initials::exists_in_db(),
+			// which also fails closed on $wpdb error.
+			return false;
 		}
 
 		return $results;

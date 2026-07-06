@@ -183,7 +183,14 @@ class MealsDB_Task_Rules {
                 $row[$field] = $updates[$field] !== null ? (string) $updates[$field] : null;
             }
         }
-        $json_fields = ['recurrence', 'query_criteria', 'payload_template', 'tags'];
+        // recurrence is deliberately EXCLUDED from this nullable loop (handled
+        // below): it is a REQUIRED column and must never be written NULL. A
+        // malformed AJAX payload delivers recurrence=null (read_json_param
+        // returns null on bad JSON); persisting that NULL desyncs next_run_at
+        // and later feeds null into compute_next_run(array $recurrence) -> an
+        // uncaught TypeError that aborts the whole nightly spawn pass
+        // (U17-tasks-core-2).
+        $json_fields = ['query_criteria', 'payload_template', 'tags'];
         foreach ($json_fields as $field) {
             if (array_key_exists($field, $updates)) {
                 $row[$field] = $updates[$field] === null
@@ -195,10 +202,13 @@ class MealsDB_Task_Rules {
             $row['is_active'] = (int) ((bool) $updates['is_active']);
         }
 
-        // If recurrence changed, recompute next_run_at from now.
-        if (array_key_exists('recurrence', $updates)) {
-            $recurrence = is_array($updates['recurrence']) ? $updates['recurrence'] : $existing['recurrence'];
-            $next = $this->compute_next_run($recurrence, self::now());
+        // Only touch recurrence/next_run_at when a valid array recurrence is
+        // supplied (mirrors create_rule's required check). A missing or
+        // malformed recurrence leaves the stored value intact rather than
+        // nulling a required column and recomputing next_run_at needlessly.
+        if (array_key_exists('recurrence', $updates) && is_array($updates['recurrence'])) {
+            $row['recurrence']  = MealsDB_Task_Engine::encode_json($updates['recurrence']);
+            $next = $this->compute_next_run($updates['recurrence'], self::now());
             $row['next_run_at'] = $next instanceof DateTimeImmutable ? $next->format('Y-m-d H:i:s') : null;
         }
 
@@ -221,12 +231,27 @@ class MealsDB_Task_Rules {
     }
 
     /**
-     * Delete a rule. Child tasks' source_rule_id goes to NULL via FK.
+     * Delete a rule, then null the source_rule_id of any child tasks.
+     *
+     * There is NO foreign key in this schema (class-schema.php notes FK
+     * constraints are intentionally omitted for source_rule_id; CLAUDE.md
+     * STR-1), so nothing cascades. Without this explicit UPDATE, deleting a
+     * rule leaves child tasks pointing source_rule_id at a now-nonexistent
+     * rule; null it so the dangling reference can't mislead source_rule_id
+     * lookups (U17-tasks-core-4). Run after the delete so a failed delete
+     * never orphans children.
      */
     public function delete_rule(int $rule_id): bool {
         $table  = MealsDB_DB::get_table_name(MealsDB_Tables::SCHEDULE_RULES);
         $result = $this->wpdb->delete($table, ['rule_id' => $rule_id]);
-        return $result !== false;
+        if ($result === false) {
+            return false;
+        }
+
+        $tasks_table = MealsDB_DB::get_table_name(MealsDB_Tables::TASKS);
+        $this->wpdb->update($tasks_table, ['source_rule_id' => null], ['source_rule_id' => $rule_id]);
+
+        return true;
     }
 
     /**
@@ -306,7 +331,13 @@ class MealsDB_Task_Rules {
 
             // Advance next_run_at past the run point, then record last_run_at.
             $after = new DateTimeImmutable($rule['next_run_at'], new DateTimeZone('UTC'));
-            $next  = $this->compute_next_run($rule['recurrence'], $after);
+            // Defensive: a row with a non-array recurrence (e.g. a legacy NULL
+            // persisted before the update_rule guard) would throw a TypeError
+            // in compute_next_run(array) and abort the entire nightly pass.
+            // Treat it as a spent rule (next_run_at=NULL) rather than crashing.
+            $next = is_array($rule['recurrence'])
+                ? $this->compute_next_run($rule['recurrence'], $after)
+                : null;
             $update = [
                 'last_run_at' => $now->format('Y-m-d H:i:s'),
                 'next_run_at' => $next instanceof DateTimeImmutable ? $next->format('Y-m-d H:i:s') : null,

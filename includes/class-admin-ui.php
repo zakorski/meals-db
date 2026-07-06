@@ -749,7 +749,12 @@ class MealsDB_Admin_UI {
                 'data' => [
                     'ajaxUrl' => admin_url('admin-ajax.php'),
                     'nonce'   => wp_create_nonce('mealsdb_nonce'),
-                    'editUrl' => admin_url('post.php?action=edit&post='),
+                    // HPOS-exclusive site: order edit screens live at
+                    // admin.php?page=wc-orders&action=edit&id=, NOT the legacy
+                    // post.php?post= URL (which only reaches the editor via WC's
+                    // COT redirect shim — the CLAUDE.md HPOS rule says not to
+                    // rely on that). order-errors.js appends the order id.
+                    'editUrl' => admin_url('admin.php?page=wc-orders&action=edit&id='),
                 ],
             ],
             'mealsdb-spillover-report' => [

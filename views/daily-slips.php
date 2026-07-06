@@ -49,10 +49,10 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
         <!-- Zone mode controls (shown by default) -->
         <div id="mealsdb-zone-controls" style="margin-bottom:10px;">
             <label for="mealsdb-zone-start"><?php echo esc_html__('Start Date:', 'meals-db'); ?></label>
-            <input type="date" id="mealsdb-zone-start" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
+            <input type="date" id="mealsdb-zone-start" value="<?php echo esc_attr(wp_date('Y-m-d')); ?>" />
 
             <label for="mealsdb-zone-end" style="margin-left:8px;"><?php echo esc_html__('End Date:', 'meals-db'); ?></label>
-            <input type="date" id="mealsdb-zone-end" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
+            <input type="date" id="mealsdb-zone-end" value="<?php echo esc_attr(wp_date('Y-m-d')); ?>" />
 
             <label for="mealsdb-zone-select" style="margin-left:8px;"><?php echo esc_html__('Zones:', 'meals-db'); ?></label>
             <select id="mealsdb-zone-select" multiple style="min-width:220px; height:auto; vertical-align:middle;">
@@ -70,7 +70,7 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
         <!-- Day mode controls (hidden by default) -->
         <div id="mealsdb-day-controls" style="display:none; margin-bottom:10px;">
             <label for="mealsdb-slip-date"><?php echo esc_html__('Delivery Date:', 'meals-db'); ?></label>
-            <input type="date" id="mealsdb-slip-date" value="<?php echo esc_attr(date('Y-m-d')); ?>" />
+            <input type="date" id="mealsdb-slip-date" value="<?php echo esc_attr(wp_date('Y-m-d')); ?>" />
         </div>
 
         <button type="button" class="button button-primary" id="mealsdb-gen-packer-pdf">

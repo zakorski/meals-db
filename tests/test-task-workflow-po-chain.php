@@ -64,6 +64,24 @@ if (!function_exists('wc_get_product')) {
         return new FakeWCProduct($id, $GLOBALS['wc_stock'][$id]);
     }
 }
+// U18-tasks-ui-3: apply_inventory_bump now uses WooCommerce's atomic
+// wc_update_product_stock($product, $amount, 'increase') (SQL stock=stock+amount)
+// instead of a read-modify-write set/save. Model it against the registry so the
+// bump is applied and returns the new total (null when the product manages no
+// stock).
+if (!function_exists('wc_update_product_stock')) {
+    function wc_update_product_stock($product, $amount = null, $mode = 'set') {
+        $id = $product->product_id;
+        if (!isset($GLOBALS['wc_stock'][$id])) { return null; }
+        $current = (int) $GLOBALS['wc_stock'][$id];
+        if ($mode === 'increase')      { $new = $current + (int) $amount; }
+        elseif ($mode === 'decrease')  { $new = $current - (int) $amount; }
+        else                           { $new = (int) $amount; }
+        $GLOBALS['wc_stock'][$id] = $new;
+        $product->stock = $new;
+        return $new;
+    }
+}
 
 // --- Fake in-memory wpdb that backs meals_tasks, meals_purchase_orders, meals_audit_log ---
 class PoChainWpdb extends wpdb {

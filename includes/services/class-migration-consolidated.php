@@ -219,7 +219,16 @@ class MealsDB_Migration_Consolidated {
             }
             $client_type = self::$type_map[$group];
 
-            $first = $meta['first_name'] ?? $user['display_name'] ?? '';
+            // WP persists first_name usermeta as an empty string for users who
+            // never set one (the KEY exists), so the old `?? $display_name`
+            // never fell through — the client row got first_name='' and lost
+            // its first-initial patterns. Treat empty as absent so the intended
+            // display_name fallback actually fires (U03-migration-12), matching
+            // the private_preview pattern.
+            $first = trim((string) ($meta['first_name'] ?? ''));
+            if ($first === '') {
+                $first = (string) ($user['display_name'] ?? '');
+            }
             $last  = $meta['last_name']  ?? '';
 
             // Encrypt sensitive fields + build deterministic index sidecars.
@@ -281,11 +290,6 @@ class MealsDB_Migration_Consolidated {
             $allowance_mains_val = ($mains !== '' && $mains !== '0') ? (int) $mains : null;
             $allowance_sides_val = ($sides !== '' && $sides !== '0') ? (int) $sides : null;
 
-            if ($dry_run) {
-                $stats['created']++;
-                continue;
-            }
-
             // STR-8 / H1: surface SILENT zone/area mis-derivation. Both fields
             // come from hardcoded string maps whose miss-case is a quiet null
             // (NOT a loud skip like an unrecognized customer_group). A null
@@ -297,6 +301,13 @@ class MealsDB_Migration_Consolidated {
             // migrated-but-wrong client is visible instead of silently billed
             // at the wrong rate. Veterans intentionally map to a null zone
             // (zone_map['veterans'] => null), so they are excluded.
+            //
+            // U03-migration-11: emit these BEFORE the dry-run short-circuit so a
+            // dry run surfaces mis-derived clients BEFORE anything is committed
+            // (the header promises a dry run reads/counts as a live run would;
+            // this info is most valuable pre-commit). Tagged dry_run so the
+            // trunk rows stay distinguishable. Phase 1 has no transaction, so
+            // writing during a dry run does not violate a rollback boundary.
             if (class_exists('MealsDB_Event_Log')) {
                 if ($client_type !== 'Veteran' && $zone === null) {
                     MealsDB_Event_Log::record([
@@ -311,7 +322,7 @@ class MealsDB_Migration_Consolidated {
                         ),
                         'entity_type' => 'user',
                         'entity_id'   => (int) $uid,
-                        'context'     => ['service_centre_charged' => (string) $sc_raw, 'client_type' => $client_type],
+                        'context'     => ['service_centre_charged' => (string) $sc_raw, 'client_type' => $client_type, 'dry_run' => $dry_run],
                     ]);
                 }
                 if ($delivery_area_name === null || $delivery_area_name === '') {
@@ -324,8 +335,14 @@ class MealsDB_Migration_Consolidated {
                         'message'     => 'billing_address_2 (delivery_area_name) was empty; no delivery area -> no derivable delivery day.',
                         'entity_type' => 'user',
                         'entity_id'   => (int) $uid,
+                        'context'     => ['dry_run' => $dry_run],
                     ]);
                 }
+            }
+
+            if ($dry_run) {
+                $stats['created']++;
+                continue;
             }
 
             $initials = MealsDB_Initials_Validator::generate($first, $last, []);
@@ -970,18 +987,13 @@ class MealsDB_Migration_Consolidated {
 
             // $changes holds column NAMES only (never values) — the values are
             // client home addresses and must not reach the dry-run error_log
-            // below. Match the exact column name for the per-field stats.
-            foreach ($changes as $change) {
-                if ($change === 'delivery_area_name') {
-                    $stats['zones_fixed']++;
-                } elseif ($change === 'street_name' || $change === 'delivery_street_name') {
-                    $stats['addresses_fixed']++;
-                } elseif ($change === 'default_rate_id') {
-                    $stats['rates_linked']++;
-                }
-            }
-
+            // below. Per-field stats are tallied per column name, but on the
+            // LIVE path ONLY AFTER the UPDATE actually succeeds (U03-migration-10):
+            // pre-counting meant a failed UPDATE still reported N zones/addresses
+            // "fixed" that were never written (while also bumping errors), so the
+            // operator-facing stats over-claimed. Dry runs count what WOULD change.
             if ($dry_run) {
+                self::tally_address_changes($changes, $stats);
                 // Log column NAMES only, never the values: these rows carry
                 // vulnerable clients' home addresses (street_name /
                 // delivery_street_name / delivery_area_name). Emitting the values
@@ -1008,6 +1020,8 @@ class MealsDB_Migration_Consolidated {
                     '[MealsDB Consolidated] ERROR addresses client_id=%d: %s',
                     $client_id, $wpdb->last_error ?: 'unknown'
                 ));
+            } else {
+                self::tally_address_changes($changes, $stats);
             }
         }
 
@@ -1017,6 +1031,24 @@ class MealsDB_Migration_Consolidated {
             'total'    => $total,
             'complete' => count($clients) < self::BATCH_SIZE,
         ];
+    }
+
+    /**
+     * Tally the per-field address-fix stats from a list of changed column
+     * NAMES. Extracted so the dry-run path and the live-success path share
+     * one counter, and the live path can defer counting until the UPDATE
+     * actually lands (U03-migration-10). $changes carries column names only.
+     */
+    private static function tally_address_changes(array $changes, array &$stats): void {
+        foreach ($changes as $change) {
+            if ($change === 'delivery_area_name') {
+                $stats['zones_fixed']++;
+            } elseif ($change === 'street_name' || $change === 'delivery_street_name') {
+                $stats['addresses_fixed']++;
+            } elseif ($change === 'default_rate_id') {
+                $stats['rates_linked']++;
+            }
+        }
     }
 
     // =====================================================================

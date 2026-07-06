@@ -113,12 +113,29 @@ class MealsDB_Schema_Rebuild {
             }
         }
 
+        // U11-schema-6: if the drop loop bailed on an error, the schema is in a
+        // partial state — the tables before the failure were dropped, the failing
+        // one and every table after it were NOT. generate_create_table_sql emits
+        // CREATE TABLE IF NOT EXISTS, so blindly recreating every table would
+        // no-op on the never-dropped ones yet still list them under 'created',
+        // telling the operator a full rebuild succeeded when it didn't. When a
+        // drop failed, recreate ONLY the tables actually dropped so 'created'
+        // mirrors 'dropped' (and untouched tables keep their existing data rather
+        // than being reported as freshly created). No drop error → recreate all.
+        $drop_failed    = !empty($results['drop_errors']);
+        $dropped_lookup = $drop_failed ? array_flip($results['dropped']) : [];
+
         foreach ($create_order as $table_key) {
             if (!isset($schemas[$table_key])) {
                 continue;
             }
 
             $table_name  = MealsDB_DB::get_table_name($table_key);
+
+            if ($drop_failed && !isset($dropped_lookup[$table_name])) {
+                continue;
+            }
+
             $create_sql  = MealsDB_Schema::generate_create_table_sql($schemas[$table_key]);
 
             try {

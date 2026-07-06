@@ -97,6 +97,34 @@ class MealsDB_Quick_Order_Products {
             add_action('save_post_product', [self::class, 'clear_cache_on_product_save'], 10, 2);
             add_action('edited_product_cat', [self::class, 'clear_cache']);
             add_action('mealsdb_plugin_updated', [self::class, 'clear_cache']);
+
+            // U07-quick-order-16: trashing/deleting a product fires
+            // trashed_post / before_delete_post, NOT save_post_product, so
+            // without these a trashed product lingered orderable in the QO grid
+            // for up to CACHE_TTL (30 min). before_delete_post is used (not
+            // deleted_post) so get_post_type() still resolves — the row is gone
+            // by deleted_post. untrashed_post re-adds a restored product.
+            // woocommerce_update_product covers programmatic CRUD/price updates
+            // that touch meta without a full wp_update_post save.
+            add_action('trashed_post', [self::class, 'clear_cache_on_product_change']);
+            add_action('untrashed_post', [self::class, 'clear_cache_on_product_change']);
+            add_action('before_delete_post', [self::class, 'clear_cache_on_product_change']);
+            add_action('woocommerce_update_product', [self::class, 'clear_cache']);
+        }
+    }
+
+    /**
+     * Clear caches when a product post is trashed, untrashed, or deleted.
+     *
+     * These generic post hooks fire for every post type, so guard on the
+     * product post type to avoid needlessly evicting the QO cache on unrelated
+     * content changes. U07-quick-order-16.
+     *
+     * @param int|string $post_id Post ID.
+     */
+    public static function clear_cache_on_product_change($post_id): void {
+        if (function_exists('get_post_type') && get_post_type((int) $post_id) === 'product') {
+            self::clear_cache();
         }
     }
 

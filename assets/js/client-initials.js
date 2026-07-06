@@ -27,8 +27,6 @@
         let validationRequest = null;
         let validatedValue = null;
         let isValid = false;
-        let initialsIsValid = false;
-        let lastValidatedValue = '';
         let stylesInjected = false;
 
         const normalize = (value) => (value || '').toString().trim().toUpperCase();
@@ -78,15 +76,11 @@
             $form.data('mealsdbInitialsValid', isValid);
 
             if (isValid) {
-                initialsIsValid = true;
-                lastValidatedValue = $initialsInput.val();
                 if ($validationStatus.length) {
                     ensureValidCheckStyles();
                     $validationStatus.html('<span class="mealsdb-valid-check">✔ Valid</span>');
                 }
             } else {
-                initialsIsValid = false;
-                lastValidatedValue = '';
                 if ($validationStatus.length) {
                     $validationStatus.empty();
                 }
@@ -312,15 +306,11 @@
         });
 
         $initialsInput.on('input', function () {
-            const rawValue = $(this).val();
-            if (rawValue !== lastValidatedValue) {
-                initialsIsValid = false;
-                if ($validationStatus.length) {
-                    $validationStatus.empty();
-                }
-            }
-
-            const current = normalize(rawValue);
+            // Single normalized tracker: a raw-only edit that leaves the
+            // NORMALIZED value unchanged (e.g. a trailing space or case change)
+            // must NOT invalidate a prior validation. Only a change to the
+            // normalized value (or clearing the field) resets validity.
+            const current = normalize($(this).val());
             if (!current) {
                 resetValidation();
                 setMessage(null, '');
@@ -353,7 +343,11 @@
 
         $form.on('submit', function (event) {
             const staff = isClientStaff();
-            if (!staff && !initialsIsValid) {
+            // Gate on the normalized validity tracker (isValid) — the same one
+            // the input handler and the second submit gate below use — so a
+            // whitespace/case-only edit can't spuriously block a save whose
+            // normalized initials are still validated.
+            if (!staff && !isValid) {
                 event.preventDefault();
                 MealsDBNotice('error', 'Please validate initials before saving.');
                 const text = messages.required || 'Please validate the initials before submitting.';
