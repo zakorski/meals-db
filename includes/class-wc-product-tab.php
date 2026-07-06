@@ -296,7 +296,6 @@ class MealsDB_WC_Product_Tab {
      */
     private static function determine_side_taxable(int $product_id): int {
         $taxable_slugs   = ['dessert', 'muffin'];
-        $nontaxable_slugs = ['cereal', 'soup'];
 
         $terms = get_the_terms($product_id, 'product_cat');
         if (!is_array($terms)) {

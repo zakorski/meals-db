@@ -99,8 +99,8 @@ $field_labels = [
             <?php esc_html_e('Review each field below, choose which value to keep, and sync the selected data to WooCommerce. You can also ignore a mismatch when the difference is expected.', 'meals-db'); ?>
         </p>
         <?php
-        $success = $success ?? null;
-        $errors  = $errors ?? [];
+        // $success and $errors are unconditionally initialized at the top of
+        // this view (lines 9-10), so status-notice.php always sees them set.
         include __DIR__ . '/partials/status-notice.php';
         ?>
 

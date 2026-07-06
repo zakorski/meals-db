@@ -716,46 +716,4 @@ class MealsDB_Encryption {
         return null;
     }
 
-    /**
-     * Get singleton instance for backward compatibility.
-     *
-     * @return MealsDB_Encryption
-     */
-    public static function get_instance(): MealsDB_Encryption {
-        static $instance = null;
-        if ($instance === null) {
-            $instance = new self();
-        }
-        return $instance;
-    }
-
-    /**
-     * Instance method wrapper for encrypt.
-     *
-     * @param string $plaintext
-     * @return string
-     */
-    public function encrypt_value(string $plaintext): string {
-        return self::encrypt($plaintext);
-    }
-
-    /**
-     * Instance method wrapper for decrypt.
-     *
-     * @param string $encoded
-     * @return string
-     */
-    public function decrypt_value(string $encoded): string {
-        return self::decrypt($encoded);
-    }
-
-    /**
-     * Instance method wrapper for create_index.
-     *
-     * @param string $plaintext
-     * @return string
-     */
-    public function create_search_index(string $plaintext): string {
-        return self::create_index($plaintext);
-    }
 }

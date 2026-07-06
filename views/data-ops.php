@@ -287,24 +287,6 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 </style>
 
 <script>
-// Shared HTML escape helper used by every IIFE on this page so server
-// JSON values flow through one defensive layer before reaching .html().
-window.MealsDBUpdates = window.MealsDBUpdates || {};
-window.MealsDBUpdates.escHtml = function (value) {
-    if (value === null || value === undefined) return '';
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-};
-window.MealsDBUpdates.intText = function (value) {
-    return String(parseInt(value, 10) || 0);
-};
-</script>
-
-<script>
 (function($) {
     'use strict';
 

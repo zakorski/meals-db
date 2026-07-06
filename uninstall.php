@@ -149,11 +149,23 @@ function mealsdb_uninstall_cleanup_current_site(): void {
     delete_option('mealsdb_rate_definitions');
     // Directive ITEM1-DERIVED per-field auto-correct toggles.
     delete_option('mealsdb_derived_autocorrect');
+    // Phase W daily-report recipient / anomaly settings (audit X5).
+    delete_option('mealsdb_daily_report_recipients');
+    delete_option('mealsdb_daily_report_only_on_anomalies');
+    delete_option('mealsdb_daily_report_anomaly_threshold');
+    // Deterministic-index HMAC activation flag (audit X5).
+    delete_option('mealsdb_index_hmac_active');
+    // Migration progress/log. Progress is no longer written (the chunked
+    // migrator dropped save_progress), but an upgraded install may retain a
+    // stale row — delete both for a true clean slate (audit X5).
+    delete_option('mealsdb_migration_progress');
+    delete_option('mealsdb_migration_log');
 
     // Plugin transients — caches that would otherwise linger as stale
     // wp_options rows after the tables they describe are gone.
     delete_transient('mealsdb_qo_all_products');
-    delete_transient('mealsdb_qo_categories');
+    delete_transient('mealsdb_qo_all_categories');
+    delete_transient('mealsdb_encryption_inventory');
 
     // Per-user migration credential and rate-limit transients are stored
     // with random tokens, so blanket-delete by prefix.
@@ -164,7 +176,24 @@ function mealsdb_uninstall_cleanup_current_site(): void {
             OR option_name LIKE '_transient_mealsdb_rate_%'
             OR option_name LIKE '_transient_timeout_mealsdb_rate_%'
             OR option_name LIKE '_transient_mealsdb_qo_%'
-            OR option_name LIKE '_transient_timeout_mealsdb_qo_%'"
+            OR option_name LIKE '_transient_timeout_mealsdb_qo_%'
+            OR option_name LIKE '_transient_mealsdb_staff_%'
+            OR option_name LIKE '_transient_timeout_mealsdb_staff_%'"
+    );
+
+    // Plugin-authored user-meta: the Quick Order per-customer scheduling cache
+    // (last call/order dates + computed next order/delivery dates). Written by
+    // MealsDB_Quick_Order_Ajax; removed here so an uninstall leaves no plugin
+    // meta behind (audit X5). last_call_date/last_order_date are unprefixed but
+    // are this plugin's keys.
+    $wpdb->query(
+        "DELETE FROM {$wpdb->usermeta}
+         WHERE meta_key IN (
+             'last_call_date',
+             'last_order_date',
+             'mealsdb_next_order_date',
+             'mealsdb_next_delivery_date'
+         )"
     );
 
     // Midland packing-slip files: the meals_slip_batches table is dropped by the

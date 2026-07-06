@@ -1,14 +1,6 @@
 (function ($) {
     'use strict';
 
-    var state = {
-        dryRun: true,
-        phase: -1,
-        phaseOffset: 0,
-        running: false,
-        phaseStats: {},
-    };
-
     // ── Helpers ──────────────────────────────────
 
     function ajax(action, data, successCb, errorCb) {
@@ -27,21 +19,6 @@
         });
     }
 
-    function setPhaseIcon(phase, icon) {
-        var $el = $('#mig-phase-' + phase + ' .mealsdb-mig-phase-icon');
-        var map = { pending: '&#9711;', running: '&#9881;', done: '&#10003;', error: '&#10007;' };
-        $el.html(map[icon] || map.pending)
-           .removeClass('pending running done error').addClass(icon);
-    }
-
-    function setPhaseStatus(phase, text) {
-        $('#mig-phase-' + phase + ' .mealsdb-mig-phase-status').text(text);
-    }
-
-    function setPhaseBar(phase, pct) {
-        $('#mig-phase-' + phase + ' .mealsdb-mig-phase-bar').css('width', pct + '%');
-    }
-
     // HTML-escape via the DOM's own textContent → innerHTML round-trip
     // so we don't have to maintain an entity table. Used below for the
     // stats rendering where both keys and values come from the AJAX
@@ -58,21 +35,6 @@
         d.textContent = s == null ? '' : String(s);
         return d.innerHTML;
     }
-
-    function statsHtml(stats) {
-        if (!stats || typeof stats !== 'object') return '';
-        var parts = [];
-        $.each(stats, function (k, v) {
-            // Keys are server-defined today (e.g. "processed", "skipped")
-            // but the values come back from the migration service's
-            // aggregated state. Escape both so a migration tool that
-            // ever reports a free-form key or an error string as a
-            // "value" doesn't land an XSS here.
-            parts.push('<strong>' + escHtml(k) + ':</strong> ' + escHtml(v));
-        });
-        return parts.join(' &nbsp;|&nbsp; ');
-    }
-
 
     $('#mig-log-btn').on('click', function () {
         ajax('log', {}, function (data) {

@@ -36,9 +36,7 @@ class MealsDB_Sync_Query {
      */
     public function get_wp_users(): array {
         $users = $this->batched_query(
-            static function (int $batch_size, int $page, int $offset): array {
-                unset($offset);
-
+            static function (int $batch_size, int $page): array {
                 $results = get_users([
                     'fields' => 'all_with_meta',
                     'number' => $batch_size,
@@ -211,15 +209,6 @@ class MealsDB_Sync_Query {
         }
 
         return $ignored;
-    }
-
-    /**
-     * Retrieve Meals DB or WordPress draft records that affect synchronization decisions.
-     *
-     * @return array<int, array<string, mixed>> List of drafts considered during synchronization.
-     */
-    public function get_drafts(): array {
-        return [];
     }
 
     /**
@@ -464,7 +453,7 @@ class MealsDB_Sync_Query {
     /**
      * Execute batched callbacks until the dataset is fully retrieved.
      *
-     * @param callable $callback   Callback invoked with (int $batch_size, int $page, int $offset).
+     * @param callable $callback   Callback invoked with (int $batch_size, int $page).
      * @param int      $batch_size Number of records to request on each iteration.
      *
      * @return array<int, mixed> Concatenated results from all batches.
@@ -472,10 +461,9 @@ class MealsDB_Sync_Query {
     private function batched_query(callable $callback, int $batch_size = 500): array {
         $results = [];
         $page    = 1;
-        $offset  = 0;
 
         while (true) {
-            $batch = $callback($batch_size, $page, $offset);
+            $batch = $callback($batch_size, $page);
 
             if (!is_array($batch) || $batch === []) {
                 break;
@@ -488,7 +476,6 @@ class MealsDB_Sync_Query {
             }
 
             $page++;
-            $offset += $batch_size;
         }
 
         return $results;

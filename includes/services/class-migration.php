@@ -21,8 +21,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class MealsDB_Migration {
 
-    const BATCH_SIZE      = 100;
-    const PROGRESS_OPTION = 'mealsdb_migration_progress';
     const LOG_OPTION      = 'mealsdb_migration_log';
 
     // ──────────────────────────────────────────────
@@ -52,26 +50,10 @@ class MealsDB_Migration {
     }
 
     // ──────────────────────────────────────────────
-    //  Progress helpers
+    //  Log helpers
     // ──────────────────────────────────────────────
 
-    public static function get_progress(): array {
-        $default = [
-            'phase'         => 0,
-            'phase_offset'  => 0,
-            'dry_run'       => true,
-            'complete'      => false,
-        ];
-        $val = get_option( self::PROGRESS_OPTION, $default );
-        return is_array( $val ) ? array_merge( $default, $val ) : $default;
-    }
-
-    public static function save_progress( array $data ): void {
-        update_option( self::PROGRESS_OPTION, $data, false );
-    }
-
     public static function reset(): void {
-        delete_option( self::PROGRESS_OPTION );
         delete_option( self::LOG_OPTION );
     }
 

@@ -384,19 +384,15 @@ class MealsDB_Quick_Order_Products {
     /**
      * Build a cache entry for a product.
      *
-     * @param WC_Product                         $product        Product instance.
-     * @param array<int, array<string, mixed>>   $metadata_batch Optional pre-fetched metadata keyed by product ID.
+     * @param WC_Product $product Product instance.
      */
-    private static function build_product_cache_entry_from_wc_product(WC_Product $product, array $metadata_batch = []): array {
+    private static function build_product_cache_entry_from_wc_product(WC_Product $product): array {
         $product_id = $product->get_id();
 
-        $price = $product->get_price();
-        if ($price === '') {
-            $price_value = 0.0;
-        } else {
-            $price_value = (float) $price;
-        }
-
+        // WooCommerce is necessarily loaded here (the param is type-hinted
+        // WC_Product), so wc_get_price_to_display() is always available; the
+        // 0.0 fallback only guards the theoretically-unreachable no-WC path.
+        $price_value = 0.0;
         if (function_exists('wc_get_price_to_display')) {
             $price_value = (float) wc_get_price_to_display($product);
         }
@@ -412,9 +408,7 @@ class MealsDB_Quick_Order_Products {
         }
 
         $categories = self::get_product_categories($product_id);
-        $metadata   = isset($metadata_batch[$product_id])
-            ? $metadata_batch[$product_id]
-            : MealsDB_Products::get_product_data($product_id);
+        $metadata   = MealsDB_Products::get_product_data($product_id);
 
         return array_merge(
             [

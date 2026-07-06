@@ -65,7 +65,6 @@ class TaskEngineFakeWpdb extends wpdb {
     public array $tasks = [];
     public int $next_id = 1;
     public int $insert_id = 0;
-    public array $last_prepare_args = [];
     public array $audit_entries = [];
 
     public function __construct() { /* skip parent */ }
@@ -74,7 +73,6 @@ class TaskEngineFakeWpdb extends wpdb {
         if (!empty($args) && is_array($args[0] ?? null)) {
             $args = $args[0];
         }
-        $this->last_prepare_args = $args;
         return ['sql' => $query, 'args' => $args];
     }
 

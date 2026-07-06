@@ -40,29 +40,4 @@ class MealsDB_Config
     {
         // No external DB credentials to load.
     }
-
-    /**
-     * Table prefix is now handled by $wpdb->prefix.
-     */
-    public function table_prefix(): string
-    {
-        global $wpdb;
-
-        return $wpdb->prefix;
-    }
-
-    /**
-     * Report whether the plugin's data backend is usable.
-     *
-     * The plugin used to connect to a separate database; now it
-     * rides on WordPress's own $wpdb. Returning an unconditional
-     * true lost the last meaningful signal — a caller surveying
-     * "is the plugin healthy?" should at minimum verify $wpdb is
-     * instantiated before trusting subsequent repository calls.
-     */
-    public static function is_db_configured(): bool
-    {
-        global $wpdb;
-        return $wpdb instanceof wpdb;
-    }
 }

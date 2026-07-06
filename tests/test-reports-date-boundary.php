@@ -68,45 +68,6 @@ if (!class_exists('wpdb')) {
     }
 }
 
-/**
- * Recording wpdb: captures every prepare() call (query template + bound args)
- * and resolves the placeholders just enough that the captured string reflects
- * what would hit MySQL. get_results() returns [] so the methods short-circuit
- * after the first prepared query — which is exactly the point where the date
- * bound is bound, so the capture is sufficient.
- */
-class BoundaryRecordingWpdb extends wpdb {
-    /** @var array<int, array{query:string, args:array, resolved:string}> */
-    public array $captured = [];
-
-    public function __construct() { $this->prefix = 'wp_'; }
-
-    public function prepare($query, ...$args) {
-        // WP allows prepare($query, [a, b]) or prepare($query, a, b).
-        if (count($args) === 1 && is_array($args[0])) {
-            $args = $args[0];
-        }
-        $resolved = $this->resolve($query, $args);
-        $this->captured[] = ['query' => $query, 'args' => $args, 'resolved' => $resolved];
-        return $resolved;
-    }
-
-    public function get_results($query, $output = OBJECT) { return []; }
-    public function get_row($query, $output = OBJECT, $y = 0) { return null; }
-    public function get_var($query, $x = 0, $y = 0) { return null; }
-    public function query($query) { return 0; }
-
-    /** Substitute %s/%d placeholders left-to-right for assertion readability. */
-    private function resolve(string $query, array $args): string {
-        $i = 0;
-        return preg_replace_callback('/%[sdf]/', static function ($m) use (&$i, $args) {
-            if (!array_key_exists($i, $args)) { return $m[0]; }
-            $v = $args[$i++];
-            return $m[0] === '%s' ? "'" . $v . "'" : (string) $v;
-        }, $query);
-    }
-}
-
 $failures = [];
 $passed   = 0;
 
@@ -134,7 +95,7 @@ $GLOBALS['__mealsdb_test_caps']['manage_woocommerce'] = true;
 // ---------------------------------------------------------------------------
 // normalise_dates() via reflection — the unit under test for the bound itself.
 // ---------------------------------------------------------------------------
-$reports = new MealsDB_Reports(new BoundaryRecordingWpdb());
+$reports = new MealsDB_Reports(new wpdb());
 $ref     = new ReflectionMethod(MealsDB_Reports::class, 'normalise_dates');
 $ref->setAccessible(true);
 

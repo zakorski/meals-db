@@ -63,8 +63,7 @@ pdf_slip_assert_true(is_string($pdf), 'PDF output is a string');
 pdf_slip_assert_true(strlen($pdf) > 100, 'PDF binary has reasonable size');
 pdf_slip_assert_equal('%PDF-', substr($pdf, 0, 5), 'PDF starts with %PDF- magic bytes');
 
-$pdf_driver = $generator->generate_driver_slips_for_date('2025-06-15');
-$client_query->clients_for_driver = [1 => $client]; // re-bind for driver path
+$client_query->clients_for_driver = [1 => $client]; // bind for driver path
 $pdf_driver = $generator->generate_driver_slips_for_date('2025-06-15');
 pdf_slip_assert_equal('%PDF-', substr($pdf_driver, 0, 5), 'driver PDF also valid');
 

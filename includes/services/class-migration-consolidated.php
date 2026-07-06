@@ -718,7 +718,7 @@ class MealsDB_Migration_Consolidated {
         );
 
         $clients = $wpdb->get_results($wpdb->prepare(
-            "SELECT client_id, wp_user_id, requisition_period, allowance_mains, allowance_sides
+            "SELECT client_id, wp_user_id
              FROM `{$clients_table}`
              WHERE wp_user_id > 0
              ORDER BY client_id ASC
@@ -894,7 +894,7 @@ class MealsDB_Migration_Consolidated {
         $meta_lookup = [];
         if (!empty($wp_user_ids)) {
             $placeholders  = implode(',', array_fill(0, count($wp_user_ids), '%d'));
-            $meta_keys     = ['billing_address_1', 'billing_address_2', 'shipping_address_1', 'shipping_address_2'];
+            $meta_keys     = ['billing_address_1', 'billing_address_2', 'shipping_address_1'];
             $meta_keys_sql = implode(',', array_map(function ($k) use ($wpdb) {
                 return $wpdb->prepare('%s', $k);
             }, $meta_keys));

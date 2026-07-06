@@ -42,17 +42,6 @@ function assert_true($cond, string $label) {
     $failures[] = "FAIL: $label";
 }
 
-// Spy: replace MealsDB_Private_Intake::maybe_promote invocation path by
-// short-circuiting on wc_get_order returning null. That means for every
-// status transition that SHOULD promote, we'll reach the wc_get_order
-// null check and return without calling get_userdata. We can still
-// verify that the guarded paths return early before reaching even
-// wc_get_order — this is exercised via a side-effect counter.
-$wc_get_order_calls = 0;
-if (!function_exists('mealsdb_phase_s_intake_spy')) {
-    // Re-declare wc_get_order via global var trick — skip, use simple counter.
-}
-
 // The active-status gate is what we really need to test. Call the
 // method directly with inactive statuses and confirm it does NOT try
 // to fetch an order (we prove this by passing null and verifying no

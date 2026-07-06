@@ -205,8 +205,12 @@ assert_equal('degraded', $last['outcome'] ?? null, 'degraded recorded for delete
 assert_equal('woocommerce_delete_order', $last['event'] ?? null, 'delete recorded under the HPOS hook name (trunk event)');
 
 // ---------------------------------------------------------------------------
-// nightly_sync IS allowed to re-throw — cron's native ledger should
-// still see the failure. So the contract here is the opposite.
+// nightly_sync SWALLOWS engine failures (Pattern 7) — background cron jobs
+// log and swallow so a bug in our handler never propagates back into WP-Cron
+// and breaks the other hooks on the same tick (class-allocation-hooks.php
+// catches \Throwable: "Pattern 7: background cron jobs log and SWALLOW — do
+// NOT rethrow."). In this test the engine's bulk_recalculate_month returns 0
+// (it doesn't throw), so nightly_sync completes cleanly regardless.
 // ---------------------------------------------------------------------------
 $threw = false;
 try {
@@ -214,17 +218,6 @@ try {
 } catch (\Throwable $e) {
     $threw = true;
 }
-// In this test the engine's bulk_recalculate_month returns 0 — it
-// doesn't throw. So nightly_sync completes cleanly. Replace the
-// engine with one that does throw to verify the re-throw contract.
-class ThrowingAllocationEngine {
-    public function bulk_recalculate_month($m) { throw new RuntimeException('boom'); }
-}
-
-// We can't redefine MealsDB_Allocation_Engine in PHP, so simulate
-// the throwing path via reflection on a fresh process boundary.
-// Instead, exercise the path indirectly: confirm the assertion that
-// the test we DID run (no-throw engine) returns normally.
 assert_equal(false, $threw, 'nightly_sync with returning engine completes normally');
 
 if (!empty($failures)) {

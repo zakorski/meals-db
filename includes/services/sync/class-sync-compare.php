@@ -8,14 +8,6 @@ defined('ABSPATH') || exit;
 class MealsDB_Sync_Compare {
 
     /**
-     * Cached WP user list keyed by spl_object_hash of the query instance.
-     * find_probable_matches_for_client is invoked per mismatch row in the
-     * dashboard render loop; without this cache each invocation re-runs
-     * the (paged) get_wp_users query.
-     *
-     * @var array<string, array<int, WP_User>>
-     */
-    /**
      * Cache of WP user lists, keyed by the query object that produced
      * them. Static so multiple MealsDB_Sync_Compare instances in the
      * same request (dashboard + a downstream reconciliation job, for
@@ -28,7 +20,7 @@ class MealsDB_Sync_Compare {
      * referenced query in $pinned_queries so it stays live for the
      * whole request.
      *
-     * @var array<int, array<int, array<string, mixed>>>
+     * @var array<int, array<int, WP_User>>
      */
     private static $wp_users_cache = [];
 
@@ -222,94 +214,6 @@ class MealsDB_Sync_Compare {
         }
 
         return $mismatches;
-    }
-
-    /**
-     * Attempt to match a Meals DB client to a WordPress user by comparing name fields.
-     *
-     * @param array<string, mixed> $client Client record under evaluation.
-     * @param array<int, mixed>    $users  Candidate WordPress users or snapshots to examine.
-     *
-     * @return array<string, mixed>|null Matching user information, or null if none found.
-     */
-    public function match_by_name(array $client, array $users): ?array {
-        $target_first = $this->normalize_name($client['first_name'] ?? '');
-        $target_last  = $this->normalize_name($client['last_name'] ?? '');
-
-        if ($target_first === '' || $target_last === '') {
-            return null;
-        }
-
-        foreach ($users as $user) {
-            $user_first = '';
-            $user_last  = '';
-            $snapshot   = null;
-
-            if ($user instanceof WP_User) {
-                $user_first = $this->normalize_name(isset($user->first_name) ? (string) $user->first_name : '');
-                $user_last  = $this->normalize_name(isset($user->last_name) ? (string) $user->last_name : '');
-                $snapshot   = $this->extract_user_snapshot($user);
-            } elseif (is_array($user)) {
-                $user_first = $this->normalize_name($user['first_name'] ?? '');
-                $user_last  = $this->normalize_name($user['last_name'] ?? '');
-                $snapshot   = $user;
-            }
-
-            if ($snapshot === null) {
-                continue;
-            }
-
-            if ($target_first === $user_first && $target_last === $user_last) {
-                return $snapshot;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Attempt to match a Meals DB client to a WordPress user by comparing phone fields.
-     *
-     * @param array<string, mixed> $client Client record under evaluation.
-     * @param array<int, mixed>    $users  Candidate WordPress users or snapshots to examine.
-     *
-     * @return array<string, mixed>|null Matching user information, or null if none found.
-     */
-    public function match_by_phone(array $client, array $users): ?array {
-        $target_phone = $this->normalize_phone($client['phone_primary'] ?? '');
-
-        if ($target_phone === '') {
-            return null;
-        }
-
-        foreach ($users as $user) {
-            $user_phone = '';
-            $snapshot   = null;
-
-            if ($user instanceof WP_User) {
-                $user_phone = $this->normalize_phone((string) get_user_meta($user->ID, 'billing_phone', true));
-                $snapshot   = $this->extract_user_snapshot($user);
-            } elseif (is_array($user)) {
-                $user_phone = $this->normalize_phone($user['phone'] ?? '');
-                $snapshot   = $user;
-            }
-
-            if ($snapshot === null) {
-                continue;
-            }
-
-            if ($user_phone !== '' && $target_phone !== '') {
-                $comparison_length = min(7, strlen($target_phone));
-                $target_tail = substr($target_phone, -$comparison_length);
-                $user_tail = substr($user_phone, -$comparison_length);
-
-                if ($target_tail !== '' && $target_tail === $user_tail) {
-                    return $snapshot;
-                }
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -619,12 +523,11 @@ class MealsDB_Sync_Compare {
             }
         }
 
-        if ($score < 0) {
-            $score = 0;
-        } elseif ($score > 200) {
-            $score = 200;
-        }
-
+        // Score is a sum of non-negative additions with a fixed ceiling
+        // (first/last name 40 each, phone 60, email 20 = 160 max), so it
+        // can never go negative or exceed that ceiling. No clamp needed;
+        // the >=50 threshold in find_probable_matches operates on a 0-160
+        // range.
         return $score;
     }
 

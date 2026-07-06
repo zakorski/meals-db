@@ -117,24 +117,6 @@ class MealsDB_Purchase_Orders {
     }
 
     /**
-     * @return array<string, mixed>|null
-     */
-    public function get_by_po_number(string $po_number): ?array {
-        if ($po_number === '') {
-            return null;
-        }
-        $table = MealsDB_DB::get_table_name(MealsDB_Tables::PURCHASE_ORDERS);
-        $row = $this->wpdb->get_row(
-            $this->wpdb->prepare("SELECT * FROM `{$table}` WHERE po_number = %s", $po_number),
-            ARRAY_A
-        );
-        if (!is_array($row)) {
-            return null;
-        }
-        return self::hydrate($row);
-    }
-
-    /**
      * Apply a partial update.
      *
      * @param array<string, mixed> $updates

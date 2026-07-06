@@ -22,9 +22,12 @@
         var cls = { success: 'notice-success', error: 'notice-error',
                     warning: 'notice-warning', info: 'notice-info' }[level] || 'notice-info';
         // Preferred explicit target, else a known status region, else the WP page heading.
-        var $target = opts.$target
-            || $('#mealsdb-notice-region').first()
-            || $('.mealsdb-status').first();
+        // A jQuery set is truthy even when it matches nothing, so each tier is gated on
+        // .length — a bare `||` chain would short-circuit on the first (empty) set and
+        // never reach the next fallback.
+        var $target = (opts.$target && opts.$target.length)
+            ? opts.$target
+            : ($('#mealsdb-notice-region').length ? $('#mealsdb-notice-region').first() : null);
         var $wrap = ($target && $target.length) ? $target : $('.wrap').first();
         // Build the notice (WP admin notice styling) with an aria-live region for accessibility.
         var $n = $('<div>', { 'class': 'notice ' + cls + ' is-dismissible mealsdb-notice',

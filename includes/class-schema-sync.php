@@ -455,9 +455,11 @@ class MealsDB_Schema_Sync {
      */
     private static function normalize_column_type(string $type): string {
         $normalized = strtolower(trim(preg_replace('/\\s+/', ' ', $type)));
-        $normalized = preg_replace('/bigint\\(\\d+\\)/', 'bigint', $normalized);
+        // A single generic pattern strips the display width from every *int(N)
+        // form: /int\(\d+\)/ matches the trailing 'int(N)' inside bigint(20),
+        // tinyint(1), smallint(6), etc. Separate bigint/tinyint passes were
+        // redundant no-ops (the width was already gone by the time they ran).
         $normalized = preg_replace('/int\\(\\d+\\)/', 'int', $normalized);
-        $normalized = preg_replace('/tinyint\\(\\d+\\)/', 'tinyint', $normalized);
 
         if ($normalized === 'boolean' || $normalized === 'bool') {
             $normalized = 'tinyint';

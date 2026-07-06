@@ -7,12 +7,6 @@ defined('ABSPATH') || exit;
 
 class MealsDB_Quick_Order_UI {
     /**
-     * Enqueue Quick Order scripts and styles.
-     */
-    public static function enqueue_scripts(): void {
-        wp_enqueue_script('mealsdb-quick-order');
-    }
-    /**
      * Render the Quick Order admin page.
      */
     public static function render_quick_order_page(): void {
@@ -30,8 +24,6 @@ class MealsDB_Quick_Order_UI {
                 . '</p></div></div>';
             return;
         }
-
-        self::enqueue_scripts();
 
         $clone_order_id = self::get_requested_clone_order_id();
         $products_array   = [];

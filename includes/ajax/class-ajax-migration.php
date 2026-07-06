@@ -108,19 +108,19 @@ class MealsDB_Ajax_Migration {
         // calls — a real migration of any size routinely fires
         // hundreds of requests inside the same hour. A bucket here
         // would 429 the operator partway through migration and leave
-        // the database in a partial state. The destructive verbs
-        // (cleanup, reset, upload_file, the three backfill_*) carry
-        // their own per-endpoint rate limit via verify_destructive()
-        // / inline gates; manage_options is the gate for everything
+        // the database in a partial state. The one-shot destructive
+        // verb reset() carries its own per-endpoint rate limit via
+        // verify_destructive(); the three backfill_* endpoints use
+        // inline gates; manage_options is the gate for everything
         // else.
     }
 
     /**
-     * Stricter rate-limit gate for one-shot destructive migration
-     * endpoints (upload_file, cleanup, reset, the three backfill_*).
-     * These are NOT called in the recursive chunked path, so
+     * Stricter rate-limit gate for the one-shot destructive reset()
+     * endpoint. reset() is NOT called in the recursive chunked path, so
      * migration_destructive (5/hr) is safe; verify() above is
-     * deliberately unthrottled.
+     * deliberately unthrottled. (The three backfill_* endpoints gate
+     * themselves inline rather than through this helper.)
      */
     private static function verify_destructive(): void {
         if ( class_exists( 'MealsDB_Rate_Limiter' )

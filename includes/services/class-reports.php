@@ -769,7 +769,6 @@ class MealsDB_Reports {
         // with the half-open convention used elsewhere in this file (audit MAJ-5).
         $start_datetime = gmdate('Y-m-d 00:00:00', strtotime($start_date));
         $end_datetime   = gmdate('Y-m-d 00:00:00', strtotime($end_date . ' +1 day'));
-        $valid_statuses = ['wc-processing', 'wc-completed', 'wc-paid'];
 
         $orders_table     = $this->wpdb->prefix . 'wc_orders';
 
@@ -1060,7 +1059,7 @@ class MealsDB_Reports {
             $placeholders  = implode(',', array_fill(0, count($customer_ids), '%d'));
             $sql = $this->wpdb->prepare(
                 "SELECT wp_user_id, delivery_initials, delivery_area_name,
-                        delivery_area_zone, delivery_street_name
+                        delivery_street_name
                  FROM `{$clients_table}`
                  WHERE wp_user_id IN ({$placeholders})",
                 ...array_values($customer_ids)
@@ -1287,28 +1286,6 @@ class MealsDB_Reports {
             'start'         => gmdate('Y-m-d 00:00:00', $start),
             'end_exclusive' => gmdate('Y-m-d 00:00:00', strtotime('+1 day', $end)),
         ];
-    }
-
-    /**
-     * Decode a JSON field into an array.
-     *
-     * @param mixed $value
-     *
-     * @return array<int|string, mixed>
-     */
-    private function decode_json_array($value): array {
-        if (is_array($value)) {
-            return $value;
-        }
-
-        if (is_string($value) && $value !== '') {
-            $decoded = json_decode($value, true);
-            if (is_array($decoded)) {
-                return $decoded;
-            }
-        }
-
-        return [];
     }
 
     /**

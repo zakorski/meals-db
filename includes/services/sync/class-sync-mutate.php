@@ -576,17 +576,6 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
-     * Resolve a synchronization conflict using the provided descriptor.
-     *
-     * @param array<string, mixed> $conflict Conflict metadata describing the resolution to apply.
-     *
-     * @return bool True when the conflict has been resolved, false otherwise.
-     */
-    public function resolve_conflict(array $conflict): bool {
-        return false;
-    }
-
-    /**
      * Link a Meals DB client to a WooCommerce user.
      *
      * @param int $client_id
@@ -752,15 +741,6 @@ class MealsDB_Sync_Mutate {
         }
 
         return true;
-    }
-
-    /**
-     * Link a Meals DB client to a WordPress user account.
-     *
-     * @return true|WP_Error
-     */
-    public function link_client_to_wordpress_user(int $client_id, int $wp_user_id) {
-        return $this->link_meals_client_to_wc_user($client_id, $wp_user_id);
     }
 
     /**

@@ -380,14 +380,11 @@ class MealsDB_Client_Form {
         $required_fields = self::get_required_fields_for_type($client_type);
 
         $initials_value = strtoupper(trim((string) ($sanitized['delivery_initials'] ?? '')));
-        $requires_delivery_initials = true;
 
         if ($initials_value === '') {
-            if ($requires_delivery_initials) {
-                $record_required_error('delivery_initials');
-            } else {
-                $sanitized['delivery_initials'] = null;
-            }
+            // Delivery initials are always required (directive GUI-INITIALS);
+            // there is no longer a conditional "not required" path.
+            $record_required_error('delivery_initials');
         } else {
             // Delivery initials are globally unique (directive GUI-INITIALS):
             // validate_code() rejects any code already used by another client.
@@ -751,12 +748,15 @@ class MealsDB_Client_Form {
             'customer_comments' => 5000, // DB-side alias
             'individual_id'     => 50,
             'requisition_id'    => 50,
-            // Phone / province: these reach save()/update() under BOTH their
-            // form-side and DB-side names depending on whether mapping has run
-            // yet. List both so the pre-encryption fast-fail catches an
-            // over-long value before it overflows its column at $wpdb->insert
-            // (directive GUI-F3F5: province "New Brunswick" overflowed
-            // VARCHAR(10); an unclamped phone overflows VARCHAR(20)).
+            // Phone / province length caps. Callers today (save()/update())
+            // run this on sanitize_payload() output — form-side keys only —
+            // BEFORE map_form_to_db(), so in practice only the form-side names
+            // below ever match. The DB-side aliases are kept as cheap defence
+            // for a future caller that reaches here with already-mapped data,
+            // so an over-long value is fast-failed before it overflows its
+            // column at $wpdb->insert (directive GUI-F3F5: province
+            // "New Brunswick" overflowed VARCHAR(10); an unclamped phone
+            // overflows VARCHAR(20)).
             'phone_primary'             => 20,
             'phone_secondary'           => 20,
             'alt_contact_phone_primary' => 20,
@@ -1975,6 +1975,13 @@ class MealsDB_Client_Form {
             return strtoupper(trim((string) $value));
         }, $contact_method_allowed)));
 
+        // These enum rules run in validate() against sanitize_payload() output,
+        // where sanitize_scalar_value() has already canonicalised the input
+        // (service_zone strips a "zone " prefix, meal_type maps "meal"->"main",
+        // requisition_period maps DAILY/WEEKLY/MONTHLY to day/week/month). The
+        // allowed lists below therefore carry only the canonical post-sanitize
+        // forms; the plural / prefixed spellings are accepted upstream in
+        // sanitize, never matched here.
         return [
             'gender' => [
                 'allowed'   => ['MALE', 'FEMALE', 'OTHER'],
@@ -1982,17 +1989,17 @@ class MealsDB_Client_Form {
                 'message'   => 'Gender must be Male, Female, or Other.',
             ],
             'service_zone' => [
-                'allowed'   => ['A', 'B', 'ZONE A', 'ZONE B'],
+                'allowed'   => ['A', 'B'],
                 'normalize' => 'upper',
                 'message'   => 'Service zone must be either A or B.',
             ],
             'meal_type' => [
-                'allowed'   => ['MAIN', 'MAIN+SIDE', 'MEAL'],
+                'allowed'   => ['MAIN', 'MAIN+SIDE'],
                 'normalize' => 'upper',
                 'message'   => 'Meal type must be either Main or Main+Side.',
             ],
             'requisition_period' => [
-                'allowed'   => ['DAY', 'DAILY', 'WEEK', 'WEEKLY', 'MONTH', 'MONTHLY'],
+                'allowed'   => ['DAY', 'WEEK', 'MONTH'],
                 'normalize' => 'upper',
                 'message'   => 'Requisition period must be Day/Daily, Week/Weekly, or Month/Monthly.',
             ],

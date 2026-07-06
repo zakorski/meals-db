@@ -61,66 +61,6 @@ class MealsDB_Clients_Repository {
     }
 
     /**
-     * Retrieve clients.
-     *
-     * Paginated — callers must specify a page size and (optionally) offset.
-     * The previous signature returned the whole table, which is unsafe on
-     * production sites with thousands of clients.
-     *
-     * @param int $limit  Max rows. Hard-capped at 1000 even if a higher
-     *                    value is requested.
-     * @param int $offset Row offset. Clamped to 0.
-     * @return array<int, array<string, mixed>>
-     */
-    public function get_all_clients(int $limit = 200, int $offset = 0): array {
-        global $wpdb;
-
-        if (!$this->ensure_table_name()) {
-            error_log('[MealsDB Clients Repository] Database connection unavailable when fetching clients.');
-            return [];
-        }
-
-        $limit  = max(1, min(1000, $limit));
-        $offset = max(0, $offset);
-
-        try {
-            // Explicit SELECT list — never SELECT *. The previous wildcard
-            // returned encrypted PII columns and deterministic-hash sidecar
-            // columns to every caller, none of which are needed by current
-            // listing surfaces and which expand the blast radius of any
-            // accidental data echo to the response.
-            $columns = self::default_select_columns();
-            $sql = $wpdb->prepare(
-                sprintf('SELECT %s FROM `%s` ORDER BY client_id ASC LIMIT %%d OFFSET %%d', $columns, $this->escape_table_name()),
-                $limit,
-                $offset
-            );
-            $rows = $wpdb->get_results($sql, ARRAY_A);
-
-            if ($rows === null) {
-                error_log('[MealsDB Clients Repository] Failed to execute client list query: ' . ($wpdb->last_error ?: 'unknown error'));
-                return [];
-            }
-
-            return is_array($rows) ? $rows : [];
-        } catch (Throwable $e) {
-            error_log('[MealsDB Clients Repository] Exception while fetching clients: ' . $e->getMessage());
-            return [];
-        }
-    }
-
-    /**
-     * Non-PII columns safe to surface in list views. Keep narrow — encrypted
-     * blobs and *_index hashes are intentionally absent.
-     */
-    private static function default_select_columns(): string {
-        return 'client_id, first_name, last_name, client_type, active, '
-             . 'wp_user_id, client_email, client_phone_1 AS phone_primary, '
-             . 'street_name, city, province, postal_code, '
-             . 'delivery_area_zone, delivery_area_name';
-    }
-
-    /**
      * Fetch a single client by ID.
      *
      * @param int $client_id Client primary key.
@@ -619,13 +559,6 @@ class MealsDB_Clients_Repository {
             error_log('[MealsDB Clients Repository] Exception while checking unique field for column ' . $column . ': ' . $e->getMessage());
             return false;
         }
-    }
-
-    /**
-     * Check if a client type is a government client (SDNB or Veteran).
-     */
-    private static function is_government_client(string $client_type): bool {
-        return $client_type === 'SDNB' || $client_type === 'Veteran';
     }
 
     /**
