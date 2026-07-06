@@ -213,11 +213,15 @@ class MealsDB_Ajax_Delivery_Slips {
     private static function verify_request(): void {
         check_ajax_referer('mealsdb_nonce', 'nonce');
 
-        $capability = MealsDB_Permissions::required_capability();
-        if (!is_string($capability) || $capability === '') {
-            $capability = 'manage_woocommerce';
-        }
-        if (!current_user_can($capability)) {
+        // U06-slips-16 / U22-ajax-misc-4: these packer/driver PDF endpoints
+        // stream DECRYPTED client PII (name, street, city, phone). Per the
+        // operator, only administrators print these documents, so gate them at
+        // manage_options — matching the Midland slip-batch endpoint, which
+        // already requires manage_options for the same PII and explicitly warns
+        // "do NOT loosen to the baseline plugin cap." Previously this used the
+        // baseline required_capability() (manage_woocommerce, held by the WC
+        // shop_manager role), a weaker tier than the identical data elsewhere.
+        if (!current_user_can('manage_options')) {
             wp_send_json([
                 'success' => false,
                 'message' => __('You are not allowed to perform this action.', 'meals-db'),
