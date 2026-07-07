@@ -405,8 +405,13 @@ class MealsDB_Reports {
                 : ($wc_product ? $wc_product->get_name() : '');
             $sku           = $wc_product ? $wc_product->get_sku() : '';
             $current_stock = $wc_product ? max(0, (int) $wc_product->get_stock_quantity()) : 0;
-            $future_inv    = max(0, (int) get_post_meta($pid, '_future_inventory_quantity', true));
-            $total_available = $current_stock + $future_inv;
+            // _future_inventory_quantity is DELIBERATELY NOT read: it is owned by
+            // a retired future-dated-inventory plugin from the old system whose
+            // data is unreliable (stale/garbage). Folding it into total_available
+            // inflated availability and SUPPRESSED units_needed, silently
+            // under-ordering (stockout risk) on any product still carrying a
+            // leftover value. Availability is now on-hand stock only.
+            $total_available = $current_stock;
 
             $units_needed = max(0, $projected_need - $total_available);
             $cases_to_buy = $units_needed > 0 ? (int) ceil($units_needed / $case_size) : 0;
@@ -433,7 +438,9 @@ class MealsDB_Reports {
                 'adjusted_weekly'     => $adjusted_weekly,
                 'projected_need'      => $projected_need,
                 'current_stock'       => $current_stock,
-                'future_inventory'    => $future_inv,
+                // future_inventory field removed — the retired plugin's meta is
+                // no longer read (see total_available above). total_available is
+                // now on-hand stock only.
                 'total_available'     => $total_available,
                 'units_needed'        => $units_needed,
                 'case_size'           => $case_size,
@@ -494,7 +501,7 @@ class MealsDB_Reports {
         // edited by a future caller.
         fwrite($handle, MealsDB_CSV::row([
             'SKU', 'Product Name', 'Avg/Week', 'Seasonal Idx', 'Adj/Week',
-            'Projected', 'Stock', 'Future',
+            'Projected', 'Stock',
             'Available', 'Units Needed', 'Case Size', 'Cases', 'Order Qty', 'Note',
         ]) . "\n");
 
@@ -509,7 +516,6 @@ class MealsDB_Reports {
                 $row['adjusted_weekly'],
                 $row['projected_need'],
                 $row['current_stock'],
-                $row['future_inventory'],
                 $row['total_available'],
                 $row['units_needed'],
                 $row['case_size'],

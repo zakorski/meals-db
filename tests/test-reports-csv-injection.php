@@ -161,7 +161,6 @@ $po = [[
     'adjusted_weekly'     => 0,
     'projected_need'      => 0,
     'current_stock'       => 0,
-    'future_inventory'    => 0,
     'total_available'     => 0,
     'units_needed'        => 0,
     'case_size'           => 1,

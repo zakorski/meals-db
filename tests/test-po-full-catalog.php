@@ -33,7 +33,10 @@ if (!function_exists('get_option')) {
 }
 if (!function_exists('get_post_meta')) {
     function get_post_meta($id, string $key, bool $single = false) {
-        // No legacy case_size meta (so FC-6's floor is exercised); no future inventory.
+        // No legacy case_size meta (so FC-6's floor is exercised). NOTE: the
+        // forecast no longer reads _future_inventory_quantity at all (the retired
+        // future-dated-inventory plugin's data is unreliable), so this branch is
+        // now dead — kept only to document that the meta is intentionally ignored.
         if ($key === '_future_inventory_quantity') { return 0; }
         return '';
     }
