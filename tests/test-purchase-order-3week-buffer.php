@@ -44,6 +44,8 @@ if (!function_exists('get_post_meta')) {
     function get_post_meta($id, string $key, bool $single = false) {
         if ($key === 'buffer') { return 1000; }                       // must be IGNORED by the validated model
         if ($key === 'case_size') { return 12; }
+        // Dead branch: the forecast no longer reads _future_inventory_quantity
+        // (retired plugin's data is unreliable); kept to document the intent.
         if ($key === '_future_inventory_quantity') { return 0; }
         return '';
     }
@@ -128,6 +130,8 @@ chk_true(!array_key_exists('qty_needed', $row), 'P-4b row has no qty_needed key'
 $csv = $reports->export_purchase_order_csv($rows);
 chk_true(strpos($csv, 'Buffer') === false, 'P-5a CSV header has no Buffer column');
 chk_true(strpos($csv, 'Qty Needed') === false, 'P-5b CSV header has no Qty Needed column');
+// The Future column was removed with the future-dated-inventory read.
+chk_true(strpos($csv, 'Future') === false, 'P-5c CSV header has no Future column');
 
 // P-6 — source no longer reads the flat buffer meta.
 $src = file_get_contents(__DIR__ . '/../includes/services/class-reports.php');
