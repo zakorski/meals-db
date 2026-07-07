@@ -19,7 +19,7 @@ MealsDB_Permissions::enforce();
         <?php echo esc_html__('Forecast model (fixed, validated by back-test): 12-week recency-weighted history, 6-week order horizon plus a 3-week demand-proportional safety buffer (9 weeks of coverage), seasonal index clamped to 0.3–3.0. Not configurable.', 'meals-db'); ?>
     </p>
 
-    <div class="mealsdb-po-controls" style="margin-bottom:16px; display:flex; gap:12px; align-items:flex-end;">
+    <div class="mealsdb-po-controls" style="margin-bottom:16px; display:flex; gap:16px; align-items:flex-end;">
         <div>
             <button type="button" class="button button-primary" id="mealsdb-po-generate">
                 <?php echo esc_html__('Generate', 'meals-db'); ?>
@@ -28,9 +28,20 @@ MealsDB_Permissions::enforce();
                 <?php echo esc_html__('Export CSV', 'meals-db'); ?>
             </button>
         </div>
+        <div>
+            <label>
+                <input type="checkbox" id="mealsdb-po-optimize" />
+                <?php echo esc_html__('Optimise for whole pallets', 'meals-db'); ?>
+            </label>
+            <p class="description" style="margin:2px 0 0;">
+                <?php echo esc_html__('Snap the order to whole Apetito pallets (75 cases): fill up if the partial pallet is at least a third full, otherwise trim it — within a 7–52 week coverage guard. The base forecast is unaffected.', 'meals-db'); ?>
+            </p>
+        </div>
     </div>
 
     <div id="mealsdb-po-status" class="notice" style="display:none;"></div>
+
+    <div id="mealsdb-po-summary" class="notice notice-info" style="display:none; margin:0 0 12px;"></div>
 
     <div id="mealsdb-po-output" style="display:none;"></div>
 </div>
@@ -57,8 +68,18 @@ $mealsdb_po_island = array(
         'colStock'        => __('Stock', 'meals-db'),
         'colCases'        => __('Cases', 'meals-db'),
         'colOrderQty'     => __('Order Qty', 'meals-db'),
+        'colDelta'        => __('Δ Cases', 'meals-db'),
         'colNote'         => __('Note', 'meals-db'),
         'total'           => __('TOTAL', 'meals-db'),
+        // Pallet-optimisation summary banner.
+        'sumTitle'        => __('Pallet optimisation', 'meals-db'),
+        'actFill'         => __('filled up to a whole pallet', 'meals-db'),
+        'actDrop'         => __('trimmed to a whole pallet', 'meals-db'),
+        'actNone'         => __('already whole pallets — no change', 'meals-db'),
+        'sumCases'        => __('cases', 'meals-db'),
+        'sumPallets'      => __('pallets', 'meals-db'),
+        'sumChanged'      => __('cases changed', 'meals-db'),
+        'sumIncomplete'   => __('could not reach a whole pallet within the 7–52 week coverage guard', 'meals-db'),
     ),
 );
 ?>

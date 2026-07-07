@@ -79,7 +79,20 @@
         return '';
     }
 
-    function renderTable(rows) {
+    // Render the freight delta (+added / -removed cases) as a coloured cell.
+    // Empty for unchanged rows so the eye jumps straight to what moved.
+    function deltaCell(delta) {
+        var d = parseInt(delta, 10) || 0;
+        if (d === 0) return '<td style="text-align:right"></td>';
+        var colour = d > 0 ? '#2271b1' : '#b32d2e';
+        var text   = (d > 0 ? '+' : '') + d;
+        return '<td style="text-align:right; color:' + colour + '; font-weight:bold;">' + esc(text) + '</td>';
+    }
+
+    // showDelta adds a "Δ Cases" column (used for the pallet-optimised view so
+    // the operator can see exactly which products the freight pass moved). The
+    // base forecast table is rendered without it.
+    function renderTable(rows, showDelta) {
         if (!rows.length) return '<p>' + esc(t('noData', 'No demand data found for the trailing period.')) + '</p>';
 
         var html = '<table class="widefat striped"><thead><tr>';
@@ -91,6 +104,9 @@
         html += '<th style="text-align:right">' + esc(t('colStock', 'Stock')) + '</th>';
         html += '<th style="text-align:right">' + esc(t('colCases', 'Cases')) + '</th>';
         html += '<th style="text-align:right">' + esc(t('colOrderQty', 'Order Qty')) + '</th>';
+        if (showDelta) {
+            html += '<th style="text-align:right">' + esc(t('colDelta', 'Δ Cases')) + '</th>';
+        }
         html += '<th>' + esc(t('colNote', 'Note')) + '</th>';
         html += '</tr></thead><tbody>';
 
@@ -108,6 +124,9 @@
             html += '<td style="text-align:right">' + intText(r.total_available) + '</td>';
             html += '<td style="text-align:right"><strong>' + intText(r.cases_to_buy) + '</strong></td>';
             html += '<td style="text-align:right">' + intText(r.order_quantity) + '</td>';
+            if (showDelta) {
+                html += deltaCell(r.freight_delta_cases);
+            }
             html += '<td>' + esc(r.seasonal_note) + '</td>';
             html += '</tr>';
         });
@@ -116,29 +135,69 @@
         html += '<th colspan="7">' + esc(t('total', 'TOTAL')) + '</th>';
         html += '<th style="text-align:right">' + intText(totalCases) + '</th>';
         html += '<th style="text-align:right">' + intText(totalQty) + '</th>';
+        if (showDelta) {
+            html += '<th></th>';
+        }
         html += '<th></th>';
         html += '</tr></tfoot></table>';
 
         return html;
     }
 
+    // One-line banner describing what the pallet pass did.
+    function renderSummary(s) {
+        if (!s) return '';
+        var action = s.action === 'fill' ? t('actFill', 'filled up to a whole pallet')
+                   : s.action === 'drop' ? t('actDrop', 'trimmed to a whole pallet')
+                   : t('actNone', 'already whole pallets — no change');
+        var palletsBase  = parseFloat(s.pallets_base).toFixed(2);
+        var palletsFinal = parseFloat(s.pallets).toFixed(2);
+        var msg = '<strong>' + esc(t('sumTitle', 'Pallet optimisation')) + ':</strong> ' + esc(action) + '. '
+                + intText(s.base_cases) + ' ' + esc(t('sumCases', 'cases')) + ' (' + esc(palletsBase) + ' ' + esc(t('sumPallets', 'pallets')) + ')'
+                + ' → ' + intText(s.final_cases) + ' ' + esc(t('sumCases', 'cases')) + ' (' + esc(palletsFinal) + ' ' + esc(t('sumPallets', 'pallets')) + ')'
+                + ', ' + intText(s.cases_changed) + ' ' + esc(t('sumChanged', 'cases changed')) + '.';
+        if (s.incomplete) {
+            msg += ' <em>' + esc(t('sumIncomplete', 'could not reach a whole pallet within the 7–52 week coverage guard')) + '.</em>';
+        }
+        return msg;
+    }
+
+    // Tracks whether the currently-displayed table is the pallet-optimised one,
+    // so the export filename matches what is on screen.
+    var showingOptimized = false;
+
     $('#mealsdb-po-generate').on('click', function () {
-        // The forecast model is fixed (validated 3-week-buffer model); no
-        // tunable parameters are sent.
+        // The forecast model is fixed (validated 3-week-buffer model); the ONLY
+        // request input is the optional pallet-optimisation toggle.
+        var optimize = $('#mealsdb-po-optimize').is(':checked');
         showStatus(t('generating', 'Generating...'), 'info');
         $('#mealsdb-po-export').hide();
+        $('#mealsdb-po-summary').hide().empty();
 
         $.post(ajaxUrl, {
             action: 'mealsdb_generate_purchase_order',
-            nonce: nonce
+            nonce: nonce,
+            optimize: optimize ? 1 : 0
         }, function (res) {
             if (!res.success) {
                 showStatus(res.message || t('errorGenerating', 'Error generating purchase order.'), 'error');
                 return;
             }
             $('#mealsdb-po-status').hide();
-            $('#mealsdb-po-output').show().html(renderTable(res.data));
-            csvData = res.csv || '';
+
+            // Option A response shape: base rows/csv are always under data/csv;
+            // the optimised variant arrives as sibling keys only when requested.
+            if (optimize && res.optimized) {
+                showingOptimized = true;
+                $('#mealsdb-po-summary').show().html(renderSummary(res.summary));
+                $('#mealsdb-po-output').show().html(renderTable(res.optimized, true));
+                csvData = res.optimized_csv || '';
+            } else {
+                showingOptimized = false;
+                $('#mealsdb-po-output').show().html(renderTable(res.data, false));
+                csvData = res.csv || '';
+            }
+
             if (csvData) {
                 $('#mealsdb-po-export').show();
             }
@@ -149,7 +208,8 @@
 
     $('#mealsdb-po-export').on('click', function () {
         if (!csvData) return;
-        var filename = 'purchase-order-' + new Date().toISOString().slice(0, 10) + '.csv';
+        var suffix   = showingOptimized ? '-pallets' : '';
+        var filename = 'purchase-order' + suffix + '-' + new Date().toISOString().slice(0, 10) + '.csv';
         exportCsv(csvData, filename);
     });
 })(jQuery);
