@@ -94,11 +94,26 @@ class MealsDB_Ajax_Reports {
         $po_rows  = $reports->generate_purchase_order();
         $csv      = $reports->export_purchase_order_csv($po_rows);
 
-        wp_send_json([
+        $response = [
             'success' => true,
             'data'    => $po_rows,
             'csv'     => $csv,
-        ]);
+        ];
+
+        // OPTIONAL freight/pallet optimisation (Option A response shape): the
+        // base forecast under `data`/`csv` is ALWAYS present and unchanged, so
+        // the existing consumer keeps working untouched. The optimised variant
+        // is added as SIBLING keys only when the operator ticks the toggle —
+        // never nested under `data` (that would change the contract the current
+        // JS reads as the rows array).
+        if (!empty($_POST['optimize'])) {
+            $optimized = MealsDB_Reports::optimize_po_for_pallets($po_rows);
+            $response['optimized']     = $optimized['rows'];
+            $response['optimized_csv'] = $reports->export_purchase_order_csv($optimized['rows']);
+            $response['summary']       = $optimized['summary'];
+        }
+
+        wp_send_json($response);
     }
 
     /**

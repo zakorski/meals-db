@@ -535,6 +535,225 @@ class MealsDB_Reports {
     }
 
     /**
+     * OPTIONAL freight optimisation: snap a purchase order to whole Apetito
+     * pallets to avoid paying to ship (or waste the deck space of) a partial
+     * pallet.
+     *
+     * This is a PURE post-processor over generate_purchase_order() rows — it
+     * takes no I/O, reads no settings, and NEVER mutates the base forecast in
+     * place (returns a modified COPY). It is only invoked when the operator
+     * ticks the "optimise for pallets" toggle; the untouched forecast remains
+     * the default.
+     *
+     * Algorithm (deterministic):
+     *   base_cases = Σ cases_to_buy;  partial = base_cases % CASES_PER_PALLET.
+     *   - partial == 0            → nothing to do (already whole pallets).
+     *   - partial >= ⅓ pallet     → FILL up to the next whole pallet
+     *                               (gap = CASES_PER_PALLET - partial).
+     *   - partial <  ⅓ pallet     → DROP the partial cases back off
+     *                               (gap = partial) IF it can be done without
+     *                               breaching the 7-week floor; if the drop
+     *                               gets stuck, ROUND UP instead (fill from
+     *                               base) — never leave stock under-covered to
+     *                               chase a round pallet.
+     *
+     * Each single-case step is applied to the current least-covered (fill) or
+     * most-covered (drop) ELIGIBLE row, then the pool is RE-RANKED before the
+     * next step so the adjustment spreads across many products instead of
+     * dumping a whole pallet onto one SKU. Coverage = (current_stock +
+     * order_quantity) / adjusted_weekly weeks — the same metric the base
+     * forecast targets (9 weeks), floored at 7 and ceilinged at 52 so freight
+     * tuning can never create a stockout or a year of dead stock.
+     *
+     * current_stock (NOT total_available) is used deliberately, per the
+     * directive: the retired future-inventory meta is unreliable, so on-hand
+     * stock is the real availability. This is consistent with the companion
+     * change that stops the base forecast folding that meta into
+     * total_available (after which current_stock == total_available anyway).
+     *
+     * Changed rows are tagged with `freight_delta_cases` (+added / -removed) and
+     * a note appended to `seasonal_note` so the operator can see exactly what
+     * the pass moved.
+     *
+     * @param array<int, array<string, mixed>> $rows generate_purchase_order() output
+     * @return array{rows: array<int, array<string, mixed>>, summary: array<string, mixed>}
+     */
+    public static function optimize_po_for_pallets(array $rows): array {
+        $cpp = (int) MealsDB_Operational_Constants::APETITO_CASES_PER_PALLET;
+
+        $base_cases = 0;
+        foreach ($rows as $r) {
+            $base_cases += max(0, (int) ($r['cases_to_buy'] ?? 0));
+        }
+
+        // Guard: no pallet size configured, or already sitting on whole pallets.
+        $partial = $cpp > 0 ? ($base_cases % $cpp) : 0;
+        if ($cpp <= 0 || $partial === 0) {
+            return [
+                'rows'    => $rows,
+                'summary' => [
+                    'base_cases'    => $base_cases,
+                    'final_cases'   => $base_cases,
+                    'partial'       => $partial,
+                    'pallets_base'  => $cpp > 0 ? $base_cases / $cpp : 0.0,
+                    'pallets'       => $cpp > 0 ? $base_cases / $cpp : 0.0,
+                    'action'        => 'none',
+                    'cases_changed' => 0,
+                    'incomplete'    => false,
+                ],
+            ];
+        }
+
+        // Coverage in weeks for a row at its CURRENT order_quantity. A row with
+        // no demand (adjusted_weekly <= 0) is treated as infinitely covered so
+        // the fill picker never selects it and the drop picker always would —
+        // but the eligibility gate below excludes it from both anyway.
+        $coverage = static function (array $row): float {
+            $aw = (float) ($row['adjusted_weekly'] ?? 0);
+            if ($aw <= 0) {
+                return INF;
+            }
+            return ((int) ($row['current_stock'] ?? 0) + (int) ($row['order_quantity'] ?? 0)) / $aw;
+        };
+
+        // A row can only be freight-adjusted if it has real demand AND a real
+        // case size (case_size 0 rows are the divide-by-zero floor case; never
+        // touch them).
+        $eligible = static function (array $row): bool {
+            return (float) ($row['adjusted_weekly'] ?? 0) > 0 && (int) ($row['case_size'] ?? 0) > 0;
+        };
+
+        // Add $gap whole cases, one at a time, each to the least-covered row
+        // that stays at/under the 52-week ceiling. Returns cases actually added
+        // (< $gap only if every eligible row hit the ceiling — near-impossible).
+        $do_fill = static function (array &$work, int $gap) use ($coverage, $eligible): int {
+            $added = 0;
+            for ($i = 0; $i < $gap; $i++) {
+                $pick = null;
+                $pick_cov = INF;
+                foreach ($work as $idx => $row) {
+                    if (!$eligible($row)) {
+                        continue;
+                    }
+                    $cs = (int) $row['case_size'];
+                    $aw = (float) $row['adjusted_weekly'];
+                    $after = ((int) $row['current_stock'] + (int) $row['order_quantity'] + $cs) / $aw;
+                    if ($after > 52.0) {
+                        continue; // ceiling
+                    }
+                    $cov = $coverage($row);
+                    if ($cov < $pick_cov) {
+                        $pick_cov = $cov;
+                        $pick = $idx;
+                    }
+                }
+                if ($pick === null) {
+                    break; // fill-stuck: everything at the ceiling
+                }
+                $work[$pick]['order_quantity'] = (int) $work[$pick]['order_quantity'] + (int) $work[$pick]['case_size'];
+                $work[$pick]['cases_to_buy']   = (int) $work[$pick]['cases_to_buy'] + 1;
+                $added++;
+            }
+            return $added;
+        };
+
+        // Remove $gap whole cases, one at a time, each from the most-covered row
+        // that stays at/above the 7-week floor and still has a case to give.
+        // Returns cases actually removed (< $gap = drop-stuck).
+        $do_drop = static function (array &$work, int $gap) use ($coverage, $eligible): int {
+            $removed = 0;
+            for ($i = 0; $i < $gap; $i++) {
+                $pick = null;
+                $pick_cov = -INF;
+                foreach ($work as $idx => $row) {
+                    if (!$eligible($row) || (int) $row['cases_to_buy'] < 1) {
+                        continue;
+                    }
+                    $cs = (int) $row['case_size'];
+                    $aw = (float) $row['adjusted_weekly'];
+                    $after = ((int) $row['current_stock'] + (int) $row['order_quantity'] - $cs) / $aw;
+                    if ($after < 7.0) {
+                        continue; // floor
+                    }
+                    $cov = $coverage($row);
+                    if ($cov > $pick_cov) {
+                        $pick_cov = $cov;
+                        $pick = $idx;
+                    }
+                }
+                if ($pick === null) {
+                    break; // drop-stuck
+                }
+                $work[$pick]['order_quantity'] = (int) $work[$pick]['order_quantity'] - (int) $work[$pick]['case_size'];
+                $work[$pick]['cases_to_buy']   = (int) $work[$pick]['cases_to_buy'] - 1;
+                $removed++;
+            }
+            return $removed;
+        };
+
+        if ($partial >= $cpp / 3) {
+            // Nearer the next pallet than the last — round UP.
+            $action = 'fill';
+            $work   = $rows;
+            $gap    = $cpp - $partial;
+            $done   = $do_fill($work, $gap);
+            $incomplete = ($done < $gap);
+        } else {
+            // Small partial — try to shed it back to the pallet below.
+            $action = 'drop';
+            $work   = $rows;
+            $gap    = $partial;
+            $done   = $do_drop($work, $gap);
+            if ($done < $gap) {
+                // Drop-stuck: the shed would push a product under the 7-week
+                // floor. Round UP from the ORIGINAL base instead (never leave
+                // stock under-covered to chase a round pallet). Discard the
+                // partial drops by restarting from $rows.
+                $action = 'fill';
+                $work   = $rows;
+                $gap    = $cpp - $partial;
+                $done   = $do_fill($work, $gap);
+                $incomplete = ($done < $gap);
+            } else {
+                $incomplete = false;
+            }
+        }
+
+        // Tag changed rows and total the result.
+        $cases_changed = 0;
+        $final_cases   = 0;
+        foreach ($work as $idx => &$row) {
+            $delta = (int) $row['cases_to_buy'] - (int) ($rows[$idx]['cases_to_buy'] ?? 0);
+            $row['freight_delta_cases'] = $delta;
+            if ($delta !== 0) {
+                $cases_changed += abs($delta);
+                $noun = abs($delta) === 1 ? 'case' : 'cases';
+                $tag  = $delta > 0
+                    ? sprintf('Freight fill +%d %s', $delta, $noun)
+                    : sprintf('Freight trim %d %s', $delta, $noun);
+                $existing = (string) ($row['seasonal_note'] ?? '');
+                $row['seasonal_note'] = $existing === '' ? $tag : $existing . ' | ' . $tag;
+            }
+            $final_cases += max(0, (int) $row['cases_to_buy']);
+        }
+        unset($row);
+
+        return [
+            'rows'    => $work,
+            'summary' => [
+                'base_cases'    => $base_cases,
+                'final_cases'   => $final_cases,
+                'partial'       => $partial,
+                'pallets_base'  => $base_cases / $cpp,
+                'pallets'       => $final_cases / $cpp,
+                'action'        => $action,
+                'cases_changed' => $cases_changed,
+                'incomplete'    => $incomplete,
+            ],
+        ];
+    }
+
+    /**
      * Reconcile client contributions: expected (from meals_clients) vs actual paid (fee product).
      *
      * @param string $start_date Y-m-d
