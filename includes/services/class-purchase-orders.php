@@ -21,6 +21,27 @@ class MealsDB_Purchase_Orders {
     public const STATUS_CANCELLED  = 'cancelled';
 
     /**
+     * PO draft workflow (spec 2026-07-10). The existing statuses double as
+     * the workflow states — displayed via status_label():
+     *   planned=Draft, placed=Approved, arrived=Received, reconciled, cancelled.
+     * payload IS NULL ⇒ legacy task-created PO: the new workflow refuses to
+     * touch it (its lifecycle belongs to the task chain — prevents a task and
+     * a list action double-applying the same inventory bump).
+     */
+    public const PAYLOAD_SCHEMA = 1;
+
+    /** Mirrors the forecast model's 9-week coverage target (class-reports.php). */
+    public const COVERAGE_TARGET_WEEKS = 9.0;
+
+    /** Mirrors the pallet-optimizer's 7-week safety floor (class-reports.php). */
+    public const COVERAGE_FLOOR_WEEKS = 7.0;
+
+    public const DEFAULT_SUPPLIER = 'Apetito';
+
+    private const MAX_CASES    = 10000; // fat-finger ceiling on any row
+    private const MAX_NOTE_LEN = 500;   // reconcile note length cap
+
+    /**
      * Valid PO statuses.
      *
      * The lifecycle is: PLANNED → PLACED → ARRIVED → RECONCILED,
@@ -254,5 +275,144 @@ class MealsDB_Purchase_Orders {
             return null;
         }
         return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) ? $value : null;
+    }
+
+    // -----------------------------------------------------------------
+    // Draft workflow (spec 2026-07-10) — creation + reads
+    // -----------------------------------------------------------------
+
+    /**
+     * Persist a generated forecast as a Draft PO. $rows is the output of
+     * MealsDB_Reports::generate_purchase_order() (optionally pallet-optimized);
+     * each row is snapshotted with its demand/stock context so the coverage
+     * warnings stay deterministic for the life of the draft.
+     *
+     * Returns po_id, or 0 on failure.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, mixed>             $meta supplier / notes overrides
+     */
+    public function create_draft(array $rows, array $meta = []): int {
+        // Defense-in-depth: service-layer capability re-check (Pattern 1).
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return 0;
+        }
+
+        $payload_rows = [];
+        foreach ($rows as $r) {
+            if (!is_array($r)) {
+                continue;
+            }
+            $sku = trim((string) ($r['sku'] ?? ''));
+            if ($sku === '') {
+                continue;
+            }
+            $case_size = max(1, (int) ($r['case_size'] ?? 1));
+            $cases     = max(0, (int) ($r['cases_to_buy'] ?? 0));
+            $payload_rows[] = [
+                'sku'                 => $sku,
+                'product_name'        => (string) ($r['product_name'] ?? ''),
+                'case_size'           => $case_size,
+                'cases'               => $cases,
+                'order_quantity'      => $cases * $case_size,
+                'adjusted_weekly'     => round((float) ($r['adjusted_weekly'] ?? 0), 2),
+                'current_stock'       => (int) ($r['current_stock'] ?? 0),
+                'seasonal_index'      => round((float) ($r['seasonal_index'] ?? 1), 2),
+                'freight_delta_cases' => (int) ($r['freight_delta_cases'] ?? 0),
+                'seasonal_note'       => (string) ($r['seasonal_note'] ?? ''),
+            ];
+        }
+        if (empty($payload_rows)) {
+            error_log('[MealsDB Purchase Orders] create_draft: no usable rows.');
+            return 0;
+        }
+
+        $payload = [
+            'schema'    => self::PAYLOAD_SCHEMA,
+            'generated' => $payload_rows,
+            'current'   => $payload_rows,
+            'received'  => [], // sku => {received_cases, note}, reconcile session
+        ];
+
+        $row = [
+            'po_number'  => 'PO-' . gmdate('Ymd-His'),
+            'supplier'   => isset($meta['supplier']) ? (string) $meta['supplier'] : self::DEFAULT_SUPPLIER,
+            'status'     => self::STATUS_PLANNED,
+            // items stays empty until approval — it is the "what was actually
+            // ordered" contract consumed by apply_inventory_bump/_adjustments.
+            'items'      => MealsDB_Task_Engine::encode_json([]),
+            'notes'      => isset($meta['notes']) ? (string) $meta['notes'] : null,
+            'payload'    => MealsDB_Task_Engine::encode_json($payload),
+            'edit_count' => 0,
+            'created_by' => get_current_user_id() ?: null,
+        ];
+
+        $table  = MealsDB_DB::get_table_name(MealsDB_Tables::PURCHASE_ORDERS);
+        $result = $this->wpdb->insert($table, $row);
+        if ($result === false) {
+            // uniq_po_number backstop: two saves in the same second collide.
+            // One suffixed retry covers the realistic case (one operator).
+            $row['po_number'] .= '-2';
+            $result = $this->wpdb->insert($table, $row);
+            if ($result === false) {
+                error_log('[MealsDB Purchase Orders] create_draft insert failed: ' . $this->wpdb->last_error);
+                return 0;
+            }
+        }
+
+        $po_id = (int) $this->wpdb->insert_id;
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_draft_created', $po_id, 'status', null, self::STATUS_PLANNED);
+        }
+        return $po_id;
+    }
+
+    /**
+     * get() plus decoded workflow payload. payload === null ⇒ legacy
+     * task-created PO (or corrupt JSON, treated the same: read-only).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function get_with_payload(int $po_id): ?array {
+        $po = $this->get($po_id);
+        if ($po === null) {
+            return null;
+        }
+        if (isset($po['payload']) && is_string($po['payload']) && $po['payload'] !== '') {
+            $decoded = json_decode($po['payload'], true);
+            $po['payload'] = (is_array($decoded) && isset($decoded['current']) && is_array($decoded['current']))
+                ? $decoded : null;
+        } else {
+            $po['payload'] = null;
+        }
+        return $po;
+    }
+
+    /**
+     * Weeks of coverage for a payload row: (stock snapshot + cases×case_size)
+     * ÷ adjusted weekly demand. Null when demand is zero (coverage undefined —
+     * the UI shows no warning). $cases overrides the row's stored count so the
+     * same math serves draft edits and reconcile previews.
+     */
+    public static function coverage_weeks(array $row, ?int $cases = null): ?float {
+        $weekly = (float) ($row['adjusted_weekly'] ?? 0);
+        if ($weekly <= 0) {
+            return null;
+        }
+        $cases = $cases ?? (int) ($row['cases'] ?? 0);
+        $units = (int) ($row['current_stock'] ?? 0) + $cases * max(1, (int) ($row['case_size'] ?? 1));
+        return round($units / $weekly, 1);
+    }
+
+    /** Operator-facing label for a status (planned displays as Draft, etc). */
+    public static function status_label(string $status): string {
+        switch ($status) {
+            case self::STATUS_PLANNED:    return __('Draft', 'meals-db');
+            case self::STATUS_PLACED:     return __('Approved', 'meals-db');
+            case self::STATUS_ARRIVED:    return __('Received', 'meals-db');
+            case self::STATUS_RECONCILED: return __('Reconciled', 'meals-db');
+            case self::STATUS_CANCELLED:  return __('Cancelled', 'meals-db');
+            default:                      return $status; // legacy 'counted'
+        }
     }
 }
