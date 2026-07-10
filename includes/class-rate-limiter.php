@@ -26,6 +26,9 @@ class MealsDB_Rate_Limiter {
         // Generous because Janet tabs through many cells in one sitting;
         // still a write, so it fails CLOSED (see MUTATING_ACTIONS).
         'invoice_draft_edit'     => 300,  // Invoice-draft review-grid field edits
+        // Per-row +/- case edits on a PO draft / reconcile session. Same
+        // rationale as invoice_draft_edit: many small writes in one sitting.
+        'po_draft_edit'          => 300,  // PO draft & reconcile row edits
         'settings_modify'        => 20,   // Settings + bulk client backfills
         'migration_destructive'  => 5,    // Migration phases, cleanup, reset
         'schema_rebuild'         => 2,    // Catastrophic: drops every plugin table
@@ -45,6 +48,7 @@ class MealsDB_Rate_Limiter {
         'sync_operations'       => true,
         'task_modify'           => true,
         'invoice_draft_edit'    => true,
+        'po_draft_edit'         => true,
         'settings_modify'       => true,
         'migration_destructive' => true,
         'schema_rebuild'        => true,

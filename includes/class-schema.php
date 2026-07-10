@@ -485,6 +485,20 @@ class MealsDB_Schema {
                     'items'            => 'JSON NULL',
                     'notes'            => 'TEXT NULL',
                     'reconciled_at'    => 'DATETIME NULL',
+                    // --- PO draft workflow (2026-07 spec). ADDITIVE ONLY: Schema_Sync
+                    // cannot ALTER existing columns, which is exactly why the workflow
+                    // reuses the existing status ENUM ('planned' displays as "Draft")
+                    // instead of adding new ENUM values. payload IS NULL marks a legacy
+                    // task-created PO (read-only in the new UI; its lifecycle stays with
+                    // the task chain so the two paths can never double-bump stock).
+                    'payload'          => 'LONGTEXT NULL',
+                    'edit_count'       => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'created_by'       => 'BIGINT UNSIGNED NULL',
+                    'approved_by'      => 'BIGINT UNSIGNED NULL',
+                    'approved_at'      => 'DATETIME NULL',
+                    'received_by'      => 'BIGINT UNSIGNED NULL',
+                    'received_at'      => 'DATETIME NULL',
+                    'reconciled_by'    => 'BIGINT UNSIGNED NULL',
                     'created_at'       => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
                     'updated_at'       => 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP',
                 ],
