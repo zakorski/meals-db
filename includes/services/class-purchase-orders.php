@@ -663,6 +663,152 @@ class MealsDB_Purchase_Orders {
         return true;
     }
 
+    // -----------------------------------------------------------------
+    // Draft workflow — reconciliation
+    // -----------------------------------------------------------------
+
+    /**
+     * Record one row of a reconcile-in-progress session: the actually-received
+     * case count (+/- buttons) and its note. Persisted in payload.received so
+     * a half-done session survives navigation. NO stock effect here — deltas
+     * are applied exactly once, by complete_reconcile().
+     *
+     * The note-required rule is enforced at COMPLETION (a row is often
+     * adjusted before its note is typed); this method only caps length.
+     *
+     * @return array{received_cases: int, ordered_cases: int, coverage_weeks: float|null}|WP_Error
+     */
+    public function edit_reconcile_row(int $po_id, string $sku, int $received_cases, string $note) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        if ($received_cases < 0 || $received_cases > self::MAX_CASES) {
+            return new WP_Error('bad_cases', __('Case count is out of the allowed range.', 'meals-db'));
+        }
+        $note = function_exists('sanitize_text_field') ? sanitize_text_field($note) : trim($note);
+        if (strlen($note) > self::MAX_NOTE_LEN) {
+            return new WP_Error('note_too_long', __('Note is too long (500 characters max).', 'meals-db'));
+        }
+
+        $po = $this->require_workflow_po($po_id, self::STATUS_ARRIVED,
+            __('Only received purchase orders can be reconciled.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        // Only ORDERED rows (cases > 0 at approval) are reconcilable.
+        $ordered = null;
+        foreach ($po['payload']['current'] as $row) {
+            if ((string) ($row['sku'] ?? '') === $sku && (int) ($row['cases'] ?? 0) > 0) {
+                $ordered = $row;
+                break;
+            }
+        }
+        if ($ordered === null) {
+            return new WP_Error('unknown_sku', __('That SKU is not on this purchase order.', 'meals-db'));
+        }
+
+        $received = is_array($po['payload']['received'] ?? null) ? $po['payload']['received'] : [];
+        $old = isset($received[$sku]['received_cases'])
+            ? (int) $received[$sku]['received_cases']
+            : (int) $ordered['cases'];
+        $received[$sku] = ['received_cases' => $received_cases, 'note' => $note];
+        $po['payload']['received'] = $received;
+
+        if (!$this->write_payload($po_id, $po['payload'], self::STATUS_ARRIVED, (int) $po['edit_count'] + 1)) {
+            return new WP_Error('save_failed',
+                __('Could not save the change (the reconciliation may have just completed) — reload.', 'meals-db'));
+        }
+        if (class_exists('MealsDB_Logger') && $old !== $received_cases) {
+            MealsDB_Logger::log('po_reconcile_edit', $po_id, $sku, (string) $old, (string) $received_cases);
+        }
+        return [
+            'received_cases' => $received_cases,
+            'ordered_cases'  => (int) $ordered['cases'],
+            'coverage_weeks' => self::coverage_weeks($ordered, $received_cases),
+        ];
+    }
+
+    /**
+     * Received → Reconciled. Validates that every adjusted row carries a note
+     * ("hit − twice, comment 'Two cases damaged in transit'"), then flips the
+     * status under guard and applies the stock deltas via the existing
+     * physical-count static (server-sourced ordered quantities; per-SKU
+     * inventory_discrepancy audit rows that carry the note). Transition-first
+     * means a concurrent double-complete applies the deltas exactly once.
+     *
+     * Untouched rows and rows set back to the ordered count are received-as-
+     * ordered: no delta, no note required.
+     *
+     * @return true|WP_Error
+     */
+    public function complete_reconcile(int $po_id) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        $po = $this->require_workflow_po($po_id, self::STATUS_ARRIVED,
+            __('Only received purchase orders can be reconciled.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        $received = is_array($po['payload']['received'] ?? null) ? $po['payload']['received'] : [];
+        $missing = [];
+        $adjustments = [];
+        foreach ($po['payload']['current'] as $row) {
+            $cases = (int) ($row['cases'] ?? 0);
+            if ($cases <= 0) {
+                continue;
+            }
+            $sku = (string) $row['sku'];
+            if (!isset($received[$sku])) {
+                continue; // untouched = received as ordered
+            }
+            $rc = (int) $received[$sku]['received_cases'];
+            if ($rc === $cases) {
+                continue; // explicitly confirmed as ordered
+            }
+            $note = trim((string) ($received[$sku]['note'] ?? ''));
+            if ($note === '') {
+                $missing[] = $sku;
+                continue;
+            }
+            $adjustments[] = [
+                'sku'          => $sku,
+                'actual_count' => $rc * max(1, (int) ($row['case_size'] ?? 1)),
+                'reason'       => 'po_reconcile',
+                'reason_notes' => $note,
+            ];
+        }
+        if (!empty($missing)) {
+            return new WP_Error(
+                'notes_required',
+                sprintf(
+                    /* translators: %s: comma-separated SKU list */
+                    __('A note is required for every adjusted row. Missing: %s', 'meals-db'),
+                    implode(', ', $missing)
+                ),
+                ['skus' => $missing]
+            );
+        }
+
+        $ok = $this->transition($po_id, self::STATUS_ARRIVED, self::STATUS_RECONCILED, [
+            'reconciled_by' => get_current_user_id() ?: null,
+            'reconciled_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+        if (!$ok) {
+            return new WP_Error('race', __('Could not complete (a concurrent change happened) — reload.', 'meals-db'));
+        }
+
+        if (!empty($adjustments) && class_exists('MealsDB_Task_Type_Physical_Count')) {
+            MealsDB_Task_Type_Physical_Count::apply_adjustments($po_id, $adjustments);
+        }
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_reconciled', $po_id, 'status', self::STATUS_ARRIVED, self::STATUS_RECONCILED);
+        }
+        return true;
+    }
+
     /**
      * Load a PO and require it to be a workflow PO (payload present) in the
      * expected status. Returns the hydrated PO array or a WP_Error.
