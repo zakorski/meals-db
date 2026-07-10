@@ -539,11 +539,21 @@ class MealsDB_Purchase_Orders {
             return new WP_Error('empty', __('Every row is zero cases — nothing to approve.', 'meals-db'));
         }
 
+        // Fail CLOSED on an items encode failure, before the status flip:
+        // items='' hydrates to [] and mark_received would bump NOTHING while
+        // the PO reads as approved (Pattern 7). product_name flows through
+        // here, the exact field the payload guards were added for.
+        $encoded_items = wp_json_encode($items);
+        if (!is_string($encoded_items) || $encoded_items === '' || $encoded_items === 'null') {
+            error_log('[MealsDB Purchase Orders] approve: items encode failed.');
+            return new WP_Error('encode_failed', __('Could not approve (item encode failed).', 'meals-db'));
+        }
+
         $ok = $this->transition($po_id, self::STATUS_PLANNED, self::STATUS_PLACED, [
             'approved_by' => get_current_user_id() ?: null,
             'approved_at' => gmdate('Y-m-d H:i:s'),
             'placed_date' => gmdate('Y-m-d'),
-            'items'       => MealsDB_Task_Engine::encode_json($items),
+            'items'       => $encoded_items,
         ]);
         if (!$ok) {
             return new WP_Error('race', __('Could not approve (a concurrent change happened) — reload.', 'meals-db'));

@@ -134,6 +134,16 @@ class RaceWpdb extends PoWpdb {
     }
 }
 
+// Simulates losing a TRANSITION race: any status-bearing update matches 0 rows.
+class TransitionRaceWpdb extends PoWpdb {
+    public function update($table, $data, $where, $df = null, $wf = null) {
+        if (strpos($table, 'meals_purchase_orders') !== false && isset($data['status'])) {
+            return 0;
+        }
+        return parent::update($table, $data, $where, $df, $wf);
+    }
+}
+
 // --- WooCommerce stub: SKU→product registry with stock (Task 5) ---
 class FakeWCProduct {
     public int $product_id;
@@ -369,6 +379,19 @@ chk($r, true, 'T-9: cancel from draft succeeds');
 chk($svc->get_with_payload($id)['status'], 'cancelled', 'T-9: status → cancelled');
 chk_true(audit_has($w, 'po_draft_cancelled'), 'T-9: audited');
 chk($svc->cancel_draft($id)->get_error_code(), 'locked', 'T-9: cancel twice rejected');
+
+// ===========================================================================
+// T-9b: the transition race branch — require_workflow_po saw the expected
+// status but the guarded UPDATE matched 0 rows → 'race', no audit row.
+// ===========================================================================
+$w = new TransitionRaceWpdb();
+$GLOBALS['wpdb'] = $w;
+$svc = new MealsDB_Purchase_Orders();
+$rid = $svc->create_draft(forecast_rows());
+$audit_before = count($w->audit);
+chk($svc->approve($rid)->get_error_code(), 'race', 'T-9b: approve lost race → race');
+chk($svc->cancel_draft($rid)->get_error_code(), 'race', 'T-9b: cancel lost race → race');
+chk(count($w->audit), $audit_before, 'T-9b: no audit rows on lost races');
 
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
