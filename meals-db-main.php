@@ -97,6 +97,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Delivery_Slips::init();
     MealsDB_Ajax_Slip_Batch::init();
     MealsDB_Ajax_Reports::init();
+    MealsDB_Ajax_Purchase_Orders::init();
     MealsDB_Quick_Order_Products::init();
     MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();
