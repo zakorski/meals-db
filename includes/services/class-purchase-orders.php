@@ -801,6 +801,10 @@ class MealsDB_Purchase_Orders {
         }
 
         if (!empty($adjustments) && class_exists('MealsDB_Task_Type_Physical_Count')) {
+            // Best-effort, void, per-SKU (matches the legacy physical_count task
+            // path): a mid-loop failure leaves this PO reconciled with the
+            // applied SKUs audited as inventory_discrepancy rows — recovery is
+            // diffing those rows against the payload and correcting WC stock.
             MealsDB_Task_Type_Physical_Count::apply_adjustments($po_id, $adjustments);
         }
         if (class_exists('MealsDB_Logger')) {
