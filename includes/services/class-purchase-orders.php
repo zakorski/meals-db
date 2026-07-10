@@ -500,6 +500,122 @@ class MealsDB_Purchase_Orders {
         ];
     }
 
+    // -----------------------------------------------------------------
+    // Draft workflow — lifecycle transitions
+    // -----------------------------------------------------------------
+
+    /**
+     * Draft → Approved. Locks the PO (invoice-finalize semantics) and writes
+     * the definitive `items` JSON (UNITS = cases × case_size) from the current
+     * payload — the contract every existing items consumer reads, including
+     * apply_inventory_bump and apply_adjustments. Zero-case rows are deliberate
+     * "don't order" decisions and are omitted.
+     *
+     * @return true|WP_Error
+     */
+    public function approve(int $po_id) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        $po = $this->require_workflow_po($po_id, self::STATUS_PLANNED,
+            __('Only draft purchase orders can be approved.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        $items = [];
+        foreach ($po['payload']['current'] as $row) {
+            $cases = (int) ($row['cases'] ?? 0);
+            if ($cases <= 0) {
+                continue;
+            }
+            $items[] = [
+                'sku'              => (string) $row['sku'],
+                'product_name'     => (string) ($row['product_name'] ?? ''),
+                'quantity_ordered' => $cases * max(1, (int) ($row['case_size'] ?? 1)),
+            ];
+        }
+        if (empty($items)) {
+            return new WP_Error('empty', __('Every row is zero cases — nothing to approve.', 'meals-db'));
+        }
+
+        $ok = $this->transition($po_id, self::STATUS_PLANNED, self::STATUS_PLACED, [
+            'approved_by' => get_current_user_id() ?: null,
+            'approved_at' => gmdate('Y-m-d H:i:s'),
+            'placed_date' => gmdate('Y-m-d'),
+            'items'       => MealsDB_Task_Engine::encode_json($items),
+        ]);
+        if (!$ok) {
+            return new WP_Error('race', __('Could not approve (a concurrent change happened) — reload.', 'meals-db'));
+        }
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_approved', $po_id, 'status', self::STATUS_PLANNED, self::STATUS_PLACED);
+        }
+        return true;
+    }
+
+    /**
+     * Approved → Draft, reason required and audited (mirrors invoice
+     * un-finalize). Only available BEFORE receiving — once stock is bumped
+     * the state machine is one-way; corrections belong to reconcile.
+     *
+     * @return true|WP_Error
+     */
+    public function unapprove(int $po_id, string $reason) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        $reason = trim($reason);
+        if ($reason === '') {
+            return new WP_Error('reason_required', __('A reason is required to un-approve (it is audited).', 'meals-db'));
+        }
+        $po = $this->require_workflow_po($po_id, self::STATUS_PLACED,
+            __('Only approved (not yet received) purchase orders can be un-approved.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        // items is left as-written; the next approve overwrites it.
+        $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_PLANNED, [
+            'approved_by' => null,
+            'approved_at' => null,
+            'placed_date' => null,
+        ]);
+        if (!$ok) {
+            return new WP_Error('race', __('Could not un-approve (a concurrent change happened) — reload.', 'meals-db'));
+        }
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_unapproved', $po_id, 'reason', null,
+                substr($reason, 0, self::MAX_NOTE_LEN));
+        }
+        return true;
+    }
+
+    /**
+     * Draft → Cancelled. Keeps abandoned drafts out of the working list
+     * without deleting the record (the audit trail stays coherent).
+     *
+     * @return true|WP_Error
+     */
+    public function cancel_draft(int $po_id) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        $po = $this->require_workflow_po($po_id, self::STATUS_PLANNED,
+            __('Only draft purchase orders can be cancelled.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+        $ok = $this->transition($po_id, self::STATUS_PLANNED, self::STATUS_CANCELLED);
+        if (!$ok) {
+            return new WP_Error('race', __('Could not cancel (a concurrent change happened) — reload.', 'meals-db'));
+        }
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_draft_cancelled', $po_id, 'status', self::STATUS_PLANNED, self::STATUS_CANCELLED);
+        }
+        return true;
+    }
+
     /**
      * Load a PO and require it to be a workflow PO (payload present) in the
      * expected status. Returns the hydrated PO array or a WP_Error.
@@ -560,6 +676,23 @@ class MealsDB_Purchase_Orders {
                 'edit_count' => $edit_count,
             ],
             ['po_id' => $po_id, 'status' => $expected_status]
+        );
+        return $result === 1;
+    }
+
+    /**
+     * Guarded status transition: the WHERE clause carries the expected FROM
+     * status, so of two concurrent requests exactly one matches a row. The
+     * loser sees 0 affected rows and must NOT apply side-effects.
+     *
+     * @param array<string, mixed> $extra additional columns to set
+     */
+    private function transition(int $po_id, string $from, string $to, array $extra = []): bool {
+        $table  = MealsDB_DB::get_table_name(MealsDB_Tables::PURCHASE_ORDERS);
+        $result = $this->wpdb->update(
+            $table,
+            array_merge(['status' => $to], $extra),
+            ['po_id' => $po_id, 'status' => $from]
         );
         return $result === 1;
     }

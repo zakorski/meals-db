@@ -317,6 +317,59 @@ $after = $svc->get_with_payload($rid);
 chk((int) $after['payload']['current'][0]['cases'], 10, 'T-6b: payload not mutated on lost race');
 chk((int) $after['edit_count'], 0, 'T-6b: edit_count not bumped on lost race');
 
+// ===========================================================================
+// T-7: approve — items written in UNITS, zero rows omitted, guarded.
+// ===========================================================================
+$w = fresh();
+$svc = new MealsDB_Purchase_Orders();
+$id = $svc->create_draft(forecast_rows());
+$svc->edit_draft_cases($id, 'SD-002', 0); // operator zeroes a row = "don't order"
+$r = $svc->approve($id);
+chk($r, true, 'T-7: approve succeeds');
+$po = $svc->get_with_payload($id);
+chk($po['status'], 'placed', 'T-7: status → placed (Approved)');
+chk_true(!empty($po['approved_at']), 'T-7: approved_at set');
+chk((int) $po['approved_by'], 7, 'T-7: approved_by = current user');
+chk_true(!empty($po['placed_date']), 'T-7: placed_date set');
+chk(count($po['items']), 1, 'T-7: zero-case row omitted from items');
+chk($po['items'][0]['sku'], 'CD-001', 'T-7: item sku');
+chk((int) $po['items'][0]['quantity_ordered'], 60, 'T-7: quantity_ordered in UNITS (10 cases × 6)');
+chk_true(audit_has($w, 'po_approved'), 'T-7: po_approved audited');
+
+// Double-approve loses the guard.
+chk($svc->approve($id)->get_error_code(), 'locked', 'T-7: second approve rejected');
+
+// All-zero draft cannot be approved.
+$id2 = $svc->create_draft(forecast_rows());
+$svc->edit_draft_cases($id2, 'CD-001', 0);
+$svc->edit_draft_cases($id2, 'SD-002', 0);
+chk($svc->approve($id2)->get_error_code(), 'empty', 'T-7: all-zero draft rejected');
+
+// ===========================================================================
+// T-8: unapprove — reason required, only from placed, clears approval marks.
+// ===========================================================================
+chk($svc->unapprove($id, '')->get_error_code(), 'reason_required', 'T-8: empty reason rejected');
+chk($svc->unapprove($id, '   ')->get_error_code(), 'reason_required', 'T-8: whitespace reason rejected');
+$r = $svc->unapprove($id, 'Apetito changed the delivery window');
+chk($r, true, 'T-8: unapprove succeeds');
+$po = $svc->get_with_payload($id);
+chk($po['status'], 'planned', 'T-8: back to planned (Draft)');
+chk($po['approved_by'], null, 'T-8: approved_by cleared');
+chk($po['approved_at'], null, 'T-8: approved_at cleared');
+chk($po['placed_date'], null, 'T-8: placed_date cleared');
+chk_true(audit_has($w, 'po_unapproved'), 'T-8: po_unapproved audited');
+chk_true(audit_has($w, 'Apetito changed the delivery window'), 'T-8: reason lands in audit row');
+chk($svc->unapprove($id, 'again')->get_error_code(), 'locked', 'T-8: unapprove from draft rejected');
+
+// ===========================================================================
+// T-9: cancel_draft — only from planned.
+// ===========================================================================
+$r = $svc->cancel_draft($id);
+chk($r, true, 'T-9: cancel from draft succeeds');
+chk($svc->get_with_payload($id)['status'], 'cancelled', 'T-9: status → cancelled');
+chk_true(audit_has($w, 'po_draft_cancelled'), 'T-9: audited');
+chk($svc->cancel_draft($id)->get_error_code(), 'locked', 'T-9: cancel twice rejected');
+
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }
