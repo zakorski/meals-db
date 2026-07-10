@@ -539,11 +539,24 @@ class MealsDB_Purchase_Orders {
      * informational counter.
      */
     private function write_payload(int $po_id, array $payload, string $expected_status, int $edit_count): bool {
+        // Fail CLOSED on an encode failure, mirroring create_draft: writing ''
+        // would read back as payload=NULL and turn the draft into a "legacy"
+        // uneditable PO (Pattern 7 — never pretend the work happened).
+        $encoded = wp_json_encode($payload);
+        if (!is_string($encoded) || $encoded === '' || $encoded === 'null') {
+            error_log('[MealsDB Purchase Orders] write_payload: payload encode failed.');
+            return false;
+        }
         $table  = MealsDB_DB::get_table_name(MealsDB_Tables::PURCHASE_ORDERS);
+        // === 1 relies on the payload always changing (edit_count increments on
+        // every call), so a matched row is always a changed row. The status in
+        // the WHERE protects against edit-vs-transition races only; concurrent
+        // edits to DIFFERENT rows of the same draft are last-write-wins — an
+        // accepted tradeoff for this single-operator workflow.
         $result = $this->wpdb->update(
             $table,
             [
-                'payload'    => MealsDB_Task_Engine::encode_json($payload),
+                'payload'    => $encoded,
                 'edit_count' => $edit_count,
             ],
             ['po_id' => $po_id, 'status' => $expected_status]

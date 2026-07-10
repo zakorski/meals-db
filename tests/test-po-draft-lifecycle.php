@@ -120,6 +120,20 @@ class PoWpdb extends wpdb {
     }
 }
 
+/**
+ * Simulates a wpdb where the payload UPDATE always reports 0 rows affected,
+ * as if an approve/transition won the race between require_workflow_po (read)
+ * and write_payload (write). Used by T-6b.
+ */
+class RaceWpdb extends PoWpdb {
+    public function update($table, $data, $where, $df = null, $wf = null) {
+        if (strpos($table, 'meals_purchase_orders') !== false && isset($data['payload'])) {
+            return 0; // simulate: an approve won the race between read and write
+        }
+        return parent::update($table, $data, $where, $df, $wf);
+    }
+}
+
 // --- WooCommerce stub: SKU→product registry with stock (Task 5) ---
 class FakeWCProduct {
     public int $product_id;
@@ -289,6 +303,19 @@ chk($svc->edit_draft_cases($legacy_id, 'CD-001', 1)->get_error_code(), 'legacy',
 $w->pos[$id]['status'] = 'placed';
 chk($svc->edit_draft_cases($id, 'CD-001', 3)->get_error_code(), 'locked', 'T-6: non-draft status rejected');
 $w->pos[$id]['status'] = 'planned';
+
+// T-6b: the edit-vs-transition race — require_workflow_po saw 'planned' but
+// the guarded UPDATE finds the status already changed → save_failed, and the
+// payload is NOT mutated.
+$w = new RaceWpdb();
+$GLOBALS['wpdb'] = $w;
+$svc = new MealsDB_Purchase_Orders();
+$rid = $svc->create_draft(forecast_rows());
+$res = $svc->edit_draft_cases($rid, 'CD-001', 5);
+chk($res->get_error_code(), 'save_failed', 'T-6b: lost race surfaces save_failed');
+$after = $svc->get_with_payload($rid);
+chk((int) $after['payload']['current'][0]['cases'], 10, 'T-6b: payload not mutated on lost race');
+chk((int) $after['edit_count'], 0, 'T-6b: edit_count not bumped on lost race');
 
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
