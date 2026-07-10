@@ -627,6 +627,43 @@ class MealsDB_Purchase_Orders {
     }
 
     /**
+     * Approved → Received. The guarded transition runs FIRST so a double-click
+     * can't apply the inventory bump twice (the loser's UPDATE matches 0
+     * rows and returns before any stock write). The bump itself delegates to
+     * the existing task-type static — one inventory-bump implementation in the
+     * plugin, and calling it does not create or touch any task.
+     *
+     * @return true|WP_Error
+     */
+    public function mark_received(int $po_id) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        $po = $this->require_workflow_po($po_id, self::STATUS_PLACED,
+            __('Only approved purchase orders can be marked received.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_ARRIVED, [
+            'received_by'  => get_current_user_id() ?: null,
+            'received_at'  => gmdate('Y-m-d H:i:s'),
+            'arrival_date' => gmdate('Y-m-d'),
+        ]);
+        if (!$ok) {
+            return new WP_Error('race', __('Could not mark received (a concurrent change happened) — reload.', 'meals-db'));
+        }
+
+        if (class_exists('MealsDB_Task_Type_Confirm_PO_Arrival')) {
+            MealsDB_Task_Type_Confirm_PO_Arrival::apply_inventory_bump((array) $po['items']);
+        }
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_received', $po_id, 'status', self::STATUS_PLACED, self::STATUS_ARRIVED);
+        }
+        return true;
+    }
+
+    /**
      * Load a PO and require it to be a workflow PO (payload present) in the
      * expected status. Returns the hydrated PO array or a WP_Error.
      *

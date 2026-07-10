@@ -393,6 +393,29 @@ chk($svc->approve($rid)->get_error_code(), 'race', 'T-9b: approve lost race → 
 chk($svc->cancel_draft($rid)->get_error_code(), 'race', 'T-9b: cancel lost race → race');
 chk(count($w->audit), $audit_before, 'T-9b: no audit rows on lost races');
 
+// ===========================================================================
+// T-10: mark_received — placed→arrived, stock bumped exactly once.
+// ===========================================================================
+$w = fresh();
+$GLOBALS['wc_stock'] = [101 => 50, 102 => 20];
+$svc = new MealsDB_Purchase_Orders();
+$id = $svc->create_draft(forecast_rows());
+chk($svc->mark_received($id)->get_error_code(), 'locked', 'T-10: receive before approve rejected');
+$svc->approve($id);
+$r = $svc->mark_received($id);
+chk($r, true, 'T-10: mark_received succeeds');
+$po = $svc->get_with_payload($id);
+chk($po['status'], 'arrived', 'T-10: status → arrived (Received)');
+chk_true(!empty($po['received_at']), 'T-10: received_at set');
+chk_true(!empty($po['arrival_date']), 'T-10: arrival_date set');
+// CD-001: 10 cases × 6 = 60 units onto 50; SD-002: 2 cases × 12 = 24 onto 20.
+chk($GLOBALS['wc_stock'][101], 110, 'T-10: CD-001 stock bumped by ordered units');
+chk($GLOBALS['wc_stock'][102], 44, 'T-10: SD-002 stock bumped by ordered units');
+chk_true(audit_has($w, 'po_received'), 'T-10: po_received audited');
+// Second click: guard loses, NO second bump.
+chk($svc->mark_received($id)->get_error_code(), 'locked', 'T-10: double receive rejected');
+chk($GLOBALS['wc_stock'][101], 110, 'T-10: no double bump');
+
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }
