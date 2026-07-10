@@ -1,10 +1,15 @@
 <?php
 /**
- * Purchase Orders tab — read-only lifecycle view.
+ * Purchase Orders tab — draft workflow list + detail (spec 2026-07-10).
  *
- * POs are created and updated via the task workflow (place_po →
- * confirm_po_arrival → physical_count). This page surfaces the current
- * state of every PO plus links to the related tasks.
+ * Lifecycle (status ENUM value → operator label):
+ *   planned=Draft → placed=Approved → arrived=Received → reconciled,
+ *   with cancelled available from Draft. Legacy task-created POs
+ *   (payload IS NULL) render read-only; their lifecycle stays with the
+ *   task chain (place_po → confirm_po_arrival → physical_count).
+ *
+ * Interactivity lives in assets/js/purchase-orders.js, fed by the JSON
+ * island #mealsdb-po-admin-data (no inline script blocks).
  *
  * @package MealsDB
  */
@@ -13,73 +18,260 @@ defined('ABSPATH') || exit;
 MealsDB_Permissions::enforce();
 
 $status_filter = isset($_GET['po_status']) ? sanitize_key(wp_unslash((string) $_GET['po_status'])) : '';
-$po_id = isset($_GET['po_id']) ? (int) $_GET['po_id'] : 0;
+$po_id  = isset($_GET['po_id']) ? (int) $_GET['po_id'] : 0;
+$action = isset($_GET['action']) ? sanitize_key(wp_unslash((string) $_GET['action'])) : '';
 
-$service = new MealsDB_Purchase_Orders();
+$service  = new MealsDB_Purchase_Orders();
 $base_url = admin_url('admin.php?page=mealsdb&tab=po_admin');
 
+/** Render the shared JSON island + wrap-up for JS. */
+$mealsdb_po_render_island = static function (array $extra = []) use ($base_url): void {
+    $island = array_merge([
+        'nonce'       => wp_create_nonce(MealsDB_Ajax_Purchase_Orders::NONCE_ACTION),
+        'ajaxUrl'     => admin_url('admin-ajax.php'),
+        'baseUrl'     => $base_url,
+        'targetWeeks' => MealsDB_Purchase_Orders::COVERAGE_TARGET_WEEKS,
+        'floorWeeks'  => MealsDB_Purchase_Orders::COVERAGE_FLOOR_WEEKS,
+        'i18n'        => [
+            'confirmApprove'   => __('Approve this purchase order? Approved orders are locked (un-approve requires an audited reason).', 'meals-db'),
+            'confirmReceive'   => __('Mark this purchase order as received? Ordered quantities will be ADDED to inventory.', 'meals-db'),
+            'confirmCancel'    => __('Cancel this draft purchase order?', 'meals-db'),
+            'confirmComplete'  => __('Complete reconciliation? Stock will be corrected for every adjusted row and the purchase order will be locked.', 'meals-db'),
+            'promptUnapprove'  => __('Enter a reason for un-approving (required — it is audited):', 'meals-db'),
+            'reasonRequired'   => __('A reason is required.', 'meals-db'),
+            'noteRequired'     => __('A note is required for adjusted rows.', 'meals-db'),
+            'requestFailed'    => __('Request failed.', 'meals-db'),
+            'saving'           => __('Saving…', 'meals-db'),
+            'was'              => __('was: %s', 'meals-db'),
+            'belowTarget'      => __('Below 9-week coverage target (%s wks)', 'meals-db'),
+            'belowFloor'       => __('Below 7-week safety floor (%s wks)', 'meals-db'),
+        ],
+    ], $extra);
+    echo '<script type="application/json" id="mealsdb-po-admin-data">'
+        . wp_json_encode($island, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)
+        . '</script>';
+};
+
+/** Coverage cell HTML: number + warning badge. Shared by draft + reconcile renders. */
+$mealsdb_po_coverage_cell = static function (?float $weeks): string {
+    if ($weeks === null) {
+        return '<td class="mealsdb-po-coverage" data-coverage="">&mdash;</td>';
+    }
+    $badge = '';
+    if ($weeks < MealsDB_Purchase_Orders::COVERAGE_FLOOR_WEEKS) {
+        $badge = '<span class="mealsdb-po-flag mealsdb-po-crit" title="'
+            . esc_attr(sprintf(__('Below 7-week safety floor (%s wks)', 'meals-db'), number_format_i18n($weeks, 1)))
+            . '">!</span>';
+    } elseif ($weeks < MealsDB_Purchase_Orders::COVERAGE_TARGET_WEEKS) {
+        $badge = '<span class="mealsdb-po-flag mealsdb-po-warn" title="'
+            . esc_attr(sprintf(__('Below 9-week coverage target (%s wks)', 'meals-db'), number_format_i18n($weeks, 1)))
+            . '">!</span>';
+    }
+    return '<td class="mealsdb-po-coverage" data-coverage="' . esc_attr((string) $weeks) . '">'
+        . esc_html(number_format_i18n($weeks, 1)) . ' ' . $badge . '</td>';
+};
+
+// ===========================================================================
+// Detail view
+// ===========================================================================
 if ($po_id > 0) {
-    $po = $service->get($po_id);
+    $po = $service->get_with_payload($po_id);
     if ($po === null) {
         echo '<div class="notice notice-error"><p>' . esc_html__('Purchase order not found.', 'meals-db') . '</p></div>';
         echo '<p><a class="button" href="' . esc_url($base_url) . '">&larr; ' . esc_html__('Back to list', 'meals-db') . '</a></p>';
         return;
     }
 
-    $engine = new MealsDB_Task_Engine();
-    $related_tasks = $engine->query_tasks([
+    $is_workflow = is_array($po['payload']);
+    $status      = (string) $po['status'];
+    $mode        = 'locked';
+    if ($is_workflow && $status === MealsDB_Purchase_Orders::STATUS_PLANNED) {
+        $mode = 'draft';
+    } elseif ($is_workflow && $status === MealsDB_Purchase_Orders::STATUS_ARRIVED && $action === 'reconcile') {
+        $mode = 'reconcile';
+    }
+
+    $engine        = class_exists('MealsDB_Task_Engine') ? new MealsDB_Task_Engine() : null;
+    $related_tasks = $engine ? $engine->query_tasks([
         'related_entity_type' => 'po',
         'related_entity_id'   => $po_id,
         'status'              => ['pending', 'in_progress', 'deferred', 'completed', 'skipped', 'abandoned'],
-    ]);
+    ]) : [];
     ?>
-    <div id="mealsdb-po-detail" class="mealsdb-po-detail">
+    <div id="mealsdb-po-detail" class="mealsdb-po-detail" data-mode="<?php echo esc_attr($mode); ?>" data-po-id="<?php echo (int) $po_id; ?>">
         <p><a class="button" href="<?php echo esc_url($base_url); ?>">&larr; <?php esc_html_e('Back to list', 'meals-db'); ?></a></p>
-        <h2><?php echo esc_html(sprintf(__('Purchase Order %s', 'meals-db'), $po['po_number'])); ?></h2>
+        <h2>
+            <?php echo esc_html(sprintf(__('Purchase Order %s', 'meals-db'), $po['po_number'])); ?>
+            <span class="mealsdb-po-status mealsdb-po-status-<?php echo esc_attr($status); ?>">
+                <?php echo esc_html(MealsDB_Purchase_Orders::status_label($status)); ?>
+            </span>
+        </h2>
+
+        <?php if ($is_workflow && $mode === 'locked' && $status === MealsDB_Purchase_Orders::STATUS_PLACED): ?>
+            <div class="notice notice-info"><p><?php esc_html_e('This purchase order is approved and is shown read-only. Un-approve it to make changes.', 'meals-db'); ?></p></div>
+        <?php elseif ($is_workflow && $mode === 'locked' && $status === MealsDB_Purchase_Orders::STATUS_ARRIVED): ?>
+            <div class="notice notice-info"><p><?php esc_html_e('This purchase order has been received. Open Reconcile to record what actually arrived.', 'meals-db'); ?></p></div>
+        <?php elseif ($mode === 'reconcile'): ?>
+            <div class="notice notice-warning"><p><?php esc_html_e('Reconcile mode: adjust the received case counts with the +/− buttons. Any adjusted row requires a note (e.g. "Two cases damaged in transit"). Stock is corrected only when you complete the reconciliation.', 'meals-db'); ?></p></div>
+        <?php elseif (!$is_workflow): ?>
+            <div class="notice notice-info"><p><?php esc_html_e('This purchase order was created by the task workflow and is shown read-only here.', 'meals-db'); ?></p></div>
+        <?php endif; ?>
 
         <table class="form-table" role="presentation">
             <tbody>
-                <tr><th><?php esc_html_e('Status', 'meals-db'); ?></th>
-                    <td><code><?php echo esc_html($po['status']); ?></code></td></tr>
                 <tr><th><?php esc_html_e('Supplier', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['supplier'] ?? '')); ?></td></tr>
                 <tr><th><?php esc_html_e('Placed Date', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['placed_date'] ?? '—')); ?></td></tr>
-                <tr><th><?php esc_html_e('Expected Arrival', 'meals-db'); ?></th>
-                    <td><?php echo esc_html((string) ($po['expected_arrival'] ?? '—')); ?></td></tr>
-                <tr><th><?php esc_html_e('Actual Arrival', 'meals-db'); ?></th>
+                <tr><th><?php esc_html_e('Arrival', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['arrival_date'] ?? '—')); ?></td></tr>
                 <tr><th><?php esc_html_e('Reconciled', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['reconciled_at'] ?? '—')); ?></td></tr>
+                <?php if ($is_workflow): ?>
+                <tr><th><?php esc_html_e('Edits', 'meals-db'); ?></th>
+                    <td id="mealsdb-po-edit-count"><?php echo (int) ($po['edit_count'] ?? 0); ?></td></tr>
+                <?php endif; ?>
             </tbody>
         </table>
 
+        <?php if ($is_workflow): ?>
+            <p class="mealsdb-po-detail-actions">
+                <?php if ($status === MealsDB_Purchase_Orders::STATUS_PLANNED): ?>
+                    <button type="button" class="button button-primary mealsdb-po-action" data-po-action="approve" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Approve', 'meals-db'); ?></button>
+                    <button type="button" class="button mealsdb-po-action" data-po-action="cancel" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Cancel draft', 'meals-db'); ?></button>
+                <?php elseif ($status === MealsDB_Purchase_Orders::STATUS_PLACED): ?>
+                    <button type="button" class="button button-primary mealsdb-po-action" data-po-action="receive" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Mark received', 'meals-db'); ?></button>
+                    <button type="button" class="button mealsdb-po-action" data-po-action="unapprove" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Un-approve', 'meals-db'); ?></button>
+                <?php elseif ($status === MealsDB_Purchase_Orders::STATUS_ARRIVED && $mode !== 'reconcile'): ?>
+                    <a class="button button-primary" href="<?php echo esc_url(add_query_arg(['po_id' => $po_id, 'action' => 'reconcile'], $base_url)); ?>"><?php esc_html_e('Reconcile', 'meals-db'); ?></a>
+                <?php elseif ($mode === 'reconcile'): ?>
+                    <button type="button" class="button button-primary" id="mealsdb-po-complete-reconcile" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Complete reconciliation', 'meals-db'); ?></button>
+                <?php endif; ?>
+                <span id="mealsdb-po-action-msg" role="status"></span>
+            </p>
+        <?php endif; ?>
+
         <h3><?php esc_html_e('Items', 'meals-db'); ?></h3>
-        <?php if (empty($po['items'])): ?>
-            <p><em><?php esc_html_e('No items on this PO.', 'meals-db'); ?></em></p>
+        <?php if (!$is_workflow): ?>
+            <?php if (empty($po['items'])): ?>
+                <p><em><?php esc_html_e('No items on this PO.', 'meals-db'); ?></em></p>
+            <?php else: ?>
+                <table class="wp-list-table widefat fixed striped">
+                    <thead><tr>
+                        <th><?php esc_html_e('SKU', 'meals-db'); ?></th>
+                        <th><?php esc_html_e('Product', 'meals-db'); ?></th>
+                        <th><?php esc_html_e('Qty Ordered', 'meals-db'); ?></th>
+                    </tr></thead>
+                    <tbody>
+                        <?php foreach ($po['items'] as $item): ?>
+                            <tr>
+                                <td><?php echo esc_html((string) ($item['sku'] ?? '')); ?></td>
+                                <td><?php echo esc_html((string) ($item['product_name'] ?? '')); ?></td>
+                                <td><?php echo esc_html((string) ($item['quantity_ordered'] ?? '')); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
         <?php else: ?>
-            <table class="wp-list-table widefat fixed striped">
+            <?php
+            $rows     = $po['payload']['current'];
+            $received = is_array($po['payload']['received'] ?? null) ? $po['payload']['received'] : [];
+            $generated_by_sku = [];
+            foreach ($po['payload']['generated'] as $g) {
+                $generated_by_sku[(string) $g['sku']] = (int) $g['cases'];
+            }
+            $total_cases = 0;
+            $total_units = 0;
+            ?>
+            <table class="widefat striped mealsdb-po-grid" id="mealsdb-po-grid">
                 <thead><tr>
                     <th><?php esc_html_e('SKU', 'meals-db'); ?></th>
                     <th><?php esc_html_e('Product', 'meals-db'); ?></th>
-                    <th><?php esc_html_e('Qty Ordered', 'meals-db'); ?></th>
+                    <th class="num"><?php esc_html_e('Adj/Wk', 'meals-db'); ?></th>
+                    <th class="num"><?php esc_html_e('Stock', 'meals-db'); ?></th>
+                    <th class="num"><?php esc_html_e('Case size', 'meals-db'); ?></th>
+                    <th class="num"><?php echo $mode === 'reconcile' ? esc_html__('Ordered', 'meals-db') : esc_html__('Cases', 'meals-db'); ?></th>
+                    <?php if ($mode === 'reconcile'): ?>
+                        <th class="num"><?php esc_html_e('Received', 'meals-db'); ?></th>
+                        <th><?php esc_html_e('Note (required if adjusted)', 'meals-db'); ?></th>
+                    <?php endif; ?>
+                    <th class="num"><?php esc_html_e('Order qty', 'meals-db'); ?></th>
+                    <th class="num"><?php esc_html_e('Coverage (wks)', 'meals-db'); ?></th>
+                    <th><?php esc_html_e('Forecast note', 'meals-db'); ?></th>
                 </tr></thead>
                 <tbody>
-                    <?php foreach ($po['items'] as $item): ?>
-                        <tr>
-                            <td><?php echo esc_html((string) ($item['sku'] ?? '')); ?></td>
-                            <td><?php echo esc_html((string) ($item['product_name'] ?? '')); ?></td>
-                            <td><?php echo esc_html((string) ($item['quantity_ordered'] ?? '')); ?></td>
-                        </tr>
-                    <?php endforeach; ?>
+                <?php foreach ($rows as $row):
+                    $sku        = (string) $row['sku'];
+                    $cases      = (int) $row['cases'];
+                    if ($mode === 'reconcile' && $cases <= 0) {
+                        continue; // zero-case rows were never ordered
+                    }
+                    $rc         = isset($received[$sku]['received_cases']) ? (int) $received[$sku]['received_cases'] : $cases;
+                    $note       = isset($received[$sku]['note']) ? (string) $received[$sku]['note'] : '';
+                    $shown      = $mode === 'reconcile' ? $rc : $cases;
+                    $total_cases += $shown;
+                    $total_units += $shown * (int) $row['case_size'];
+                    $gen        = $generated_by_sku[$sku] ?? $cases;
+                    ?>
+                    <tr data-sku="<?php echo esc_attr($sku); ?>"
+                        data-case-size="<?php echo (int) $row['case_size']; ?>"
+                        data-adjusted-weekly="<?php echo esc_attr((string) $row['adjusted_weekly']); ?>"
+                        data-stock="<?php echo (int) $row['current_stock']; ?>"
+                        data-generated-cases="<?php echo (int) $gen; ?>"
+                        data-ordered-cases="<?php echo (int) $cases; ?>">
+                        <td><?php echo esc_html($sku); ?></td>
+                        <td><?php echo esc_html((string) $row['product_name']); ?></td>
+                        <td class="num"><?php echo esc_html(number_format_i18n((float) $row['adjusted_weekly'], 2)); ?></td>
+                        <td class="num"><?php echo (int) $row['current_stock']; ?></td>
+                        <td class="num"><?php echo (int) $row['case_size']; ?></td>
+                        <td class="num mealsdb-po-ordered">
+                            <?php if ($mode === 'draft'): ?>
+                                <span class="mealsdb-po-stepper">
+                                    <button type="button" class="button mealsdb-po-step" data-step="-1" aria-label="<?php esc_attr_e('One case fewer', 'meals-db'); ?>">&minus;</button>
+                                    <span class="mealsdb-po-cases" data-cases="<?php echo (int) $cases; ?>"><?php echo (int) $cases; ?></span>
+                                    <button type="button" class="button mealsdb-po-step" data-step="1" aria-label="<?php esc_attr_e('One case more', 'meals-db'); ?>">+</button>
+                                </span>
+                                <?php if ($cases !== $gen): ?>
+                                    <div class="mealsdb-po-was"><?php echo esc_html(sprintf(__('was: %s', 'meals-db'), $gen)); ?></div>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                <?php echo (int) $cases; ?>
+                            <?php endif; ?>
+                        </td>
+                        <?php if ($mode === 'reconcile'): ?>
+                            <td class="num">
+                                <span class="mealsdb-po-stepper">
+                                    <button type="button" class="button mealsdb-po-step" data-step="-1" aria-label="<?php esc_attr_e('One case fewer', 'meals-db'); ?>">&minus;</button>
+                                    <span class="mealsdb-po-cases" data-cases="<?php echo (int) $rc; ?>"><?php echo (int) $rc; ?></span>
+                                    <button type="button" class="button mealsdb-po-step" data-step="1" aria-label="<?php esc_attr_e('One case more', 'meals-db'); ?>">+</button>
+                                </span>
+                            </td>
+                            <td>
+                                <input type="text" class="mealsdb-po-note regular-text" maxlength="500"
+                                    value="<?php echo esc_attr($note); ?>"
+                                    placeholder="<?php esc_attr_e('Why does this differ?', 'meals-db'); ?>"
+                                    <?php echo $rc === $cases ? 'style="display:none;"' : ''; ?> />
+                            </td>
+                        <?php endif; ?>
+                        <td class="num mealsdb-po-orderqty"><?php echo (int) ($shown * (int) $row['case_size']); ?></td>
+                        <?php echo $mealsdb_po_coverage_cell(MealsDB_Purchase_Orders::coverage_weeks($row, $shown)); // phpcs:ignore WordPress.Security.EscapeOutput -- helper escapes internally ?>
+                        <td><?php echo esc_html((string) $row['seasonal_note']); ?></td>
+                    </tr>
+                <?php endforeach; ?>
                 </tbody>
+                <tfoot><tr>
+                    <th colspan="5"><?php esc_html_e('TOTAL', 'meals-db'); ?></th>
+                    <th class="num" id="mealsdb-po-total-cases"><?php echo (int) $total_cases; ?></th>
+                    <?php if ($mode === 'reconcile'): ?><th></th><th></th><?php endif; ?>
+                    <th class="num" id="mealsdb-po-total-units"><?php echo (int) $total_units; ?></th>
+                    <th></th><th></th>
+                </tr></tfoot>
             </table>
         <?php endif; ?>
 
-        <h3><?php esc_html_e('Related Tasks', 'meals-db'); ?></h3>
-        <?php if (empty($related_tasks)): ?>
-            <p><em><?php esc_html_e('No related tasks.', 'meals-db'); ?></em></p>
-        <?php else: ?>
+        <?php if (!empty($related_tasks)): ?>
+            <h3><?php esc_html_e('Related Tasks', 'meals-db'); ?></h3>
             <table class="wp-list-table widefat fixed striped">
                 <thead><tr>
                     <th><?php esc_html_e('Type', 'meals-db'); ?></th>
@@ -111,10 +303,13 @@ if ($po_id > 0) {
         <?php endif; ?>
     </div>
     <?php
+    $mealsdb_po_render_island(['poId' => $po_id, 'mode' => $mode]);
     return;
 }
 
-// List view.
+// ===========================================================================
+// List view
+// ===========================================================================
 $filters = [];
 if ($status_filter !== '') {
     $filters['status'] = [$status_filter];
@@ -123,6 +318,7 @@ $rows = $service->query($filters);
 ?>
 <div id="mealsdb-po-list" class="mealsdb-po-list">
     <h2><?php esc_html_e('Purchase Orders', 'meals-db'); ?></h2>
+    <p class="description"><?php esc_html_e('Drafts are created from the Purchase Order forecast tab ("Save as draft PO"). Approve locks a draft; Mark received adds it to inventory; Reconcile records what actually arrived.', 'meals-db'); ?></p>
 
     <div style="margin-bottom:12px;">
         <label><strong><?php esc_html_e('Status:', 'meals-db'); ?></strong></label>
@@ -131,10 +327,11 @@ $rows = $service->query($filters);
             <?php foreach (MealsDB_Purchase_Orders::ALLOWED_STATUSES as $s): ?>
                 <option value="<?php echo esc_url(add_query_arg(['po_status' => $s], $base_url)); ?>"
                     <?php selected($status_filter, $s); ?>>
-                    <?php echo esc_html($s); ?>
+                    <?php echo esc_html(MealsDB_Purchase_Orders::status_label($s)); ?>
                 </option>
             <?php endforeach; ?>
         </select>
+        <span id="mealsdb-po-action-msg" role="status"></span>
     </div>
 
     <?php if (empty($rows)): ?>
@@ -144,28 +341,58 @@ $rows = $service->query($filters);
             <thead><tr>
                 <th><?php esc_html_e('PO #', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Supplier', 'meals-db'); ?></th>
-                <th><?php esc_html_e('Placed', 'meals-db'); ?></th>
-                <th><?php esc_html_e('Expected', 'meals-db'); ?></th>
-                <th><?php esc_html_e('Arrived', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Status', 'meals-db'); ?></th>
-                <th><?php esc_html_e('Items', 'meals-db'); ?></th>
-                <th></th>
+                <th class="num"><?php esc_html_e('Cases', 'meals-db'); ?></th>
+                <th class="num"><?php esc_html_e('Edits', 'meals-db'); ?></th>
+                <th><?php esc_html_e('Created', 'meals-db'); ?></th>
+                <th><?php esc_html_e('Approved', 'meals-db'); ?></th>
+                <th><?php esc_html_e('Received', 'meals-db'); ?></th>
+                <th><?php esc_html_e('Actions', 'meals-db'); ?></th>
             </tr></thead>
             <tbody>
                 <?php foreach ($rows as $po): ?>
-                    <?php $detail_url = add_query_arg(['po_id' => (int) $po['po_id']], $base_url); ?>
+                    <?php
+                    $rid        = (int) $po['po_id'];
+                    $detail_url = add_query_arg(['po_id' => $rid], $base_url);
+                    $payload    = null;
+                    if (isset($po['payload']) && is_string($po['payload']) && $po['payload'] !== '') {
+                        $decoded = json_decode($po['payload'], true);
+                        $payload = (is_array($decoded) && isset($decoded['current'])) ? $decoded : null;
+                    }
+                    $is_wf = is_array($payload);
+                    $cases = 0;
+                    if ($is_wf) {
+                        foreach ($payload['current'] as $r) { $cases += (int) ($r['cases'] ?? 0); }
+                    }
+                    // Legacy items store UNITS, not cases — the column shows — for them.
+                    $st = (string) $po['status'];
+                    ?>
                     <tr>
-                        <td><strong><?php echo esc_html((string) $po['po_number']); ?></strong></td>
+                        <td><strong><a href="<?php echo esc_url($detail_url); ?>"><?php echo esc_html((string) $po['po_number']); ?></a></strong></td>
                         <td><?php echo esc_html((string) ($po['supplier'] ?? '')); ?></td>
-                        <td><?php echo esc_html((string) ($po['placed_date'] ?? '—')); ?></td>
-                        <td><?php echo esc_html((string) ($po['expected_arrival'] ?? '—')); ?></td>
-                        <td><?php echo esc_html((string) ($po['arrival_date'] ?? '—')); ?></td>
-                        <td><code><?php echo esc_html($po['status']); ?></code></td>
-                        <td><?php echo (int) count($po['items'] ?? []); ?></td>
-                        <td><a class="button button-small" href="<?php echo esc_url($detail_url); ?>"><?php esc_html_e('View', 'meals-db'); ?></a></td>
+                        <td><span class="mealsdb-po-status mealsdb-po-status-<?php echo esc_attr($st); ?>"><?php echo esc_html(MealsDB_Purchase_Orders::status_label($st)); ?></span><?php if (!$is_wf): ?> <em class="mealsdb-po-legacy"><?php esc_html_e('(task)', 'meals-db'); ?></em><?php endif; ?></td>
+                        <td class="num"><?php echo $is_wf ? (int) $cases : '&mdash;'; ?></td>
+                        <td class="num"><?php echo $is_wf ? (int) ($po['edit_count'] ?? 0) : '&mdash;'; ?></td>
+                        <td><?php echo esc_html((string) ($po['created_at'] ?? '—')); ?></td>
+                        <td><?php echo esc_html((string) ($po['approved_at'] ?? ($po['placed_date'] ?? '—'))); ?></td>
+                        <td><?php echo esc_html((string) ($po['received_at'] ?? ($po['arrival_date'] ?? '—'))); ?></td>
+                        <td>
+                            <a class="button button-small" href="<?php echo esc_url($detail_url); ?>"><?php esc_html_e('Review', 'meals-db'); ?></a>
+                            <?php if ($is_wf && $st === MealsDB_Purchase_Orders::STATUS_PLANNED): ?>
+                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="approve" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Approve', 'meals-db'); ?></button>
+                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="cancel" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Cancel', 'meals-db'); ?></button>
+                            <?php elseif ($is_wf && $st === MealsDB_Purchase_Orders::STATUS_PLACED): ?>
+                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="receive" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Mark received', 'meals-db'); ?></button>
+                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="unapprove" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Un-approve', 'meals-db'); ?></button>
+                            <?php elseif ($is_wf && $st === MealsDB_Purchase_Orders::STATUS_ARRIVED): ?>
+                                <a class="button button-small" href="<?php echo esc_url(add_query_arg(['po_id' => $rid, 'action' => 'reconcile'], $base_url)); ?>"><?php esc_html_e('Reconcile', 'meals-db'); ?></a>
+                            <?php endif; ?>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
         </table>
     <?php endif; ?>
 </div>
+<?php
+$mealsdb_po_render_island(['mode' => 'list']);
