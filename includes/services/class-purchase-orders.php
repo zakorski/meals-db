@@ -437,4 +437,117 @@ class MealsDB_Purchase_Orders {
             default:                      return $status; // legacy 'counted'
         }
     }
+
+    // -----------------------------------------------------------------
+    // Draft workflow — case edits (+/- buttons)
+    // -----------------------------------------------------------------
+
+    /**
+     * Set the ordered case count for one row of a Draft PO. Validates status,
+     * SKU membership, and range; bumps edit_count and audits only on an actual
+     * change. Coverage warnings are the caller's concern — this never blocks
+     * on the 9/7-week thresholds (spec: warnings, not clamps).
+     *
+     * @return array{changed: bool, cases: int, order_quantity: int, coverage_weeks: float|null}|WP_Error
+     */
+    public function edit_draft_cases(int $po_id, string $sku, int $cases) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        if ($cases < 0 || $cases > self::MAX_CASES) {
+            return new WP_Error('bad_cases', __('Case count is out of the allowed range.', 'meals-db'));
+        }
+
+        $po = $this->require_workflow_po($po_id, self::STATUS_PLANNED,
+            __('Only draft purchase orders can be edited.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        $idx = self::find_row_index($po['payload']['current'], $sku);
+        if ($idx === null) {
+            return new WP_Error('unknown_sku', __('Unknown SKU for this purchase order.', 'meals-db'));
+        }
+
+        $row = $po['payload']['current'][$idx];
+        $old = (int) ($row['cases'] ?? 0);
+        if ($old === $cases) {
+            return [
+                'changed'        => false,
+                'cases'          => $old,
+                'order_quantity' => (int) ($row['order_quantity'] ?? 0),
+                'coverage_weeks' => self::coverage_weeks($row),
+            ];
+        }
+
+        $po['payload']['current'][$idx]['cases']          = $cases;
+        $po['payload']['current'][$idx]['order_quantity'] = $cases * max(1, (int) ($row['case_size'] ?? 1));
+
+        if (!$this->write_payload($po_id, $po['payload'], self::STATUS_PLANNED, (int) $po['edit_count'] + 1)) {
+            return new WP_Error('save_failed',
+                __('Could not save the change (the draft may have just been approved) — reload.', 'meals-db'));
+        }
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_draft_edit', $po_id, $sku, (string) $old, (string) $cases);
+        }
+
+        $updated = $po['payload']['current'][$idx];
+        return [
+            'changed'        => true,
+            'cases'          => $cases,
+            'order_quantity' => (int) $updated['order_quantity'],
+            'coverage_weeks' => self::coverage_weeks($updated),
+        ];
+    }
+
+    /**
+     * Load a PO and require it to be a workflow PO (payload present) in the
+     * expected status. Returns the hydrated PO array or a WP_Error.
+     *
+     * @return array<string, mixed>|WP_Error
+     */
+    private function require_workflow_po(int $po_id, string $expected_status, string $locked_message) {
+        $po = $this->get_with_payload($po_id);
+        if ($po === null) {
+            return new WP_Error('not_found', __('Purchase order not found.', 'meals-db'));
+        }
+        if (!is_array($po['payload'])) {
+            return new WP_Error('legacy',
+                __('This purchase order was created by the task workflow and cannot be modified here.', 'meals-db'));
+        }
+        if ((string) ($po['status'] ?? '') !== $expected_status) {
+            return new WP_Error('locked', $locked_message);
+        }
+        return $po;
+    }
+
+    /** @param array<int, array<string, mixed>> $rows */
+    private static function find_row_index(array $rows, string $sku): ?int {
+        foreach ($rows as $i => $row) {
+            if ((string) ($row['sku'] ?? '') === $sku) {
+                return $i;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Persist the payload under the same status guard the transitions use, so
+     * an edit racing an approve loses cleanly (0 rows) instead of mutating a
+     * locked PO. edit_count is written as a value (not col+1): a lost
+     * increment between two same-second edits is acceptable for an
+     * informational counter.
+     */
+    private function write_payload(int $po_id, array $payload, string $expected_status, int $edit_count): bool {
+        $table  = MealsDB_DB::get_table_name(MealsDB_Tables::PURCHASE_ORDERS);
+        $result = $this->wpdb->update(
+            $table,
+            [
+                'payload'    => MealsDB_Task_Engine::encode_json($payload),
+                'edit_count' => $edit_count,
+            ],
+            ['po_id' => $po_id, 'status' => $expected_status]
+        );
+        return $result === 1;
+    }
 }

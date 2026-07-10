@@ -241,6 +241,55 @@ chk(MealsDB_Purchase_Orders::coverage_weeks($row, 13), 8.5, 'T-4: override cases
 chk(MealsDB_Purchase_Orders::coverage_weeks($row, 10), 7.0, 'T-4: 7.0 exactly (floor boundary)');
 chk(MealsDB_Purchase_Orders::coverage_weeks(['adjusted_weekly' => 0, 'current_stock' => 5, 'case_size' => 1, 'cases' => 1]), null, 'T-4: zero demand → null (no warning possible)');
 
+// ===========================================================================
+// T-5: edit_draft_cases — happy path, audit, edit_count.
+// ===========================================================================
+$w = fresh();
+$svc = new MealsDB_Purchase_Orders();
+$id = $svc->create_draft(forecast_rows());
+$r = $svc->edit_draft_cases($id, 'CD-001', 12);
+chk_true(is_array($r), 'T-5: edit returns array');
+chk($r['changed'], true, 'T-5: changed = true');
+chk($r['cases'], 12, 'T-5: new cases echoed');
+chk($r['order_quantity'], 72, 'T-5: order_quantity = 12*6');
+// (40 + 12*6) / 11 = 10.2
+chk($r['coverage_weeks'], 10.2, 'T-5: coverage recomputed');
+$po = $svc->get_with_payload($id);
+chk((int) $po['payload']['current'][0]['cases'], 12, 'T-5: payload persisted');
+chk((int) $po['payload']['generated'][0]['cases'], 10, 'T-5: generated baseline untouched');
+chk((int) $po['edit_count'], 1, 'T-5: edit_count bumped');
+chk_true(audit_has($w, 'po_draft_edit'), 'T-5: po_draft_edit audited');
+
+// No-op: same value → changed=false, no extra audit / count bump.
+$audit_before = count($w->audit);
+$r = $svc->edit_draft_cases($id, 'CD-001', 12);
+chk($r['changed'], false, 'T-5: no-op reports changed=false');
+chk(count($w->audit), $audit_before, 'T-5: no-op writes no audit row');
+$po = $svc->get_with_payload($id);
+chk((int) $po['edit_count'], 1, 'T-5: no-op does not bump edit_count');
+
+// Clamp-at-zero is the JS's job; the service just accepts 0.
+$r = $svc->edit_draft_cases($id, 'CD-001', 0);
+chk($r['changed'], true, 'T-5: zeroing a row is allowed');
+
+// ===========================================================================
+// T-6: edit_draft_cases — validation and status guards.
+// ===========================================================================
+chk($svc->edit_draft_cases($id, 'NOPE-9', 1)->get_error_code(), 'unknown_sku', 'T-6: unknown sku rejected');
+chk($svc->edit_draft_cases($id, 'CD-001', -1)->get_error_code(), 'bad_cases', 'T-6: negative rejected');
+chk($svc->edit_draft_cases($id, 'CD-001', 10001)->get_error_code(), 'bad_cases', 'T-6: >10000 rejected');
+chk($svc->edit_draft_cases(9999, 'CD-001', 1)->get_error_code(), 'not_found', 'T-6: missing PO rejected');
+
+// Legacy PO (payload NULL) is untouchable.
+$legacy_id = $svc->create(['po_number' => 'LEG-1', 'status' => 'planned',
+    'items' => [['sku' => 'CD-001', 'product_name' => 'X', 'quantity_ordered' => 6]]]);
+chk($svc->edit_draft_cases($legacy_id, 'CD-001', 1)->get_error_code(), 'legacy', 'T-6: legacy PO rejected');
+
+// Locked once not planned.
+$w->pos[$id]['status'] = 'placed';
+chk($svc->edit_draft_cases($id, 'CD-001', 3)->get_error_code(), 'locked', 'T-6: non-draft status rejected');
+$w->pos[$id]['status'] = 'planned';
+
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }
