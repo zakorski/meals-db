@@ -1,11 +1,16 @@
 <?php
 /**
- * Purchase Order service — CRUD for meals_purchase_orders.
+ * Purchase Order service — CRUD for meals_purchase_orders, plus the
+ * draft-workflow lifecycle (spec 2026-07-10).
  *
- * POs are first-class entities threaded through the task workflow:
- *   place_po → arrived via confirm_po_arrival → reconciled via physical_count.
- * This class is a thin CRUD layer; all lifecycle transitions are driven
- * by task on_complete callbacks.
+ * Workflow states (status column doubles as state):
+ *   planned=Draft → placed=Approved → arrived=Received → reconciled
+ * Transitions are guarded here; each step is driven by a direct service
+ * call (create_draft, approve_draft, etc.), NOT by task on_complete callbacks.
+ *
+ * payload IS NULL ⇒ legacy task-created PO.  The workflow refuses to touch
+ * those rows — their lifecycle still belongs to the task chain (prevents a
+ * task and a list action from double-applying the same inventory bump).
  *
  * @package MealsDB
  */
@@ -38,8 +43,8 @@ class MealsDB_Purchase_Orders {
 
     public const DEFAULT_SUPPLIER = 'Apetito';
 
-    private const MAX_CASES    = 10000; // fat-finger ceiling on any row
-    private const MAX_NOTE_LEN = 500;   // reconcile note length cap
+    private const MAX_CASES    = 10000; // fat-finger ceiling — enforced by edit_draft_cases (Task 3)
+    private const MAX_NOTE_LEN = 500;   // reconcile note length cap — enforced by reconcile_draft (Task 6)
 
     /**
      * Valid PO statuses.
@@ -334,6 +339,17 @@ class MealsDB_Purchase_Orders {
             'received'  => [], // sku => {received_cases, note}, reconcile session
         ];
 
+        // Fail CLOSED: a draft whose payload didn't encode would read back as
+        // payload=NULL and masquerade as a legacy task PO (Pattern 7 — never
+        // pretend the work happened). Bad UTF-8 in a product name is the
+        // realistic trigger; reject it here rather than persisting an
+        // uneditable row.
+        $encoded = wp_json_encode($payload);
+        if (!is_string($encoded) || $encoded === '' || $encoded === 'null') {
+            error_log('[MealsDB Purchase Orders] create_draft: payload encode failed.');
+            return 0;
+        }
+
         $row = [
             'po_number'  => 'PO-' . gmdate('Ymd-His'),
             'supplier'   => isset($meta['supplier']) ? (string) $meta['supplier'] : self::DEFAULT_SUPPLIER,
@@ -342,7 +358,7 @@ class MealsDB_Purchase_Orders {
             // ordered" contract consumed by apply_inventory_bump/_adjustments.
             'items'      => MealsDB_Task_Engine::encode_json([]),
             'notes'      => isset($meta['notes']) ? (string) $meta['notes'] : null,
-            'payload'    => MealsDB_Task_Engine::encode_json($payload),
+            'payload'    => $encoded,
             'edit_count' => 0,
             'created_by' => get_current_user_id() ?: null,
         ];
@@ -350,8 +366,14 @@ class MealsDB_Purchase_Orders {
         $table  = MealsDB_DB::get_table_name(MealsDB_Tables::PURCHASE_ORDERS);
         $result = $this->wpdb->insert($table, $row);
         if ($result === false) {
-            // uniq_po_number backstop: two saves in the same second collide.
-            // One suffixed retry covers the realistic case (one operator).
+            $is_dup = stripos((string) $this->wpdb->last_error, 'duplicate') !== false;
+            if (!$is_dup) {
+                error_log('[MealsDB Purchase Orders] create_draft insert failed: ' . $this->wpdb->last_error);
+                return 0;
+            }
+            // uniq_po_number backstop: a second save in the same second collides.
+            // One suffixed retry covers the realistic single-operator case; a third
+            // same-second save fails loudly rather than guessing further.
             $row['po_number'] .= '-2';
             $result = $this->wpdb->insert($table, $row);
             if ($result === false) {

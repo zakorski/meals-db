@@ -75,7 +75,10 @@ class PoWpdb extends wpdb {
             }
             $id = $this->next_id++;
             $data['po_id'] = $id;
-            $data += ['edit_count' => 0, 'reconciled_at' => null];
+            // Do NOT default edit_count here — the T-1 assertion verifies
+            // the service sets it; defaulting it in the stub would mask a
+            // missing field in the INSERT data.
+            $data += ['reconciled_at' => null];
             $this->pos[$id] = $data;
             $this->insert_id = $id;
             return 1;
