@@ -27,6 +27,9 @@ MealsDB_Permissions::enforce();
             <button type="button" class="button" id="mealsdb-po-export" style="display:none;">
                 <?php echo esc_html__('Export CSV', 'meals-db'); ?>
             </button>
+            <button type="button" class="button" id="mealsdb-po-save-draft" style="display:none;">
+                <?php echo esc_html__('Save as draft PO', 'meals-db'); ?>
+            </button>
         </div>
         <div>
             <label>
@@ -54,6 +57,10 @@ MealsDB_Permissions::enforce();
 $mealsdb_po_island = array(
     'nonce'   => wp_create_nonce('mealsdb_nonce'),
     'ajaxUrl' => admin_url('admin-ajax.php'),
+    // PO draft workflow: its own nonce context (destructive family) and the
+    // list page to land on after a successful save.
+    'poNonce'    => wp_create_nonce(MealsDB_Ajax_Purchase_Orders::NONCE_ACTION),
+    'poAdminUrl' => admin_url('admin.php?page=mealsdb&tab=po_admin'),
     'i18n'    => array(
         'generating'      => __('Generating...', 'meals-db'),
         'errorGenerating' => __('Error generating purchase order.', 'meals-db'),
@@ -80,6 +87,8 @@ $mealsdb_po_island = array(
         'sumPallets'      => __('pallets', 'meals-db'),
         'sumChanged'      => __('cases changed', 'meals-db'),
         'sumIncomplete'   => __('could not reach a whole pallet within the 7–52 week coverage guard', 'meals-db'),
+        'savingDraft'     => __('Saving draft…', 'meals-db'),
+        'draftSaveFailed' => __('Could not save the draft purchase order.', 'meals-db'),
     ),
 );
 ?>

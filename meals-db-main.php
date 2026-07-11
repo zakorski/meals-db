@@ -3,7 +3,7 @@
  * Plugin Name: Meals Database
  * Plugin URI: https://github.com/zakorski/meals-db
  * Description: Custom plugin for Meals & More database integration.
- * Version: 1.0.496
+ * Version: 1.0.497
  * Author: Zak Sikorski
  * Author URI: https://zakorski.com
  * GitHub Plugin URI: zakorski/meals-db
@@ -97,6 +97,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Delivery_Slips::init();
     MealsDB_Ajax_Slip_Batch::init();
     MealsDB_Ajax_Reports::init();
+    MealsDB_Ajax_Purchase_Orders::init();
     MealsDB_Quick_Order_Products::init();
     MealsDB_Quick_Order_Ajax::init();
     MealsDB_Staff::init();

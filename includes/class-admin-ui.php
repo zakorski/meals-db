@@ -127,6 +127,18 @@ class MealsDB_Admin_UI {
             case 'po':
                 $enqueue('purchase-order', [self::register_report_utils_script()]);
                 break;
+            case 'po_admin':
+                $enqueue('purchase-orders');
+                $po_css = MEALS_DB_PLUGIN_DIR . 'assets/css/purchase-orders.css';
+                if (file_exists($po_css)) {
+                    wp_enqueue_style(
+                        'mealsdb-purchase-orders',
+                        MEALS_DB_PLUGIN_URL . 'assets/css/purchase-orders.css',
+                        [],
+                        filemtime($po_css)
+                    );
+                }
+                break;
             case 'tasks':
                 if ($action === 'detail') {
                     // task-form.js (handle mealsdb-task-form) is already enqueued

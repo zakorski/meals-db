@@ -1,0 +1,95 @@
+/**
+ * Purchase Orders tab — draft workflow styling.
+ * Follows the invoice-draft.css conventions (WP admin palette, sticky
+ * header, recompute flash) plus the coverage warning badges.
+ */
+
+/* Grid */
+.mealsdb-po-grid th.num,
+.mealsdb-po-grid td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.mealsdb-po-grid thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f6f7f7;
+}
+
+/* Steppers */
+.mealsdb-po-stepper {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+.mealsdb-po-stepper .mealsdb-po-step {
+    min-width: 26px;
+    padding: 0 6px;
+    line-height: 1.6;
+    text-align: center;
+}
+.mealsdb-po-cases {
+    display: inline-block;
+    min-width: 32px;
+    text-align: right;
+    font-weight: 600;
+}
+
+/* "was: N" hint under an edited count (invoice-draft convention) */
+.mealsdb-po-was {
+    font-size: 11px;
+    color: #777;
+    text-align: right;
+}
+
+/* Coverage warning badges: yellow ! below the 9-week target, red ! below
+   the 7-week safety floor. Informational — never blocks saving. */
+.mealsdb-po-flag {
+    display: inline-block;
+    min-width: 16px;
+    text-align: center;
+    border-radius: 50%;
+    font-weight: 700;
+    cursor: help;
+}
+.mealsdb-po-warn {
+    background: #fcf9e8;
+    color: #996800;
+    border: 1px solid #dba617;
+}
+.mealsdb-po-crit {
+    background: #fcf0f1;
+    color: #b32d2e;
+    border: 1px solid #b32d2e;
+}
+
+/* Row states */
+tr.mealsdb-po-saving {
+    opacity: 0.6;
+}
+.mealsdb-po-coverage.mealsdb-po-recomputed {
+    background: #fcf9e8;
+    transition: background 0.6s ease;
+}
+tr.mealsdb-po-note-missing .mealsdb-po-note {
+    border-color: #b32d2e;
+    box-shadow: 0 0 0 1px #b32d2e;
+}
+
+/* Status chip */
+.mealsdb-po-status {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    background: #f0f0f1;
+    color: #3c434a;
+}
+.mealsdb-po-status-planned    { background: #f0f6fc; color: #2271b1; }
+.mealsdb-po-status-placed     { background: #edfaef; color: #007017; }
+.mealsdb-po-status-arrived    { background: #fcf9e8; color: #996800; }
+.mealsdb-po-status-reconciled { background: #f0f0f1; color: #3c434a; }
+.mealsdb-po-status-cancelled  { background: #fcf0f1; color: #b32d2e; }
+.mealsdb-po-legacy            { color: #777; font-size: 11px; }

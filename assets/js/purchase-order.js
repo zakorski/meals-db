@@ -172,6 +172,7 @@
         var optimize = $('#mealsdb-po-optimize').is(':checked');
         showStatus(t('generating', 'Generating...'), 'info');
         $('#mealsdb-po-export').hide();
+        $('#mealsdb-po-save-draft').hide();
         $('#mealsdb-po-summary').hide().empty();
 
         $.post(ajaxUrl, {
@@ -200,6 +201,7 @@
 
             if (csvData) {
                 $('#mealsdb-po-export').show();
+                $('#mealsdb-po-save-draft').show();
             }
         }).fail(function () {
             showStatus(t('requestFailed', 'Request failed.'), 'error');
@@ -211,5 +213,29 @@
         var suffix   = showingOptimized ? '-pallets' : '';
         var filename = 'purchase-order' + suffix + '-' + new Date().toISOString().slice(0, 10) + '.csv';
         exportCsv(csvData, filename);
+    });
+
+    // Persist the on-screen forecast as a Draft PO. The server REGENERATES
+    // the rows (the browser copy is untrusted display data) and saves the
+    // same variant that is showing — base, or pallet-optimised when the
+    // optimised table is on screen.
+    $('#mealsdb-po-save-draft').on('click', function () {
+        var $btn = $(this).prop('disabled', true);
+        showStatus(t('savingDraft', 'Saving draft…'), 'info');
+        $.post(ajaxUrl, {
+            action: 'mealsdb_po_save_draft',
+            nonce: data.poNonce || '',
+            optimize: showingOptimized ? 1 : 0
+        }, function (res) {
+            if (res && res.success && res.data && res.data.po_id) {
+                window.location.href = (data.poAdminUrl || '') + '&po_id=' + parseInt(res.data.po_id, 10);
+                return;
+            }
+            $btn.prop('disabled', false);
+            showStatus((res && res.data && res.data.message) || t('draftSaveFailed', 'Could not save the draft purchase order.'), 'error');
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            showStatus(t('requestFailed', 'Request failed.'), 'error');
+        });
     });
 })(jQuery);
