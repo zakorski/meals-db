@@ -43,23 +43,22 @@ class MealsDB_Ajax_Purchase_Orders {
     }
 
     /**
-     * Forecast tab "Save as draft PO". The rows are REGENERATED server-side
-     * rather than accepted from the browser: the on-screen table is display
-     * data, not a trusted payload. The operator saves "what the model says
-     * right now" — identical to the preview unless stock/orders moved in the
-     * seconds between Generate and Save.
+     * Forecast tab "Generate draft PO" (one-click flow, spec 2026-07-11).
+     * The rows are REGENERATED server-side rather than accepted from the
+     * browser: the on-screen page is display data, not a trusted payload.
+     * Drafts are ALWAYS pallet-optimized — the preview and its optimize
+     * toggle were removed; the optimizer is a pure post-processor over the
+     * forecast rows (test-po-freight-optimization.php) and the draft page
+     * is where the operator reviews and edits the result.
      */
     public static function save_draft(): void {
         if (!self::guard('client_modify')) {
             return;
         }
         try {
-            $reports = new MealsDB_Reports($GLOBALS['wpdb']);
-            $rows    = $reports->generate_purchase_order();
-            if (!empty($_POST['optimize'])) {
-                $optimized = MealsDB_Reports::optimize_po_for_pallets($rows);
-                $rows      = $optimized['rows'];
-            }
+            $reports   = new MealsDB_Reports($GLOBALS['wpdb']);
+            $optimized = MealsDB_Reports::optimize_po_for_pallets($reports->generate_purchase_order());
+            $rows      = $optimized['rows'];
             $service = new MealsDB_Purchase_Orders();
             $po_id   = $service->create_draft($rows);
             if ($po_id <= 0) {
