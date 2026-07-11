@@ -485,6 +485,10 @@ class MealsDB_Reports {
     /**
      * Export a seasonally-adjusted purchase order to CSV string.
      *
+     * NOTE (2026-07-11): no production caller since the forecast-tab preview
+     * was removed (one-click draft flow); kept as a tested pure exporter —
+     * the draft detail page builds its CSV client-side via Report.csvCell.
+     *
      * @param array $po_rows Rows from generate_purchase_order().
      *
      * @return string CSV content.
