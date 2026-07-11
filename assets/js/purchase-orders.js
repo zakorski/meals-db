@@ -189,7 +189,21 @@
         if (!map) { return; }
 
         var data = { nonce: cfg.nonce, po_id: parseInt($btn.data('po-id'), 10), action: map.action };
-        if (kind === 'unapprove') {
+        if (kind === 'approve') {
+            var $arrival = $('#mealsdb-po-expected-arrival');
+            if ($arrival.length) {
+                // Detail page: date input + the normal confirm dialog.
+                if (!window.confirm(map.confirm)) { return; }
+                data.expected_arrival = String($arrival.val() || '');
+            } else {
+                // List page: one prefilled prompt doubles as the confirm —
+                // Cancel aborts the approval entirely.
+                var dflt = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+                var picked = window.prompt(t('promptExpectedArrival', 'Expected arrival date (YYYY-MM-DD) — OK approves:'), dflt);
+                if (picked === null) { return; }
+                data.expected_arrival = picked;
+            }
+        } else if (kind === 'unapprove') {
             var reason = window.prompt(t('promptUnapprove', 'Enter a reason for un-approving (required):'));
             if (reason === null) { return; }
             if (!reason.replace(/\s/g, '').length) {

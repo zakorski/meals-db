@@ -145,6 +145,12 @@ class MealsDB_Ajax_Purchase_Orders {
             if ($method === 'unapprove') {
                 $reason = sanitize_text_field(wp_unslash($_POST['reason'] ?? ''));
                 $result = $service->unapprove($po_id, $reason);
+            } elseif ($method === 'approve') {
+                // Optional expected-arrival date for the confirm-arrival task's
+                // due date; the service normalizes (malformed → null → the
+                // bridge falls back to +7 days).
+                $expected = sanitize_text_field(wp_unslash($_POST['expected_arrival'] ?? ''));
+                $result   = $service->approve($po_id, $expected !== '' ? $expected : null);
             } else {
                 $result = $service->{$method}($po_id);
             }
