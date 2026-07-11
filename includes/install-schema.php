@@ -184,24 +184,13 @@ class MealsDB_Installer {
             ];
         }
 
-        if (class_exists('MealsDB_Task_Type_Place_PO')) {
-            $seeds[] = [
-                'name'             => 'Appetito Purchase Order',
-                'task_type'        => MealsDB_Task_Type_Place_PO::TYPE_ID,
-                'spawn_type'       => MealsDB_Task_Rules::SPAWN_FIXED,
-                'recurrence'       => [
-                    'type'        => 'monthly_weekday',
-                    'interval'    => 1,
-                    'nth'         => 4,
-                    'day_of_week' => 'tuesday',
-                    'time'        => '08:00',
-                ],
-                'payload_template' => ['supplier' => 'Appetito'],
-                'assignee_role'    => 'admin',
-                'tags'             => ['appetito_po'],
-                'is_active'        => 1,
-            ];
-        }
+        // The 'Appetito Purchase Order' seed rule (place_po task type) was removed
+        // with the legacy PO task chain in feat/po-task-integration. The new
+        // workflow-native bridge (MealsDB_PO_Task_Bridge) spawns po_confirm_arrival
+        // and po_reconcile tasks automatically from lifecycle hooks — no seed rule
+        // is needed for those. Any existing 'Appetito Purchase Order' rule rows
+        // in production are orphaned (task type deleted) and can be purged via the
+        // Task Rules admin page.
 
         // U11-schema-10: seed each rule at most ONCE per install, tracked by name
         // in a persisted ledger. install() runs on every version bump, so the old

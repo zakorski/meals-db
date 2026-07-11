@@ -54,11 +54,12 @@ class MealsDB_Purchase_Orders {
      * state.
      *
      * HISTORY: A `STATUS_COUNTED` constant was previously declared
-     * but never set anywhere. The physical_count task handler does
-     * both the count and the reconcile in one operation, so the
-     * intermediate state had no place in the workflow. Removed for
-     * clarity. The schema ENUM in class-schema.php still tolerates
-     * 'counted' for now — a dev-side `SELECT COUNT(*) ... WHERE
+     * but never set anywhere. The legacy physical_count task type (now
+     * deleted — feat/po-task-integration) handled both counting and
+     * reconciliation in one step, so the intermediate state had no
+     * place in the workflow. Removed for clarity. The schema ENUM in
+     * class-schema.php still tolerates 'counted' for now — a dev-side
+     * `SELECT COUNT(*) ... WHERE
      * status='counted'` check is required before tightening the
      * ENUM, since any orphan row would fail the new constraint.
      */

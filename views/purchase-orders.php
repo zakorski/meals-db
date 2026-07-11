@@ -5,8 +5,9 @@
  * Lifecycle (status ENUM value → operator label):
  *   planned=Draft → placed=Approved → arrived=Received → reconciled,
  *   with cancelled available from Draft. Legacy task-created POs
- *   (payload IS NULL) render read-only; their lifecycle stays with the
- *   task chain (place_po → confirm_po_arrival → physical_count).
+ *   (payload IS NULL) render read-only; the deleted legacy task chain
+ *   (place_po / confirm_po_arrival / physical_count) no longer exists —
+ *   legacy POs are display-only and their lifecycle is considered closed.
  *
  * Interactivity lives in assets/js/purchase-orders.js, fed by the JSON
  * island #mealsdb-po-admin-data (no inline script blocks).
