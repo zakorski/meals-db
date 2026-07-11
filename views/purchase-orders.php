@@ -123,6 +123,8 @@ if ($po_id > 0) {
                     <td><?php echo esc_html((string) ($po['supplier'] ?? '')); ?></td></tr>
                 <tr><th><?php esc_html_e('Placed Date', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['placed_date'] ?? '—')); ?></td></tr>
+                <tr><th><?php esc_html_e('Expected Arrival', 'meals-db'); ?></th>
+                    <td><?php echo esc_html((string) ($po['expected_arrival'] ?? '—')); ?></td></tr>
                 <tr><th><?php esc_html_e('Arrival', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['arrival_date'] ?? '—')); ?></td></tr>
                 <tr><th><?php esc_html_e('Reconciled', 'meals-db'); ?></th>
@@ -232,11 +234,11 @@ if ($po_id > 0) {
                                     <span class="mealsdb-po-cases" data-cases="<?php echo (int) $cases; ?>"><?php echo (int) $cases; ?></span>
                                     <button type="button" class="button mealsdb-po-step" data-step="1" aria-label="<?php esc_attr_e('One case more', 'meals-db'); ?>">+</button>
                                 </span>
-                                <?php if ($cases !== $gen): ?>
-                                    <div class="mealsdb-po-was"><?php echo esc_html(sprintf(__('was: %s', 'meals-db'), $gen)); ?></div>
-                                <?php endif; ?>
                             <?php else: ?>
                                 <?php echo (int) $cases; ?>
+                            <?php endif; ?>
+                            <?php if ($cases !== $gen): ?>
+                                <div class="mealsdb-po-was"><?php echo esc_html(sprintf(__('was: %s', 'meals-db'), $gen)); ?></div>
                             <?php endif; ?>
                         </td>
                         <?php if ($mode === 'reconcile'): ?>
@@ -262,7 +264,14 @@ if ($po_id > 0) {
                 </tbody>
                 <tfoot><tr>
                     <th colspan="5"><?php esc_html_e('TOTAL', 'meals-db'); ?></th>
-                    <th class="num" id="mealsdb-po-total-cases"><?php echo (int) $total_cases; ?></th>
+                    <th class="num" id="mealsdb-po-total-cases"><?php echo (int) $total_cases;
+                        if (class_exists('MealsDB_Operational_Constants') && MealsDB_Operational_Constants::APETITO_CASES_PER_PALLET > 0) {
+                            $per_pallet_detail = (int) MealsDB_Operational_Constants::APETITO_CASES_PER_PALLET;
+                            echo ' <span id="mealsdb-po-total-pallets">(' . esc_html(number_format_i18n($total_cases / $per_pallet_detail, 2)) . ' pal)</span>';
+                        } else {
+                            echo ' <span id="mealsdb-po-total-pallets"></span>';
+                        }
+                    ?></th>
                     <?php if ($mode === 'reconcile'): ?><th></th><th></th><?php endif; ?>
                     <th class="num" id="mealsdb-po-total-units"><?php echo (int) $total_units; ?></th>
                     <th></th><th></th>
@@ -303,7 +312,11 @@ if ($po_id > 0) {
         <?php endif; ?>
     </div>
     <?php
-    $mealsdb_po_render_island(['poId' => $po_id, 'mode' => $mode]);
+    $mealsdb_po_render_island([
+        'poId'       => $po_id,
+        'mode'       => $mode,
+        'palletSize' => class_exists('MealsDB_Operational_Constants') ? (int) MealsDB_Operational_Constants::APETITO_CASES_PER_PALLET : 0,
+    ]);
     return;
 }
 
@@ -343,6 +356,7 @@ $rows = $service->query($filters);
                 <th><?php esc_html_e('Supplier', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Status', 'meals-db'); ?></th>
                 <th class="num"><?php esc_html_e('Cases', 'meals-db'); ?></th>
+                <th class="num"><?php esc_html_e('Rows', 'meals-db'); ?></th>
                 <th class="num"><?php esc_html_e('Edits', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Created', 'meals-db'); ?></th>
                 <th><?php esc_html_e('Approved', 'meals-db'); ?></th>
@@ -371,7 +385,18 @@ $rows = $service->query($filters);
                         <td><strong><a href="<?php echo esc_url($detail_url); ?>"><?php echo esc_html((string) $po['po_number']); ?></a></strong></td>
                         <td><?php echo esc_html((string) ($po['supplier'] ?? '')); ?></td>
                         <td><span class="mealsdb-po-status mealsdb-po-status-<?php echo esc_attr($st); ?>"><?php echo esc_html(MealsDB_Purchase_Orders::status_label($st)); ?></span><?php if (!$is_wf): ?> <em class="mealsdb-po-legacy"><?php esc_html_e('(task)', 'meals-db'); ?></em><?php endif; ?></td>
-                        <td class="num"><?php echo $is_wf ? (int) $cases : '&mdash;'; ?></td>
+                        <td class="num"><?php
+                            if ($is_wf) {
+                                echo (int) $cases;
+                                if (class_exists('MealsDB_Operational_Constants') && MealsDB_Operational_Constants::APETITO_CASES_PER_PALLET > 0) {
+                                    $per_pallet = (int) MealsDB_Operational_Constants::APETITO_CASES_PER_PALLET;
+                                    echo ' <span class="mealsdb-po-pallets">(' . esc_html(number_format_i18n($cases / $per_pallet, 2)) . ' pal)</span>';
+                                }
+                            } else {
+                                echo '&mdash;';
+                            }
+                        ?></td>
+                        <td class="num"><?php echo $is_wf ? (int) count($payload['current']) : '&mdash;'; ?></td>
                         <td class="num"><?php echo $is_wf ? (int) ($po['edit_count'] ?? 0) : '&mdash;'; ?></td>
                         <td><?php echo esc_html((string) ($po['created_at'] ?? '—')); ?></td>
                         <td><?php echo esc_html((string) ($po['approved_at'] ?? ($po['placed_date'] ?? '—'))); ?></td>

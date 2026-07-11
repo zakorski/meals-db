@@ -77,6 +77,10 @@
         });
         $('#mealsdb-po-total-cases').text(cases);
         $('#mealsdb-po-total-units').text(units);
+        var palletSize = parseInt(cfg.palletSize, 10) || 0;
+        if (palletSize > 0) {
+            $('#mealsdb-po-total-pallets').text('(' + (cases / palletSize).toFixed(2) + ' pal)');
+        }
     }
 
     // ------------------------------------------------------------------
