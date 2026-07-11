@@ -514,7 +514,7 @@ class MealsDB_Purchase_Orders {
      *
      * @return true|WP_Error
      */
-    public function approve(int $po_id) {
+    public function approve(int $po_id, ?string $expected_arrival = null) {
         if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
             return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
         }
@@ -523,6 +523,11 @@ class MealsDB_Purchase_Orders {
         if (is_wp_error($po)) {
             return $po;
         }
+
+        // Task-integration: an optional expected-arrival date (captured in the
+        // approve dialog) rides the same guarded transition and becomes the
+        // confirm-arrival task's due date. Malformed → null (bridge falls back).
+        $expected_arrival = self::normalize_date($expected_arrival);
 
         $items = [];
         foreach ($po['payload']['current'] as $row) {
@@ -551,16 +556,20 @@ class MealsDB_Purchase_Orders {
         }
 
         $ok = $this->transition($po_id, self::STATUS_PLANNED, self::STATUS_PLACED, [
-            'approved_by' => get_current_user_id() ?: null,
-            'approved_at' => gmdate('Y-m-d H:i:s'),
-            'placed_date' => gmdate('Y-m-d'),
-            'items'       => $encoded_items,
+            'approved_by'      => get_current_user_id() ?: null,
+            'approved_at'      => gmdate('Y-m-d H:i:s'),
+            'placed_date'      => gmdate('Y-m-d'),
+            'items'            => $encoded_items,
+            'expected_arrival' => $expected_arrival,
         ]);
         if (!$ok) {
             return new WP_Error('race', __('Could not approve (a concurrent change happened) — reload.', 'meals-db'));
         }
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_approved', $po_id, 'status', self::STATUS_PLANNED, self::STATUS_PLACED);
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_approved', $po_id, $expected_arrival);
         }
         return true;
     }
@@ -588,9 +597,10 @@ class MealsDB_Purchase_Orders {
 
         // items is left as-written; the next approve overwrites it.
         $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_PLANNED, [
-            'approved_by' => null,
-            'approved_at' => null,
-            'placed_date' => null,
+            'approved_by'      => null,
+            'approved_at'      => null,
+            'placed_date'      => null,
+            'expected_arrival' => null,
         ]);
         if (!$ok) {
             return new WP_Error('race', __('Could not un-approve (a concurrent change happened) — reload.', 'meals-db'));
@@ -598,6 +608,9 @@ class MealsDB_Purchase_Orders {
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_unapproved', $po_id, 'reason', null,
                 substr($reason, 0, self::MAX_NOTE_LEN));
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_unapproved', $po_id, $reason);
         }
         return true;
     }
@@ -635,7 +648,7 @@ class MealsDB_Purchase_Orders {
      *
      * @return true|WP_Error
      */
-    public function mark_received(int $po_id) {
+    public function mark_received(int $po_id, ?string $arrival_date = null) {
         if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
             return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
         }
@@ -645,10 +658,14 @@ class MealsDB_Purchase_Orders {
             return $po;
         }
 
+        // A task completed after the fact may carry the TRUE arrival date;
+        // the PO page passes null and gets today (UTC), as before.
+        $arrival_date = self::normalize_date($arrival_date) ?? gmdate('Y-m-d');
+
         $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_ARRIVED, [
             'received_by'  => get_current_user_id() ?: null,
             'received_at'  => gmdate('Y-m-d H:i:s'),
-            'arrival_date' => gmdate('Y-m-d'),
+            'arrival_date' => $arrival_date,
         ]);
         if (!$ok) {
             return new WP_Error('race', __('Could not mark received (a concurrent change happened) — reload.', 'meals-db'));
@@ -657,6 +674,9 @@ class MealsDB_Purchase_Orders {
         self::apply_inventory_bump((array) $po['items']);
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_received', $po_id, 'status', self::STATUS_PLACED, self::STATUS_ARRIVED);
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_received', $po_id);
         }
         return true;
     }
@@ -807,6 +827,9 @@ class MealsDB_Purchase_Orders {
         }
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_reconciled', $po_id, 'status', self::STATUS_ARRIVED, self::STATUS_RECONCILED);
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_reconciled', $po_id);
         }
         return true;
     }
