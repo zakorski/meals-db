@@ -1,7 +1,7 @@
 /**
  * Purchase Orders tab — draft workflow list + detail interactivity.
  *
- * Reads config from the JSON island #mealsdb-po-admin-data. Three concerns:
+ * Reads config from the JSON island #mealsdb-po-admin-data. Four concerns:
  *   1. List/detail lifecycle buttons (approve / un-approve / receive /
  *      cancel / complete-reconcile) with confirms and the un-approve
  *      reason prompt (mirrors invoice un-finalize UX).
@@ -11,6 +11,8 @@
  *      generation-time snapshot (data-adjusted-weekly / data-stock /
  *      data-case-size): yellow ! below the 9-week target, red ! below the
  *      7-week floor. Warnings never block saving — they inform.
+ *   4. Detail-page CSV export, built from the live grid rows (so stepper
+ *      edits are reflected) through Report.csvRow/exportCsv (Pattern 14).
  */
 (function ($) {
     'use strict';
@@ -274,5 +276,44 @@
             $btn.prop('disabled', false);
             msg(t('requestFailed', 'Request failed.'), true);
         });
+    });
+    // ------------------------------------------------------------------
+    // Export CSV (detail view). Values come from the row's data-* snapshot
+    // attributes plus the live case count — NOT the formatted cell text —
+    // so locale thousands-separators never leak into the CSV. Every cell
+    // routes through Report.csvRow (formula-injection guard, Pattern 14);
+    // if report-utils failed to load we refuse rather than emit unguarded
+    // cells. In reconcile mode "Cases" is the received count (what the
+    // grid shows).
+    // ------------------------------------------------------------------
+    var R = window.MealsDBReport || {};
+
+    $(document).on('click', '#mealsdb-po-export-csv', function () {
+        if (!R.csvRow || !R.exportCsv) {
+            msg(t('requestFailed', 'Request failed.'), true);
+            return;
+        }
+        var csv = R.csvRow(['SKU', 'Product', 'Adj/Wk', 'Stock', 'Case size', 'Cases', 'Order qty', 'Coverage (wks)', 'Forecast note']);
+        $('#mealsdb-po-grid tbody tr').each(function () {
+            var $row     = $(this);
+            var caseSize = parseInt($row.data('case-size'), 10) || 1;
+            var cases    = parseInt($row.find('.mealsdb-po-cases').attr('data-cases'), 10);
+            if (isNaN(cases)) { // locked mode renders plain text, no stepper span
+                cases = parseInt($row.data('ordered-cases'), 10) || 0;
+            }
+            csv += R.csvRow([
+                String($row.attr('data-sku') || ''),
+                String($row.find('td').eq(1).text()).trim(),
+                String(parseFloat($row.data('adjusted-weekly')) || 0),
+                String(parseInt($row.data('stock'), 10) || 0),
+                String(caseSize),
+                String(cases),
+                String(cases * caseSize),
+                String($row.find('.mealsdb-po-coverage').attr('data-coverage') || ''),
+                String($row.find('td').last().text()).trim()
+            ]);
+        });
+        var slug = String(cfg.poNumber || cfg.poId || 'draft').replace(/[^\w.-]+/g, '-');
+        R.exportCsv(csv, 'po-' + slug + '-' + new Date().toISOString().slice(0, 10) + '.csv');
     });
 })(jQuery);

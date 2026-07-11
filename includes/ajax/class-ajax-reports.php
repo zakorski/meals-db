@@ -13,7 +13,6 @@ class MealsDB_Ajax_Reports {
      * Register AJAX actions.
      */
     public static function init(): void {
-        add_action('wp_ajax_mealsdb_generate_purchase_order', [self::class, 'generate_purchase_order']);
         add_action('wp_ajax_mealsdb_contribution_reconciliation', [self::class, 'contribution_reconciliation']);
         add_action('wp_ajax_mealsdb_delivery_fee_reconciliation', [self::class, 'delivery_fee_reconciliation']);
         add_action('wp_ajax_mealsdb_private_customer_report', [self::class, 'private_customer_report']);
@@ -63,57 +62,6 @@ class MealsDB_Ajax_Reports {
         }
 
         return [$start_date, $end_date];
-    }
-
-    /**
-     * Generate a seasonally-adjusted purchase order projection.
-     */
-    public static function generate_purchase_order(): void {
-        check_ajax_referer('mealsdb_nonce', 'nonce');
-
-        // can_access_plugin() already resolves the required capability (filter +
-        // whitelist + non-empty fallback) and checks it — no inline fallback
-        // copy to drift out of lockstep (U05-reports-10). A logged-out user
-        // fails current_user_can() too, so the reject set is unchanged.
-        if (!MealsDB_Permissions::can_access_plugin()) {
-            // U05-reports-11: match the data.message shape the consumers read.
-            wp_send_json_error(
-                ['message' => __('You are not allowed to perform this action.', 'meals-db')],
-                403
-            );
-        }
-
-        self::enforce_rate_limit();
-
-        // The forecasting model is locked to the back-test-validated
-        // configuration (12-week recency-weighted history, decay 0.85, 6-week
-        // horizon + 3-week demand-proportional buffer = 9 weeks coverage). It
-        // takes no parameters by design — any trailing/horizon/decay request
-        // inputs are ignored (the controls were removed from the view).
-        $reports  = new MealsDB_Reports($GLOBALS['wpdb']);
-        $po_rows  = $reports->generate_purchase_order();
-        $csv      = $reports->export_purchase_order_csv($po_rows);
-
-        $response = [
-            'success' => true,
-            'data'    => $po_rows,
-            'csv'     => $csv,
-        ];
-
-        // OPTIONAL freight/pallet optimisation (Option A response shape): the
-        // base forecast under `data`/`csv` is ALWAYS present and unchanged, so
-        // the existing consumer keeps working untouched. The optimised variant
-        // is added as SIBLING keys only when the operator ticks the toggle —
-        // never nested under `data` (that would change the contract the current
-        // JS reads as the rows array).
-        if (!empty($_POST['optimize'])) {
-            $optimized = MealsDB_Reports::optimize_po_for_pallets($po_rows);
-            $response['optimized']     = $optimized['rows'];
-            $response['optimized_csv'] = $reports->export_purchase_order_csv($optimized['rows']);
-            $response['summary']       = $optimized['summary'];
-        }
-
-        wp_send_json($response);
     }
 
     /**
