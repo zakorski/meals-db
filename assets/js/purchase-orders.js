@@ -302,7 +302,7 @@
                 cases = parseInt($row.data('ordered-cases'), 10) || 0;
             }
             csv += R.csvRow([
-                String($row.data('sku')),
+                String($row.attr('data-sku') || ''),
                 $.trim($row.find('td').eq(1).text()),
                 String(parseFloat($row.data('adjusted-weekly')) || 0),
                 String(parseInt($row.data('stock'), 10) || 0),
