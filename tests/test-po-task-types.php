@@ -254,6 +254,7 @@ function forecast_rows(): array {
 
 MealsDB_Task_Registry::reset();
 MealsDB_Task_Type_PO_Confirm_Arrival::register();
+MealsDB_Task_Type_PO_Reconcile::register();
 
 /** Drive a fresh draft to 'placed' with a known expected arrival; return [svc, engine, po_id]. */
 function placed_po(PoWpdb $w): array {
@@ -314,6 +315,72 @@ chk($w->tasks[$tid]['status'], 'deferred', 'C-3: task deferred, not completed');
 chk($w->tasks[$tid]['next_run_date'], gmdate('Y-m-d', strtotime('+1 day')), 'C-3: due tomorrow');
 chk($svc->get_with_payload($po_id)['status'], 'placed', 'C-3: PO untouched');
 chk($GLOBALS['wc_stock'][101], 50, 'C-3: no stock effect');
+
+/** Drive a PO to 'arrived' and create a reconcile task; return [svc, engine, po_id, tid]. */
+function reconcile_setup(PoWpdb $w): array {
+    [$svc, $engine, $po_id] = placed_po($w);
+    $svc->mark_received($po_id); // stock now 110 / 44
+    $tid = $engine->create_task([
+        'task_type'           => MealsDB_Task_Type_PO_Reconcile::TYPE_ID,
+        'payload'             => ['po_number' => 'PO-X', 'rows' => [
+            ['sku' => 'CD-001', 'product_name' => 'Chicken Dinner', 'ordered_cases' => 10],
+            ['sku' => 'SD-002', 'product_name' => 'Side Salad',     'ordered_cases' => 2],
+        ]],
+        'next_run_date'       => gmdate('Y-m-d'),
+        'related_entity_type' => 'po',
+        'related_entity_id'   => $po_id,
+        'assignee_role'       => 'warehouse',
+    ]);
+    return [$svc, $engine, $po_id, $tid];
+}
+
+// ===========================================================================
+// R-T1: happy path — short 2 cases with a note → deltas + reconciled.
+// ===========================================================================
+$w = fresh();
+[$svc, $engine, $po_id, $tid] = reconcile_setup($w);
+$ok = $engine->complete_task($tid, [
+    'count_received' => 'yes',
+    'sku_rows' => [
+        ['sku' => 'CD-001', 'ordered_cases' => 10, 'received_cases' => 8, 'note' => 'Two cases damaged in transit'],
+        ['sku' => 'SD-002', 'ordered_cases' => 2,  'received_cases' => 2, 'note' => ''],
+    ],
+], 7);
+chk($ok, true, 'R-T1: completes');
+$po = $svc->get_with_payload($po_id);
+chk($po['status'], 'reconciled', 'R-T1: PO reconciled via task');
+chk($GLOBALS['wc_stock'][101], 98, 'R-T1: delta applied (110 − 2×6)');
+chk($GLOBALS['wc_stock'][102], 44, 'R-T1: unchanged row no delta');
+chk_true(audit_has($w, 'Two cases damaged in transit'), 'R-T1: note in discrepancy audit');
+chk($w->tasks[$tid]['status'], 'completed', 'R-T1: task completed');
+
+// ===========================================================================
+// R-T2: already reconciled on the PO page → graceful no-op, no double delta.
+// ===========================================================================
+$w = fresh();
+[$svc, $engine, $po_id, $tid] = reconcile_setup($w);
+$svc->edit_reconcile_row($po_id, 'CD-001', 8, 'Two cases damaged in transit');
+$svc->complete_reconcile($po_id); // PO page acted first → stock 98
+chk($GLOBALS['wc_stock'][101], 98, 'R-T2: page-side delta applied');
+$ok = $engine->complete_task($tid, [
+    'count_received' => 'yes',
+    'sku_rows' => [
+        ['sku' => 'CD-001', 'ordered_cases' => 10, 'received_cases' => 8, 'note' => 'dup'],
+        ['sku' => 'SD-002', 'ordered_cases' => 2,  'received_cases' => 2, 'note' => ''],
+    ],
+], 7);
+chk($ok, true, 'R-T2: stale task still completes');
+chk($GLOBALS['wc_stock'][101], 98, 'R-T2: NO double delta');
+
+// ===========================================================================
+// R-T3: count_received=no → auto-defer, no effects.
+// ===========================================================================
+$w = fresh();
+[$svc, $engine, $po_id, $tid] = reconcile_setup($w);
+$engine->complete_task($tid, ['count_received' => 'no'], 7);
+chk($w->tasks[$tid]['status'], 'deferred', 'R-T3: deferred');
+chk($svc->get_with_payload($po_id)['status'], 'arrived', 'R-T3: PO untouched');
+chk($GLOBALS['wc_stock'][101], 110, 'R-T3: no delta');
 
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
