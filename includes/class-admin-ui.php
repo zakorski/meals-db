@@ -128,7 +128,9 @@ class MealsDB_Admin_UI {
                 $enqueue('purchase-order', [self::register_report_utils_script()]);
                 break;
             case 'po_admin':
-                $enqueue('purchase-orders');
+                // report-utils supplies csvRow/exportCsv for the detail-page
+                // CSV export (Pattern 14 injection guard lives there).
+                $enqueue('purchase-orders', [self::register_report_utils_script()]);
                 $po_css = MEALS_DB_PLUGIN_DIR . 'assets/css/purchase-orders.css';
                 if (file_exists($po_css)) {
                     wp_enqueue_style(

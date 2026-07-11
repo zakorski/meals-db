@@ -154,6 +154,7 @@ if ($po_id > 0) {
                 <?php elseif ($mode === 'reconcile'): ?>
                     <button type="button" class="button button-primary" id="mealsdb-po-complete-reconcile" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Complete reconciliation', 'meals-db'); ?></button>
                 <?php endif; ?>
+                <button type="button" class="button" id="mealsdb-po-export-csv"><?php esc_html_e('Export CSV', 'meals-db'); ?></button>
                 <span id="mealsdb-po-action-msg" role="status"></span>
             </p>
         <?php endif; ?>
@@ -319,6 +320,7 @@ if ($po_id > 0) {
     <?php
     $mealsdb_po_render_island([
         'poId'       => $po_id,
+        'poNumber'   => (string) $po['po_number'],
         'mode'       => $mode,
         'palletSize' => class_exists('MealsDB_Operational_Constants') ? (int) MealsDB_Operational_Constants::APETITO_CASES_PER_PALLET : 0,
     ]);
