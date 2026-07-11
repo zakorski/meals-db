@@ -303,14 +303,14 @@
             }
             csv += R.csvRow([
                 String($row.attr('data-sku') || ''),
-                $.trim($row.find('td').eq(1).text()),
+                String($row.find('td').eq(1).text()).trim(),
                 String(parseFloat($row.data('adjusted-weekly')) || 0),
                 String(parseInt($row.data('stock'), 10) || 0),
                 String(caseSize),
                 String(cases),
                 String(cases * caseSize),
                 String($row.find('.mealsdb-po-coverage').attr('data-coverage') || ''),
-                $.trim($row.find('td').last().text())
+                String($row.find('td').last().text()).trim()
             ]);
         });
         var slug = String(cfg.poNumber || cfg.poId || 'draft').replace(/[^\w.-]+/g, '-');

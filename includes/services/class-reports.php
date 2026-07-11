@@ -487,7 +487,7 @@ class MealsDB_Reports {
      *
      * NOTE (2026-07-11): no production caller since the forecast-tab preview
      * was removed (one-click draft flow); kept as a tested pure exporter —
-     * the draft detail page builds its CSV client-side via Report.csvCell.
+     * the draft detail page builds its CSV client-side via Report.csvRow/csvCell.
      *
      * @param array $po_rows Rows from generate_purchase_order().
      *
