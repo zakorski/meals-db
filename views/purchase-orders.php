@@ -338,7 +338,7 @@ $rows = $service->query($filters);
 ?>
 <div id="mealsdb-po-list" class="mealsdb-po-list">
     <h2><?php esc_html_e('Purchase Orders', 'meals-db'); ?></h2>
-    <p class="description"><?php esc_html_e('Drafts are created from the Purchase Order forecast tab ("Save as draft PO"). Approve locks a draft; Mark received adds it to inventory; Reconcile records what actually arrived.', 'meals-db'); ?></p>
+    <p class="description"><?php esc_html_e('Drafts are created from the Purchase Order tab ("Generate draft PO") and arrive pallet-optimized. Approve locks a draft; Mark received adds it to inventory; Reconcile records what actually arrived.', 'meals-db'); ?></p>
 
     <div style="margin-bottom:12px;">
         <label><strong><?php esc_html_e('Status:', 'meals-db'); ?></strong></label>
