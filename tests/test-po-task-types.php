@@ -10,6 +10,13 @@
 if (!defined('ABSPATH')) {
     define('ABSPATH', dirname(__DIR__) . '/');
 }
+
+// Pre-defining the class wins over the autoloader — capture degraded events.
+class MealsDB_Event_Log {
+    public static array $records = [];
+    public static function record(array $args): void { self::$records[] = $args; }
+}
+
 require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 
@@ -229,6 +236,13 @@ function audit_has(PoWpdb $w, string $needle): bool {
     foreach ($w->audit as $sql) { if (strpos($sql, $needle) !== false) { return true; } }
     return false;
 }
+function degraded_events(string $event): array {
+    $out = [];
+    foreach (MealsDB_Event_Log::$records as $r) {
+        if (($r['event'] ?? '') === $event && ($r['outcome'] ?? '') === 'degraded') { $out[] = $r; }
+    }
+    return $out;
+}
 /** Two forecast-shaped rows, as generate_purchase_order() emits them. */
 function forecast_rows(): array {
     return [
@@ -381,6 +395,38 @@ $engine->complete_task($tid, ['count_received' => 'no'], 7);
 chk($w->tasks[$tid]['status'], 'deferred', 'R-T3: deferred');
 chk($svc->get_with_payload($po_id)['status'], 'arrived', 'R-T3: PO untouched');
 chk($GLOBALS['wc_stock'][101], 110, 'R-T3: no delta');
+
+// ===========================================================================
+// D-1: degraded paths — no related PO / stale status emit Event_Log rows.
+// ===========================================================================
+$w = fresh();
+MealsDB_Event_Log::$records = [];
+$engine = new MealsDB_Task_Engine($w);
+
+// Confirm task with NO related PO → confirm_no_entity.
+$tid = $engine->create_task([
+    'task_type' => MealsDB_Task_Type_PO_Confirm_Arrival::TYPE_ID,
+    'payload'   => ['po_number' => 'PO-X'],
+]);
+$engine->complete_task($tid, ['arrived' => 'yes'], 7);
+chk(count(degraded_events('po_task.confirm_no_entity')), 1, 'D-1: confirm_no_entity degraded event');
+
+// Confirm task pointing at a DRAFT PO (stale) → stale_confirm.
+$svc = new MealsDB_Purchase_Orders();
+$draft_id = $svc->create_draft(forecast_rows());
+$tid = confirm_task($engine, $draft_id); // PO still planned
+$engine->complete_task($tid, ['arrived' => 'yes'], 7);
+chk(count(degraded_events('po_task.stale_confirm')), 1, 'D-1: stale_confirm degraded event');
+chk($svc->get_with_payload($draft_id)['status'], 'planned', 'D-1: draft PO untouched');
+
+// Reconcile task with no related PO → reconcile_no_entity.
+MealsDB_Event_Log::$records = [];
+$tid = $engine->create_task([
+    'task_type' => MealsDB_Task_Type_PO_Reconcile::TYPE_ID,
+    'payload'   => ['po_number' => 'PO-X', 'rows' => []],
+]);
+$engine->complete_task($tid, ['count_received' => 'yes'], 7);
+chk(count(degraded_events('po_task.reconcile_no_entity')), 1, 'D-1: reconcile_no_entity degraded event');
 
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
