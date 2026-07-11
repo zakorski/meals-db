@@ -78,6 +78,12 @@ class MealsDB_Installer {
         // install — it no-ops when the seed rule already exists.
         self::seed_task_engine();
 
+        // One-time-safe cleanup (2026-07): the legacy PO task chain was
+        // removed; any previously-seeded rule targeting those types would
+        // spawn uncompletable tasks. Idempotent — matches nothing on fresh
+        // installs or after the first pass.
+        self::deactivate_legacy_po_rules();
+
         // U11-schema-2: a failed table/column create must NOT be recorded as
         // "schema up-to-date". Throwing makes mealsdb_maybe_upgrade_schema
         // skip the version bump (and retry next admin_init) and converts
@@ -231,6 +237,34 @@ class MealsDB_Installer {
 
         if ($ledger_changed && function_exists('update_option')) {
             update_option('mealsdb_task_seeds_done', array_values(array_unique($seeds_done)), false);
+        }
+    }
+
+    /**
+     * Deactivate any rule rows that target the three deleted legacy PO task
+     * types (place_po, confirm_po_arrival, physical_count). Those types were
+     * removed in feat/po-task-integration (2026-07); a rule pointing at a
+     * deleted type would keep spawning tasks nobody can complete.
+     *
+     * Idempotent: matches nothing on a fresh install, and skips rows that
+     * are already inactive (is_active = 0). The literal type strings are
+     * correct — the class constants no longer exist.
+     */
+    private static function deactivate_legacy_po_rules(): void {
+        global $wpdb;
+
+        if (!class_exists('MealsDB_DB') || !class_exists('MealsDB_Tables')) {
+            return;
+        }
+
+        $rules_table = MealsDB_DB::get_table_name(MealsDB_Tables::SCHEDULE_RULES);
+        $deactivated = $wpdb->query(
+            "UPDATE `{$rules_table}` SET is_active = 0
+             WHERE task_type IN ('place_po', 'confirm_po_arrival', 'physical_count')
+               AND is_active = 1"
+        );
+        if ($deactivated > 0 && class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('task_rule_deactivated_legacy_po', 0, 'is_active', '1', '0');
         }
     }
 

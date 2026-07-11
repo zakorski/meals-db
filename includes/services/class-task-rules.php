@@ -380,6 +380,26 @@ class MealsDB_Task_Rules {
             return 0;
         }
 
+        // A rule can outlive its task type (e.g. the legacy PO chain deleted
+        // 2026-07): spawning an unregistered type creates tasks nobody can
+        // complete. Skip and surface it — the operator should deactivate or
+        // retarget the rule.
+        if (class_exists('MealsDB_Task_Registry') && MealsDB_Task_Registry::get($task_type) === null) {
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'warning',
+                    'category'  => 'task',
+                    'subsystem' => 'task_rules',
+                    'event'     => 'rule.unregistered_type',
+                    'outcome'   => 'degraded',
+                    'message'   => sprintf('Rule %d ("%s") targets unregistered task type "%s"; spawn skipped.',
+                        (int) ($rule['rule_id'] ?? 0), (string) ($rule['name'] ?? ''), $task_type),
+                    'context'   => ['rule_id' => (int) ($rule['rule_id'] ?? 0)],
+                ]);
+            }
+            return 0;
+        }
+
         $template = is_array($rule['payload_template']) ? $rule['payload_template'] : [];
         $tags     = is_array($rule['tags'] ?? null) ? $rule['tags'] : null;
         $role     = $rule['assignee_role'] !== null ? (string) $rule['assignee_role'] : null;
