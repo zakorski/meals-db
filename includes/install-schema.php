@@ -78,6 +78,12 @@ class MealsDB_Installer {
         // install — it no-ops when the seed rule already exists.
         self::seed_task_engine();
 
+        // One-time-safe cleanup (2026-07): the legacy PO task chain was
+        // removed; any previously-seeded rule targeting those types would
+        // spawn uncompletable tasks. Idempotent — matches nothing on fresh
+        // installs or after the first pass.
+        self::deactivate_legacy_po_rules();
+
         // U11-schema-2: a failed table/column create must NOT be recorded as
         // "schema up-to-date". Throwing makes mealsdb_maybe_upgrade_schema
         // skip the version bump (and retry next admin_init) and converts
@@ -184,24 +190,13 @@ class MealsDB_Installer {
             ];
         }
 
-        if (class_exists('MealsDB_Task_Type_Place_PO')) {
-            $seeds[] = [
-                'name'             => 'Appetito Purchase Order',
-                'task_type'        => MealsDB_Task_Type_Place_PO::TYPE_ID,
-                'spawn_type'       => MealsDB_Task_Rules::SPAWN_FIXED,
-                'recurrence'       => [
-                    'type'        => 'monthly_weekday',
-                    'interval'    => 1,
-                    'nth'         => 4,
-                    'day_of_week' => 'tuesday',
-                    'time'        => '08:00',
-                ],
-                'payload_template' => ['supplier' => 'Appetito'],
-                'assignee_role'    => 'admin',
-                'tags'             => ['appetito_po'],
-                'is_active'        => 1,
-            ];
-        }
+        // The 'Appetito Purchase Order' seed rule (place_po task type) was removed
+        // with the legacy PO task chain in feat/po-task-integration. The new
+        // workflow-native bridge (MealsDB_PO_Task_Bridge) spawns po_confirm_arrival
+        // and po_reconcile tasks automatically from lifecycle hooks — no seed rule
+        // is needed for those. Any existing 'Appetito Purchase Order' rule rows
+        // in production are orphaned (task type deleted) and can be purged via the
+        // Task Rules admin page.
 
         // U11-schema-10: seed each rule at most ONCE per install, tracked by name
         // in a persisted ledger. install() runs on every version bump, so the old
@@ -242,6 +237,34 @@ class MealsDB_Installer {
 
         if ($ledger_changed && function_exists('update_option')) {
             update_option('mealsdb_task_seeds_done', array_values(array_unique($seeds_done)), false);
+        }
+    }
+
+    /**
+     * Deactivate any rule rows that target the three deleted legacy PO task
+     * types (place_po, confirm_po_arrival, physical_count). Those types were
+     * removed in feat/po-task-integration (2026-07); a rule pointing at a
+     * deleted type would keep spawning tasks nobody can complete.
+     *
+     * Idempotent: matches nothing on a fresh install, and skips rows that
+     * are already inactive (is_active = 0). The literal type strings are
+     * correct — the class constants no longer exist.
+     */
+    private static function deactivate_legacy_po_rules(): void {
+        global $wpdb;
+
+        if (!class_exists('MealsDB_DB') || !class_exists('MealsDB_Tables')) {
+            return;
+        }
+
+        $rules_table = MealsDB_DB::get_table_name(MealsDB_Tables::SCHEDULE_RULES);
+        $deactivated = $wpdb->query(
+            "UPDATE `{$rules_table}` SET is_active = 0
+             WHERE task_type IN ('place_po', 'confirm_po_arrival', 'physical_count')
+               AND is_active = 1"
+        );
+        if ($deactivated > 0 && class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('task_rule_deactivated_legacy_po', 0, 'is_active', '1', '0');
         }
     }
 

@@ -246,6 +246,40 @@ assert_equals($p1['description'], 'new', 'completed task payload not touched by 
 $p2 = json_decode((string) $fake->tasks[2]['payload'], true);
 assert_equals($p2['description'], 'even newer', 'pending task payload updated');
 
+// ---- unregistered task type guard ----
+// Simulates a rule whose task_type was deleted (e.g. the legacy PO chain
+// removed in 2026-07). spawn_from_rule must return 0 and create no tasks.
+$fake_unreg = new SpawnFakeWpdb();
+$GLOBALS['wpdb'] = $fake_unreg;
+MealsDB_Task_Registry::reset();
+// Register only 'reminder' — 'deleted_po_type' is intentionally absent.
+MealsDB_Task_Registry::register('reminder', ['label' => 'Reminder', 'form_schema' => []]);
+
+$rules_unreg = new MealsDB_Task_Rules($fake_unreg);
+
+$orphan_rule = [
+    'rule_id'          => 99,
+    'name'             => 'Appetito Purchase Order',
+    'task_type'        => 'deleted_po_type',
+    'spawn_type'       => MealsDB_Task_Rules::SPAWN_FIXED,
+    'payload_template' => [],
+    'tags'             => null,
+    'assignee_role'    => null,
+    'next_run_at'      => gmdate('Y-m-d H:i:s'),
+    'recurrence'       => ['type' => 'monthly_day', 'interval' => 1, 'day' => 1, 'time' => '07:00'],
+    'query_criteria'   => null,
+];
+$created_unreg = $rules_unreg->spawn_from_rule($orphan_rule);
+assert_equals($created_unreg, 0, 'unregistered task type spawns 0 tasks');
+assert_equals(count($fake_unreg->tasks), 0, 'no task rows created for unregistered type');
+
+// When the type IS registered, the same rule should spawn 1 task (guard
+// is only the registry check, not a type-agnostic block).
+MealsDB_Task_Registry::register('deleted_po_type', ['label' => 'PO (test)', 'form_schema' => []]);
+$created_now_reg = $rules_unreg->spawn_from_rule($orphan_rule);
+assert_equals($created_now_reg, 1, 'registered task type spawns 1 task');
+assert_equals(count($fake_unreg->tasks), 1, 'exactly 1 task row after registering type');
+
 echo "Ran " . ($passed + count($failures)) . " checks: $passed passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }
 exit(empty($failures) ? 0 : 1);

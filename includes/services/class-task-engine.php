@@ -344,7 +344,7 @@ class MealsDB_Task_Engine {
      * count, and set status='deferred'.
      *
      * `$allow_from_terminal=true` lets an on_complete callback reverse its
-     * own terminal transition: e.g. confirm_po_arrival deciding post-hoc
+     * own terminal transition: e.g. po_confirm_arrival deciding post-hoc
      * that an arrived='no' answer should have been a defer. Keep the door
      * narrow — outside that one pattern, defer should refuse terminal tasks.
      */

@@ -5,8 +5,9 @@
  * Lifecycle (status ENUM value → operator label):
  *   planned=Draft → placed=Approved → arrived=Received → reconciled,
  *   with cancelled available from Draft. Legacy task-created POs
- *   (payload IS NULL) render read-only; their lifecycle stays with the
- *   task chain (place_po → confirm_po_arrival → physical_count).
+ *   (payload IS NULL) render read-only; the deleted legacy task chain
+ *   (place_po / confirm_po_arrival / physical_count) no longer exists —
+ *   legacy POs are display-only and their lifecycle is considered closed.
  *
  * Interactivity lives in assets/js/purchase-orders.js, fed by the JSON
  * island #mealsdb-po-admin-data (no inline script blocks).
@@ -37,6 +38,7 @@ $mealsdb_po_render_island = static function (array $extra = []) use ($base_url):
             'confirmReceive'   => __('Mark this purchase order as received? Ordered quantities will be ADDED to inventory.', 'meals-db'),
             'confirmCancel'    => __('Cancel this draft purchase order?', 'meals-db'),
             'confirmComplete'  => __('Complete reconciliation? Stock will be corrected for every adjusted row and the purchase order will be locked.', 'meals-db'),
+            'promptExpectedArrival' => __('Expected arrival date (YYYY-MM-DD) — OK approves:', 'meals-db'),
             'promptUnapprove'  => __('Enter a reason for un-approving (required — it is audited):', 'meals-db'),
             'reasonRequired'   => __('A reason is required.', 'meals-db'),
             'noteRequired'     => __('A note is required for adjusted rows.', 'meals-db'),
@@ -139,6 +141,9 @@ if ($po_id > 0) {
         <?php if ($is_workflow): ?>
             <p class="mealsdb-po-detail-actions">
                 <?php if ($status === MealsDB_Purchase_Orders::STATUS_PLANNED): ?>
+                    <label for="mealsdb-po-expected-arrival"><?php esc_html_e('Expected arrival:', 'meals-db'); ?></label>
+                    <input type="date" id="mealsdb-po-expected-arrival"
+                        value="<?php echo esc_attr(gmdate('Y-m-d', strtotime('+7 days'))); ?>" />
                     <button type="button" class="button button-primary mealsdb-po-action" data-po-action="approve" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Approve', 'meals-db'); ?></button>
                     <button type="button" class="button mealsdb-po-action" data-po-action="cancel" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Cancel draft', 'meals-db'); ?></button>
                 <?php elseif ($status === MealsDB_Purchase_Orders::STATUS_PLACED): ?>

@@ -118,10 +118,9 @@ add_action('plugins_loaded', function () {
     // Task engine (Phase R1 + R2).
     MealsDB_Task_Type_Generic_Reminder::register();
     MealsDB_Task_Type_Call_Client::register();
-    MealsDB_Task_Type_Place_PO::register();
-    MealsDB_Task_Type_Confirm_PO_Arrival::register();
-    MealsDB_Task_Type_Physical_Count::register();
     MealsDB_Task_Type_Client_Delivery::register();
+    MealsDB_Task_Type_PO_Confirm_Arrival::register();
+    MealsDB_Task_Type_PO_Reconcile::register();
 
     MealsDB_Task_Rules::register_strategy(
         'clients_due_to_reorder',
@@ -135,6 +134,7 @@ add_action('plugins_loaded', function () {
 
     MealsDB_Ajax_Tasks::init();
     MealsDB_Task_Cron::init();
+    MealsDB_PO_Task_Bridge::init();
 
     // Phase W — cron monitoring & hook observability.
     // Daily report runs at 04:00 (effective ~04:15 with cPanel cron's

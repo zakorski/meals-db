@@ -45,7 +45,16 @@ $form_schema = is_array($definition['form_schema'] ?? null) ? $definition['form_
                 <td><?php echo esc_html((string) $task['assignee_role']); ?></td></tr>
             <?php if (!empty($task['related_entity_type'])): ?>
                 <tr><th><?php esc_html_e('Related', 'meals-db'); ?></th>
-                    <td><?php echo esc_html(sprintf('%s #%d', $task['related_entity_type'], (int) $task['related_entity_id'])); ?></td></tr>
+                    <td><?php
+                    $mealsdb_rel_label = sprintf('%s #%d', $task['related_entity_type'], (int) $task['related_entity_id']);
+                    if ($task['related_entity_type'] === 'po' && (int) $task['related_entity_id'] > 0) {
+                        // Deep link to the PO workflow page (task-integration §6).
+                        $mealsdb_po_url = admin_url('admin.php?page=mealsdb&tab=po_admin&po_id=' . (int) $task['related_entity_id']);
+                        echo '<a href="' . esc_url($mealsdb_po_url) . '">' . esc_html($mealsdb_rel_label) . '</a>';
+                    } else {
+                        echo esc_html($mealsdb_rel_label);
+                    }
+                    ?></td></tr>
             <?php endif; ?>
             <?php if ((int) $task['deferral_count'] > 0): ?>
                 <tr><th><?php esc_html_e('Deferral count', 'meals-db'); ?></th>

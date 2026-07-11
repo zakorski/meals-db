@@ -25,6 +25,13 @@ if (!function_exists('is_user_logged_in')) { function is_user_logged_in() { retu
 if (!function_exists('current_time')) { function current_time($fmt) { return gmdate('Y-m-d H:i:s'); } }
 if (!function_exists('get_option')) { function get_option($k, $d = '') { return $d; } }
 if (!function_exists('sanitize_text_field')) { function sanitize_text_field($s) { return trim(preg_replace('/[\r\n\t]+/', ' ', strip_tags((string) $s))); } }
+if (!function_exists('do_action')) {
+    function do_action(string $hook, ...$args) { $GLOBALS['fired_actions'][] = ['hook' => $hook, 'args' => $args]; }
+}
+if (!function_exists('add_action')) {
+    function add_action(string $hook, $cb, int $prio = 10, int $accepted = 1) { $GLOBALS['wp_actions'][$hook][] = $cb; }
+}
+$GLOBALS['fired_actions'] = [];
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
 if (!defined('OBJECT')) { define('OBJECT', 'OBJECT'); }
 
@@ -415,6 +422,59 @@ chk_true(audit_has($w, 'po_received'), 'T-10: po_received audited');
 // Second click: guard loses, NO second bump.
 chk($svc->mark_received($id)->get_error_code(), 'locked', 'T-10: double receive rejected');
 chk($GLOBALS['wc_stock'][101], 110, 'T-10: no double bump');
+
+// ===========================================================================
+// T-11: lifecycle hooks + expected_arrival / arrival_date params.
+// ===========================================================================
+$w = fresh();
+$GLOBALS['fired_actions'] = [];
+$GLOBALS['wc_stock'] = [101 => 50, 102 => 20];
+$svc = new MealsDB_Purchase_Orders();
+$id = $svc->create_draft(forecast_rows());
+
+function fired(string $hook): array {
+    $out = [];
+    foreach ($GLOBALS['fired_actions'] as $f) { if ($f['hook'] === $hook) { $out[] = $f; } }
+    return $out;
+}
+
+// approve with an expected arrival: stored + passed to the hook.
+chk($svc->approve($id, '2026-07-24'), true, 'T-11: approve accepts expected_arrival');
+$po = $svc->get_with_payload($id);
+chk($po['expected_arrival'], '2026-07-24', 'T-11: expected_arrival stored');
+$f = fired('mealsdb_po_approved');
+chk(count($f), 1, 'T-11: mealsdb_po_approved fired once');
+chk($f[0]['args'], [$id, '2026-07-24'], 'T-11: hook args = po_id + expected_arrival');
+
+// unapprove: clears expected_arrival, fires hook with reason.
+$svc->unapprove($id, 'window moved');
+$po = $svc->get_with_payload($id);
+chk($po['expected_arrival'], null, 'T-11: expected_arrival cleared on unapprove');
+$f = fired('mealsdb_po_unapproved');
+chk($f[0]['args'], [$id, 'window moved'], 'T-11: unapproved hook args');
+
+// malformed expected_arrival → stored as null, hook gets null.
+chk($svc->approve($id, 'not-a-date'), true, 'T-11: approve tolerates malformed date');
+chk($svc->get_with_payload($id)['expected_arrival'], null, 'T-11: malformed date stored as null');
+$f = fired('mealsdb_po_approved');
+chk($f[1]['args'], [$id, null], 'T-11: hook gets null for malformed date');
+
+// mark_received with an explicit arrival date.
+chk($svc->mark_received($id, '2026-07-22'), true, 'T-11: mark_received accepts arrival_date');
+$po = $svc->get_with_payload($id);
+chk($po['arrival_date'], '2026-07-22', 'T-11: explicit arrival_date stored');
+chk(count(fired('mealsdb_po_received')), 1, 'T-11: mealsdb_po_received fired');
+chk(fired('mealsdb_po_received')[0]['args'], [$id], 'T-11: received hook args');
+
+// complete_reconcile fires its hook.
+$svc->edit_reconcile_row($id, 'CD-001', 10, ''); // unchanged count, no note needed
+chk($svc->complete_reconcile($id), true, 'T-11: reconcile completes');
+chk(count(fired('mealsdb_po_reconciled')), 1, 'T-11: mealsdb_po_reconciled fired');
+
+// Hooks do NOT fire on refused transitions.
+$before = count($GLOBALS['fired_actions']);
+$svc->approve($id); // locked — already reconciled
+chk(count($GLOBALS['fired_actions']), $before, 'T-11: no hook on refused transition');
 
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";

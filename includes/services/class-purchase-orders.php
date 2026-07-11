@@ -54,11 +54,12 @@ class MealsDB_Purchase_Orders {
      * state.
      *
      * HISTORY: A `STATUS_COUNTED` constant was previously declared
-     * but never set anywhere. The physical_count task handler does
-     * both the count and the reconcile in one operation, so the
-     * intermediate state had no place in the workflow. Removed for
-     * clarity. The schema ENUM in class-schema.php still tolerates
-     * 'counted' for now — a dev-side `SELECT COUNT(*) ... WHERE
+     * but never set anywhere. The legacy physical_count task type (now
+     * deleted — feat/po-task-integration) handled both counting and
+     * reconciliation in one step, so the intermediate state had no
+     * place in the workflow. Removed for clarity. The schema ENUM in
+     * class-schema.php still tolerates 'counted' for now — a dev-side
+     * `SELECT COUNT(*) ... WHERE
      * status='counted'` check is required before tightening the
      * ENUM, since any orphan row would fail the new constraint.
      */
@@ -513,7 +514,7 @@ class MealsDB_Purchase_Orders {
      *
      * @return true|WP_Error
      */
-    public function approve(int $po_id) {
+    public function approve(int $po_id, ?string $expected_arrival = null) {
         if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
             return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
         }
@@ -522,6 +523,11 @@ class MealsDB_Purchase_Orders {
         if (is_wp_error($po)) {
             return $po;
         }
+
+        // Task-integration: an optional expected-arrival date (captured in the
+        // approve dialog) rides the same guarded transition and becomes the
+        // confirm-arrival task's due date. Malformed → null (bridge falls back).
+        $expected_arrival = self::normalize_date($expected_arrival);
 
         $items = [];
         foreach ($po['payload']['current'] as $row) {
@@ -550,16 +556,20 @@ class MealsDB_Purchase_Orders {
         }
 
         $ok = $this->transition($po_id, self::STATUS_PLANNED, self::STATUS_PLACED, [
-            'approved_by' => get_current_user_id() ?: null,
-            'approved_at' => gmdate('Y-m-d H:i:s'),
-            'placed_date' => gmdate('Y-m-d'),
-            'items'       => $encoded_items,
+            'approved_by'      => get_current_user_id() ?: null,
+            'approved_at'      => gmdate('Y-m-d H:i:s'),
+            'placed_date'      => gmdate('Y-m-d'),
+            'items'            => $encoded_items,
+            'expected_arrival' => $expected_arrival,
         ]);
         if (!$ok) {
             return new WP_Error('race', __('Could not approve (a concurrent change happened) — reload.', 'meals-db'));
         }
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_approved', $po_id, 'status', self::STATUS_PLANNED, self::STATUS_PLACED);
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_approved', $po_id, $expected_arrival);
         }
         return true;
     }
@@ -587,9 +597,10 @@ class MealsDB_Purchase_Orders {
 
         // items is left as-written; the next approve overwrites it.
         $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_PLANNED, [
-            'approved_by' => null,
-            'approved_at' => null,
-            'placed_date' => null,
+            'approved_by'      => null,
+            'approved_at'      => null,
+            'placed_date'      => null,
+            'expected_arrival' => null,
         ]);
         if (!$ok) {
             return new WP_Error('race', __('Could not un-approve (a concurrent change happened) — reload.', 'meals-db'));
@@ -597,6 +608,9 @@ class MealsDB_Purchase_Orders {
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_unapproved', $po_id, 'reason', null,
                 substr($reason, 0, self::MAX_NOTE_LEN));
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_unapproved', $po_id, $reason);
         }
         return true;
     }
@@ -629,13 +643,12 @@ class MealsDB_Purchase_Orders {
     /**
      * Approved → Received. The guarded transition runs FIRST so a double-click
      * can't apply the inventory bump twice (the loser's UPDATE matches 0
-     * rows and returns before any stock write). The bump itself delegates to
-     * the existing task-type static — one inventory-bump implementation in the
-     * plugin, and calling it does not create or touch any task.
+     * rows and returns before any stock write). The bump itself is this class's
+     * own `apply_inventory_bump` (one inventory-bump implementation in the plugin).
      *
      * @return true|WP_Error
      */
-    public function mark_received(int $po_id) {
+    public function mark_received(int $po_id, ?string $arrival_date = null) {
         if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
             return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
         }
@@ -645,20 +658,25 @@ class MealsDB_Purchase_Orders {
             return $po;
         }
 
+        // A task completed after the fact may carry the TRUE arrival date;
+        // the PO page passes null and gets today (UTC), as before.
+        $arrival_date = self::normalize_date($arrival_date) ?? gmdate('Y-m-d');
+
         $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_ARRIVED, [
             'received_by'  => get_current_user_id() ?: null,
             'received_at'  => gmdate('Y-m-d H:i:s'),
-            'arrival_date' => gmdate('Y-m-d'),
+            'arrival_date' => $arrival_date,
         ]);
         if (!$ok) {
             return new WP_Error('race', __('Could not mark received (a concurrent change happened) — reload.', 'meals-db'));
         }
 
-        if (class_exists('MealsDB_Task_Type_Confirm_PO_Arrival')) {
-            MealsDB_Task_Type_Confirm_PO_Arrival::apply_inventory_bump((array) $po['items']);
-        }
+        self::apply_inventory_bump((array) $po['items']);
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_received', $po_id, 'status', self::STATUS_PLACED, self::STATUS_ARRIVED);
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_received', $po_id);
         }
         return true;
     }
@@ -800,15 +818,18 @@ class MealsDB_Purchase_Orders {
             return new WP_Error('race', __('Could not complete (a concurrent change happened) — reload.', 'meals-db'));
         }
 
-        if (!empty($adjustments) && class_exists('MealsDB_Task_Type_Physical_Count')) {
-            // Best-effort, void, per-SKU (matches the legacy physical_count task
-            // path): a mid-loop failure leaves this PO reconciled with the
-            // applied SKUs audited as inventory_discrepancy rows — recovery is
-            // diffing those rows against the payload and correcting WC stock.
-            MealsDB_Task_Type_Physical_Count::apply_adjustments($po_id, $adjustments);
+        if (!empty($adjustments)) {
+            // Best-effort, void, per-SKU: a mid-loop failure leaves this PO
+            // reconciled with the applied SKUs audited as inventory_discrepancy
+            // rows — recovery is diffing those rows against the payload and
+            // correcting WC stock.
+            self::apply_adjustments($po_id, $adjustments);
         }
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_reconciled', $po_id, 'status', self::STATUS_ARRIVED, self::STATUS_RECONCILED);
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_reconciled', $po_id);
         }
         return true;
     }
@@ -892,5 +913,142 @@ class MealsDB_Purchase_Orders {
             ['po_id' => $po_id, 'status' => $from]
         );
         return $result === 1;
+    }
+
+    // -----------------------------------------------------------------
+    // Inventory side-effects (moved here from the deleted legacy PO task
+    // types — spec 2026-07-10 task-integration §4. Behavior and audit
+    // actions are unchanged; these are the ONLY stock-write paths for POs.)
+    // -----------------------------------------------------------------
+
+    /**
+     * Bump WC stock for each item by quantity_ordered (UNITS). Silently
+     * skips items with unknown SKUs, logging each miss.
+     *
+     * @param array<int, array<string, mixed>> $items
+     */
+    public static function apply_inventory_bump(array $items): void {
+        if (!function_exists('wc_get_product_id_by_sku') || !function_exists('wc_get_product') || !function_exists('wc_update_product_stock')) {
+            error_log('[MealsDB Purchase Orders] WooCommerce not available; skipping inventory bump.');
+            return;
+        }
+
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $sku = isset($item['sku']) ? (string) $item['sku'] : '';
+            $qty = isset($item['quantity_ordered']) ? (int) $item['quantity_ordered'] : 0;
+            if ($sku === '' || $qty === 0) {
+                continue;
+            }
+
+            $product_id = wc_get_product_id_by_sku($sku);
+            if (!$product_id) {
+                error_log(sprintf('[MealsDB Purchase Orders] Unknown SKU "%s"; skipping bump.', $sku));
+                continue;
+            }
+            $product = wc_get_product($product_id);
+            if (!$product) {
+                continue;
+            }
+            $current = (int) $product->get_stock_quantity();
+            // Atomic DB-level increment (SQL `stock = stock + qty`) instead of a
+            // read-modify-write set/save, which clobbers a concurrent stock
+            // change (e.g. an order placed between our read and our write).
+            $new_stock = wc_update_product_stock($product, $qty, 'increase');
+            if ($new_stock === null) {
+                // Product does not manage stock — nothing changed; skip the
+                // audit line rather than log a bogus old->new pair.
+                continue;
+            }
+            $new_total = (int) $new_stock;
+
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::log(
+                    'po_inventory_bump',
+                    (int) $product_id,
+                    'stock_quantity',
+                    (string) $current,
+                    (string) $new_total,
+                    'mealsdb'
+                );
+            }
+        }
+    }
+
+    /**
+     * Apply per-SKU count deltas to WC stock. Ordered quantities were added
+     * at receive time; this only adjusts the ordered-vs-actual delta.
+     *
+     * Ordered quantities (and the valid SKU set) are sourced from the STORED
+     * PO, never the caller — a tampered adjustment row cannot apply an
+     * arbitrary delta. Only actual_count is taken from the caller.
+     *
+     * @param array<int, array<string, mixed>> $adjustments each {sku, actual_count (UNITS), reason, reason_notes}
+     */
+    public static function apply_adjustments(int $po_id, array $adjustments): void {
+        if (!function_exists('wc_get_product_id_by_sku') || !function_exists('wc_get_product')) {
+            error_log('[MealsDB Purchase Orders] WooCommerce not available; skipping stock adjustments.');
+            return;
+        }
+
+        $ordered_by_sku = [];
+        $po = (new MealsDB_Purchase_Orders())->get($po_id);
+        foreach ((array) ($po['items'] ?? []) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $isku = isset($item['sku']) ? (string) $item['sku'] : '';
+            if ($isku !== '') {
+                $ordered_by_sku[$isku] = isset($item['quantity_ordered']) ? (int) $item['quantity_ordered'] : 0;
+            }
+        }
+
+        foreach ($adjustments as $adj) {
+            if (!is_array($adj)) {
+                continue;
+            }
+            $sku = isset($adj['sku']) ? (string) $adj['sku'] : '';
+            // Reject any SKU not actually on this PO — never trust a caller-only sku.
+            if ($sku === '' || !array_key_exists($sku, $ordered_by_sku)) {
+                continue;
+            }
+            $ordered = $ordered_by_sku[$sku]; // server-sourced
+            $actual  = isset($adj['actual_count']) ? (int) $adj['actual_count'] : $ordered;
+            $diff    = $actual - $ordered;
+
+            if ($diff === 0) {
+                continue;
+            }
+
+            $product_id = wc_get_product_id_by_sku($sku);
+            if (!$product_id) {
+                error_log(sprintf('[MealsDB Purchase Orders] Unknown SKU "%s"; skipping adjustment.', $sku));
+                continue;
+            }
+            $product = wc_get_product($product_id);
+            if (!$product) {
+                continue;
+            }
+            $current = (int) $product->get_stock_quantity();
+            $new_total = $current + $diff;
+            $product->set_stock_quantity($new_total);
+            $product->save();
+
+            if (class_exists('MealsDB_Logger')) {
+                $reason = isset($adj['reason']) ? (string) $adj['reason'] : '';
+                $notes  = isset($adj['reason_notes']) ? (string) $adj['reason_notes'] : '';
+                MealsDB_Logger::log(
+                    'inventory_discrepancy',
+                    (int) $product_id,
+                    'stock_quantity',
+                    (string) $current,
+                    (string) $new_total,
+                    sprintf('mealsdb:po=%d:sku=%s:ordered=%d:actual=%d:reason=%s:notes=%s',
+                        $po_id, $sku, $ordered, $actual, $reason, $notes)
+                );
+            }
+        }
     }
 }

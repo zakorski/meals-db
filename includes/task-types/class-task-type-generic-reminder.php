@@ -3,7 +3,7 @@
  * Generic reminder task type — proof-of-concept for the task engine.
  *
  * Exists purely to validate the whole task/rule/cron chain end-to-end.
- * Real workflows (call_client, place_po, confirm_po_arrival, etc.) ship in
+ * Real workflows (call_client, po_confirm_arrival, po_reconcile, etc.) ship in
  * Phase R2 on top of this foundation.
  *
  * @package MealsDB
