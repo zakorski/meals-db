@@ -185,7 +185,6 @@ class MealsDB_Zone_Day {
         // (first/last name are not in ENCRYPTED_CLIENT_COLUMNS); the EVENT
         // context carries ids only (PII-lean by construction).
         $placeholders = implode(',', array_fill(0, count($schedule), '%s'));
-        $output_type = defined('ARRAY_A') ? ARRAY_A : 'ARRAY_A';
         $orphans = $wpdb->get_results($wpdb->prepare(
             "SELECT client_id, first_name, last_name, delivery_area_name
              FROM `{$table}`
@@ -194,7 +193,7 @@ class MealsDB_Zone_Day {
                     OR delivery_area_name NOT IN ({$placeholders}))
              ORDER BY delivery_area_name, last_name",
             ...array_keys($schedule)
-        ), $output_type);
+        ), ARRAY_A);
         $orphans = is_array($orphans) ? $orphans : [];
 
         // One UPDATE per zone: only rows whose cached day is wrong.

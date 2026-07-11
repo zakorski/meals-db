@@ -19,6 +19,7 @@ if (!function_exists('get_option')) {
     }
 }
 if (!function_exists('__')) { function __(string $t, string $d = 'default') { return $t; } }
+if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
 
 $failures = []; $passed = 0;
 function zd_check(string $label, $actual, $expected): void {
