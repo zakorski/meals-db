@@ -34,22 +34,43 @@
         });
     });
 
-    // Backfill delivery_day
-    $('#mealsdb-backfill-delivery-day').on('click', function () {
-        var $btn    = $(this);
-        var $result = $('#mealsdb-backfill-result');
-        $btn.prop('disabled', true);
-        $result.text('Running...'); tint($result, '#666');
-
+    // Resync delivery days from zones (replaced the retired Data-Ops
+    // blank-fill button, 2026-07-11).
+    $('#mealsdb-resync-delivery-days').on('click', function () {
+        var $btn = $(this).prop('disabled', true);
+        var $result = $('#mealsdb-resync-result');
+        var $orphans = $('#mealsdb-resync-orphans').hide().empty();
+        $result.text('Running…'); tint($result, '#666');
         $.post(ajaxUrl, {
-            action: 'mealsdb_backfill_delivery_day',
-            nonce: nonces.general || ''
-        }, function (resp) {
+            action: 'mealsdb_resync_delivery_days',
+            nonce: nonces.settings || ''
+        }, function (res) {
             $btn.prop('disabled', false);
-            if (resp && resp.success) {
-                $result.text(resp.message || 'Done.'); tint($result, '#46b450');
-            } else {
-                $result.text((resp && resp.message) || 'Failed.'); tint($result, '#dc3232');
+            if (!res || !res.success) {
+                $result.text((res && res.data && res.data.message) || 'Request failed.');
+                tint($result, '#dc3232');
+                return;
+            }
+            var d = res.data || {};
+            var orphans = d.orphans || [];
+            $result.text(
+                d.updated + ' client(s) updated, ' +
+                (d.already_correct != null ? d.already_correct + ' already correct, ' : '') +
+                orphans.length + ' orphan(s).'
+            );
+            tint($result, orphans.length > 0 ? '#dba617' : '#46b450');
+            if (orphans.length) {
+                var $list = $('<ul style="margin:4px 0 0 16px; list-style:disc;"></ul>');
+                $.each(orphans, function (_, o) {
+                    // .text() per item — orphan names/zones are data, not HTML.
+                    $('<li></li>').text(
+                        '#' + o.client_id + ' ' + (o.first_name || '') + ' ' + (o.last_name || '')
+                        + ' — zone: ' + (o.delivery_area_name || '(blank)')
+                    ).appendTo($list);
+                });
+                $orphans.show()
+                    .append($('<strong></strong>').text('Orphaned clients (fix their zone on the client form):'))
+                    .append($list);
             }
         }).fail(function () {
             $btn.prop('disabled', false);

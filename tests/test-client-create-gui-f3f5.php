@@ -35,6 +35,12 @@ if (!defined('MEALS_DB_KEY')) {
     define('MEALS_DB_KEY', 'base64:' . base64_encode(str_repeat('k', 32)));
 }
 
+// Zone schedule stub: delivery_day is zone-derived (spec 2026-07-11).
+// The test uses Zone 1, which maps to Wednesday.
+$GLOBALS['mealsdb_zone_schedule'] = [
+    'Zone 1' => ['day' => 'Wednesday', 'label' => 'Wednesday morning'],
+];
+
 require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 
@@ -45,6 +51,14 @@ if (!function_exists('is_user_logged_in'))   { function is_user_logged_in() { re
 if (!function_exists('current_user_can'))    { function current_user_can($c) { return true; } }
 if (!function_exists('get_current_user_id')) { function get_current_user_id() { return 1; } }
 if (!function_exists('sanitize_email'))      { function sanitize_email($v) { return trim((string) $v); } }
+if (!function_exists('get_option')) {
+    function get_option($key, $default = false) {
+        if ($key === 'mealsdb_zone_delivery_schedule') {
+            return $GLOBALS['mealsdb_zone_schedule'] ?? $default;
+        }
+        return $default;
+    }
+}
 if (!function_exists('sanitize_text_field')) {
     function sanitize_text_field($v) {
         $v = (string) $v;
@@ -141,7 +155,7 @@ function valid_private_payload(array $overrides = []): array {
         'address_city'        => 'Moncton',
         'address_province'    => 'NB',
         'address_postal'      => 'E1E1E1',
-        'delivery_day'        => 'WED AM',
+        'delivery_area_name'  => 'Zone 1',
         'payment_method'      => 'Cheque',
         'delivery_initials'   => 'ACL',
         'client_email'        => 'alex@example.com',

@@ -171,29 +171,22 @@ class MealsDB_Derived_Value_Check {
     }
 
     /**
-     * Expected delivery_day: the day the zone delivery schedule assigns to the
-     * client's delivery_area_name. Mirrors the blank-fill backfill
-     * (MealsDB_Migration_Consolidated::run_phase_delivery_day), which keys the
-     * `mealsdb_zone_delivery_schedule` option by delivery_area_name and reads
-     * config['day']. Lower-cased to match the stored-value comparison.
+     * Expected delivery_day: the day the zone delivery schedule assigns to
+     * the client's delivery_area_name — via MealsDB_Zone_Day, the single
+     * zone→day implementation shared with the form save, the settings-save
+     * propagation, and the resync (spec 2026-07-11).
      *
-     * Returns null (skip) when there is no schedule, the area is blank, the
-     * area isn't in the schedule, or its config has no day — none of those are
-     * drift.
+     * Returns null (skip) when the zone cannot be resolved — the resync's
+     * orphan report and its degraded event own that failure mode; the
+     * nightly checker only measures drift on resolvable zones.
      */
     private static function expected_delivery_day(array $client): ?string {
-        $area = self::trimmed($client['delivery_area_name'] ?? null);
-        if ($area === '') {
+        if (!class_exists('MealsDB_Zone_Day')) {
             return null;
         }
-        $schedule = function_exists('get_option')
-            ? get_option('mealsdb_zone_delivery_schedule', [])
-            : [];
-        if (!is_array($schedule) || empty($schedule[$area]) || !is_array($schedule[$area])) {
-            return null;
-        }
-        $day = isset($schedule[$area]['day']) ? trim((string) $schedule[$area]['day']) : '';
-        return $day === '' ? null : strtolower($day);
+        return MealsDB_Zone_Day::day_for_zone(
+            self::nullable($client['delivery_area_name'] ?? null)
+        );
     }
 
     /** Coerce a possibly-null value to a trimmed string. */

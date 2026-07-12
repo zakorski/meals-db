@@ -217,6 +217,20 @@ function fresh_wpdb(): ClientFormWpdb {
     return $wpdb;
 }
 
+// get_option stub: delivery zone schedule used by MealsDB_Zone_Day.
+// validate() / save() derive delivery_day from the zone — WED AM vocabulary deleted.
+if (!function_exists('get_option')) {
+    function get_option($key, $default = false) {
+        if ($key === 'mealsdb_zone_delivery_schedule') {
+            return $GLOBALS['zd_schedule'] ?? $default;
+        }
+        return $default;
+    }
+}
+$GLOBALS['zd_schedule'] = [
+    'Zone 1' => ['day' => 'Wednesday', 'label' => 'Moncton Downtown'],
+];
+
 function valid_private_payload(array $overrides = []): array {
     return array_merge([
         'client_type'         => 'Private',
@@ -227,7 +241,11 @@ function valid_private_payload(array $overrides = []): array {
         'address_city'        => 'Moncton',
         'address_province'    => 'NB',
         'address_postal'      => 'E1E1E1',
-        'delivery_day'        => 'WED AM',
+        // delivery_day is zone-derived (spec 2026-07-11): NOT in the required
+        // field list and not accepted from POST (apply_zone_delivery_day()
+        // unsets any posted value and derives it from delivery_area_name →
+        // Zone 1 → 'wednesday').  No key needed here.
+        'delivery_area_name'  => 'Zone 1',
         'payment_method'      => 'Cheque',
         'delivery_initials'   => 'ACL',
         'client_email'        => 'alex@example.com',

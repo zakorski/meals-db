@@ -161,7 +161,10 @@ if ( $has_enc_key ) {
             </thead>
             <tbody>
                 <?php
-                $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                // Weekend deliveries don't exist operationally; keeping the
+                // list tight prevents a misclick from parking a whole zone on
+                // a day no driver runs (spec 2026-07-11).
+                $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
                 foreach ( $zone_schedule as $zone_name => $config ) :
                     if ( ! is_array( $config ) ) {
                         // Defensive against a corrupted option value — skip
@@ -192,7 +195,16 @@ if ( $has_enc_key ) {
                 <?php endforeach; ?>
             </tbody>
         </table>
-
+        <p>
+            <button type="button" class="button" id="mealsdb-resync-delivery-days">
+                <?php echo esc_html__( 'Resync delivery days from zones', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-resync-result" style="margin-left:12px;"></span>
+        </p>
+        <div id="mealsdb-resync-orphans" style="display:none; margin-top:8px;"></div>
+        <p class="description">
+            <?php echo esc_html__( 'Overwrites every active client\'s delivery day from their zone\'s scheduled day (it is a derived value — this is always safe), and lists clients whose Delivery Area matches no zone; those clients will not appear on slips until re-zoned. After a clean resync, enable the Delivery Day auto-correct toggle below so drift cannot return.', 'meals-db' ); ?>
+        </p>
 
         <h2><?php echo esc_html__( 'Derived Value Integrity', 'meals-db' ); ?></h2>
         <p class="description">
@@ -221,7 +233,7 @@ if ( $has_enc_key ) {
                                        value="1" <?php checked( ! empty( $derived_autocorrect[ $field ] ) ); ?> />
                                 <?php echo $label; // already escaped above ?>
                                 <?php if ( $field === 'delivery_day' ) : ?>
-                                    <em><?php echo esc_html__( '(not recommended — zone overrides are legitimate)', 'meals-db' ); ?></em>
+                                    <em><?php echo esc_html__( '(recommended ON — delivery day is derived from the zone; per-client overrides are no longer supported and drift is rewritten nightly, audit-logged)', 'meals-db' ); ?></em>
                                 <?php endif; ?>
                             </label>
                         <?php endforeach; ?>

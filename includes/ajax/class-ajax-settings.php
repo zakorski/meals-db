@@ -23,6 +23,7 @@ class MealsDB_Ajax_Settings {
         add_action( 'wp_ajax_mealsdb_run_private_deactivation', [ self::class, 'run_private_deactivation' ] );
         add_action( 'wp_ajax_mealsdb_enrich_private_skeletons', [ self::class, 'enrich_private_skeletons' ] );
         add_action( 'wp_ajax_mealsdb_recalculate_allocations',  [ self::class, 'recalculate_allocations' ] );
+        add_action( 'wp_ajax_mealsdb_resync_delivery_days', [ self::class, 'resync_delivery_days' ] );
     }
 
     /**
@@ -148,6 +149,31 @@ class MealsDB_Ajax_Settings {
         wp_send_json_success( $result );
     }
 
+    /**
+     * Resync every active client's delivery_day from their zone (spec
+     * 2026-07-11). REPLACES the old blank-fill-only Data-Ops backfill button
+     * (retired 2026-07-11): this one OVERWRITES wrong values —
+     * delivery_day is a derived cache, so overwriting is always safe —
+     * and reports orphans (clients whose zone resolves to nothing).
+     */
+    public static function resync_delivery_days(): void {
+        check_ajax_referer( 'mealsdb_settings_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'You are not allowed to perform this action.', 'meals-db' ) ], 403 );
+        }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Resync is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
+        }
+
+        $result = MealsDB_Zone_Day::resync_all();
+        if ( $result === null ) {
+            wp_send_json_error( [ 'message' => __( 'No zone delivery schedule is configured — refusing to resync.', 'meals-db' ) ] );
+        }
+        wp_send_json_success( $result );
+    }
+
     public static function save_settings(): void {
         check_ajax_referer( 'mealsdb_settings_nonce', 'nonce' );
 
@@ -248,7 +274,10 @@ class MealsDB_Ajax_Settings {
 
         // Save zone delivery schedule if provided (Phase Q).
         if ( isset( $_POST['zone_schedule'] ) && is_array( $_POST['zone_schedule'] ) ) {
-            $valid_days = [ 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday' ];
+            // Weekend deliveries don't exist operationally; keeping the
+            // list tight prevents a misclick from parking a whole zone on
+            // a day no driver runs (spec 2026-07-11).
+            $valid_days = [ 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday' ];
             $schedule   = [];
             foreach ( $_POST['zone_schedule'] as $zone_name => $config ) {
                 $zone_name = sanitize_text_field( wp_unslash( $zone_name ) );
@@ -260,7 +289,15 @@ class MealsDB_Ajax_Settings {
                 }
             }
             if ( ! empty( $schedule ) ) {
+                $old_schedule = get_option( 'mealsdb_zone_delivery_schedule', [] );
                 update_option( 'mealsdb_zone_delivery_schedule', $schedule, false );
+                // delivery_day is a zone-derived cache: a day change here must
+                // reach every active client in the zone NOW, not at the next
+                // nightly drift pass (spec 2026-07-11). Dropped zones with
+                // active clients are recorded as a degraded event inside.
+                if ( is_array( $old_schedule ) && class_exists( 'MealsDB_Zone_Day' ) ) {
+                    MealsDB_Zone_Day::propagate_schedule_change( $old_schedule, $schedule );
+                }
             }
         }
 

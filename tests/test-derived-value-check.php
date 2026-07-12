@@ -163,6 +163,18 @@ $case_only = ['client_id' => 6, 'delivery_day' => 'monday', 'delivery_area_name'
 ok(MealsDB_Derived_Value_Check::check_client($case_only) === [], 'case-only delivery_day is not drift');
 $GLOBALS['__options']['mealsdb_zone_delivery_schedule'] = []; // reset
 
+// T-9: delivery_day drift detected via zone schedule through MealsDB_Zone_Day service.
+$GLOBALS['__options']['mealsdb_zone_delivery_schedule'] = ['Zone X' => ['day' => 'Tuesday']];
+$day_drift_via_service = [
+    'client_id'          => 7,
+    'delivery_day'       => 'monday', // stored as 'monday'
+    'delivery_area_name' => 'Zone X',
+];
+$m = MealsDB_Derived_Value_Check::check_client($day_drift_via_service);
+ok(count($m) === 1 && $m[0]['field'] === 'delivery_day' && $m[0]['expected'] === 'tuesday',
+   'T-9 delivery_day drift detected via MealsDB_Zone_Day service (Zone X → Tuesday)');
+$GLOBALS['__options']['mealsdb_zone_delivery_schedule'] = []; // reset
+
 // =========================================================================
 //  Audit pass (MealsDB_Derived_Value_Audit)
 // =========================================================================

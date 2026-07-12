@@ -1513,9 +1513,10 @@ class MealsDB_Migration_Consolidated {
      * immediately get a delivery day filled in.
      *
      * Blank-fill only: clients that already have a delivery_day are never
-     * touched, so it is idempotent and safe to re-run. Logic mirrors
-     * MealsDB_Ajax_Delivery_Slips::backfill_delivery_day (the standalone
-     * Data Ops button), kept identical so both entry points behave the same.
+     * touched, so it is idempotent and safe to re-run. Logic mirrors the
+     * zone→day fill also performed by MealsDB_Zone_Day::resync_all() (the
+     * Settings-page resync); this migration phase remains the blank-fill
+     * variant for initial import.
      *
      * Single bulk pass — not chunked — so it completes in one call.
      *
