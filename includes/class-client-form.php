@@ -442,6 +442,18 @@ class MealsDB_Client_Form {
             }
         }
 
+        // Zone is the sole source of truth for delivery_day (spec
+        // 2026-07-11): the zone itself must resolve. A blank zone is
+        // handled by the existing required-field logic per client type;
+        // a NON-blank zone that matches no schedule key would silently
+        // drop the client off every packer/driver slip, so it is a hard
+        // field error here.
+        if (isset($sanitized['delivery_area_name']) && trim((string) $sanitized['delivery_area_name']) !== ''
+            && class_exists('MealsDB_Zone_Day')
+            && MealsDB_Zone_Day::day_for_zone((string) $sanitized['delivery_area_name']) === null) {
+            $record_format_error('delivery_area_name', 'Delivery area does not match any configured delivery zone.');
+        }
+
         $numeric_fields = [
             'ordering_frequency' => 'Ordering frequency must be a number.',
             'delivery_frequency' => 'Delivery frequency must be a number.',
@@ -875,6 +887,19 @@ class MealsDB_Client_Form {
         // Map form field names to database column names
         $sanitized = self::map_form_to_db($sanitized);
 
+        // delivery_day is a zone-derived cache — NEVER trust the posted
+        // value (spec 2026-07-11). Derive from the selected zone; with a
+        // blank zone, drop the key entirely rather than persist a stale
+        // posted day. validate() has already rejected unresolvable
+        // non-blank zones, but this path re-guards for callers that skip
+        // the form flow (defense-in-depth, Pattern 1).
+        $sanitized = self::apply_zone_delivery_day($sanitized);
+        if ($sanitized === null) {
+            self::$last_save_error = __('Delivery area does not match any configured delivery zone.', 'meals-db');
+            error_log('[MealsDB] Save aborted: unresolvable delivery zone.');
+            return false;
+        }
+
         $sanitized = self::apply_insert_defaults($sanitized);
 
         $encrypted = $sanitized;
@@ -1109,6 +1134,19 @@ class MealsDB_Client_Form {
         // Map form field names to database column names
         $sanitized = self::map_form_to_db($sanitized);
 
+        // delivery_day is a zone-derived cache — NEVER trust the posted
+        // value (spec 2026-07-11). Derive from the selected zone; with a
+        // blank zone, drop the key entirely rather than persist a stale
+        // posted day. validate() has already rejected unresolvable
+        // non-blank zones, but this path re-guards for callers that skip
+        // the form flow (defense-in-depth, Pattern 1).
+        $sanitized = self::apply_zone_delivery_day($sanitized);
+        if ($sanitized === null) {
+            self::$last_save_error = __('Delivery area does not match any configured delivery zone.', 'meals-db');
+            error_log('[MealsDB] Update aborted: unresolvable delivery zone.');
+            return false;
+        }
+
         $encrypted = $sanitized;
         if (!self::ensure_index_columns_exist()) {
             // Part C: genuine structural failure only (a hash column could not
@@ -1304,6 +1342,41 @@ class MealsDB_Client_Form {
         }
 
         return $mapped;
+    }
+
+    /**
+     * Overwrite delivery_day from the zone (or strip it). Returns null
+     * when a NON-blank zone cannot be resolved — the caller must abort.
+     *
+     * - zone present + resolvable  → delivery_day := lowercase day
+     * - zone present + unresolvable → null (abort signal)
+     * - zone blank                  → delivery_day key removed (never
+     *                                 write a day the zone didn't produce)
+     * - zone key absent from payload (partial update) → delivery_day key
+     *   removed too: a delivery_day submitted without its zone has no
+     *   authority.
+     *
+     * @param array<string, mixed> $sanitized DB-side payload.
+     * @return array<string, mixed>|null
+     */
+    private static function apply_zone_delivery_day(array $sanitized): ?array {
+        unset($sanitized['delivery_day']);
+        if (!array_key_exists('delivery_area_name', $sanitized)) {
+            return $sanitized;
+        }
+        $zone = trim((string) $sanitized['delivery_area_name']);
+        if ($zone === '') {
+            return $sanitized;
+        }
+        if (!class_exists('MealsDB_Zone_Day')) {
+            return $sanitized; // degraded: cannot derive, but don't block the save on a missing class
+        }
+        $day = MealsDB_Zone_Day::day_for_zone($zone);
+        if ($day === null) {
+            return null;
+        }
+        $sanitized['delivery_day'] = $day;
+        return $sanitized;
     }
 
     /**
@@ -1963,25 +2036,13 @@ class MealsDB_Client_Form {
      * Build the validation configuration for enumerated fields.
      */
     private static function get_enum_validation_rules(): array {
-        $delivery_day_allowed = [
-            'WED AM',
-            'WED PM',
-            'THURS AM',
-            'THURS PM',
-            'FRI AM',
-        ];
-
-        if (function_exists('apply_filters')) {
-            $filtered_days = apply_filters('mealsdb_allowed_delivery_days', $delivery_day_allowed);
-            if (is_array($filtered_days) && !empty($filtered_days)) {
-                $delivery_day_allowed = $filtered_days;
-            }
-        }
-
-        $delivery_day_allowed = array_values(array_filter(array_map(static function ($value) {
-            return strtoupper(trim((string) $value));
-        }, $delivery_day_allowed)));
-
+        // delivery_day is no longer validated here — it is a zone-derived cache
+        // (spec 2026-07-11). The old WED AM / THURS AM / FRI AM vocabulary is
+        // deleted. Zone membership is checked separately in validate() via
+        // MealsDB_Zone_Day::day_for_zone(), and the actual delivery_day value is
+        // written by apply_zone_delivery_day() in save()/update(). A posted
+        // delivery_day value (e.g. from a cached form) is silently discarded —
+        // it must not block a save.
         $contact_method_allowed = [
             'AUTO-RENEW',
             'BULK EMAIL',
@@ -2026,11 +2087,6 @@ class MealsDB_Client_Form {
                 'allowed'   => ['DAY', 'WEEK', 'MONTH'],
                 'normalize' => 'upper',
                 'message'   => 'Requisition period must be Day/Daily, Week/Weekly, or Month/Monthly.',
-            ],
-            'delivery_day' => [
-                'allowed'   => $delivery_day_allowed,
-                'normalize' => 'upper',
-                'message'   => 'Delivery day must match one of the scheduled options.',
             ],
             'ordering_contact_method' => [
                 'allowed'   => $contact_method_allowed,
