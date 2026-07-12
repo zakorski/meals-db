@@ -211,6 +211,18 @@ function mealsdb_maybe_upgrade_schema(): void {
             ], '', 'no');
         }
 
+        // delivery_day is zone-derived (spec 2026-07-11): fresh installs get
+        // nightly auto-correct ON for it. Installs with a stored option keep
+        // their choice (save_settings always writes all three keys, so any
+        // operator who has ever saved settings has one).
+        if (false === get_option('mealsdb_derived_autocorrect')) {
+            add_option('mealsdb_derived_autocorrect', [
+                'next_order_date'    => 0,
+                'next_delivery_date' => 0,
+                'delivery_day'       => 1,
+            ], '', 'no');
+        }
+
         update_option('mealsdb_db_version', MEALS_DB_VERSION, false);
     } catch (Throwable $e) {
         // Log but don't rethrow — next admin page load retries. The

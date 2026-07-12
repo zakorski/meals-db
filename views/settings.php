@@ -161,7 +161,10 @@ if ( $has_enc_key ) {
             </thead>
             <tbody>
                 <?php
-                $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                // Weekend deliveries don't exist operationally; keeping the
+                // list tight prevents a misclick from parking a whole zone on
+                // a day no driver runs (spec 2026-07-11).
+                $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
                 foreach ( $zone_schedule as $zone_name => $config ) :
                     if ( ! is_array( $config ) ) {
                         // Defensive against a corrupted option value — skip
@@ -221,7 +224,7 @@ if ( $has_enc_key ) {
                                        value="1" <?php checked( ! empty( $derived_autocorrect[ $field ] ) ); ?> />
                                 <?php echo $label; // already escaped above ?>
                                 <?php if ( $field === 'delivery_day' ) : ?>
-                                    <em><?php echo esc_html__( '(not recommended — zone overrides are legitimate)', 'meals-db' ); ?></em>
+                                    <em><?php echo esc_html__( '(recommended ON — delivery day is derived from the zone; per-client overrides are no longer supported and drift is rewritten nightly, audit-logged)', 'meals-db' ); ?></em>
                                 <?php endif; ?>
                             </label>
                         <?php endforeach; ?>

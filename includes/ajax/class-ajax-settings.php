@@ -248,7 +248,10 @@ class MealsDB_Ajax_Settings {
 
         // Save zone delivery schedule if provided (Phase Q).
         if ( isset( $_POST['zone_schedule'] ) && is_array( $_POST['zone_schedule'] ) ) {
-            $valid_days = [ 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday' ];
+            // Weekend deliveries don't exist operationally; keeping the
+            // list tight prevents a misclick from parking a whole zone on
+            // a day no driver runs (spec 2026-07-11).
+            $valid_days = [ 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday' ];
             $schedule   = [];
             foreach ( $_POST['zone_schedule'] as $zone_name => $config ) {
                 $zone_name = sanitize_text_field( wp_unslash( $zone_name ) );
@@ -260,7 +263,15 @@ class MealsDB_Ajax_Settings {
                 }
             }
             if ( ! empty( $schedule ) ) {
+                $old_schedule = get_option( 'mealsdb_zone_delivery_schedule', [] );
                 update_option( 'mealsdb_zone_delivery_schedule', $schedule, false );
+                // delivery_day is a zone-derived cache: a day change here must
+                // reach every active client in the zone NOW, not at the next
+                // nightly drift pass (spec 2026-07-11). Dropped zones with
+                // active clients are recorded as a degraded event inside.
+                if ( is_array( $old_schedule ) && class_exists( 'MealsDB_Zone_Day' ) ) {
+                    MealsDB_Zone_Day::propagate_schedule_change( $old_schedule, $schedule );
+                }
             }
         }
 
