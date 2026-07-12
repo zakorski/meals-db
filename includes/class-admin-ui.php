@@ -601,6 +601,15 @@ class MealsDB_Admin_UI {
                 'window.mealsdbWpUser = ' . wp_json_encode($wp_user_data) . ';',
                 'before'
             );
+
+            $zone_day_path = MEALS_DB_PLUGIN_DIR . 'assets/js/client-zone-day.js';
+            wp_enqueue_script(
+                'mealsdb-client-zone-day',
+                MEALS_DB_PLUGIN_URL . 'assets/js/client-zone-day.js',
+                ['jquery'],
+                file_exists($zone_day_path) ? filemtime($zone_day_path) : MEALS_DB_VERSION,
+                true
+            );
         }
 
         $mealsdb_data = [
@@ -1193,7 +1202,7 @@ class MealsDB_Admin_UI {
             $field_formats = [
                 'gender' => 'title',                // Male, Female, Other
                 'requisition_period' => 'lower',    // day, week, month
-                'delivery_day' => 'upper',          // WED AM, THURS AM, etc.
+
                 'ordering_contact_method' => 'upper', // AUTO-RENEW, BULK EMAIL, PHONE
                 'payment_method' => 'title',        // Cheque, etc.
             ];
@@ -1215,7 +1224,7 @@ class MealsDB_Admin_UI {
 
         $client_type = $normalize_field_value('client_type', $form_values['client_type'] ?? '');
 
-        $delivery_day_options = MealsDB_Client_Form::get_allowed_options('delivery_day');
+        $zone_schedule = class_exists('MealsDB_Zone_Day') ? MealsDB_Zone_Day::schedule() : [];
         $ordering_contact_method_options = MealsDB_Client_Form::get_allowed_options('ordering_contact_method');
 
         $format_enum_option_label = static function (string $value): string {
@@ -1257,7 +1266,6 @@ class MealsDB_Admin_UI {
         );
 
         $delivery_initials_value = $form_values['delivery_initials'] ?? '';
-        $delivery_day_value = $normalize_field_value('delivery_day', $form_values['delivery_day'] ?? '');
         $ordering_contact_method_value = $normalize_field_value('ordering_contact_method', $form_values['ordering_contact_method'] ?? '');
         $gender_value = $normalize_field_value('gender', $form_values['gender'] ?? '');
         $requisition_period_value = $normalize_field_value('requisition_period', $form_values['requisition_period'] ?? '');
@@ -1549,27 +1557,45 @@ class MealsDB_Admin_UI {
                 </tr>
                 <?php
             },
-            static function (array $client) use ($delivery_day_options, $format_enum_option_label, $delivery_day_value) {
+            static function (array $client) use ($zone_schedule) {
+                $zone = trim((string) ($client['delivery_area_name'] ?? ''));
+                $cfg  = $zone_schedule[$zone] ?? null;
+                if ($cfg !== null) {
+                    $display = $cfg['day'] . ($cfg['label'] !== '' ? ' — ' . $cfg['label'] : '');
+                } elseif ($zone !== '') {
+                    $display = __('⚠ zone not in schedule', 'meals-db');
+                } else {
+                    $display = '—';
+                }
                 ?>
-                <tr data-required-for="sdnb,veteran,private">
-                    <th><label for="delivery_day"><?php esc_html_e('Delivery Day *', 'meals-db'); ?></label></th>
+                <tr>
+                    <th><?php esc_html_e('Delivery Day', 'meals-db'); ?></th>
                     <td>
-                        <select name="delivery_day" id="delivery_day" class="regular-text" required data-base-required="1">
-                            <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
-                            <?php foreach ($delivery_day_options as $option) : ?>
-                                <?php $label = $format_enum_option_label($option); ?>
-                                <option value="<?php echo esc_attr($option); ?>" <?php selected($delivery_day_value, strtoupper($option)); ?>><?php echo esc_html($label); ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                        <span id="mealsdb-zone-day-display"><?php echo esc_html($display); ?></span>
+                        <p class="description"><?php esc_html_e('Determined by the delivery zone (Settings → Zone Delivery Schedule). Not directly editable.', 'meals-db'); ?></p>
                     </td>
                 </tr>
                 <?php
             },
-            static function (array $client) {
+            static function (array $client) use ($zone_schedule) {
+                $current = trim((string) ($client['delivery_area_name'] ?? ''));
+                $known   = $current !== '' && isset($zone_schedule[$current]);
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_area_name"><?php esc_html_e('Delivery Area Name *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="delivery_area_name" id="delivery_area_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['delivery_area_name'] ?? ''); ?>" /></td>
+                    <td>
+                        <select name="delivery_area_name" id="delivery_area_name" class="regular-text" required data-base-required="1">
+                            <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
+                            <?php if ($current !== '' && !$known) : ?>
+                                <?php // Legacy value not in the schedule: keep it selected-but-flagged so an
+                                      // untouched record isn't corrupted, but editing forces a real choice. ?>
+                                <option value="<?php echo esc_attr($current); ?>" selected>⚠ <?php echo esc_html($current); ?> <?php esc_html_e('(not in schedule)', 'meals-db'); ?></option>
+                            <?php endif; ?>
+                            <?php foreach (array_keys($zone_schedule) as $zone_name) : ?>
+                                <option value="<?php echo esc_attr($zone_name); ?>" <?php selected($current, $zone_name); ?>><?php echo esc_html($zone_name); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
                 </tr>
                 <?php
             },
@@ -1850,6 +1876,11 @@ class MealsDB_Admin_UI {
             ?>
         <?php endif; ?>
         <?php
+        // Zone→day map for the live read-only display (client-zone-day.js).
+        // JSON island per the plugin pattern — JSON_HEX_* makes it <script>-safe.
+        echo '<script type="application/json" id="mealsdb-zone-day-data">'
+            . wp_json_encode($zone_schedule, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)
+            . '</script>';
     }
 
     /**
