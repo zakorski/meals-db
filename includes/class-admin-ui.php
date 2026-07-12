@@ -1595,6 +1595,11 @@ class MealsDB_Admin_UI {
                                 <option value="<?php echo esc_attr($zone_name); ?>" <?php selected($current, $zone_name); ?>><?php echo esc_html($zone_name); ?></option>
                             <?php endforeach; ?>
                         </select>
+                        <?php if ($current !== '' && !$known) : ?>
+                            <p class="description" style="color:#b32d2e;">
+                                <?php esc_html_e('This zone is no longer in the delivery schedule. Select a current zone before saving — the form will not save with the old value.', 'meals-db'); ?>
+                            </p>
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php
