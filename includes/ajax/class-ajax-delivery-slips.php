@@ -6,8 +6,8 @@
  * delivery date or zone + date range). The four old screen-rendered
  * slip endpoints (packing/picking/delivery/driver, plus their
  * zone-mode counterparts) were retired with this phase. The old
- * blank-fill backfill (mealsdb_backfill_delivery_day) was superseded
- * by MealsDB_Ajax_Settings::resync_delivery_days() (spec 2026-07-11).
+ * blank-fill delivery-day backfill that lived here was superseded by
+ * the Settings-page resync (MealsDB_Ajax_Settings::resync_delivery_days, 2026-07-11).
  *
  * @package MealsDB
  */

@@ -151,8 +151,8 @@ class MealsDB_Ajax_Settings {
 
     /**
      * Resync every active client's delivery_day from their zone (spec
-     * 2026-07-11). REPLACES the old blank-fill-only backfill
-     * (mealsdb_backfill_delivery_day): this one OVERWRITES wrong values —
+     * 2026-07-11). REPLACES the old blank-fill-only Data-Ops backfill button
+     * (retired 2026-07-11): this one OVERWRITES wrong values —
      * delivery_day is a derived cache, so overwriting is always safe —
      * and reports orphans (clients whose zone resolves to nothing).
      */

@@ -34,10 +34,8 @@
         });
     });
 
-    // Resync delivery_day from zone schedule (spec 2026-07-11).
-    // Replaces the old blank-fill-only backfill (#mealsdb-backfill-delivery-day
-    // on data-ops.php, now retired): this one OVERWRITES wrong cached values
-    // and reports orphans (clients whose zone resolves to nothing).
+    // Resync delivery days from zones (replaced the retired Data-Ops
+    // blank-fill button, 2026-07-11).
     $('#mealsdb-resync-delivery-days').on('click', function () {
         var $btn = $(this).prop('disabled', true);
         var $result = $('#mealsdb-resync-result');
