@@ -151,7 +151,13 @@ class ZoneDayFormWpdb extends wpdb {
         return 1;
     }
 
+    /** @var array<string,mixed>|null Captured payload from the most recent client UPDATE */
+    public $clientUpdate = null;
+    public $clientUpdateAttempted = false;
+
     public function update(string $table, array $data, array $where, $f1 = null, $f2 = null) {
+        $this->clientUpdateAttempted = true;
+        $this->clientUpdate = $data;
         $this->last_error = '';
         return 1;
     }
@@ -183,8 +189,9 @@ function zf_reset(): ZoneDayFormWpdb {
 /**
  * Minimal valid Private client fixture — uses DB-side vocabulary where
  * applicable (delivery_area_name, not delivery_day, since delivery_day is
- * now zone-derived and should not be posted). For assertion 3 & 4, the
- * caller adds delivery_day to the payload.
+ * now zone-derived server-side and must NOT be posted by the form).
+ * delivery_day is intentionally absent from this fixture; callers that
+ * need to test stale-posted-value handling add it as an override.
  */
 function mealsdb_test_minimal_valid_client(array $overrides = []): array {
     return array_merge([
@@ -197,9 +204,6 @@ function mealsdb_test_minimal_valid_client(array $overrides = []): array {
         'address_province'    => 'NB',
         'address_postal'      => 'E1E1E1',
         'delivery_area_name'  => 'Zone 1',
-        // delivery_day is intentionally absent — it is derived from the zone.
-        // Callers that need to test posted-value handling add it as an override.
-        'delivery_day'        => 'wednesday',  // valid derived form so required-field check passes
         'payment_method'      => 'Cheque',
         'delivery_initials'   => 'ACL',
         'client_email'        => 'alex@example.com',
@@ -258,6 +262,37 @@ $inserted = $wpdb4->clientInsert;
 $stored_day = $inserted['delivery_day'] ?? '(not present)';
 zf_check($stored_day === 'wednesday',
     '4: stored delivery_day is the zone-derived lowercase day, not the posted WED AM — got: ' . var_export($stored_day, true));
+
+// ---------------------------------------------------------------------------
+// 5. validate(): a Private payload with NO delivery_day key at all passes.
+//    delivery_day is no longer a required field (spec 2026-07-11); only
+//    delivery_area_name (the zone) is required so the derivation can run.
+// ---------------------------------------------------------------------------
+zf_reset();
+// mealsdb_test_minimal_valid_client() has no delivery_day key by default.
+$data5 = mealsdb_test_minimal_valid_client();
+zf_check(!array_key_exists('delivery_day', $data5), '5: fixture has no delivery_day key (pre-condition)');
+$res5 = MealsDB_Client_Form::validate($data5);
+zf_check($res5['valid'] === true,
+    '5: validate() passes for a Private payload with NO delivery_day key — errors: ' . wp_json_encode($res5['error_details'] ?? []));
+
+// ---------------------------------------------------------------------------
+// 6. update() WITHOUT delivery_area_name: delivery_day must NOT appear in
+//    the UPDATE data sent to the DB (a partial update that omits the zone
+//    must not overwrite the stored delivery_day column with a stale value).
+// ---------------------------------------------------------------------------
+$wpdb6 = zf_reset();
+// Partial update: only changing the phone number; no zone, no delivery_day.
+$partial = [
+    'client_type'    => 'Private',
+    'phone_primary'  => '(506)-555-9999',
+    'wordpress_user_id' => '500',
+];
+$updated6 = MealsDB_Client_Form::update(1, $partial);
+zf_check($updated6 === true, '6: update() succeeds with a partial payload (no delivery_area_name)');
+$update_data = $wpdb6->clientUpdate ?? [];
+zf_check(!array_key_exists('delivery_day', $update_data),
+    '6: update payload has NO delivery_day key when delivery_area_name was not supplied — keys: ' . implode(', ', array_keys($update_data)));
 
 // ---------------------------------------------------------------------------
 // Report

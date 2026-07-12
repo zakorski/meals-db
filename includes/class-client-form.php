@@ -630,6 +630,9 @@ class MealsDB_Client_Form {
         $base_required = ['client_type'];
 
         $type_specific = [
+            // delivery_day is zone-derived server-side (spec 2026-07-11);
+            // delivery_area_name is what the operator must supply — it drives
+            // the derivation.  delivery_day must NOT appear in this list.
             'PRIVATE' => [
                 'first_name',
                 'last_name',
@@ -638,7 +641,7 @@ class MealsDB_Client_Form {
                 'address_city',
                 'address_province',
                 'address_postal',
-                'delivery_day',
+                'delivery_area_name',
                 'payment_method',
             ],
             'SDNB' => [
