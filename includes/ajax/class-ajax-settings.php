@@ -23,6 +23,7 @@ class MealsDB_Ajax_Settings {
         add_action( 'wp_ajax_mealsdb_run_private_deactivation', [ self::class, 'run_private_deactivation' ] );
         add_action( 'wp_ajax_mealsdb_enrich_private_skeletons', [ self::class, 'enrich_private_skeletons' ] );
         add_action( 'wp_ajax_mealsdb_recalculate_allocations',  [ self::class, 'recalculate_allocations' ] );
+        add_action( 'wp_ajax_mealsdb_resync_delivery_days', [ self::class, 'resync_delivery_days' ] );
     }
 
     /**
@@ -144,6 +145,31 @@ class MealsDB_Ajax_Settings {
         // the partial stats — report it as a failure instead of success:true.
         if ( isset( $result['error'] ) ) {
             wp_send_json_error( [ 'message' => $result['error'] ] );
+        }
+        wp_send_json_success( $result );
+    }
+
+    /**
+     * Resync every active client's delivery_day from their zone (spec
+     * 2026-07-11). REPLACES the old blank-fill-only backfill
+     * (mealsdb_backfill_delivery_day): this one OVERWRITES wrong values —
+     * delivery_day is a derived cache, so overwriting is always safe —
+     * and reports orphans (clients whose zone resolves to nothing).
+     */
+    public static function resync_delivery_days(): void {
+        check_ajax_referer( 'mealsdb_settings_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'You are not allowed to perform this action.', 'meals-db' ) ], 403 );
+        }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'migration_destructive' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Resync is rate-limited. Please wait before retrying.', 'meals-db' ) ], 429 );
+        }
+
+        $result = MealsDB_Zone_Day::resync_all();
+        if ( $result === null ) {
+            wp_send_json_error( [ 'message' => __( 'No zone delivery schedule is configured — refusing to resync.', 'meals-db' ) ] );
         }
         wp_send_json_success( $result );
     }

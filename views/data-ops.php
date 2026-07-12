@@ -146,17 +146,6 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     <div id="mealsdb-updates-status" class="notice notice-info" style="display:none;"></div>
     <pre id="mealsdb-updates-log" class="mealsdb-updates-log" style="display:none;"></pre>
     <hr style="margin:24px 0;">
-        <h2><?php echo esc_html__( 'Backfill Delivery Day', 'meals-db' ); ?></h2>
-        <p class="description">
-            <?php echo esc_html__( 'Populate the delivery_day field on client records based on their zone assignment and the schedule above. Only updates clients where delivery_day is currently empty.', 'meals-db' ); ?>
-        </p>
-        <p>
-            <button type="button" class="button" id="mealsdb-backfill-delivery-day">
-                <?php echo esc_html__( 'Populate delivery_day from Zone Schedule', 'meals-db' ); ?>
-            </button>
-            <span id="mealsdb-backfill-result" style="margin-left:12px;"></span>
-        </p>
-
         <h2><?php echo esc_html__( 'Backfill Next-Order / Next-Delivery Dates', 'meals-db' ); ?></h2>
         <p class="description">
             <?php echo esc_html__( "Populate next_order_date / next_delivery_date on each client using their last-order/last-delivery user meta plus the configured ordering / delivery frequencies. Only fills empty columns so existing values are preserved. Safe to re-run.", 'meals-db' ); ?>

@@ -5,8 +5,9 @@
  * Two slip types — packer and driver — each with two callers (single
  * delivery date or zone + date range). The four old screen-rendered
  * slip endpoints (packing/picking/delivery/driver, plus their
- * zone-mode counterparts) were retired with this phase; only the
- * delivery-day backfill helper survives.
+ * zone-mode counterparts) were retired with this phase. The old
+ * blank-fill backfill (mealsdb_backfill_delivery_day) was superseded
+ * by MealsDB_Ajax_Settings::resync_delivery_days() (spec 2026-07-11).
  *
  * @package MealsDB
  */
@@ -30,8 +31,6 @@ class MealsDB_Ajax_Delivery_Slips {
         add_action('wp_ajax_mealsdb_zone_packer_pdf', [self::class, 'zone_packer_pdf']);
         add_action('wp_ajax_mealsdb_zone_driver_pdf', [self::class, 'zone_driver_pdf']);
 
-        // Backfill delivery_day from zone schedule (kept from prior phases).
-        add_action('wp_ajax_mealsdb_backfill_delivery_day', [self::class, 'backfill_delivery_day']);
     }
 
     public static function packer_pdf(): void {
@@ -102,78 +101,6 @@ class MealsDB_Ajax_Delivery_Slips {
 
         $filename = self::zone_filename('driver', $params);
         self::stream_pdf($pdf, $filename);
-    }
-
-    /**
-     * Backfill delivery_day on meals_clients from zone delivery schedule.
-     */
-    public static function backfill_delivery_day(): void {
-        // This is a BULK CLIENT WRITE (UPDATEs meals_clients.delivery_day for
-        // every active client in each zone), NOT a read-only slip render — so it
-        // must not share verify_request()'s baseline gate (required_capability(),
-        // i.e. manage_woocommerce, which the shop_manager role holds) or its
-        // read-tier 'delivery_slips' bucket. Match its sibling backfills in
-        // class-ajax-migration.php: full-admin capability plus the destructive
-        // rate bucket. verify_request() stays on the read-only PDF endpoints
-        // above. (Audit U22-ajax-misc-3.)
-        check_ajax_referer('mealsdb_nonce', 'nonce');
-
-        if (!current_user_can('manage_options')) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('You are not allowed to perform this action.', 'meals-db'),
-            ], 403);
-        }
-
-        if (class_exists('MealsDB_Rate_Limiter')
-            && !MealsDB_Rate_Limiter::check_rate_limit('migration_destructive')) {
-            wp_send_json([
-                'success' => false,
-                'message' => __('Backfill is rate-limited. Please wait before retrying.', 'meals-db'),
-            ], 429);
-        }
-
-        $schedule = get_option('mealsdb_zone_delivery_schedule', []);
-        if (empty($schedule)) {
-            wp_send_json(['success' => false, 'message' => 'No zone delivery schedule configured.']);
-        }
-
-        global $wpdb;
-
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $updated = 0;
-
-        foreach ($schedule as $zone_name => $config) {
-            // The zone schedule is an operator-set option; don't trust its
-            // shape. A malformed entry (non-array, or missing 'day') is skipped
-            // rather than emitting a PHP 8 warning / strtolower(null) deprecation
-            // and clobbering delivery_day with an empty string.
-            if (!is_array($config)) {
-                continue;
-            }
-            $day = strtolower((string) ($config['day'] ?? ''));
-            if ($day === '') {
-                continue;
-            }
-
-            $sql = $wpdb->prepare(
-                "UPDATE `{$clients_table}`
-                 SET delivery_day = %s
-                 WHERE delivery_area_name = %s
-                   AND (delivery_day IS NULL OR delivery_day = '')
-                   AND active = 1",
-                $day,
-                $zone_name
-            );
-            $wpdb->query($sql);
-            $updated += $wpdb->rows_affected;
-        }
-
-        wp_send_json([
-            'success' => true,
-            'data'    => ['updated' => $updated],
-            'message' => sprintf('Updated delivery_day for %d clients.', $updated),
-        ]);
     }
 
     // -----------------------------------------------------------------
