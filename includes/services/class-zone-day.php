@@ -169,7 +169,7 @@ class MealsDB_Zone_Day {
      * Returns null when no schedule is configured (refuses rather than
      * blanking 890 rows).
      *
-     * @return array{updated: int, orphans: array<int, array<string, mixed>>}|null
+     * @return array{updated: int, already_correct: int, orphans: array<int, array<string, mixed>>}|null
      */
     public static function resync_all(): ?array {
         $schedule = self::schedule();
@@ -211,13 +211,25 @@ class MealsDB_Zone_Day {
             $updated += max(0, $affected);
         }
 
+        // Spec §D response contract: callers (settings.js, AJAX handler) expect
+        // an already_correct count so the operator can distinguish "nothing to do"
+        // from "nothing was corrected because there are no schedule clients."
+        // Reuses $placeholders already built for the orphan query above.
+        $in_schedule_count = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM `{$table}`
+             WHERE active = 1
+               AND delivery_area_name IN ({$placeholders})",
+            ...array_keys($schedule)
+        ));
+        $already_correct = max(0, $in_schedule_count - $updated);
+
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log(
                 'delivery_day_resync',
                 0,
                 'delivery_day',
                 null,
-                sprintf('%d updated, %d orphans', $updated, count($orphans))
+                sprintf('%d updated, %d already correct, %d orphans', $updated, $already_correct, count($orphans))
             );
         }
         if (!empty($orphans) && class_exists('MealsDB_Event_Log')) {
@@ -232,6 +244,6 @@ class MealsDB_Zone_Day {
             ]);
         }
 
-        return ['updated' => $updated, 'orphans' => $orphans];
+        return ['updated' => $updated, 'already_correct' => $already_correct, 'orphans' => $orphans];
     }
 }

@@ -241,12 +241,11 @@ function valid_private_payload(array $overrides = []): array {
         'address_city'        => 'Moncton',
         'address_province'    => 'NB',
         'address_postal'      => 'E1E1E1',
-        // delivery_day is zone-derived (spec 2026-07-11): WED AM vocabulary
-        // is deleted. delivery_area_name drives the day; validate() /
-        // save() call MealsDB_Zone_Day::day_for_zone() via
-        // apply_zone_delivery_day() to set delivery_day = 'wednesday'.
+        // delivery_day is zone-derived (spec 2026-07-11): NOT in the required
+        // field list and not accepted from POST (apply_zone_delivery_day()
+        // unsets any posted value and derives it from delivery_area_name →
+        // Zone 1 → 'wednesday').  No key needed here.
         'delivery_area_name'  => 'Zone 1',
-        'delivery_day'        => 'wednesday',  // still included so the Private required-field check passes
         'payment_method'      => 'Cheque',
         'delivery_initials'   => 'ACL',
         'client_email'        => 'alex@example.com',

@@ -167,15 +167,19 @@ $wpdb_stub = new ZdWpdb();
 $wpdb_stub->affected_per_update = 4; // per-zone UPDATE reports 4 corrected rows
 $GLOBALS['wpdb'] = $wpdb_stub;
 MealsDB_Event_Log::$events = [];
-// One get_results call: the orphan SELECT.
+// Call order in resync_all(): get_results (orphans) → query ×2 (UPDATEs) →
+// get_var (COUNT of active clients in schedule zones).  The COUNT returns 10
+// so already_correct = max(0, 10 − 8) = 2.
 $wpdb_stub->results_queue = [
     [
         ['client_id' => 7, 'first_name' => 'A', 'last_name' => 'B', 'delivery_area_name' => 'Old Zone'],
     ],
+    10, // get_var: total active clients whose zone is in the schedule
 ];
 $out = MealsDB_Zone_Day::resync_all();
 
 zd_check('resync: updated', $out['updated'], 8); // 2 zones × 4
+zd_check('resync: already_correct', $out['already_correct'], 2); // 10 in-schedule − 8 updated
 zd_check('resync: orphan count', count($out['orphans']), 1);
 zd_check('resync: orphan zone value', $out['orphans'][0]['delivery_area_name'], 'Old Zone');
 zd_check('resync: orphan degraded event', MealsDB_Event_Log::$events[0]['event'] ?? '', 'delivery_day.orphaned_clients');

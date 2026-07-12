@@ -53,7 +53,11 @@
             }
             var d = res.data || {};
             var orphans = d.orphans || [];
-            $result.text(d.updated + ' client(s) updated, ' + orphans.length + ' orphan(s).');
+            $result.text(
+                d.updated + ' client(s) updated, ' +
+                (d.already_correct != null ? d.already_correct + ' already correct, ' : '') +
+                orphans.length + ' orphan(s).'
+            );
             tint($result, orphans.length > 0 ? '#dba617' : '#46b450');
             if (orphans.length) {
                 var $list = $('<ul style="margin:4px 0 0 16px; list-style:disc;"></ul>');
