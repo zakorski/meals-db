@@ -416,6 +416,9 @@
             // Checkbox: send '1' when checked, '0' when not, so the server can
             // distinguish an explicit "off" from "never set" (fail-safe ON).
             shadow_mode: $('input[name="shadow_mode"]').is(':checked') ? '1' : '0',
+            // Advanced-tools menu visibility — same explicit '0'/'1'
+            // convention as shadow_mode (server treats absent as '0').
+            show_advanced_tools: $('input[name="show_advanced_tools"]').is(':checked') ? '1' : '0',
             overage_mains: $('#mealsdb-overage-mains').val(),
             overage_taxable_sides: $('#mealsdb-overage-taxable-sides').val(),
             overage_nontax_sides: $('#mealsdb-overage-nontax-sides').val(),

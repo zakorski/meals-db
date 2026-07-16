@@ -17,6 +17,11 @@ $shadow_on = class_exists( 'MealsDB_Shadow_Mode' )
     ? MealsDB_Shadow_Mode::is_enabled()
     : true;
 
+// Advanced-tools toggle state (fail-safe HIDDEN — see MealsDB_Advanced_Tools).
+$advanced_on = class_exists( 'MealsDB_Advanced_Tools' )
+    ? MealsDB_Advanced_Tools::is_enabled()
+    : false;
+
 $enc_key       = isset( $opts['encryption_key'] ) ? (string) $opts['encryption_key'] : '';
 $has_enc_key   = $enc_key !== '';
 
@@ -56,6 +61,18 @@ if ( $has_enc_key ) {
                         </label>
                         <p class="description">
                             <?php echo esc_html__( 'Fail-safe: if this setting is ever missing or unreadable, the plugin behaves as if shadow mode is ON.', 'meals-db' ); ?>
+                        </p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><?php echo esc_html__( 'Advanced tools', 'meals-db' ); ?></th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="show_advanced_tools" value="1" <?php checked( $advanced_on ); ?> />
+                            <?php echo esc_html__( 'Show advanced tools (Rate Definitions, Data Ops, Migration) in the menu', 'meals-db' ); ?>
+                        </label>
+                        <p class="description">
+                            <?php echo esc_html__( 'Off by default to keep the menu focused on daily work. Hiding is a convenience, not security — the pages stay reachable by direct URL and keep their own permission checks.', 'meals-db' ); ?>
                         </p>
                     </td>
                 </tr>
