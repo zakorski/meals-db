@@ -398,3 +398,27 @@ EOF
 ```
 
 Merge on request only (operator's workflow); CI owns version bumps — do NOT bump `MEALS_DB_VERSION` (no schema change here anyway).
+
+---
+
+## Amendment (2026-07-16, post-review)
+
+Code review of Task 1 found the plan's `remove_submenu_page()` approach **broken
+for plugin pages**: removing the submenu entry after registration makes
+`user_can_access_admin_page()` resolve an unregistered hookname
+(`admin_page_{slug}` vs the registered `meals-db_page_{slug}`), 403-ing the
+governed pages for everyone — including admins — whenever the toggle is off
+(the default). Verified empirically against WP core.
+
+**Corrected architecture (matches spec §5's original prescription):** the
+toggle governs the *parent slug at registration time*.
+`MealsDB_Advanced_Tools::menu_parent()` returns `'mealsdb'` when enabled and
+`''` when disabled; the three governed `register_menu()` methods pass it as
+`add_submenu_page()`'s first argument. `''` registers the page hook without a
+menu entry (WP's hidden-page pattern), so direct URLs keep working. There is
+no `admin_menu` hook and no bootstrap wiring anymore.
+
+Knock-on: the page hook suffix differs by state (`meals-db_page_{slug}`
+visible, `admin_page_{slug}` hidden), so the Migration and Data Ops enqueue
+checks now accept both suffixes. Task 4's smoke item 4 must verify Migration's
+assets load in BOTH toggle states.

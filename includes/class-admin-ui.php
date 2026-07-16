@@ -218,8 +218,14 @@ class MealsDB_Admin_UI {
             ['MealsDB_Admin_UI', 'render_reports_page']
         );
 
+        // Parent is toggle-dependent (advanced-tools visibility): 'mealsdb'
+        // when shown, '' (registered but menu-less) when hidden.
+        $parent = class_exists('MealsDB_Advanced_Tools')
+            ? MealsDB_Advanced_Tools::menu_parent()
+            : 'mealsdb';
+
         add_submenu_page(
-            'mealsdb',
+            $parent,
             __('Data Ops', 'meals-db'),
             __('Data Ops', 'meals-db'),
             MealsDB_Permissions::required_capability(),
@@ -387,7 +393,10 @@ class MealsDB_Admin_UI {
         $is_staff_page       = ($hook === 'meals-db_page_meals-db-staff');
         $is_quick_order_page = ($hook === 'meals-db_page_mealsdb_quick_order');
         $is_reports_page     = ($hook === 'meals-db_page_mealsdb-reports');
-        $is_data_ops_page    = ($hook === 'meals-db_page_mealsdb-data-ops');
+        // Data Ops is toggle-governed: its hook suffix depends on the
+        // advanced-tools toggle ('meals-db_page_{slug}' when visible,
+        // 'admin_page_{slug}' when hidden) — accept both.
+        $is_data_ops_page    = in_array($hook, ['meals-db_page_mealsdb-data-ops', 'admin_page_mealsdb-data-ops'], true);
 
         if (!$is_main_page && !$is_staff_page && !$is_quick_order_page && !$is_reports_page && !$is_data_ops_page) {
             return;

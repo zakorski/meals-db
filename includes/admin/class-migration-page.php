@@ -21,8 +21,14 @@ class MealsDB_Migration_Page {
             return;
         }
 
+        // Parent is toggle-dependent (advanced-tools visibility): 'mealsdb'
+        // when shown, '' (registered but menu-less) when hidden.
+        $parent = class_exists('MealsDB_Advanced_Tools')
+            ? MealsDB_Advanced_Tools::menu_parent()
+            : 'mealsdb';
+
         add_submenu_page(
-            'mealsdb',
+            $parent,
             __( 'Site Migration', 'meals-db' ),
             __( 'Migration', 'meals-db' ),
             'manage_options',
@@ -32,7 +38,9 @@ class MealsDB_Migration_Page {
     }
 
     public static function enqueue_assets( $hook ): void {
-        if ( $hook !== 'meals-db_page_mealsdb-migration' ) {
+        // The hook suffix depends on the advanced-tools toggle: visible
+        // pages get 'meals-db_page_{slug}', hidden ones 'admin_page_{slug}'.
+        if ( ! in_array( $hook, [ 'meals-db_page_mealsdb-migration', 'admin_page_mealsdb-migration' ], true ) ) {
             return;
         }
 

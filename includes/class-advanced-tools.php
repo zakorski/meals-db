@@ -5,10 +5,23 @@
  *
  * Rarely-used / destructive admin pages (Rate Definitions, Data Ops,
  * Migration) are hidden from the Meals DB menu unless the operator has
- * ticked "Show advanced tools" in Settings. Hiding is a CONVENIENCE, not
- * a security layer: the pages stay registered (direct URLs and bookmarks
- * keep working) and every governed page keeps its own capability gate,
- * which is enforced on render regardless of menu visibility.
+ * ticked "Show advanced tools" in Settings. Governed pages pass
+ * menu_parent() as the parent slug of their add_submenu_page() call:
+ * 'mealsdb' when the toggle is on (normal menu entry), '' when off —
+ * WordPress's standard hidden-page pattern, which registers the page hook
+ * WITHOUT a menu entry so direct URLs and bookmarks keep working.
+ *
+ * remove_submenu_page() after registration was rejected for this: for
+ * plugin pages it makes user_can_access_admin_page() resolve a hookname
+ * ('admin_page_{slug}') that was never registered, 403-ing the page even
+ * for admins.
+ *
+ * Cron Status and Event Log are deliberately NOT governed — they are how
+ * the team notices breakage (design decision, spec 2026-07-16).
+ *
+ * Hiding is a CONVENIENCE, not a security layer: every governed page keeps
+ * its own capability gate, which is enforced on render regardless of menu
+ * visibility.
  *
  * @package MealsDB
  */
@@ -21,55 +34,30 @@ class MealsDB_Advanced_Tools {
     const SETTING_KEY = 'show_advanced_tools';
 
     /**
-     * Submenu slugs governed by the toggle, in menu order. Cron Status and
-     * Event Log are deliberately NOT governed — they are how the team
-     * notices breakage (design decision, spec 2026-07-16).
-     */
-    const GOVERNED_SLUGS = [
-        'mealsdb_rate_definitions',
-        'mealsdb-data-ops',
-        'mealsdb-migration',
-    ];
-
-    public static function init(): void {
-        // Priority 99: the governed pages register their menu entries at
-        // admin_menu 10 (Data Ops via MealsDB_Admin_UI), 22 (Migration)
-        // and 23 (Rate Definitions); removal must run after all of them.
-        add_action('admin_menu', [self::class, 'maybe_hide_governed_menu_items'], 99);
-    }
-
-    /**
      * Whether advanced tools are shown in the menu. Opposite fail-safe to
-     * shadow mode: anything other than an explicit, readable "on" keeps
-     * the tools HIDDEN (missing option, non-array option, absent key,
-     * '0'/''/0/false all mean hidden).
+     * shadow mode: only an explicit, readable "on" ('1'/1/true) shows the
+     * tools; a missing option, non-array option, absent key, or any other
+     * value keeps them HIDDEN.
      */
     public static function is_enabled(): bool {
         $settings = get_option('mealsdb_settings', null);
-        if (!is_array($settings)) {
+        if (!is_array($settings) || !array_key_exists(self::SETTING_KEY, $settings)) {
             return false;
         }
-        // empty() treats '0', '', 0, false and an absent key all as "off".
-        return !empty($settings[self::SETTING_KEY]);
+        $value = $settings[self::SETTING_KEY];
+        return $value === '1' || $value === 1 || $value === true;
     }
 
     /**
-     * Remove the governed submenu entries when the toggle is off.
+     * Parent slug for governed pages' add_submenu_page() registration:
+     * 'mealsdb' (visible menu entry) when the toggle is on, '' (registered
+     * but menu-less — the hidden-page pattern) when off.
      *
-     * remove_submenu_page() only removes the MENU ENTRY — the page stays
-     * registered and reachable at admin.php?page={slug} with its original
-     * hook suffix, so asset enqueues keyed on the hook and the pages' own
-     * capability checks are untouched.
+     * The page hook suffix differs by state ('meals-db_page_{slug}' when
+     * visible, 'admin_page_{slug}' when hidden), so enqueue checks on
+     * governed pages must accept BOTH suffixes.
      */
-    public static function maybe_hide_governed_menu_items(): void {
-        if (self::is_enabled()) {
-            return;
-        }
-        if (!function_exists('remove_submenu_page')) {
-            return;
-        }
-        foreach (self::GOVERNED_SLUGS as $slug) {
-            remove_submenu_page('mealsdb', $slug);
-        }
+    public static function menu_parent(): string {
+        return self::is_enabled() ? 'mealsdb' : '';
     }
 }

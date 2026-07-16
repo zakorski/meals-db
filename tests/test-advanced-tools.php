@@ -4,9 +4,9 @@
  * for rare/destructive admin pages (admin UI consolidation spec 2026-07-16,
  * PR 1). Covers:
  *   - is_enabled() fail-safe semantics: default is HIDDEN — only an
- *     explicit truthy stored value shows the tools
- *   - maybe_hide_governed_menu_items() removes exactly the three governed
- *     submenu entries when disabled, and nothing when enabled
+ *     explicit '1'/1/true stored value shows the tools
+ *   - menu_parent(): 'mealsdb' (visible) when enabled, '' (registered but
+ *     menu-less — the hidden-page pattern) when disabled
  *
  * Run with: php tests/test-advanced-tools.php
  */
@@ -24,12 +24,6 @@ function get_option(string $name, $default = false) {
     return array_key_exists($name, $GLOBALS['test_options'])
         ? $GLOBALS['test_options'][$name]
         : $default;
-}
-function add_action($hook, $cb, $priority = 10, $args = 1) { return true; }
-$GLOBALS['removed_submenus'] = [];
-function remove_submenu_page($parent, $slug) {
-    $GLOBALS['removed_submenus'][] = [$parent, $slug];
-    return true;
 }
 
 // --- assertion helpers (test-hook-logger.php convention) ----------------
@@ -57,29 +51,26 @@ assert_equal(false, MealsDB_Advanced_Tools::is_enabled(), 'key absent => disable
 $GLOBALS['test_options'] = ['mealsdb_settings' => ['show_advanced_tools' => '0']];
 assert_equal(false, MealsDB_Advanced_Tools::is_enabled(), "explicit '0' => disabled");
 
+$GLOBALS['test_options'] = ['mealsdb_settings' => ['show_advanced_tools' => 'garbage']];
+assert_equal(false, MealsDB_Advanced_Tools::is_enabled(), 'unrecognised value => disabled (strict on-check)');
+
 $GLOBALS['test_options'] = ['mealsdb_settings' => ['show_advanced_tools' => '1']];
 assert_equal(true, MealsDB_Advanced_Tools::is_enabled(), "explicit '1' => enabled");
 
+$GLOBALS['test_options'] = ['mealsdb_settings' => ['show_advanced_tools' => 1]];
+assert_equal(true, MealsDB_Advanced_Tools::is_enabled(), 'int 1 => enabled');
+
+$GLOBALS['test_options'] = ['mealsdb_settings' => ['show_advanced_tools' => true]];
+assert_equal(true, MealsDB_Advanced_Tools::is_enabled(), 'bool true => enabled');
+
 // ---------------------------------------------------------------------------
-// maybe_hide_governed_menu_items()
+// menu_parent()
 // ---------------------------------------------------------------------------
 $GLOBALS['test_options'] = [];
-$GLOBALS['removed_submenus'] = [];
-MealsDB_Advanced_Tools::maybe_hide_governed_menu_items();
-assert_equal(
-    [
-        ['mealsdb', 'mealsdb_rate_definitions'],
-        ['mealsdb', 'mealsdb-data-ops'],
-        ['mealsdb', 'mealsdb-migration'],
-    ],
-    $GLOBALS['removed_submenus'],
-    'disabled => the three governed submenu entries removed from mealsdb'
-);
+assert_equal('', MealsDB_Advanced_Tools::menu_parent(), 'disabled => hidden-page parent (empty string)');
 
 $GLOBALS['test_options'] = ['mealsdb_settings' => ['show_advanced_tools' => '1']];
-$GLOBALS['removed_submenus'] = [];
-MealsDB_Advanced_Tools::maybe_hide_governed_menu_items();
-assert_equal([], $GLOBALS['removed_submenus'], 'enabled => nothing removed');
+assert_equal('mealsdb', MealsDB_Advanced_Tools::menu_parent(), 'enabled => visible under mealsdb');
 
 // ---------------------------------------------------------------------------
 // Report.
