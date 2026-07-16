@@ -110,6 +110,11 @@ add_action('plugins_loaded', function () {
     MealsDB_Ajax_Migration::init();
     MealsDB_Ajax_DB_Sync::init();
     MealsDB_Ajax_Settings::init();
+    // Admin UI consolidation (spec 2026-07-16) PR 1 — hide rare/destructive
+    // pages (Rate Definitions, Data Ops, Migration) from the menu unless the
+    // Settings "Show advanced tools" toggle is on. Hidden pages remain
+    // URL-reachable; their capability gates are unchanged.
+    MealsDB_Advanced_Tools::init();
     MealsDB_Product_Display_Sync::init();
     MealsDB_Sync::register_hooks();
     MealsDB_Allocation_Hooks::init();
