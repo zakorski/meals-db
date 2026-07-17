@@ -409,6 +409,17 @@
             }
         });
 
+        // Per-field derived-value auto-correct toggles (directive
+        // ITEM1-DERIVED). These were omitted from this hand-picked payload,
+        // so the server — which rebuilds the option from POST on every save,
+        // treating an absent key as all-off — silently reset auto-correct on
+        // EVERY settings save and made the checkboxes impossible to enable.
+        var derivedAutocorrect = {};
+        $('input[name^="derived_autocorrect["]:checked').each(function () {
+            var m = $(this).attr('name').match(/^derived_autocorrect\[(.+)\]$/);
+            if (m) { derivedAutocorrect[m[1]] = '1'; }
+        });
+
         $.post(ajaxUrl, {
             action: 'mealsdb_save_settings',
             nonce: nonces.settings || '',
@@ -422,7 +433,8 @@
             overage_mains: $('#mealsdb-overage-mains').val(),
             overage_taxable_sides: $('#mealsdb-overage-taxable-sides').val(),
             overage_nontax_sides: $('#mealsdb-overage-nontax-sides').val(),
-            zone_schedule: zoneSchedule
+            zone_schedule: zoneSchedule,
+            derived_autocorrect: derivedAutocorrect
         }, function (resp) {
             if (resp && resp.success) {
                 $result.text('Settings saved.'); tint($result, '#46b450');
