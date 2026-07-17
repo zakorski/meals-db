@@ -55,12 +55,12 @@ assert_equal(
     'lowercase needle matches stored case'
 );
 assert_equal(
-    ['Sussex' => ['day' => 'Friday', 'label' => '']],
+    ['Sussex' => ['day' => 'FRIDAY', 'label' => '']],
     MealsDB_Zone_Day::zones_for_day(
         ['Sussex' => ['day' => 'FRIDAY', 'label' => '']],
         'Friday'
     ),
-    'uppercase stored day matches'
+    'uppercase stored day matches; config returned verbatim'
 );
 
 // ---------------------------------------------------------------------------

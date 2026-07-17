@@ -82,8 +82,9 @@ class MealsDB_Zone_Day {
      * schedule() shape; $day is a full weekday name, compared
      * case-insensitively. Preserves schedule order and skips malformed
      * rows (same defensive stance as schedule() — the option is
-     * operator-set). Pure, for unit tests and the Home page's "Today's
-     * deliveries" widget (spec 2026-07-16 §2).
+     * operator-set). Matched configs are returned verbatim (day keeps its
+     * stored case, like schedule()). Pure, for unit tests and the Home
+     * page's "Today's deliveries" widget (spec 2026-07-16 §2).
      *
      * @param array<string, array{day: string, label: string}> $schedule
      * @return array<string, array{day: string, label: string}>
@@ -99,9 +100,7 @@ class MealsDB_Zone_Day {
                 continue;
             }
             if (strtolower(trim((string) ($config['day'] ?? ''))) === $needle) {
-                $matched = $config;
-                $matched['day'] = ucfirst(strtolower($matched['day']));
-                $out[(string) $zone] = $matched;
+                $out[(string) $zone] = $config;
             }
         }
         return $out;
