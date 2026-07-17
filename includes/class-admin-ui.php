@@ -12,6 +12,70 @@ defined('ABSPATH') || exit;
 class MealsDB_Admin_UI {
 
     /**
+     * Canonical Meals DB submenu order (spec 2026-07-16 §menu). The pages
+     * register across six classes at admin_menu priorities 10–23; rather
+     * than re-prioritising them all, reorder_submenu() sorts the finished
+     * $submenu['mealsdb'] array by this slug list on a late hook. The
+     * toggle-governed tail (Rate Definitions, Data Ops, Migration) only
+     * appears here when the advanced-tools toggle is on.
+     */
+    private const MENU_ORDER = [
+        'mealsdb',                    // Home (the top-level's own entry)
+        'mealsdb_quick_order',
+        'mealsdb-clients',
+        'mealsdb-tasks',
+        'mealsdb-packing-slips',
+        'mealsdb-purchase-orders',
+        'mealsdb-invoices',
+        'mealsdb-reports',
+        'meals-db-staff',
+        'mealsdb_cron_status',
+        'mealsdb_event_log',
+        'mealsdb-settings',
+        'mealsdb_rate_definitions',
+        'mealsdb-data-ops',
+        'mealsdb-migration',
+    ];
+
+    /**
+     * Sort WP submenu entries ([0]=title, [1]=cap, [2]=slug, …) into
+     * MENU_ORDER. Unknown/slugless entries sort after every known slug,
+     * keeping their original relative order — a future page can never
+     * vanish because this list lags behind. Pure, for unit testing.
+     */
+    public static function order_submenu_items(array $items): array {
+        $rank  = array_flip(self::MENU_ORDER);
+        $after = count(self::MENU_ORDER);
+
+        $decorated = [];
+        foreach (array_values($items) as $i => $item) {
+            $slug = isset($item[2]) ? (string) $item[2] : '';
+            $decorated[] = [
+                'rank' => $rank[$slug] ?? $after,
+                'idx'  => $i,
+                'item' => $item,
+            ];
+        }
+        usort($decorated, static function (array $a, array $b): int {
+            return ($a['rank'] <=> $b['rank']) ?: ($a['idx'] <=> $b['idx']);
+        });
+
+        return array_column($decorated, 'item');
+    }
+
+    /**
+     * admin_menu@999: apply MENU_ORDER to the live submenu. Runs after
+     * every registration (latest is priority 23) and after the
+     * advanced-tools visibility resolution.
+     */
+    public function reorder_submenu(): void {
+        global $submenu;
+        if (isset($submenu['mealsdb']) && is_array($submenu['mealsdb'])) {
+            $submenu['mealsdb'] = self::order_submenu_items($submenu['mealsdb']);
+        }
+    }
+
+    /**
      * Shared instance for registering hooks without relying on global state.
      *
      * @var self|null
@@ -157,6 +221,7 @@ class MealsDB_Admin_UI {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('admin_init', [$this, 'redirect_legacy_quick_order_slug']);
         add_action('admin_init', [$this, 'redirect_retired_tabs']);
+        add_action('admin_menu', [$this, 'reorder_submenu'], 999);
         add_filter('woocommerce_admin_order_actions', [$this, 'add_quick_order_clone_action'], 10, 2);
         add_filter('woocommerce_admin_order_preview_actions', [$this, 'add_quick_order_clone_preview_action'], 10, 2);
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_quick_order_clone_button']);
@@ -202,6 +267,47 @@ class MealsDB_Admin_UI {
             MealsDB_Permissions::required_capability(),
             'mealsdb_quick_order',
             ['MealsDB_Quick_Order_UI', 'render_quick_order_page']
+        );
+
+        // PR 3 (spec 2026-07-16): the main page's tabs become dedicated
+        // pages. Visual order comes from reorder_submenu(), not from
+        // registration order.
+        add_submenu_page(
+            'mealsdb',
+            __('Clients', 'meals-db'),
+            __('Clients', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
+            'mealsdb-clients',
+            ['MealsDB_Admin_UI', 'render_clients_page']
+        );
+
+        add_submenu_page(
+            'mealsdb',
+            __('Tasks', 'meals-db'),
+            __('Tasks', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
+            'mealsdb-tasks',
+            ['MealsDB_Admin_UI', 'render_tasks_page']
+        );
+
+        add_submenu_page(
+            'mealsdb',
+            __('Purchase Orders', 'meals-db'),
+            __('Purchase Orders', 'meals-db'),
+            MealsDB_Permissions::required_capability(),
+            'mealsdb-purchase-orders',
+            ['MealsDB_Admin_UI', 'render_po_page']
+        );
+
+        // Settings view self-gates manage_options; register the menu entry
+        // at the same tier so non-admins don't see a dead link.
+        add_submenu_page(
+            'mealsdb',
+            __('Settings', 'meals-db'),
+            __('Settings', 'meals-db'),
+            'manage_options',
+            'mealsdb-settings',
+            ['MealsDB_Admin_UI', 'render_settings_page']
         );
 
         add_submenu_page(
@@ -993,6 +1099,94 @@ class MealsDB_Admin_UI {
     }
 
     /**
+     * Clients page (spec 2026-07-16 §3): List (with edit), Add (with the
+     * resume-a-draft panel), and Sync (with Ignored Conflicts as a
+     * view=ignored sub-view). The views are the former main-page tabs,
+     * unchanged.
+     */
+    public static function render_clients_page(): void {
+        MealsDB_Permissions::enforce();
+
+        $tab = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : 'list';
+        $subtabs = [
+            'list' => __('Client List', 'meals-db'),
+            'add'  => __('Add Client', 'meals-db'),
+            'sync' => __('WooCommerce Sync', 'meals-db'),
+        ];
+        if (!isset($subtabs[$tab])) {
+            $tab = 'list';
+        }
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Clients', 'meals-db') . '</h1>';
+        self::render_subnav('mealsdb-clients', $subtabs, $tab, 'tab');
+        echo '<div class="mealsdb-tab-content">';
+        switch ($tab) {
+            case 'add':
+                include MealsDB_Plugin::path('views/partials/drafts-panel.php');
+                include MealsDB_Plugin::path('views/add-client.php');
+                break;
+
+            case 'sync':
+                $view = isset($_GET['view']) ? sanitize_key(wp_unslash((string) $_GET['view'])) : '';
+                if ($view === 'ignored') {
+                    include MealsDB_Plugin::path('views/ignored.php');
+                } else {
+                    include MealsDB_Plugin::path('views/dashboard.php');
+                }
+                break;
+
+            case 'list':
+            default:
+                $action = isset($_GET['action']) ? sanitize_key(wp_unslash((string) $_GET['action'])) : '';
+                if ($action === 'edit') {
+                    include MealsDB_Plugin::path('views/edit-client.php');
+                } else {
+                    include MealsDB_Plugin::path('views/view-clients.php');
+                }
+                break;
+        }
+        echo '</div></div>';
+    }
+
+    /** Tasks page: list / detail / rules — the former tasks tab, unchanged. */
+    public static function render_tasks_page(): void {
+        MealsDB_Permissions::enforce();
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Tasks', 'meals-db') . '</h1>';
+        echo '<div class="mealsdb-tab-content">';
+        $action = isset($_GET['action']) ? sanitize_key(wp_unslash((string) $_GET['action'])) : '';
+        if ($action === 'detail') {
+            include MealsDB_Plugin::path('views/task-detail.php');
+        } elseif ($action === 'rules') {
+            include MealsDB_Plugin::path('views/task-rules.php');
+        } else {
+            include MealsDB_Plugin::path('views/tasks-list.php');
+        }
+        echo '</div></div>';
+    }
+
+    /** Settings page — the former settings tab, unchanged (view self-gates manage_options). */
+    public static function render_settings_page(): void {
+        MealsDB_Permissions::enforce();
+
+        echo '<div class="wrap">';
+        echo '<h1>' . esc_html__('Meals DB Settings', 'meals-db') . '</h1>';
+        include MealsDB_Plugin::path('views/settings.php');
+        echo '</div>';
+    }
+
+    /** Purchase Orders page — the former po_admin tab, unchanged. */
+    public static function render_po_page(): void {
+        MealsDB_Permissions::enforce();
+
+        echo '<div class="wrap">';
+        include MealsDB_Plugin::path('views/purchase-orders.php');
+        echo '</div>';
+    }
+
+    /**
      * Render the Data Ops submenu page. Hosts every data-mutating
      * operation relocated here from the old Settings and Updates cards.
      * The handlers are unchanged; only their host page moved.
@@ -1057,10 +1251,10 @@ class MealsDB_Admin_UI {
     /**
      * Render a simple sub-tab nav bar for the new submenu pages.
      */
-    private static function render_subnav(string $page, array $subtabs, string $active): void {
+    private static function render_subnav(string $page, array $subtabs, string $active, string $param = 'sub'): void {
         echo '<h2 class="nav-tab-wrapper">';
         foreach ($subtabs as $slug => $label) {
-            $url = admin_url('admin.php?page=' . $page . '&sub=' . $slug);
+            $url = admin_url('admin.php?page=' . $page . '&' . $param . '=' . $slug);
             $cls = 'nav-tab' . ($slug === $active ? ' nav-tab-active' : '');
             printf('<a href="%s" class="%s">%s</a>', esc_url($url), esc_attr($cls), esc_html($label));
         }
