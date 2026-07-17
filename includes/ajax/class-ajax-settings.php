@@ -220,6 +220,12 @@ class MealsDB_Ajax_Settings {
         $settings[MealsDB_Shadow_Mode::SETTING_KEY] =
             empty($_POST['shadow_mode']) ? '0' : '1';
 
+        // Advanced-tools menu visibility (admin UI consolidation spec
+        // 2026-07-16). Same explicit '0'/'1' storage as shadow_mode, but
+        // the OPPOSITE fail-safe: absent/unreadable means HIDDEN.
+        $settings[MealsDB_Advanced_Tools::SETTING_KEY] =
+            empty($_POST['show_advanced_tools']) ? '0' : '1';
+
         update_option( 'mealsdb_settings', $settings, false );
 
         // Audit encryption-key rotation. The key value is NOT logged

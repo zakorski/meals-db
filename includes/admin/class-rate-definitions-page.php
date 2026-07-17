@@ -40,8 +40,14 @@ class MealsDB_Rate_Definitions_Page {
     }
 
     public static function register_menu(): void {
+        // Parent is toggle-dependent (advanced-tools visibility): 'mealsdb'
+        // when shown, '' (registered but menu-less) when hidden.
+        $parent = class_exists('MealsDB_Advanced_Tools')
+            ? MealsDB_Advanced_Tools::menu_parent()
+            : 'mealsdb';
+
         add_submenu_page(
-            'mealsdb',
+            $parent,
             __('Rate Definitions', 'meals-db'),
             __('Rate Definitions', 'meals-db'),
             'manage_options',
