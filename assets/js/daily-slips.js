@@ -107,7 +107,7 @@
             fields.start_date = start;
             fields.end_date   = end;
         } else {
-            var date = $('#mealsdb-slip-date').val();
+            var date = $('#mealsdb-ondemand-date').val();
             if (!date) {
                 showStatus(i18n.selectDate || 'Please select a date.', 'warning');
                 return null;

@@ -121,12 +121,6 @@ class MealsDB_Admin_UI {
             case 'ignored':
                 $enqueue('ignored');
                 break;
-            case 'slips':
-                $enqueue('daily-slips', [self::register_report_utils_script()]);
-                break;
-            case 'po':
-                $enqueue('purchase-order', [self::register_report_utils_script()]);
-                break;
             case 'po_admin':
                 // report-utils supplies csvRow/exportCsv for the detail-page
                 // CSV export (Pattern 14 injection guard lives there).
@@ -162,6 +156,7 @@ class MealsDB_Admin_UI {
         add_action('admin_menu', [$this, 'register_menu']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('admin_init', [$this, 'redirect_legacy_quick_order_slug']);
+        add_action('admin_init', [$this, 'redirect_retired_tabs']);
         add_filter('woocommerce_admin_order_actions', [$this, 'add_quick_order_clone_action'], 10, 2);
         add_filter('woocommerce_admin_order_preview_actions', [$this, 'add_quick_order_clone_preview_action'], 10, 2);
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_quick_order_clone_button']);
@@ -273,6 +268,71 @@ class MealsDB_Admin_UI {
 
             exit;
         }
+    }
+
+    /**
+     * Legacy-URL map for main-page tabs retired by the admin UI
+     * consolidation (spec 2026-07-16). Returns the replacement admin URL,
+     * or null when the request is not a retired-tab URL. Pure (no request
+     * reads, no redirect) so it is unit-testable; redirect_retired_tabs()
+     * is the admin_init wrapper that acts on it.
+     */
+    public static function retired_tab_target(string $page, string $tab): ?string {
+        if ($page !== 'mealsdb') {
+            return null;
+        }
+        switch ($tab) {
+            // PR 2: Daily Slips folded into the Packing Slips batch page
+            // (collapsed "On-demand PDFs" section).
+            case 'slips':
+                return admin_url('admin.php?page=mealsdb-packing-slips');
+            // PR 2: the generate-only tab merged into the PO list.
+            // Still tab=po_admin until PR 3 gives the list its own page —
+            // update this target in PR 3, not the callers.
+            case 'po':
+                return admin_url('admin.php?page=mealsdb&tab=po_admin');
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * admin_init: redirect retired ?page=mealsdb&tab=… URLs so bookmarks
+     * and muscle memory survive the consolidation. Same pattern as
+     * redirect_legacy_quick_order_slug() above.
+     */
+    public function redirect_retired_tabs(): void {
+        if (!isset($_GET['page'], $_GET['tab'])) {
+            return;
+        }
+
+        // Array-typed params (?page[]=…) would emit array-to-string warnings
+        // below; they can never match the map, so bail quietly.
+        if (!is_string($_GET['page']) || !is_string($_GET['tab'])) {
+            return;
+        }
+
+        $page = $_GET['page'];
+        $tab  = $_GET['tab'];
+        if (function_exists('wp_unslash')) {
+            $page = wp_unslash($page);
+            $tab  = wp_unslash($tab);
+        }
+        if (function_exists('sanitize_key')) {
+            $tab = sanitize_key((string) $tab);
+        }
+
+        $target = self::retired_tab_target((string) $page, (string) $tab);
+        if ($target === null) {
+            return;
+        }
+
+        if (function_exists('wp_safe_redirect')) {
+            wp_safe_redirect($target);
+        } else {
+            wp_redirect($target);
+        }
+        exit;
     }
 
     /**
@@ -717,8 +777,8 @@ class MealsDB_Admin_UI {
         // via assets/js/report-utils.js.
         $this->enqueue_report_scripts($tab);
 
-        // Extracted per-tab view scripts (drafts, ignored, daily-slips,
-        // purchase-order, tasks list/detail/rules) — replaces the inline
+        // Extracted per-tab view scripts (drafts, ignored,
+        // tasks list/detail/rules) — replaces the inline
         // <script> blocks those views used to carry.
         $this->enqueue_tab_view_scripts($tab, $action);
     }
@@ -1059,14 +1119,6 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/ignored.php');
                 break;
 
-            case 'slips':
-                include MealsDB_Plugin::path('views/daily-slips.php');
-                break;
-
-            case 'po':
-                include MealsDB_Plugin::path('views/purchase-order.php');
-                break;
-
             case 'settings':
                 include MealsDB_Plugin::path('views/settings.php');
                 break;
@@ -1153,8 +1205,6 @@ class MealsDB_Admin_UI {
             'clients' => __('View Clients', 'meals-db'),
             'drafts'  => __('Drafts', 'meals-db'),
             'ignored' => __('Ignored Conflicts', 'meals-db'),
-            'slips'   => __('Daily Slips', 'meals-db'),
-            'po'      => __('Purchase Order', 'meals-db'),
             'tasks'    => __('Tasks', 'meals-db'),
             'po_admin' => __('Purchase Orders', 'meals-db'),
             'settings' => __('Settings', 'meals-db'),

@@ -44,6 +44,8 @@ $mealsdb_po_render_island = static function (array $extra = []) use ($base_url):
             'noteRequired'     => __('A note is required for adjusted rows.', 'meals-db'),
             'requestFailed'    => __('Request failed.', 'meals-db'),
             'saving'           => __('Saving…', 'meals-db'),
+            'generating'       => __('Generating…', 'meals-db'),
+            'draftSaveFailed'  => __('Could not save the draft purchase order.', 'meals-db'),
             'was'              => __('was: %s', 'meals-db'),
             'belowTarget'      => __('Below 9-week coverage target (%s wks)', 'meals-db'),
             'belowFloor'       => __('Below 7-week safety floor (%s wks)', 'meals-db'),
@@ -338,7 +340,19 @@ $rows = $service->query($filters);
 ?>
 <div id="mealsdb-po-list" class="mealsdb-po-list">
     <h2><?php esc_html_e('Purchase Orders', 'meals-db'); ?></h2>
-    <p class="description"><?php esc_html_e('Drafts are created from the Purchase Order tab ("Generate draft PO") and arrive pallet-optimized. Approve locks a draft; Mark received adds it to inventory; Reconcile records what actually arrived.', 'meals-db'); ?></p>
+
+    <div class="mealsdb-po-controls" style="margin-bottom:12px;">
+        <button type="button" class="button button-primary" id="mealsdb-po-generate">
+            <?php esc_html_e('Generate draft PO', 'meals-db'); ?>
+        </button>
+    </div>
+
+    <p class="description"><?php esc_html_e('Generate creates a seasonally-adjusted, pallet-optimized draft and opens it for review. Approve locks a draft; Mark received adds it to inventory; Reconcile records what actually arrived.', 'meals-db'); ?></p>
+
+    <details style="margin-bottom:12px;">
+        <summary class="description" style="cursor:pointer;"><?php esc_html_e('How the forecast works', 'meals-db'); ?></summary>
+        <p class="description"><?php esc_html_e('Fixed model, validated by back-test: 12-week recency-weighted history, 6-week order horizon plus a 3-week demand-proportional safety buffer (9 weeks of coverage), seasonal index clamped to 0.3–3.0. The order is snapped to whole Apetito pallets (75 cases): filled up if the partial pallet is at least a third full, otherwise trimmed — within a 7–52 week coverage guard. Not configurable.', 'meals-db'); ?></p>
+    </details>
 
     <div style="margin-bottom:12px;">
         <label><strong><?php esc_html_e('Status:', 'meals-db'); ?></strong></label>

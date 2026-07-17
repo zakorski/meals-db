@@ -316,4 +316,30 @@
         var slug = String(cfg.poNumber || cfg.poId || 'draft').replace(/[^\w.-]+/g, '-');
         R.exportCsv(csv, 'po-' + slug + '-' + new Date().toISOString().slice(0, 10) + '.csv');
     });
+
+    // ------------------------------------------------------------------
+    // Generate draft PO — merged from the retired Purchase Order tab
+    // (purchase-order.js, deleted in the same change). The server
+    // REGENERATES the forecast rows and pallet-optimizes them; the browser
+    // never supplies row data. On success, open the new draft's detail page.
+    // ------------------------------------------------------------------
+    $('#mealsdb-po-generate').on('click', function () {
+        // Disabled while in flight: a double-click must not create two drafts.
+        var $btn = $(this).prop('disabled', true);
+        msg(t('generating', 'Generating…'), false);
+        $.post(cfg.ajaxUrl, {
+            action: 'mealsdb_po_save_draft',
+            nonce: cfg.nonce || ''
+        }, function (res) {
+            if (res && res.success && res.data && res.data.po_id) {
+                window.location.href = (cfg.baseUrl || '') + '&po_id=' + parseInt(res.data.po_id, 10);
+                return;
+            }
+            $btn.prop('disabled', false);
+            msg((res && res.data && res.data.message) || t('draftSaveFailed', 'Could not save the draft purchase order.'), true);
+        }).fail(function () {
+            $btn.prop('disabled', false);
+            msg(t('requestFailed', 'Request failed.'), true);
+        });
+    });
 })(jQuery);

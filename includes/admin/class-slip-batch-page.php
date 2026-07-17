@@ -72,6 +72,23 @@ class MealsDB_Slip_Batch_Page {
             ]) . ';',
             'before'
         );
+
+        // On-demand section (merged Daily Slips, spec 2026-07-16): the view
+        // emits the #mealsdb-daily-slips-data JSON island; daily-slips.js
+        // reads it by element id. report-utils supplies the shared status
+        // helper. The main page used to enqueue this per-tab — that site is
+        // retired along with the tab.
+        $report_utils = class_exists('MealsDB_Admin_UI')
+            ? MealsDB_Admin_UI::register_report_utils_script()
+            : 'jquery';
+
+        wp_enqueue_script(
+            'mealsdb-daily-slips-js',
+            plugins_url('assets/js/daily-slips.js', dirname(dirname(__FILE__))),
+            ['jquery', $report_utils],
+            defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false,
+            true
+        );
     }
 
     public static function render(): void {
@@ -84,6 +101,7 @@ class MealsDB_Slip_Batch_Page {
 
         self::render_generate_form();
         self::render_history_table();
+        self::render_on_demand_section();
 
         echo '</div>';
     }
@@ -144,6 +162,28 @@ class MealsDB_Slip_Batch_Page {
         }
 
         echo '</tbody></table>';
+    }
+
+    // -----------------------------------------------------------------
+    // On-demand PDFs (merged Daily Slips)
+    // -----------------------------------------------------------------
+
+    /**
+     * On-demand slip PDFs — the retired Daily Slips tab, relocated here
+     * (admin UI consolidation spec 2026-07-16 §4: "batches won"). Renders
+     * views/daily-slips.php inside a collapsed <details>: immediate
+     * packer/driver PDFs by zone + date range or by delivery day, streamed
+     * to the browser. Nothing is saved — batch history/cancel above does
+     * not apply to these.
+     */
+    private static function render_on_demand_section(): void {
+        echo '<hr style="margin:24px 0;" />';
+        echo '<details id="mealsdb-on-demand-slips">';
+        echo '<summary style="cursor:pointer;"><strong>'
+            . esc_html__('On-demand PDFs (not saved)', 'meals-db')
+            . '</strong></summary>';
+        include MealsDB_Plugin::path('views/daily-slips.php');
+        echo '</details>';
     }
 
     /**
