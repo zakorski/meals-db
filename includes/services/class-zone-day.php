@@ -78,6 +78,36 @@ class MealsDB_Zone_Day {
     }
 
     /**
+     * Zones delivering on a given weekday. $schedule is the validated
+     * schedule() shape; $day is a full weekday name, compared
+     * case-insensitively. Preserves schedule order and skips malformed
+     * rows (same defensive stance as schedule() — the option is
+     * operator-set). Pure, for unit tests and the Home page's "Today's
+     * deliveries" widget (spec 2026-07-16 §2).
+     *
+     * @param array<string, array{day: string, label: string}> $schedule
+     * @return array<string, array{day: string, label: string}>
+     */
+    public static function zones_for_day(array $schedule, string $day): array {
+        $needle = strtolower(trim($day));
+        if ($needle === '') {
+            return [];
+        }
+        $out = [];
+        foreach ($schedule as $zone => $config) {
+            if (!is_array($config)) {
+                continue;
+            }
+            if (strtolower(trim((string) ($config['day'] ?? ''))) === $needle) {
+                $matched = $config;
+                $matched['day'] = ucfirst(strtolower($matched['day']));
+                $out[(string) $zone] = $matched;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * Apply a schedule edit to client rows: any zone whose DAY changed
      * updates every active client in that zone (delivery_day is a synced
      * cache — spec 2026-07-11). Zones present in $old but dropped from
