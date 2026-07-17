@@ -73,8 +73,9 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
 
         <!-- Day mode controls (hidden by default) -->
         <div id="mealsdb-day-controls" style="display:none; margin-bottom:10px;">
-            <label for="mealsdb-slip-date"><?php echo esc_html__('Delivery Date:', 'meals-db'); ?></label>
-            <input type="date" id="mealsdb-slip-date" value="<?php echo esc_attr(wp_date('Y-m-d')); ?>" />
+            <label for="mealsdb-ondemand-date"><?php echo esc_html__('Delivery Date:', 'meals-db'); ?></label>
+            <?php // id renamed from mealsdb-slip-date: the Packing Slips page's batch form already uses that id (duplicate DOM id broke day-mode). ?>
+            <input type="date" id="mealsdb-ondemand-date" value="<?php echo esc_attr(wp_date('Y-m-d')); ?>" />
         </div>
 
         <button type="button" class="button button-primary" id="mealsdb-gen-packer-pdf">

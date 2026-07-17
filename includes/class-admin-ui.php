@@ -780,7 +780,7 @@ class MealsDB_Admin_UI {
         // via assets/js/report-utils.js.
         $this->enqueue_report_scripts($tab);
 
-        // Extracted per-tab view scripts (drafts, ignored, daily-slips,
+        // Extracted per-tab view scripts (drafts, ignored,
         // purchase-order, tasks list/detail/rules) — replaces the inline
         // <script> blocks those views used to carry.
         $this->enqueue_tab_view_scripts($tab, $action);
