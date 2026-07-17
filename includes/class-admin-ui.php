@@ -253,6 +253,18 @@ class MealsDB_Admin_UI {
             30
         );
 
+        // Re-register the parent's auto-cloned first submenu entry so it
+        // reads "Home" (spec 2026-07-16 §menu) instead of repeating the
+        // parent title. Same slug as the parent — WP replaces the clone.
+        add_submenu_page(
+            'mealsdb',
+            $page_title,
+            __('Home', 'meals-db'),
+            $capability,
+            'mealsdb',
+            $callback
+        );
+
         add_submenu_page(
             'mealsdb',
             __('Staff Directory', 'meals-db'),
@@ -1382,12 +1394,6 @@ class MealsDB_Admin_UI {
         return (string) ob_get_clean();
     }
 
-
-    /**
-     * Renders the tab navigation.
-     *
-     * @param string $active
-     */
     /**
      * Render the client form using a single-page, multi-column layout.
      *

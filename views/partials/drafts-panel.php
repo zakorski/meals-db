@@ -19,7 +19,8 @@ $mealsdb_draft_count  = (int) $wpdb->get_var($wpdb->prepare(
 ));
 
 if ($mealsdb_draft_count > 0) : ?>
-<details id="mealsdb-drafts-panel" style="margin-bottom:16px;">
+<?php // Stay open across the panel's own pagination links (?paged=N). ?>
+<details id="mealsdb-drafts-panel" style="margin-bottom:16px;"<?php echo isset($_GET['paged']) ? ' open' : ''; ?>>
     <summary style="cursor:pointer;"><strong>
         <?php echo esc_html(sprintf(
             /* translators: %d: number of the operator's saved client drafts */
