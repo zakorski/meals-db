@@ -179,7 +179,9 @@ class MealsDB_Admin_UI {
         };
 
         switch ($tab) {
-            case 'drafts':
+            case 'add':
+                // The Add tab hosts the resume-a-draft panel (spec §3);
+                // its delete/confirm behaviour lives in drafts.js.
                 $enqueue('drafts');
                 break;
             case 'ignored':
@@ -564,7 +566,17 @@ class MealsDB_Admin_UI {
         // 'admin_page_{slug}' when hidden) — accept both.
         $is_data_ops_page    = in_array($hook, ['meals-db_page_mealsdb-data-ops', 'admin_page_mealsdb-data-ops'], true);
 
-        if (!$is_main_page && !$is_staff_page && !$is_quick_order_page && !$is_reports_page && !$is_data_ops_page) {
+        // PR 3 (spec 2026-07-16): the main page's tabs live on dedicated
+        // pages now. Each new hook is translated back into the legacy
+        // $tab/$action vocabulary below, so the per-view asset blocks are
+        // unchanged.
+        $is_clients_page  = ($hook === 'meals-db_page_mealsdb-clients');
+        $is_tasks_page    = ($hook === 'meals-db_page_mealsdb-tasks');
+        $is_settings_page = ($hook === 'meals-db_page_mealsdb-settings');
+        $is_po_page       = ($hook === 'meals-db_page_mealsdb-purchase-orders');
+
+        if (!$is_main_page && !$is_staff_page && !$is_quick_order_page && !$is_reports_page && !$is_data_ops_page
+            && !$is_clients_page && !$is_tasks_page && !$is_settings_page && !$is_po_page) {
             return;
         }
 
@@ -657,6 +669,12 @@ class MealsDB_Admin_UI {
             return;
         }
 
+        // Home shell (PR 3): title + quick-action buttons only — no admin
+        // JS needed. PR 4's dashboard widgets will revisit this.
+        if ($is_main_page) {
+            return;
+        }
+
         $tab = $_GET['tab'] ?? '';
         if (function_exists('wp_unslash')) {
             $tab = wp_unslash($tab);
@@ -675,6 +693,25 @@ class MealsDB_Admin_UI {
             $action = sanitize_key($action);
         } else {
             $action = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $action));
+        }
+
+        // Translate the dedicated pages into the legacy tab identities the
+        // asset blocks below and the two dispatch helpers are keyed on.
+        if ($is_clients_page) {
+            if ($tab === 'add') {
+                // keep 'add'
+            } elseif ($tab === 'sync') {
+                $view = isset($_GET['view']) ? sanitize_key(wp_unslash((string) $_GET['view'])) : '';
+                $tab  = ($view === 'ignored') ? 'ignored' : 'sync';
+            } else {
+                $tab = 'clients'; // list (default) + action=edit
+            }
+        } elseif ($is_tasks_page) {
+            $tab = 'tasks';
+        } elseif ($is_settings_page) {
+            $tab = 'settings';
+        } elseif ($is_po_page) {
+            $tab = 'po_admin';
         }
 
         if ($tab === 'add' || ($tab === 'clients' && $action === 'edit')) {
