@@ -121,9 +121,6 @@ class MealsDB_Admin_UI {
             case 'ignored':
                 $enqueue('ignored');
                 break;
-            case 'slips':
-                $enqueue('daily-slips', [self::register_report_utils_script()]);
-                break;
             case 'po':
                 $enqueue('purchase-order', [self::register_report_utils_script()]);
                 break;
@@ -309,6 +306,12 @@ class MealsDB_Admin_UI {
      */
     public function redirect_retired_tabs(): void {
         if (!isset($_GET['page'], $_GET['tab'])) {
+            return;
+        }
+
+        // Array-typed params (?page[]=…) would emit array-to-string warnings
+        // below; they can never match the map, so bail quietly.
+        if (!is_string($_GET['page']) || !is_string($_GET['tab'])) {
             return;
         }
 
@@ -1119,10 +1122,6 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/ignored.php');
                 break;
 
-            case 'slips':
-                include MealsDB_Plugin::path('views/daily-slips.php');
-                break;
-
             case 'po':
                 include MealsDB_Plugin::path('views/purchase-order.php');
                 break;
@@ -1213,7 +1212,6 @@ class MealsDB_Admin_UI {
             'clients' => __('View Clients', 'meals-db'),
             'drafts'  => __('Drafts', 'meals-db'),
             'ignored' => __('Ignored Conflicts', 'meals-db'),
-            'slips'   => __('Daily Slips', 'meals-db'),
             'po'      => __('Purchase Order', 'meals-db'),
             'tasks'    => __('Tasks', 'meals-db'),
             'po_admin' => __('Purchase Orders', 'meals-db'),

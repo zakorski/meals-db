@@ -1,13 +1,17 @@
 <?php
 /**
- * Daily Slips admin view — Phase T per-order PDF generation.
+ * On-demand slip PDFs — embedded section of the Packing Slips page
+ * (MealsDB_Slip_Batch_Page::render_on_demand_section(), spec 2026-07-16).
+ * Formerly the main page's Daily Slips tab (Phase T), retired in the admin
+ * UI consolidation PR 2.
  *
  * Two PDF outputs per generation request:
  *   - Packer slips (no financial info, right column reserved for notes)
  *   - Driver slips (packer slip + collection breakdown + customer info)
  *
  * Slip-mode toggle (zone + date range vs. single delivery day) is
- * preserved from Phase Q.
+ * preserved from Phase Q. The view stays self-guarding (enforce() +
+ * manage_options wp_die) so a future includer can't skip the gate.
  */
 defined('ABSPATH') || exit;
 
