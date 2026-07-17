@@ -121,9 +121,6 @@ class MealsDB_Admin_UI {
             case 'ignored':
                 $enqueue('ignored');
                 break;
-            case 'po':
-                $enqueue('purchase-order', [self::register_report_utils_script()]);
-                break;
             case 'po_admin':
                 // report-utils supplies csvRow/exportCsv for the detail-page
                 // CSV export (Pattern 14 injection guard lives there).
@@ -1122,10 +1119,6 @@ class MealsDB_Admin_UI {
                 include MealsDB_Plugin::path('views/ignored.php');
                 break;
 
-            case 'po':
-                include MealsDB_Plugin::path('views/purchase-order.php');
-                break;
-
             case 'settings':
                 include MealsDB_Plugin::path('views/settings.php');
                 break;
@@ -1212,7 +1205,6 @@ class MealsDB_Admin_UI {
             'clients' => __('View Clients', 'meals-db'),
             'drafts'  => __('Drafts', 'meals-db'),
             'ignored' => __('Ignored Conflicts', 'meals-db'),
-            'po'      => __('Purchase Order', 'meals-db'),
             'tasks'    => __('Tasks', 'meals-db'),
             'po_admin' => __('Purchase Orders', 'meals-db'),
             'settings' => __('Settings', 'meals-db'),
