@@ -87,7 +87,7 @@ if ($results === null && $wpdb->last_error) {
                         <td><?= esc_html($data['phone_primary'] ?? '') ?></td>
                         <td><?= esc_html(mysql2date('Y-m-d H:i', $draft['created_at'])) ?></td>
                         <td>
-                            <form method="post" action="<?php echo esc_url(admin_url('admin.php?page=mealsdb&tab=add')); ?>">
+                            <form method="post" action="<?php echo esc_url(admin_url('admin.php?page=mealsdb-clients&tab=add')); ?>">
                                 <?php foreach ($data as $key => $value): ?>
                                     <?php
                                     $serialized_value = is_scalar($value)
@@ -111,7 +111,7 @@ if ($results === null && $wpdb->last_error) {
         <?php
         $total_pages = (int) ceil($total_drafts / $per_page);
         if ($total_pages > 1):
-            $base_url = admin_url('admin.php?page=mealsdb&tab=drafts');
+            $base_url = admin_url('admin.php?page=mealsdb-clients&tab=add');
         ?>
             <div class="tablenav bottom">
                 <div class="tablenav-pages">

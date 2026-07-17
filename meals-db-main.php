@@ -347,8 +347,9 @@ add_action('admin_notices', function () {
     $on_settings_screen = false;
     if (isset($_GET['page'])) {
         $current_page = sanitize_key(wp_unslash((string) $_GET['page']));
-        $current_tab  = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : '';
-        $on_settings_screen = ($current_page === 'mealsdb' && $current_tab === 'settings');
+        // PR 3: Settings moved from ?page=mealsdb&tab=settings to its own
+        // mealsdb-settings page — key the live-key reveal to the new slug.
+        $on_settings_screen = ($current_page === 'mealsdb-settings');
     }
 
     echo '<div class="notice notice-warning"><p><strong>';

@@ -379,58 +379,67 @@ class MealsDB_Admin_UI {
     }
 
     /**
-     * Legacy-URL map for main-page tabs retired by the admin UI
-     * consolidation (spec 2026-07-16). Returns the replacement admin URL,
-     * or null when the request is not a retired-tab URL. Pure (no request
-     * reads, no redirect) so it is unit-testable; redirect_retired_tabs()
-     * is the admin_init wrapper that acts on it.
+     * Legacy-URL map for the retired ?page=mealsdb&tab=… URLs (spec
+     * 2026-07-16 §6; PR 3 dissolved the main page's tabs into dedicated
+     * pages). Takes the request's full query-arg array and returns the
+     * replacement admin URL with every extra scalar arg preserved
+     * (client_id, po_id, task_id, paged, search, filters…), or null when
+     * the request is not a retired-tab URL. Pure — no superglobal reads,
+     * no redirect — so it is unit-testable. The PR 2 (string,string)
+     * signature could not express arg preservation; this is the redesign
+     * its review called for.
      */
-    public static function retired_tab_target(string $page, string $tab): ?string {
-        if ($page !== 'mealsdb') {
+    public static function retired_tab_target(array $query): ?string {
+        $page = isset($query['page']) && is_string($query['page']) ? $query['page'] : '';
+        $tab  = isset($query['tab']) && is_string($query['tab']) ? strtolower($query['tab']) : '';
+        if ($page !== 'mealsdb' || $tab === '') {
             return null;
         }
-        switch ($tab) {
-            // PR 2: Daily Slips folded into the Packing Slips batch page
-            // (collapsed "On-demand PDFs" section).
-            case 'slips':
-                return admin_url('admin.php?page=mealsdb-packing-slips');
-            // PR 2: the generate-only tab merged into the PO list.
-            // Still tab=po_admin until PR 3 gives the list its own page —
-            // update this target in PR 3, not the callers.
-            case 'po':
-                return admin_url('admin.php?page=mealsdb&tab=po_admin');
-            default:
-                return null;
+
+        // tab => [new page slug, forced args appended after the preserved
+        // extras]. The bare mealsdb slug (no tab) renders Home — no row.
+        $map = [
+            'sync'     => ['mealsdb-clients', ['tab' => 'sync']],
+            'add'      => ['mealsdb-clients', ['tab' => 'add']],
+            'clients'  => ['mealsdb-clients', ['tab' => 'list']],
+            'drafts'   => ['mealsdb-clients', ['tab' => 'add']],
+            'ignored'  => ['mealsdb-clients', ['tab' => 'sync', 'view' => 'ignored']],
+            'slips'    => ['mealsdb-packing-slips', []],
+            'po'       => ['mealsdb-purchase-orders', []],
+            'po_admin' => ['mealsdb-purchase-orders', []],
+            'tasks'    => ['mealsdb-tasks', []],
+            'settings' => ['mealsdb-settings', []],
+        ];
+        if (!isset($map[$tab])) {
+            return null;
         }
+
+        [$new_page, $forced] = $map[$tab];
+        $args = $query;
+        unset($args['page'], $args['tab']);
+        $args = array_merge($args, $forced);
+
+        $url = 'admin.php?page=' . $new_page;
+        foreach ($args as $key => $value) {
+            if (!is_scalar($value)) {
+                continue; // ?ids[]=… can't be preserved through this builder
+            }
+            $url .= '&' . rawurlencode((string) $key) . '=' . rawurlencode((string) $value);
+        }
+        return admin_url($url);
     }
 
-    /**
-     * admin_init: redirect retired ?page=mealsdb&tab=… URLs so bookmarks
-     * and muscle memory survive the consolidation. Same pattern as
-     * redirect_legacy_quick_order_slug() above.
-     */
     public function redirect_retired_tabs(): void {
         if (!isset($_GET['page'], $_GET['tab'])) {
             return;
         }
 
-        // Array-typed params (?page[]=…) would emit array-to-string warnings
-        // below; they can never match the map, so bail quietly.
-        if (!is_string($_GET['page']) || !is_string($_GET['tab'])) {
-            return;
-        }
-
-        $page = $_GET['page'];
-        $tab  = $_GET['tab'];
+        $query = $_GET;
         if (function_exists('wp_unslash')) {
-            $page = wp_unslash($page);
-            $tab  = wp_unslash($tab);
-        }
-        if (function_exists('sanitize_key')) {
-            $tab = sanitize_key((string) $tab);
+            $query = wp_unslash($query);
         }
 
-        $target = self::retired_tab_target((string) $page, (string) $tab);
+        $target = self::retired_tab_target(is_array($query) ? $query : []);
         if ($target === null) {
             return;
         }
@@ -1301,79 +1310,33 @@ class MealsDB_Admin_UI {
     /**
      * Render the main admin page, routing to correct tab.
      */
+    /**
+     * Home — the plugin's landing page (spec 2026-07-16 §1). PR 3 ships
+     * the shell (title + quick actions); PR 4 adds the dashboard widgets
+     * (tasks due today, today's zones, alerts). The tab router that lived
+     * here is gone: every tab is a dedicated page now, and
+     * redirect_retired_tabs() catches old ?tab= URLs before render.
+     */
     public static function render_main_page() {
         MealsDB_Permissions::enforce();
 
-        // NOTE: the update_schema and force_rebuild POST handlers moved to
-        // render_data_ops_page(); delete_nonadmin_users was removed entirely.
-
-        $tab = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : 'sync';
-
         echo '<div class="wrap">';
-        echo '<h1>Meals DB</h1>';
+        echo '<h1>' . esc_html__('Meals DB', 'meals-db') . '</h1>';
 
-        self::render_tabs($tab);
-
-        echo '<div class="mealsdb-tab-content">';
-
-        switch ($tab) {
-            case 'sync':
-                include MealsDB_Plugin::path('views/dashboard.php');
-                break;
-
-            case 'add':
-                include MealsDB_Plugin::path('views/add-client.php');
-                break;
-
-            case 'clients':
-                $action = $_GET['action'] ?? '';
-                if (function_exists('wp_unslash')) {
-                    $action = wp_unslash($action);
-                }
-                if (function_exists('sanitize_key')) {
-                    $action = sanitize_key($action);
-                } else {
-                    $action = strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $action));
-                }
-                if ($action === 'edit') {
-                    include MealsDB_Plugin::path('views/edit-client.php');
-                } else {
-                    include MealsDB_Plugin::path('views/view-clients.php');
-                }
-                break;
-
-            case 'drafts':
-                include MealsDB_Plugin::path('views/drafts.php');
-                break;
-
-            case 'ignored':
-                include MealsDB_Plugin::path('views/ignored.php');
-                break;
-
-            case 'settings':
-                include MealsDB_Plugin::path('views/settings.php');
-                break;
-
-            case 'tasks':
-                $action = isset($_GET['action']) ? sanitize_key(wp_unslash((string) $_GET['action'])) : '';
-                if ($action === 'detail') {
-                    include MealsDB_Plugin::path('views/task-detail.php');
-                } elseif ($action === 'rules') {
-                    include MealsDB_Plugin::path('views/task-rules.php');
-                } else {
-                    include MealsDB_Plugin::path('views/tasks-list.php');
-                }
-                break;
-
-            case 'po_admin':
-                include MealsDB_Plugin::path('views/purchase-orders.php');
-                break;
-
-            default:
-                echo '<p>Invalid tab selected.</p>';
+        $actions = [
+            [admin_url('admin.php?page=mealsdb-clients&tab=add'), __('New Client', 'meals-db')],
+            [admin_url('admin.php?page=mealsdb_quick_order'), __('Quick Order', 'meals-db')],
+            [admin_url('admin.php?page=mealsdb-packing-slips'), __("Today's Slips", 'meals-db')],
+            [admin_url('admin.php?page=mealsdb-tasks'), __('Tasks', 'meals-db')],
+            [admin_url('admin.php?page=mealsdb-clients'), __('Clients', 'meals-db')],
+        ];
+        echo '<p class="mealsdb-home-actions" style="margin-top:16px;">';
+        foreach ($actions as $action) {
+            echo '<a class="button button-hero" style="margin:0 8px 8px 0;" href="'
+                . esc_url($action[0]) . '">' . esc_html($action[1]) . '</a>';
         }
-
-        echo '</div></div>';
+        echo '</p>';
+        echo '</div>';
     }
 
     /**
@@ -1428,22 +1391,6 @@ class MealsDB_Admin_UI {
      *
      * @param string $active
      */
-    private static function render_tabs(string $active = 'sync') {
-        $active_tab = $active;
-        $tabs = [
-            'sync'    => __('Sync Dashboard', 'meals-db'),
-            'add'     => __('Add New Client', 'meals-db'),
-            'clients' => __('View Clients', 'meals-db'),
-            'drafts'  => __('Drafts', 'meals-db'),
-            'ignored' => __('Ignored Conflicts', 'meals-db'),
-            'tasks'    => __('Tasks', 'meals-db'),
-            'po_admin' => __('Purchase Orders', 'meals-db'),
-            'settings' => __('Settings', 'meals-db'),
-        ];
-
-        include MealsDB_Plugin::path('views/partials/tabs.php');
-    }
-
     /**
      * Render the client form using a single-page, multi-column layout.
      *
