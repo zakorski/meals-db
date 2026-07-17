@@ -78,6 +78,25 @@ $field_labels = [
         <?php esc_html_e('Click "Compare Databases" to scan for differences between Meals DB and WordPress users.', 'meals-db'); ?>
     </p>
 
+    <?php
+    // Ignored Conflicts lives under this Sync tab now (spec 2026-07-16 §3) —
+    // unignoring is part of the same reconciliation job. Count is cheap
+    // (indexed COUNT on a small table).
+    global $wpdb;
+    $mealsdb_ignored_table = MealsDB_DB::get_table_name(MealsDB_Tables::IGNORED_CONFLICTS);
+    $mealsdb_ignored_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$mealsdb_ignored_table}`");
+    if ($mealsdb_ignored_count > 0) : ?>
+        <p>
+            <a href="<?php echo esc_url(admin_url('admin.php?page=mealsdb-clients&tab=sync&view=ignored')); ?>">
+                <?php echo esc_html(sprintf(
+                    /* translators: %d: number of ignored sync mismatches */
+                    __('View ignored mismatches (%d)', 'meals-db'),
+                    $mealsdb_ignored_count
+                )); ?>
+            </a>
+        </p>
+    <?php endif; ?>
+
     <form method="post" class="mealsdb-compare-form">
         <?php wp_nonce_field('mealsdb_compare_databases', 'mealsdb_compare_nonce'); ?>
         <input type="hidden" name="mealsdb_action" value="compare_databases" />

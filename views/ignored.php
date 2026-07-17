@@ -69,6 +69,12 @@ unset($item);
 <div class="wrap">
     <h2>Ignored Conflicts</h2>
 
+    <p>
+        <a href="<?php echo esc_url(admin_url('admin.php?page=mealsdb-clients&tab=sync')); ?>">
+            &larr; <?php echo esc_html__('Back to WooCommerce Sync', 'meals-db'); ?>
+        </a>
+    </p>
+
     <?php if ($ignored_error): ?>
         <div class="notice notice-error">
             <p><?= esc_html($ignored_error) ?></p>
@@ -111,7 +117,7 @@ unset($item);
         <?php
         $total_pages = (int) ceil($total_ignored / $per_page);
         if ($total_pages > 1):
-            $base_url = admin_url('admin.php?page=mealsdb&tab=ignored');
+            $base_url = admin_url('admin.php?page=mealsdb-clients&tab=sync&view=ignored');
         ?>
             <div class="tablenav bottom">
                 <div class="tablenav-pages">

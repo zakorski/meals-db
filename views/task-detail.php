@@ -12,7 +12,7 @@ $task_id = isset($_GET['task_id']) ? (int) $_GET['task_id'] : 0;
 $engine = new MealsDB_Task_Engine();
 $task = $engine->get_task($task_id);
 
-$base_url = admin_url('admin.php?page=mealsdb&tab=tasks');
+$base_url = admin_url('admin.php?page=mealsdb-tasks');
 
 if ($task === null) {
     echo '<div class="notice notice-error"><p>' . esc_html__('Task not found.', 'meals-db') . '</p></div>';
@@ -49,7 +49,7 @@ $form_schema = is_array($definition['form_schema'] ?? null) ? $definition['form_
                     $mealsdb_rel_label = sprintf('%s #%d', $task['related_entity_type'], (int) $task['related_entity_id']);
                     if ($task['related_entity_type'] === 'po' && (int) $task['related_entity_id'] > 0) {
                         // Deep link to the PO workflow page (task-integration §6).
-                        $mealsdb_po_url = admin_url('admin.php?page=mealsdb&tab=po_admin&po_id=' . (int) $task['related_entity_id']);
+                        $mealsdb_po_url = admin_url('admin.php?page=mealsdb-purchase-orders&po_id=' . (int) $task['related_entity_id']);
                         echo '<a href="' . esc_url($mealsdb_po_url) . '">' . esc_html($mealsdb_rel_label) . '</a>';
                     } else {
                         echo esc_html($mealsdb_rel_label);

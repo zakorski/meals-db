@@ -337,7 +337,7 @@ add_action('admin_notices', function () {
     $key  = is_array($opts) && !empty($opts['encryption_key']) ? (string) $opts['encryption_key'] : '';
 
     // Only reveal the LIVE key on the plugin's own Settings screen
-    // (admin.php?page=mealsdb&tab=settings) — the one place the operator can
+    // (admin.php?page=mealsdb-settings) — the one place the operator can
     // already see it (the encryption_key field in views/settings.php). This
     // admin_notices hook fires on EVERY wp-admin page; echoing the secret into
     // the DOM of unrelated pages (dashboard, posts, plugins, …) needlessly
@@ -347,8 +347,9 @@ add_action('admin_notices', function () {
     $on_settings_screen = false;
     if (isset($_GET['page'])) {
         $current_page = sanitize_key(wp_unslash((string) $_GET['page']));
-        $current_tab  = isset($_GET['tab']) ? sanitize_key(wp_unslash((string) $_GET['tab'])) : '';
-        $on_settings_screen = ($current_page === 'mealsdb' && $current_tab === 'settings');
+        // PR 3: Settings moved from ?page=mealsdb&tab=settings to its own
+        // mealsdb-settings page — key the live-key reveal to the new slug.
+        $on_settings_screen = ($current_page === 'mealsdb-settings');
     }
 
     echo '<div class="notice notice-warning"><p><strong>';
