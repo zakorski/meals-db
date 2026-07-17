@@ -51,8 +51,8 @@ if ($paged > $total_pages) {
 
 $clients = MealsDB_Clients::get_clients($client_type_filter, $search_term, false, $per_page, $offset);
 
-$base_url = admin_url('admin.php?page=mealsdb&tab=clients');
-$edit_base = admin_url('admin.php?page=mealsdb&tab=clients&action=edit');
+$base_url = admin_url('admin.php?page=mealsdb-clients&tab=list');
+$edit_base = admin_url('admin.php?page=mealsdb-clients&tab=list&action=edit');
 
 $preset_labels = [
     'government' => __('SDNB + Veteran (default)', 'meals-db'),
@@ -73,8 +73,8 @@ $badge_styles = [
     <h2><?php esc_html_e('View Clients', 'meals-db'); ?></h2>
 
     <form method="get" class="mealsdb-client-filters">
-        <input type="hidden" name="page" value="mealsdb" />
-        <input type="hidden" name="tab" value="clients" />
+        <input type="hidden" name="page" value="mealsdb-clients" />
+        <input type="hidden" name="tab" value="list" />
 
         <label for="mealsdb-filter-client-type" class="screen-reader-text"><?php esc_html_e('Filter by client type', 'meals-db'); ?></label>
         <select id="mealsdb-filter-client-type" name="type_preset">

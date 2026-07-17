@@ -23,7 +23,7 @@ $po_id  = isset($_GET['po_id']) ? (int) $_GET['po_id'] : 0;
 $action = isset($_GET['action']) ? sanitize_key(wp_unslash((string) $_GET['action'])) : '';
 
 $service  = new MealsDB_Purchase_Orders();
-$base_url = admin_url('admin.php?page=mealsdb&tab=po_admin');
+$base_url = admin_url('admin.php?page=mealsdb-purchase-orders');
 
 /** Render the shared JSON island + wrap-up for JS. */
 $mealsdb_po_render_island = static function (array $extra = []) use ($base_url): void {
@@ -301,7 +301,7 @@ if ($po_id > 0) {
                         <?php
                         $def = MealsDB_Task_Registry::get($task['task_type']);
                         $label = $def['label'] ?? $task['task_type'];
-                        $detail_url = admin_url('admin.php?page=mealsdb&tab=tasks&action=detail&task_id=' . (int) $task['task_id']);
+                        $detail_url = admin_url('admin.php?page=mealsdb-tasks&action=detail&task_id=' . (int) $task['task_id']);
                         ?>
                         <tr>
                             <td><?php echo esc_html($label); ?></td>

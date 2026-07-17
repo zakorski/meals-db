@@ -12,7 +12,7 @@ $rules_service = new MealsDB_Task_Rules();
 $rules = $rules_service->list_rules();
 $types = MealsDB_Task_Registry::get_all();
 
-$base_url = admin_url('admin.php?page=mealsdb&tab=tasks');
+$base_url = admin_url('admin.php?page=mealsdb-tasks');
 ?>
 <div id="mealsdb-task-rules" class="mealsdb-task-rules">
     <p>

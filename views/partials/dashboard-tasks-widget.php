@@ -38,7 +38,7 @@ foreach ($today_tasks as $t) {
     }
 }
 
-$tasks_url = admin_url('admin.php?page=mealsdb&tab=tasks');
+$tasks_url = admin_url('admin.php?page=mealsdb-tasks');
 ?>
 <div class="mealsdb-dashboard-tasks" style="margin:16px 0; padding:12px 16px; background:#fff; border:1px solid #ccd0d4; border-left:4px solid #2271b1;">
     <h3 style="margin:0 0 8px;"><?php esc_html_e('Today\'s Tasks', 'meals-db'); ?></h3>

@@ -64,7 +64,7 @@ if ($role === 'all') {
     $grouped[$role] = $tasks;
 }
 
-$base_url = admin_url('admin.php?page=mealsdb&tab=tasks');
+$base_url = admin_url('admin.php?page=mealsdb-tasks');
 ?>
 <div id="mealsdb-tasks-list" class="mealsdb-tasks-list">
     <div style="margin-bottom:16px; display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;">

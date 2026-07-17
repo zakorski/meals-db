@@ -337,7 +337,7 @@ add_action('admin_notices', function () {
     $key  = is_array($opts) && !empty($opts['encryption_key']) ? (string) $opts['encryption_key'] : '';
 
     // Only reveal the LIVE key on the plugin's own Settings screen
-    // (admin.php?page=mealsdb&tab=settings) — the one place the operator can
+    // (admin.php?page=mealsdb-settings) — the one place the operator can
     // already see it (the encryption_key field in views/settings.php). This
     // admin_notices hook fires on EVERY wp-admin page; echoing the secret into
     // the DOM of unrelated pages (dashboard, posts, plugins, …) needlessly

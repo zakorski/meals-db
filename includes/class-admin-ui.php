@@ -984,7 +984,7 @@ class MealsDB_Admin_UI {
                     // views/view-clients.php and the allocation-history enqueue
                     // above). '&id=' left every fee-reconciliation client link on
                     // "Invalid client specified." — use client_id.
-                    'editUrl' => admin_url('admin.php?page=mealsdb&tab=clients&action=edit&client_id='),
+                    'editUrl' => admin_url('admin.php?page=mealsdb-clients&tab=list&action=edit&client_id='),
                 ],
             ],
             'mealsdb-order-errors' => [
@@ -1307,9 +1307,6 @@ class MealsDB_Admin_UI {
         echo '</h2>';
     }
 
-    /**
-     * Render the main admin page, routing to correct tab.
-     */
     /**
      * Home — the plugin's landing page (spec 2026-07-16 §1). PR 3 ships
      * the shell (title + quick actions); PR 4 adds the dashboard widgets
