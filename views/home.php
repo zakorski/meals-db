@@ -17,13 +17,20 @@ global $wpdb;
 // ---------------------------------------------------------------------
 // Quick actions (unchanged from the PR 3 shell).
 // ---------------------------------------------------------------------
+// Packing Slips is manage_options — used to gate both the quick action
+// and the per-zone batch links below (no 403-dangling links for
+// baseline-capability users).
+$mealsdb_can_slips = current_user_can('manage_options');
+
 $mealsdb_home_actions = [
     [admin_url('admin.php?page=mealsdb-clients&tab=add'), __('New Client', 'meals-db')],
     [admin_url('admin.php?page=mealsdb_quick_order'), __('Quick Order', 'meals-db')],
-    [admin_url('admin.php?page=mealsdb-packing-slips'), __("Today's Slips", 'meals-db')],
-    [admin_url('admin.php?page=mealsdb-tasks'), __('Tasks', 'meals-db')],
-    [admin_url('admin.php?page=mealsdb-clients'), __('Clients', 'meals-db')],
 ];
+if ($mealsdb_can_slips) {
+    $mealsdb_home_actions[] = [admin_url('admin.php?page=mealsdb-packing-slips'), __("Today's Slips", 'meals-db')];
+}
+$mealsdb_home_actions[] = [admin_url('admin.php?page=mealsdb-tasks'), __('Tasks', 'meals-db')];
+$mealsdb_home_actions[] = [admin_url('admin.php?page=mealsdb-clients'), __('Clients', 'meals-db')];
 
 // ---------------------------------------------------------------------
 // Alerts strip.
@@ -85,8 +92,6 @@ try {
 $mealsdb_today_zones = class_exists('MealsDB_Zone_Day')
     ? MealsDB_Zone_Day::zones_for_day(MealsDB_Zone_Day::schedule(), $mealsdb_today_name)
     : [];
-// Packing Slips is manage_options — plain text below that tier.
-$mealsdb_can_slips = current_user_can('manage_options');
 ?>
 <div class="wrap">
     <h1><?php esc_html_e('Meals DB', 'meals-db'); ?></h1>

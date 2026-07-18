@@ -690,8 +690,8 @@ class MealsDB_Admin_UI {
             return;
         }
 
-        // Home shell (PR 3): title + quick-action buttons only — no admin
-        // JS needed. PR 4's dashboard widgets will revisit this.
+        // Home (spec 2026-07-16 §1–2): title, quick actions, and the PR 4
+        // dashboard widgets are all server-rendered — admin.css only, no JS.
         if ($is_main_page) {
             return;
         }
