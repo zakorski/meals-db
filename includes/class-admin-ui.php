@@ -1320,32 +1320,15 @@ class MealsDB_Admin_UI {
     }
 
     /**
-     * Home — the plugin's landing page (spec 2026-07-16 §1). PR 3 ships
-     * the shell (title + quick actions); PR 4 adds the dashboard widgets
-     * (tasks due today, today's zones, alerts). The tab router that lived
-     * here is gone: every tab is a dedicated page now, and
-     * redirect_retired_tabs() catches old ?tab= URLs before render.
+     * Home — the plugin's landing page (spec 2026-07-16 §1). PR 4 filled
+     * the shell with the dashboard widgets — see views/home.php. The tab
+     * router that lived here is gone: every tab is a dedicated page now,
+     * and redirect_retired_tabs() catches old ?tab= URLs before render.
      */
     public static function render_main_page() {
         MealsDB_Permissions::enforce();
 
-        echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('Meals DB', 'meals-db') . '</h1>';
-
-        $actions = [
-            [admin_url('admin.php?page=mealsdb-clients&tab=add'), __('New Client', 'meals-db')],
-            [admin_url('admin.php?page=mealsdb_quick_order'), __('Quick Order', 'meals-db')],
-            [admin_url('admin.php?page=mealsdb-packing-slips'), __("Today's Slips", 'meals-db')],
-            [admin_url('admin.php?page=mealsdb-tasks'), __('Tasks', 'meals-db')],
-            [admin_url('admin.php?page=mealsdb-clients'), __('Clients', 'meals-db')],
-        ];
-        echo '<p class="mealsdb-home-actions" style="margin-top:16px;">';
-        foreach ($actions as $action) {
-            echo '<a class="button button-hero" style="margin:0 8px 8px 0;" href="'
-                . esc_url($action[0]) . '">' . esc_html($action[1]) . '</a>';
-        }
-        echo '</p>';
-        echo '</div>';
+        include MealsDB_Plugin::path('views/home.php');
     }
 
     /**
