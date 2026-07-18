@@ -111,6 +111,20 @@ class MealsDB_Slip_Batch_Page {
     // -----------------------------------------------------------------
 
     private static function render_generate_form(): void {
+        // The Home page's "Today's deliveries" links prefill zone + date
+        // via GET (spec 2026-07-16 §2). Read-only convenience — generating
+        // still requires the explicit button click. Unknown zones simply
+        // don't match an <option>; malformed dates are dropped.
+        $prefill_zone = isset($_GET['zone']) && is_string($_GET['zone'])
+            ? sanitize_text_field(wp_unslash($_GET['zone']))
+            : '';
+        $prefill_date = isset($_GET['date']) && is_string($_GET['date'])
+            ? sanitize_text_field(wp_unslash($_GET['date']))
+            : '';
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $prefill_date)) {
+            $prefill_date = '';
+        }
+
         echo '<h2>' . esc_html__('Generate a batch', 'meals-db') . '</h2>';
         echo '<p class="description">'
             . esc_html__('Generates and saves the packer slips (with cover) and the driver sheets for one zone and delivery date, for manual handling.', 'meals-db')
@@ -124,14 +138,15 @@ class MealsDB_Slip_Batch_Page {
         echo '<option value="">' . esc_html__('— select —', 'meals-db') . '</option>';
         if (is_array($schedule)) {
             foreach (array_keys($schedule) as $zone_name) {
-                echo '<option value="' . esc_attr((string) $zone_name) . '">'
+                echo '<option value="' . esc_attr((string) $zone_name) . '"'
+                    . selected($prefill_zone, (string) $zone_name, false) . '>'
                     . esc_html((string) $zone_name) . '</option>';
             }
         }
         echo '</select></label> ';
 
         echo '<label>' . esc_html__('Delivery date', 'meals-db')
-            . ' <input type="date" id="mealsdb-slip-date" /></label> ';
+            . ' <input type="date" id="mealsdb-slip-date" value="' . esc_attr($prefill_date) . '" /></label> ';
 
         echo '<button type="button" class="button button-primary" id="mealsdb-slip-generate-btn">'
             . esc_html__('Generate batch', 'meals-db') . '</button>';
