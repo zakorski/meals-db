@@ -1321,20 +1321,29 @@ body { font-family: Helvetica, Arial, sans-serif; color: #000; margin: 0; paddin
    longer than ~12 rows ran straight through them. They now flow AFTER the
    table inside this one absolutely-placed box. Only the right-region
    divider / doc-4 geometry is calibrated to the reference scan (see the
-   DOC2_/DOC4_ constants); nothing on the left anchors to it. */
+   DOC2_/DOC4_ constants); nothing on the left anchors to it.
+   KNOWN LIMIT: doc 2 has no item pagination, and dompdf never
+   page-breaks inside an absolute container — an extreme order (~30+
+   single-line rows) pushes totals/notes/page-number past the 8.5in page
+   edge, where the page box clips them. A real fix means chunking rows
+   into additional .doc2-page's in PHP and recomputing page_y. */
 .d2-flow        { position: absolute; left: 0.24in; top: 1.26in; width: 6.9in; }
 .d2-items       { width: 100%; border-collapse: collapse; font-size: 11pt; table-layout: fixed; }
 .d2-items th, .d2-items td { border: 1px solid #000; padding: 1pt 5pt; text-align: left; }
 .d2-items th    { background: #fff; font-weight: bold; }    /* white header (no grey) */
-/* Column budget: 0.75 + 0.45 + 4.7 + 0.8 = the same 6.7in the old
-   1.0/0.6/4.0/1.1 split used — the table's external width is unchanged.
-   Product must stay on ONE line for the packers: widened at the expense
-   of SKU/Qty/Category; nowrap + hidden clips a pathological name instead
-   of wrapping it. */
-.d2-items td.d2-sku, .d2-items th.d2-sku { width: 0.75in; font-weight: bold; }
-.d2-items .d2-qty { width: 0.45in; text-align: center; }
-.d2-items .d2-name { width: 4.7in; white-space: nowrap; overflow: hidden; }
-.d2-items .d2-cat  { width: 0.8in; }
+/* Columns MUST be percentages: dompdf's fixed-layout Cellmap zeroes the
+   resolved value of absolute (in/pt) cell widths (Cellmap.php:736-751,
+   vendored 3.1.5), silently rendering equal quarters — which is why the
+   old 1.0/0.6/4.0/1.1in split never took effect and product names
+   wrapped. Percent widths ARE honored (same fixed+percent pattern as the
+   on-demand .items-table). Sum is exactly 100 of the 6.9in table:
+   ~0.76in SKU / ~0.45in Qty / ~4.86in Product / ~0.83in Category.
+   Product must stay on ONE line for the packers: nowrap + hidden clips a
+   pathological name instead of wrapping it (td clipping works on 3.1.5). */
+.d2-items td.d2-sku, .d2-items th.d2-sku { width: 11%; font-weight: bold; }
+.d2-items .d2-qty { width: 6.5%; text-align: center; }
+.d2-items .d2-name { width: 70.5%; white-space: nowrap; overflow: hidden; }
+.d2-items .d2-cat  { width: 12%; }
 .d2-totals      { margin-top: 0.12in; font-size: 10pt; font-weight: bold; }
 .d2-totals .d2-page { margin-left: 1.0in; }
 .d2-notes       { margin-top: 0.10in; font-size: 10pt; }
