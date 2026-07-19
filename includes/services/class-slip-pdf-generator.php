@@ -42,6 +42,34 @@ class MealsDB_Slip_PDF_Generator {
     public const DOC4_BLOCK_TOP_IN   = 4.62;
     public const DOC4_BLOCK_WIDTH_IN = 3.2;
 
+    // ----------------------------------------------------------------- //
+    //  Doc 2 pagination (row chunking). dompdf cannot page-break inside
+    //  the absolutely-positioned .d2-flow container, so pagination is
+    //  computed HERE, in PHP, from conservative geometry estimates.
+    //  Chunking engages ONLY when the flowed content would cross into the
+    //  bottom print margin — a slip that fits renders exactly as before.
+    // ----------------------------------------------------------------- //
+
+    /** Letter-landscape page height and the .d2-flow content top. */
+    private const DOC2_PAGE_HEIGHT_IN = 8.5;
+    private const DOC2_CONTENT_TOP_IN = 1.26;
+
+    /** Standard bottom printing margin — the bleed threshold. */
+    public const DOC2_PRINT_MARGIN_IN = 0.5;
+
+    /** Single-line 11pt row (incl. 1pt padding + collapsed borders). */
+    private const DOC2_ROW_IN = 0.23;
+
+    /** Totals block: 0.12in margin + ~0.19in of 10pt line. */
+    private const DOC2_TOTALS_IN = 0.31;
+
+    /** Notes block: 0.10in margin + ~0.18in per 10pt line. */
+    private const DOC2_NOTES_MARGIN_IN = 0.10;
+    private const DOC2_NOTES_LINE_IN   = 0.18;
+
+    /** ~125 chars fit 6.9in at 10pt; 110 keeps the estimate conservative. */
+    private const DOC2_NOTES_CHARS_PER_LINE = 110;
+
     // WC product_cat term ID for Mains is sourced from the documented single
     // source of truth (MealsDB_Operational_Constants::CATEGORY_ID_MAINS = 35)
     // rather than a local copy, so a taxonomy-rebuild ID shift is a one-place
@@ -996,6 +1024,82 @@ CSS;
     <div class="d1-footer">Page 1 of {$page_y}</div>
 </div>
 HTML;
+    }
+
+    /**
+     * Conservative wrapped-line estimate for the Additional Notes block.
+     * Public + pure for unit tests.
+     */
+    public static function doc2_notes_lines(string $notes): int {
+        $notes = trim($notes);
+        if ($notes === '') {
+            return 0;
+        }
+        $lines = 0;
+        foreach (explode("\n", $notes) as $segment) {
+            $len = function_exists('mb_strlen') ? mb_strlen($segment) : strlen($segment);
+            $lines += max(1, (int) ceil($len / self::DOC2_NOTES_CHARS_PER_LINE));
+        }
+        return $lines;
+    }
+
+    /**
+     * Row counts per doc-2 page for one order. Returns [$item_count]
+     * (single page — NO chunking) whenever header + rows + totals + notes
+     * clear the bottom print margin: chunking must never alter a slip
+     * that already fits. Otherwise: greedy 28-row full pages, with the
+     * tail (totals + notes) reserved space on the last page. Degenerate
+     * giant notes (tail alone exceeds a page) yield a final 0-row page —
+     * the notes themselves are not paginated.
+     *
+     * Public + pure for unit tests.
+     *
+     * @return array<int,int>
+     */
+    public static function doc2_chunk_sizes(int $item_count, int $notes_lines): array {
+        $capacity = self::DOC2_PAGE_HEIGHT_IN - self::DOC2_CONTENT_TOP_IN - self::DOC2_PRINT_MARGIN_IN;
+        $header   = self::DOC2_ROW_IN;
+        $tail     = self::DOC2_TOTALS_IN
+            + ($notes_lines > 0 ? self::DOC2_NOTES_MARGIN_IN + $notes_lines * self::DOC2_NOTES_LINE_IN : 0);
+
+        if ($header + $item_count * self::DOC2_ROW_IN + $tail <= $capacity) {
+            return [$item_count];
+        }
+
+        $full = max(1, (int) floor(($capacity - $header) / self::DOC2_ROW_IN));
+        $last = (int) floor(($capacity - $header - $tail) / self::DOC2_ROW_IN);
+
+        $sizes     = [];
+        $remaining = $item_count;
+        // Keep at least one row for the tail page when the tail leaves room
+        // for any — a bare totals/notes page is reserved for the degenerate
+        // giant-notes case only.
+        $reserve = $last >= 1 ? 1 : 0;
+        while ($remaining > max(0, $last)) {
+            $take = max(1, min($full, $remaining - $reserve));
+            $sizes[]    = $take;
+            $remaining -= $take;
+        }
+        $sizes[] = $remaining;
+        return $sizes;
+    }
+
+    /**
+     * Doc-2 page count per slip, positionally matching $slips. Shared by
+     * the combined renderer (global page numbering) and the doc-4
+     * download (blank-page padding for overlay alignment).
+     *
+     * @param array<int,array> $slips
+     * @return array<int,int>
+     */
+    private static function doc2_counts_for_slips(array $slips): array {
+        $counts = [];
+        foreach ($slips as $slip) {
+            $items_n  = is_array($slip['items'] ?? null) ? count($slip['items']) : 0;
+            $notes    = self::doc2_notes_lines((string) ($slip['additional_notes'] ?? ''));
+            $counts[] = count(self::doc2_chunk_sizes($items_n, $notes));
+        }
+        return $counts;
     }
 
     // ----------------------------------------------------------------- //
