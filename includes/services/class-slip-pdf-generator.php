@@ -955,8 +955,10 @@ CSS;
      * Packing-Slips document can place it as page 1 ahead of the doc 2 slips.
      * Standalone doc 1 passes $page_break=false (a lone page needs no break);
      * the combined doc passes true so a page break separates the cover from the
-     * first packer slip. Page numbering ("Page 1 of {1+order_count}") is
-     * unchanged — the caller sets order_count to the count it wants reflected.
+     * first packer slip. Page numbering: the caller passes the true page
+     * total as $batch['total_page_count'] (row chunking can give an order
+     * several pages, so 1+order_count under-counts); an absent key falls
+     * back to the pre-chunking 1+order_count formula.
      */
     private function doc1_body_html(string $zone_name, string $delivery_date, array $batch, bool $page_break = false): string {
         $orders      = is_array($batch['orders'] ?? null) ? $batch['orders'] : [];
@@ -1001,7 +1003,7 @@ CSS;
         }
 
         // In combined doc with chunking, total_page_count reflects the sum of
-        // chunk pages + cover; in standalone doc, revert to 1+order_count.
+        // chunk pages + cover; absent key => pre-chunking 1+order_count.
         $page_y = (int) ($batch['total_page_count'] ?? (1 + $order_count)); // cover is page 1; doc2 pages follow.
         $brk    = $page_break ? ' d2-break' : '';
 
@@ -1059,7 +1061,7 @@ HTML;
      * @return array<int,int>
      */
     public static function doc2_chunk_sizes(int $item_count, int $notes_lines): array {
-        $item_count = max(0, $item_count); // total against direct misuse; count() callers are always >= 0
+        $item_count = max(0, $item_count); // guard against direct misuse; count() callers are always >= 0
         $capacity = self::DOC2_PAGE_HEIGHT_IN - self::DOC2_CONTENT_TOP_IN - self::DOC2_PRINT_MARGIN_IN;
         $header   = self::DOC2_ROW_IN;
         $tail     = self::DOC2_TOTALS_IN

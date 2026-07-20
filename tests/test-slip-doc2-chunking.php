@@ -68,7 +68,7 @@ chk(MealsDB_Slip_PDF_Generator::doc2_chunk_sizes(25, 3), [24, 1], 'CH-7 notes pu
 chk(MealsDB_Slip_PDF_Generator::doc2_chunk_sizes(5, 40), [5, 0], 'CH-8 degenerate giant notes => tail-only last page');
 
 // ===========================================================================
-// HTML — chunked combined document. 30 single-line items, no notes
+// HTML — chunked combined document. 30 single-line items + a 1-line note
 // => sizes [28, 2] => 2 doc2 pages; with the cover, y = 3.
 // ===========================================================================
 $mk_item = static function (int $i): array {
