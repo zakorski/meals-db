@@ -170,8 +170,15 @@ class MealsDB_Ajax_Slip_Batch {
         $batch = self::download_guard();
         try {
             $generator = self::make_pdf_generator();
+            // Chunked doc-2 orders span multiple physical sheets; pass the
+            // live per-order page counts so doc 4 pads blank pages and the
+            // manual overlay lands on each order's FIRST sheet.
             $pdf = $generator->generate_doc4_driver_blocks(
-                is_array($batch['orders'] ?? null) ? $batch['orders'] : []
+                is_array($batch['orders'] ?? null) ? $batch['orders'] : [],
+                $generator->doc2_page_counts(
+                    (string) ($batch['zone_name'] ?? ''),
+                    (string) ($batch['delivery_date'] ?? '')
+                )
             );
             self::stream_pdf($pdf, self::filename($batch, 'driver'));
         } catch (\Throwable $e) {
