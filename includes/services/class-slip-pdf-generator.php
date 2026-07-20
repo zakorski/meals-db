@@ -42,6 +42,34 @@ class MealsDB_Slip_PDF_Generator {
     public const DOC4_BLOCK_TOP_IN   = 4.62;
     public const DOC4_BLOCK_WIDTH_IN = 3.2;
 
+    // ----------------------------------------------------------------- //
+    //  Doc 2 pagination (row chunking). dompdf cannot page-break inside
+    //  the absolutely-positioned .d2-flow container, so pagination is
+    //  computed HERE, in PHP, from conservative geometry estimates.
+    //  Chunking engages ONLY when the flowed content would cross into the
+    //  bottom print margin — a slip that fits renders exactly as before.
+    // ----------------------------------------------------------------- //
+
+    /** Letter-landscape page height and the .d2-flow content top. */
+    private const DOC2_PAGE_HEIGHT_IN = 8.5;
+    private const DOC2_CONTENT_TOP_IN = 1.26;
+
+    /** Standard bottom printing margin — the bleed threshold. */
+    public const DOC2_PRINT_MARGIN_IN = 0.5;
+
+    /** Single-line 11pt row (incl. 1pt padding + collapsed borders). */
+    private const DOC2_ROW_IN = 0.23;
+
+    /** Totals block: 0.12in margin + ~0.19in of 10pt line. */
+    private const DOC2_TOTALS_IN = 0.31;
+
+    /** Notes block: 0.10in margin + ~0.18in per 10pt line. */
+    private const DOC2_NOTES_MARGIN_IN = 0.10;
+    private const DOC2_NOTES_LINE_IN   = 0.18;
+
+    /** ~125 chars fit 6.9in at 10pt; 110 keeps the estimate conservative. */
+    private const DOC2_NOTES_CHARS_PER_LINE = 110;
+
     // WC product_cat term ID for Mains is sourced from the documented single
     // source of truth (MealsDB_Operational_Constants::CATEGORY_ID_MAINS = 35)
     // rather than a local copy, so a taxonomy-rebuild ID shift is a one-place
@@ -927,8 +955,10 @@ CSS;
      * Packing-Slips document can place it as page 1 ahead of the doc 2 slips.
      * Standalone doc 1 passes $page_break=false (a lone page needs no break);
      * the combined doc passes true so a page break separates the cover from the
-     * first packer slip. Page numbering ("Page 1 of {1+order_count}") is
-     * unchanged — the caller sets order_count to the count it wants reflected.
+     * first packer slip. Page numbering: the caller passes the true page
+     * total as $batch['total_page_count'] (row chunking can give an order
+     * several pages, so 1+order_count under-counts); an absent key falls
+     * back to the pre-chunking 1+order_count formula.
      */
     private function doc1_body_html(string $zone_name, string $delivery_date, array $batch, bool $page_break = false): string {
         $orders      = is_array($batch['orders'] ?? null) ? $batch['orders'] : [];
@@ -972,7 +1002,9 @@ CSS;
             $legend_html = '<tr><td colspan="3" class="legend-empty">(delivery schedule not configured)</td></tr>';
         }
 
-        $page_y = 1 + $order_count; // cover is page 1; one page per order after.
+        // In combined doc with chunking, total_page_count reflects the sum of
+        // chunk pages + cover; absent key => pre-chunking 1+order_count.
+        $page_y = (int) ($batch['total_page_count'] ?? (1 + $order_count)); // cover is page 1; doc2 pages follow.
         $brk    = $page_break ? ' d2-break' : '';
 
         return <<<HTML
@@ -998,18 +1030,145 @@ CSS;
 HTML;
     }
 
+    /**
+     * Conservative wrapped-line estimate for the Additional Notes block.
+     * Public + pure for unit tests.
+     */
+    public static function doc2_notes_lines(string $notes): int {
+        $notes = trim($notes);
+        if ($notes === '') {
+            return 0;
+        }
+        $lines = 0;
+        foreach (explode("\n", $notes) as $segment) {
+            $len = function_exists('mb_strlen') ? mb_strlen($segment) : strlen($segment);
+            $lines += max(1, (int) ceil($len / self::DOC2_NOTES_CHARS_PER_LINE));
+        }
+        return $lines;
+    }
+
+    /**
+     * Row counts per doc-2 page for one order. Returns [$item_count]
+     * (single page — NO chunking) whenever header + rows + totals + notes
+     * clear the bottom print margin: chunking must never alter a slip
+     * that already fits. Otherwise: greedy 28-row full pages, with the
+     * tail (totals + notes) reserved space on the last page. Degenerate
+     * giant notes (tail alone exceeds a page) yield a final 0-row page —
+     * the notes themselves are not paginated.
+     *
+     * Public + pure for unit tests.
+     *
+     * @return array<int,int>
+     */
+    public static function doc2_chunk_sizes(int $item_count, int $notes_lines): array {
+        $item_count = max(0, $item_count); // guard against direct misuse; count() callers are always >= 0
+        $capacity = self::DOC2_PAGE_HEIGHT_IN - self::DOC2_CONTENT_TOP_IN - self::DOC2_PRINT_MARGIN_IN;
+        $header   = self::DOC2_ROW_IN;
+        $tail     = self::DOC2_TOTALS_IN
+            + ($notes_lines > 0 ? self::DOC2_NOTES_MARGIN_IN + $notes_lines * self::DOC2_NOTES_LINE_IN : 0);
+
+        if ($header + $item_count * self::DOC2_ROW_IN + $tail <= $capacity) {
+            return [$item_count];
+        }
+
+        $full = max(1, (int) floor(($capacity - $header) / self::DOC2_ROW_IN));
+        $last = (int) floor(($capacity - $header - $tail) / self::DOC2_ROW_IN);
+
+        $sizes     = [];
+        $remaining = $item_count;
+        // Keep at least one row for the tail page when the tail leaves room
+        // for any — a bare totals/notes page is reserved for the degenerate
+        // giant-notes case only.
+        $reserve = $last >= 1 ? 1 : 0;
+        while ($remaining > max(0, $last)) {
+            $take = max(1, min($full, $remaining - $reserve));
+            $sizes[]    = $take;
+            $remaining -= $take;
+        }
+        $sizes[] = $remaining;
+        return $sizes;
+    }
+
+    /**
+     * Doc-2 page count per slip, positionally matching $slips. Shared by
+     * the combined renderer (global page numbering) and the doc-4
+     * download (blank-page padding for overlay alignment).
+     *
+     * @param array<int,array> $slips
+     * @return array<int,int>
+     */
+    private static function doc2_counts_for_slips(array $slips): array {
+        $counts = [];
+        foreach ($slips as $slip) {
+            $items_n  = is_array($slip['items'] ?? null) ? count($slip['items']) : 0;
+            $notes    = self::doc2_notes_lines((string) ($slip['additional_notes'] ?? ''));
+            $counts[] = count(self::doc2_chunk_sizes($items_n, $notes));
+        }
+        return $counts;
+    }
+
     // ----------------------------------------------------------------- //
     //  DOC 2 — packer slip page renderer (item list left, divider right)
     // ----------------------------------------------------------------- //
 
-    private function render_doc2_page(array $slip, int $n, int $m, int $page_x, int $page_y, bool $is_last): string {
+    /**
+     * All doc-2 pages for ONE order. A fitting order is a single page,
+     * byte-equivalent to the pre-chunking output. A chunked order repeats
+     * the header lines with "(continued)" on follow-on pages; totals +
+     * notes render on the LAST chunk only; the calibrated divider renders
+     * on the FIRST chunk only — doc 4 is printed on top of the physical
+     * doc-2 sheets, and its driver block must land on (and only on) each
+     * order's first page. $first_page_x is the order's first global page
+     * number; the caller advances by the chunk count.
+     */
+    private function render_doc2_order_pages(array $slip, int $n, int $m, int $first_page_x, int $page_y, bool $is_last_order): string {
+        $items = is_array($slip['items'] ?? null) ? $slip['items'] : [];
+        $sizes = self::doc2_chunk_sizes(
+            count($items),
+            self::doc2_notes_lines((string) ($slip['additional_notes'] ?? ''))
+        );
+
+        $total  = count($sizes);
+        $out    = '';
+        $offset = 0;
+        foreach ($sizes as $ci => $take) {
+            $chunk   = array_slice($items, $offset, $take);
+            $offset += $take;
+            $is_first_chunk = ($ci === 0);
+            $is_last_chunk  = ($ci === $total - 1);
+            $out .= $this->render_doc2_page(
+                $slip,
+                $chunk,
+                $n,
+                $m,
+                $first_page_x + $ci,
+                $page_y,
+                $is_first_chunk,
+                $is_last_chunk,
+                $is_last_order && $is_last_chunk
+            );
+        }
+        return $out;
+    }
+
+    private function render_doc2_page(
+        array $slip,
+        array $chunk_items,
+        int $n,
+        int $m,
+        int $page_x,
+        int $page_y,
+        bool $is_first_chunk,
+        bool $is_last_chunk,
+        bool $is_last_page
+    ): string {
         $initials      = self::esc((string) ($slip['initials'] ?? ''));
         $zone          = self::esc((string) ($slip['zone'] ?? ''));
         $order_number  = self::esc((string) ($slip['order_number'] ?? ''));
         $delivery_date = self::esc((string) ($slip['delivery_date'] ?? ''));
 
         $items_html = '';
-        foreach (($slip['items'] ?? []) as $item) {
+        foreach ($chunk_items as $item) {
             $items_html .= '<tr>'
                 . '<td class="d2-sku">' . self::esc((string) $item['sku']) . '</td>'
                 . '<td class="d2-qty">' . (int) $item['qty'] . '</td>'
@@ -1018,29 +1177,41 @@ HTML;
                 . '</tr>';
         }
 
-        // Totals wording corrected per directive: Total Mains / Total Sides.
-        $totals = sprintf(
-            'Total Items: %d | Total Mains: %d | Total Sides: %d',
-            (int) ($slip['total_items'] ?? 0),
-            (int) ($slip['total_mains'] ?? 0),
-            (int) ($slip['total_sides'] ?? 0)
-        );
+        $position = "Order {$n} of {$m}" . ($is_first_chunk ? '' : ' (continued)');
 
-        $notes      = (string) ($slip['additional_notes'] ?? '');
-        $notes_html = '';
-        if ($notes !== '') {
-            $notes_html = '<div class="d2-notes"><span class="d2-notes-label">Additional Notes:</span> '
-                . nl2br(self::esc($notes)) . '</div>';
+        $tail_html = '';
+        if ($is_last_chunk) {
+            // Totals wording corrected per directive: Total Mains / Total Sides.
+            $totals = sprintf(
+                'Total Items: %d | Total Mains: %d | Total Sides: %d',
+                (int) ($slip['total_items'] ?? 0),
+                (int) ($slip['total_mains'] ?? 0),
+                (int) ($slip['total_sides'] ?? 0)
+            );
+            $tail_html = '<div class="d2-totals">' . $totals
+                . '<span class="d2-page">Page ' . $page_x . ' of ' . $page_y . '</span></div>';
+
+            $notes = (string) ($slip['additional_notes'] ?? '');
+            if ($notes !== '') {
+                $tail_html .= '<div class="d2-notes"><span class="d2-notes-label">Additional Notes:</span> '
+                    . nl2br(self::esc($notes)) . '</div>';
+            }
+        } else {
+            // Continuation pages still show their global page number.
+            $tail_html = '<div class="d2-totals"><span class="d2-page">Page ' . $page_x . ' of ' . $page_y . '</span></div>';
         }
 
-        $page_class = 'doc2-page' . ($is_last ? '' : ' d2-break');
+        // Divider only where doc 4's overlay lands (first chunk page).
+        $divider_html = $is_first_chunk ? '<div class="d2-divider"></div>' : '';
+
+        $page_class = 'doc2-page' . ($is_last_page ? '' : ' d2-break');
 
         return <<<HTML
 <div class="{$page_class}">
     <div class="d2-name-line">Name: {$initials}</div>
     <div class="d2-zone-order">{$zone} - Order {$order_number}</div>
     <div class="d2-delivery">Delivery Date: {$delivery_date}</div>
-    <div class="d2-position">Order {$n} of {$m}</div>
+    <div class="d2-position">{$position}</div>
     <div class="d2-flow">
         <table class="d2-items">
             <thead>
@@ -1048,10 +1219,9 @@ HTML;
             </thead>
             <tbody>{$items_html}</tbody>
         </table>
-        <div class="d2-totals">{$totals}<span class="d2-page">Page {$page_x} of {$page_y}</span></div>
-        {$notes_html}
+        {$tail_html}
     </div>
-    <div class="d2-divider"></div>
+    {$divider_html}
 </div>
 HTML;
     }
@@ -1088,19 +1258,22 @@ HTML;
      */
     private function render_packing_slips_combined_html(string $zone_name, string $delivery_date, array $batch, array $slips): string {
         $css   = $this->midland_doc_css();
-        $count = count($slips);
-        $y     = 1 + $count; // cover (1) + one page per order.
+        $count  = count($slips);
+        $counts = self::doc2_counts_for_slips($slips);
+        $y      = 1 + array_sum($counts); // cover (1) + every chunk page.
 
         // Cover reflects the LIVE count; break after it only if slips follow.
         $cover_batch = $batch;
         $cover_batch['order_count'] = $count;
+        $cover_batch['total_page_count'] = $y;
         $body = $this->doc1_body_html($zone_name, $delivery_date, $cover_batch, $count > 0);
 
+        $page_x = 2; // cover is page 1.
         foreach ($slips as $i => $slip) {
-            $n       = $i + 1;       // order N within the zone batch
-            $page_x  = $n + 1;       // global page # (cover is page 1)
-            $is_last = ($i === $count - 1);
-            $body   .= $this->render_doc2_page($slip, $n, $count, $page_x, $y, $is_last);
+            $n             = $i + 1; // order N within the zone batch
+            $is_last_order = ($i === $count - 1);
+            $body   .= $this->render_doc2_order_pages($slip, $n, $count, $page_x, $y, $is_last_order);
+            $page_x += $counts[$i];
         }
 
         return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
@@ -1111,30 +1284,65 @@ HTML;
     // ----------------------------------------------------------------- //
 
     /**
-     * Render the saved doc 4 driver blocks as standalone landscape pages — one
-     * per order, the block alone at the calibrated right-region position, NO
-     * item table and NO divider (this is the print-on-top manual fallback; the
+     * Render the saved doc 4 driver blocks as standalone landscape pages —
+     * the block alone at the calibrated right-region position, NO item
+     * table and NO divider (this is the print-on-top manual fallback; the
      * physical slip it overlays already carries the divider).
      *
+     * $page_counts (positional, from doc2_page_counts()) pads BLANK pages
+     * behind each block so the doc-4 page sequence mirrors the doc-2
+     * order pages: a chunked order occupies several physical sheets, and
+     * the driver block must land on the FIRST of them only. Empty/absent
+     * counts preserve the one-page-per-order output.
+     *
      * @param array<int,array> $doc4_orders persisted, positional driver blocks
+     * @param array<int,int>   $page_counts doc-2 pages per order, positional
      */
-    public function generate_doc4_driver_blocks(array $doc4_orders): string {
-        $css   = $this->midland_doc_css();
-        $count = count($doc4_orders);
+    public function generate_doc4_driver_blocks(array $doc4_orders, array $page_counts = []): string {
+        return $this->render_with_dompdf($this->render_doc4_html($doc4_orders, $page_counts));
+    }
+
+    /** The doc-4 document HTML (dompdf-free, unit-testable). */
+    private function render_doc4_html(array $doc4_orders, array $page_counts): string {
+        $css    = $this->midland_doc_css();
+        $orders = array_values($doc4_orders);
+        $count  = count($orders);
 
         $body = '';
-        foreach (array_values($doc4_orders) as $i => $order) {
-            $is_last    = ($i === $count - 1);
-            $page_class = 'doc4-page' . ($is_last ? '' : ' d4-break');
-            $block      = self::driver_block_inner_html(is_array($order) ? $order : []);
-            $body      .= "<div class=\"{$page_class}\"><div class=\"d4-block\">{$block}</div></div>";
+        foreach ($orders as $i => $order) {
+            $pages_for_order = max(1, (int) ($page_counts[$i] ?? 1));
+            $is_last_order   = ($i === $count - 1);
+            $block           = self::driver_block_inner_html(is_array($order) ? $order : []);
+
+            for ($p = 0; $p < $pages_for_order; $p++) {
+                $is_last_page = $is_last_order && ($p === $pages_for_order - 1);
+                $page_class   = 'doc4-page' . ($is_last_page ? '' : ' d4-break');
+                // Block on the order's FIRST page only; the rest are blank
+                // spacers that keep the manual re-feed sheet-aligned.
+                $inner = ($p === 0) ? '<div class="d4-block">' . $block . '</div>' : '';
+                $body .= "<div class=\"{$page_class}\">{$inner}</div>";
+            }
         }
         if ($body === '') {
             $body = '<div class="doc4-page"><div class="d2-empty">No driver blocks in this batch.</div></div>';
         }
 
-        $html = "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
-        return $this->render_with_dompdf($html);
+        return "<!DOCTYPE html>\n<html><head><meta charset=\"UTF-8\"><style>{$css}</style></head><body>{$body}</body></html>";
+    }
+
+    /**
+     * Live doc-2 page count per order for a zone + date, positionally
+     * matching the batch's persisted doc-4 blocks (both derive from the
+     * same build_slips() ordering). Used by the doc-4 download so the
+     * overlay stays sheet-aligned with a chunked doc 2.
+     *
+     * @return array<int,int>
+     */
+    public function doc2_page_counts(string $zone_name, string $delivery_date): array {
+        $clients = $this->client_query->get_clients_for_zones([$zone_name]);
+        $orders  = $this->fetch_orders_for_clients($clients, $delivery_date, $delivery_date);
+        $slips   = $this->build_slips($orders, $clients, false);
+        return self::doc2_counts_for_slips($slips);
     }
 
     /**
@@ -1322,11 +1530,11 @@ body { font-family: Helvetica, Arial, sans-serif; color: #000; margin: 0; paddin
    table inside this one absolutely-placed box. Only the right-region
    divider / doc-4 geometry is calibrated to the reference scan (see the
    DOC2_/DOC4_ constants); nothing on the left anchors to it.
-   KNOWN LIMIT: doc 2 has no item pagination, and dompdf never
-   page-breaks inside an absolute container — an extreme order (~30+
-   single-line rows) pushes totals/notes/page-number past the 8.5in page
-   edge, where the page box clips them. A real fix means chunking rows
-   into additional .doc2-page's in PHP and recomputing page_y. */
+   Row chunking (doc2_chunk_sizes) splits an order across pages when the
+   flowed content would cross the DOC2_PRINT_MARGIN_IN band; a fitting
+   slip renders on one page exactly as before. Remaining limit: the
+   NOTES block itself is never split — pathological multi-hundred-char
+   notes can still push past the margin on the final page. */
 .d2-flow        { position: absolute; left: 0.24in; top: 1.26in; width: 6.9in; }
 .d2-items       { width: 100%; border-collapse: collapse; font-size: 11pt; table-layout: fixed; }
 .d2-items th, .d2-items td { border: 1px solid #000; padding: 1pt 5pt; text-align: left; }
