@@ -1041,14 +1041,16 @@ HTML;
     <div class="d2-zone-order">{$zone} - Order {$order_number}</div>
     <div class="d2-delivery">Delivery Date: {$delivery_date}</div>
     <div class="d2-position">Order {$n} of {$m}</div>
-    <table class="d2-items">
-        <thead>
-            <tr><th class="d2-sku">SKU</th><th class="d2-qty">Qty</th><th class="d2-name">Product</th><th class="d2-cat">Category</th></tr>
-        </thead>
-        <tbody>{$items_html}</tbody>
-    </table>
-    <div class="d2-totals">{$totals}<span class="d2-page">Page {$page_x} of {$page_y}</span></div>
-    {$notes_html}
+    <div class="d2-flow">
+        <table class="d2-items">
+            <thead>
+                <tr><th class="d2-sku">SKU</th><th class="d2-qty">Qty</th><th class="d2-name">Product</th><th class="d2-cat">Category</th></tr>
+            </thead>
+            <tbody>{$items_html}</tbody>
+        </table>
+        <div class="d2-totals">{$totals}<span class="d2-page">Page {$page_x} of {$page_y}</span></div>
+        {$notes_html}
+    </div>
     <div class="d2-divider"></div>
 </div>
 HTML;
@@ -1314,16 +1316,37 @@ body { font-family: Helvetica, Arial, sans-serif; color: #000; margin: 0; paddin
 .d2-zone-order  { position: absolute; left: 4.6in;  top: 0.36in; font-size: 16pt; font-weight: bold; }
 .d2-delivery    { position: absolute; left: 0.31in; top: 0.76in; font-size: 10pt; font-weight: bold; }
 .d2-position    { position: absolute; left: 0.31in; top: 1.08in; font-size: 10pt; font-weight: bold; }
-.d2-items       { position: absolute; left: 0.24in; top: 1.26in; width: 6.9in; border-collapse: collapse; font-size: 11pt; table-layout: fixed; }
+/* Left-region flow container. The totals + notes used to be pinned to the
+   PAGE (top 4.18in/4.46in) while the table grew from 1.26in — any order
+   longer than ~12 rows ran straight through them. They now flow AFTER the
+   table inside this one absolutely-placed box. Only the right-region
+   divider / doc-4 geometry is calibrated to the reference scan (see the
+   DOC2_/DOC4_ constants); nothing on the left anchors to it.
+   KNOWN LIMIT: doc 2 has no item pagination, and dompdf never
+   page-breaks inside an absolute container — an extreme order (~30+
+   single-line rows) pushes totals/notes/page-number past the 8.5in page
+   edge, where the page box clips them. A real fix means chunking rows
+   into additional .doc2-page's in PHP and recomputing page_y. */
+.d2-flow        { position: absolute; left: 0.24in; top: 1.26in; width: 6.9in; }
+.d2-items       { width: 100%; border-collapse: collapse; font-size: 11pt; table-layout: fixed; }
 .d2-items th, .d2-items td { border: 1px solid #000; padding: 1pt 5pt; text-align: left; }
 .d2-items th    { background: #fff; font-weight: bold; }    /* white header (no grey) */
-.d2-items td.d2-sku, .d2-items th.d2-sku { width: 1.0in; font-weight: bold; }
-.d2-items .d2-qty { width: 0.6in; text-align: center; }
-.d2-items .d2-name { width: 4.0in; }
-.d2-items .d2-cat  { width: 1.1in; }
-.d2-totals      { position: absolute; left: 0.24in; top: 4.18in; font-size: 10pt; font-weight: bold; }
+/* Columns MUST be percentages: dompdf's fixed-layout Cellmap zeroes the
+   resolved value of absolute (in/pt) cell widths (Cellmap.php:736-751,
+   vendored 3.1.5), silently rendering equal quarters — which is why the
+   old 1.0/0.6/4.0/1.1in split never took effect and product names
+   wrapped. Percent widths ARE honored (same fixed+percent pattern as the
+   on-demand .items-table). Sum is exactly 100 of the 6.9in table:
+   ~0.76in SKU / ~0.45in Qty / ~4.86in Product / ~0.83in Category.
+   Product must stay on ONE line for the packers: nowrap + hidden clips a
+   pathological name instead of wrapping it (td clipping works on 3.1.5). */
+.d2-items td.d2-sku, .d2-items th.d2-sku { width: 11%; font-weight: bold; }
+.d2-items .d2-qty { width: 6.5%; text-align: center; }
+.d2-items .d2-name { width: 70.5%; white-space: nowrap; overflow: hidden; }
+.d2-items .d2-cat  { width: 12%; }
+.d2-totals      { margin-top: 0.12in; font-size: 10pt; font-weight: bold; }
 .d2-totals .d2-page { margin-left: 1.0in; }
-.d2-notes       { position: absolute; left: 0.24in; top: 4.46in; width: 6.9in; font-size: 10pt; }
+.d2-notes       { margin-top: 0.10in; font-size: 10pt; }
 .d2-notes .d2-notes-label { font-weight: bold; }
 /* Divider: a filled bar (background-color), NOT border-top (which bleeds full
    width in dompdf). Shared geometry with doc 4's anchor. */
