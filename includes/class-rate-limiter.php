@@ -29,6 +29,10 @@ class MealsDB_Rate_Limiter {
         // Per-row +/- case edits on a PO draft / reconcile session. Same
         // rationale as invoice_draft_edit: many small writes in one sitting.
         'po_draft_edit'          => 300,  // PO draft & reconcile row edits
+        // Weekly order audit — per-row confirm/edit/revert clicks. An auditor
+        // works ~300+ orders in one sitting (16k orders/yr ≈ 300/wk), so the
+        // 300/hr draft-edit sizing would 429 a normal session mid-audit.
+        'order_audit_edit'       => 1000, // Weekly order-audit grid row edits
         'settings_modify'        => 20,   // Settings + bulk client backfills
         'migration_destructive'  => 5,    // Migration phases, cleanup, reset
         'schema_rebuild'         => 2,    // Catastrophic: drops every plugin table
@@ -49,6 +53,7 @@ class MealsDB_Rate_Limiter {
         'task_modify'           => true,
         'invoice_draft_edit'    => true,
         'po_draft_edit'         => true,
+        'order_audit_edit'      => true,
         'settings_modify'       => true,
         'migration_destructive' => true,
         'schema_rebuild'        => true,
