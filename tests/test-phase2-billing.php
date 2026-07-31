@@ -21,6 +21,14 @@ if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
 // BC-5: sum_contribution_for_orders now resolves the contribution product id via
 // get_fee_product_ids() -> get_option(). With no override, defaults apply (5675).
 if (!function_exists('get_option')) { function get_option($name, $default = false) { return $default; } }
+// MealsDB_Event_Log::record() (missing-zone surfacing tests below) encodes
+// context via wp_json_encode.
+if (!function_exists('wp_json_encode')) {
+    function wp_json_encode($d, $f = 0, $depth = 512) {
+        $r = json_encode($d, $f, $depth);
+        return $r === false ? false : $r;
+    }
+}
 
 // Mock WooCommerce's tax API: get_phase2_billing_data resolves the HST
 // rate live from WC_Tax (LB-7 follow-up — no fallback). 15% standard rate.
@@ -37,7 +45,15 @@ if (!class_exists('wpdb')) { class wpdb {} }
 // Mock wpdb that returns scripted results per query key.
 class P2Wpdb extends wpdb {
     public $prefix = 'wp_';
+    public $insert_id = 0;
+    public $last_error = '';
+    public array $inserts = []; // captured [$table, $data] pairs (Event_Log writes)
     public array $scripted = []; // method => [pattern => result]
+    public function insert($table, $data, $formats = null) {
+        $this->inserts[] = [$table, $data];
+        $this->insert_id = count($this->inserts);
+        return 1;
+    }
     public function prepare($q, ...$a) {
         if (count($a) === 1 && is_array($a[0])) { $a = $a[0]; }
         $i = 0;
@@ -218,6 +234,97 @@ $sides_cost = 0;
 $sides_tax = 0;
 $new_total = $vet_mains_cost + $sides_cost + $sides_tax;
 chk($new_total, 28055, 'VAC Ralph: new_total = $280.55 (no contribution subtraction)');
+
+// ---------------------------------------------------------------------------
+// Test 6 (operator ruling 2026-07-30): a client with NO mains and NO sides
+// attributed in the month must NOT appear on the invoice — even when a
+// contribution line item exists on an order in that month. Previously the
+// contribution alone kept the row alive.
+// ---------------------------------------------------------------------------
+$wpdb6 = new P2WpdbWithRate();
+$wpdb6->rate = 14.66;
+$wpdb6->scripted = [
+    'get_results' => [
+        "FROM `wp_meals_client_allocations`" => [
+            ['client_id' => 8, 'used_mains' => 0, 'used_sides' => 0, 'used_tax_sides' => 0, 'used_nontax_sides' => 0],
+        ],
+        "FROM `wp_meals_delivery_allocations`" => [
+            ['client_id' => 8, 'wc_order_id' => 777],
+        ],
+    ],
+    'get_var' => [
+        "SUM(CAST(ls.meta_value AS DECIMAL" => '19.7700', // contribution exists…
+    ],
+];
+$GLOBALS['wpdb'] = $wpdb6;
+$out = call_p2([['client_id' => 8, 'wp_user_id' => 51, 'default_rate_id' => 1, 'first_name' => 'C', 'last_name' => 'Only']], '2025-11');
+chk(isset($out[8]), false, 'zero-attribution: contribution-only client excluded from invoice');
+
+// …but a SIDES-only client (no mains) still has attribution and stays.
+$wpdb6b = new P2WpdbWithRate();
+$wpdb6b->rate = 14.66;
+$wpdb6b->scripted = $wpdb6->scripted;
+$wpdb6b->scripted['get_results']["FROM `wp_meals_client_allocations`"] = [
+    ['client_id' => 8, 'used_mains' => 0, 'used_sides' => 2, 'used_tax_sides' => 2, 'used_nontax_sides' => 0],
+];
+$GLOBALS['wpdb'] = $wpdb6b;
+$out = call_p2([['client_id' => 8, 'wp_user_id' => 51, 'default_rate_id' => 1, 'first_name' => 'C', 'last_name' => 'Only']], '2025-11');
+chk(isset($out[8]), true, 'zero-attribution: sides-only client still appears');
+
+// ---------------------------------------------------------------------------
+// Test 7 (missing-zone surfacing): an SDNB client billed with a BLANK
+// delivery_area_zone defaults to URBAN rates — that default must be recorded
+// as ONE degraded event-log entry naming the affected client_ids, not
+// silently swallowed. Non-SDNB rows (VAC never selects the zone column)
+// must not trigger it.
+// ---------------------------------------------------------------------------
+$wpdb7 = new P2WpdbWithRate();
+$wpdb7->rate = 14.66;
+$wpdb7->scripted = [
+    'get_results' => [
+        "FROM `wp_meals_client_allocations`" => [
+            ['client_id' => 90, 'used_mains' => 30, 'used_sides' => 0, 'used_tax_sides' => 0, 'used_nontax_sides' => 0],
+            ['client_id' => 91, 'used_mains' => 30, 'used_sides' => 0, 'used_tax_sides' => 0, 'used_nontax_sides' => 0],
+        ],
+        "FROM `wp_meals_delivery_allocations`" => [],
+    ],
+    'get_var' => [
+        "SUM(CAST(ls.meta_value AS DECIMAL" => '0.0000',
+    ],
+];
+$GLOBALS['wpdb'] = $wpdb7;
+$out = call_p2([
+    ['client_id' => 90, 'wp_user_id' => 60, 'default_rate_id' => 1, 'client_type' => 'SDNB',
+     'delivery_area_zone' => '', 'first_name' => 'No', 'last_name' => 'Zone'],
+    ['client_id' => 91, 'wp_user_id' => 61, 'default_rate_id' => 1, 'client_type' => 'SDNB',
+     'delivery_area_zone' => 'M', 'first_name' => 'Has', 'last_name' => 'Zone'],
+], '2025-11');
+chk(isset($out[90]) && isset($out[91]), true, 'missing zone: both clients still billed');
+$zone_events = array_values(array_filter($wpdb7->inserts, function ($ins) {
+    return stripos($ins[0], 'meals_event_log') !== false
+        && ($ins[1]['event'] ?? '') === 'sdnb_zone.missing';
+}));
+chk(count($zone_events), 1, 'missing zone: exactly ONE degraded event recorded');
+$ev = $zone_events[0][1] ?? [];
+chk($ev['outcome'] ?? '', 'degraded', 'missing zone: event outcome is degraded');
+$ctx = json_decode((string) ($ev['context'] ?? ''), true);
+chk(in_array(90, (array) ($ctx['client_ids'] ?? []), true), true, 'missing zone: context names client 90');
+chk(in_array(91, (array) ($ctx['client_ids'] ?? []), true), false, 'missing zone: client 91 (zone M) NOT flagged');
+
+// A VAC-style row (no delivery_area_zone selected, client_type Veteran) must
+// not trigger the SDNB missing-zone event.
+$wpdb7b = new P2WpdbWithRate();
+$wpdb7b->rate = 9.05;
+$wpdb7b->scripted = $wpdb7->scripted;
+$GLOBALS['wpdb'] = $wpdb7b;
+call_p2([
+    ['client_id' => 90, 'wp_user_id' => 60, 'default_rate_id' => 1, 'client_type' => 'Veteran',
+     'first_name' => 'Vet', 'last_name' => 'NoZoneCol'],
+], '2025-11');
+$vac_zone_events = array_filter($wpdb7b->inserts, function ($ins) {
+    return ($ins[1]['event'] ?? '') === 'sdnb_zone.missing';
+});
+chk(count($vac_zone_events), 0, 'missing zone: VAC rows never trigger the SDNB zone event');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) echo "FAIL: $f\n";
