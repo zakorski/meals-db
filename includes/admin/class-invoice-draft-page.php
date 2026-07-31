@@ -97,6 +97,7 @@ class MealsDB_Invoice_Draft_Page {
                     'confirmUnfin' => __('Un-finalize this invoice? It will become editable again — you can edit it or regenerate.', 'meals-db'),
                     'reasonPrompt' => __('Enter a reason for un-finalizing (required — it is audited):', 'meals-db'),
                     'reasonRequired' => __('A reason is required to un-finalize.', 'meals-db'),
+                    'coverageWarn' => __('SDNB coverage warnings — this month\'s clients are not cleanly split across the three SDNB invoices:', 'meals-db'),
                 ],
             ]) . ';',
             'before'

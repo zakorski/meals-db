@@ -130,9 +130,22 @@ class MealsDB_Ajax_Invoice_Draft {
                 return;
             }
 
+            // SDNB cross-pipeline coverage check (decision 2026-07-31): warn —
+            // never block — when a billable SDNB client would land on zero or
+            // two invoices for this month (flag flip between generations,
+            // legacy client with a zone outside M/S, stale/incomplete draft).
+            // The check also records one degraded Event Log entry itself.
+            $coverage = [];
+            if (($pipeline === MealsDB_Invoice_Draft::PIPELINE_SDNB_LEGACY
+                    || $pipeline === MealsDB_Invoice_Draft::PIPELINE_SDNB_NEW)
+                && class_exists('MealsDB_Invoice_Coverage')) {
+                $coverage = array_column(MealsDB_Invoice_Coverage::check_month($billing_month), 'message');
+            }
+
             wp_send_json_success([
-                'draft_id'  => $draft_id,
-                'row_count' => is_array($rows) ? count($rows) : 0,
+                'draft_id'          => $draft_id,
+                'row_count'         => is_array($rows) ? count($rows) : 0,
+                'coverage_warnings' => $coverage,
             ]);
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Invoice_Draft AJAX] generate failed: ' . $e->getMessage());

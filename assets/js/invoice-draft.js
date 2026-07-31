@@ -108,6 +108,13 @@
                 period_end: $('#gen_end').val()
             }).done(function (resp) {
                 if (resp && resp.success && resp.data && resp.data.draft_id) {
+                    // Coverage warnings must be seen BEFORE the redirect wipes
+                    // the page — they also persist on the Event Log, but the
+                    // operator generating the draft is the one who can act.
+                    if (resp.data.coverage_warnings && resp.data.coverage_warnings.length) {
+                        window.alert((i18n.coverageWarn || 'SDNB coverage warnings:') + '\n\n- '
+                            + resp.data.coverage_warnings.join('\n- '));
+                    }
                     window.location.href = cfg.pageUrl + '&draft_id=' + encodeURIComponent(resp.data.draft_id);
                 } else {
                     $msg.text((resp && resp.data && resp.data.message) || i18n.genericErr);
