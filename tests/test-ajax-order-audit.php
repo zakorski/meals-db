@@ -18,6 +18,10 @@
  */
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 
+// Pin server-local timezone to the real deployment locale so tz-dependent date
+// functions in the code under test fail loudly instead of coinciding with UTC.
+date_default_timezone_set('America/Moncton');
+
 // ---------------------------------------------------------------------------
 // Controllable guard flags + recorded JSON response + service call log.
 // ---------------------------------------------------------------------------

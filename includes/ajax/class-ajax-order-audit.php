@@ -57,7 +57,9 @@ class MealsDB_Ajax_Order_Audit {
         try {
             $week_start = sanitize_text_field(wp_unslash($_POST['week_start'] ?? ''));
             if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $week_start)
-                || date('N', (int) strtotime($week_start . ' UTC')) !== '1') {
+                // gmdate (not date) so the weekday is always evaluated in UTC
+                // regardless of server timezone — Pattern 11, CLAUDE.md.
+                || (int) gmdate('N', (int) strtotime($week_start . ' UTC')) !== 1) {
                 wp_send_json_error(['message' => __('Pick the Monday of the week to audit.', 'meals-db')]);
                 return;
             }
