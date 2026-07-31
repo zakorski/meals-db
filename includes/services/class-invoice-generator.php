@@ -124,6 +124,10 @@ class MealsDB_Invoice_Generator {
      * (phase 1 fill with single-month spill), so the generators never need
      * to cap or compare to allowance anymore.
      *
+     * Clients with no mains AND no sides attributed this month are omitted
+     * entirely — a contribution line alone does not put a client on the
+     * invoice (operator ruling 2026-07-30).
+     *
      * Tax follows the allocated taxable-side count: HST = taxable sides ×
      * the (rurality-resolved) pre-tax side rate × the WC-sourced HST rate
      * (see resolve_hst_rate). Mains are never taxed. The VAC path does NOT use
@@ -221,6 +225,13 @@ class MealsDB_Invoice_Generator {
         $hst_rate = self::resolve_hst_rate();
 
         $out = [];
+        // SDNB clients billed with a blank delivery_area_zone default to
+        // URBAN rates (main-rate fallback and the HST side rate below).
+        // Rural rates are higher, so that default UNDER-bills — collect the
+        // affected client_ids and surface them as one degraded event after
+        // the loop, instead of defaulting silently. (VAC rows never select
+        // the zone column and are exempt.)
+        $sdnb_missing_zone = [];
         foreach ($client_rows as $client) {
             $cid = (int) ($client['client_id'] ?? 0);
             if ($cid <= 0) { continue; }
@@ -269,17 +280,25 @@ class MealsDB_Invoice_Generator {
                 $tax_cents   = MealsDB_Money::percent_of($sides_cents, $hst_rate);
             }
 
-            // Suppress zero-activity clients: a client with no mains, no sides
-            // of any kind, and no contribution has nothing to bill this month —
-            // including them produces an empty invoice line/page. Keep any
-            // client with ANY billable activity (a contribution with zero meals
-            // still belongs on the invoice).
-            $has_activity = ($allocated_mains > 0)
+            // Suppress zero-attribution clients: per the operator's ruling
+            // (2026-07-30), a client with no mains and no sides attributed in
+            // the month does NOT appear on the invoice — even when a
+            // contribution line item exists on one of their orders. (The
+            // previous behavior kept contribution-only rows, which produced
+            // units-0 lines the serializers had to skip and a negative
+            // Dept. Cost on the legacy layout.)
+            $has_attribution = ($allocated_mains > 0)
                 || ($allocated_tax_sides > 0)
-                || ($allocated_nontax_sides > 0)
-                || ($contribution_cents > 0);
-            if (!$has_activity) {
+                || ($allocated_nontax_sides > 0);
+            if (!$has_attribution) {
                 continue;
+            }
+
+            // Only flag the missing zone for clients actually billed this
+            // month — an idle client's data gap costs nothing yet.
+            if (strtoupper((string) ($client['client_type'] ?? '')) === 'SDNB'
+                && trim((string) ($client['delivery_area_zone'] ?? '')) === '') {
+                $sdnb_missing_zone[] = $cid;
             }
 
             $out[$cid] = array_merge($client, [
@@ -291,6 +310,20 @@ class MealsDB_Invoice_Generator {
                 'contribution_cents'     => $contribution_cents,
                 'basic_cents'            => $basic_cents,
                 'tax_cents'              => $tax_cents,
+            ]);
+        }
+
+        if (!empty($sdnb_missing_zone) && class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'  => 'warning',
+                'category'  => 'billing',
+                'subsystem' => 'invoice_generator',
+                'event'     => 'sdnb_zone.missing',
+                'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message'   => count($sdnb_missing_zone) . ' SDNB client(s) on the ' . $billing_month
+                    . ' invoice have no delivery_area_zone and were billed at URBAN rates by default.'
+                    . ' Set the zone on each client (Sussex = S) and regenerate if any are rural.',
+                'context'   => ['billing_month' => $billing_month, 'client_ids' => $sdnb_missing_zone],
             ]);
         }
         return $out;
