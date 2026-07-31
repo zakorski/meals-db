@@ -1,0 +1,411 @@
+<?php
+/**
+ * Weekly order audit service (spec 2026-07-30).
+ *
+ * Persistence + lifecycle for the weekly delivery-paperwork audit: pull the
+ * week's delivered orders into an encrypted draft snapshot, let the auditor
+ * confirm/correct each order, finalize when every row is resolved. Deliberately
+ * copies the MealsDB_Invoice_Draft shape ({generated, current} payload,
+ * draft → finalized, unfinalize-with-reason) but shares NO code with it:
+ * invoice-draft finalize freezes allocation billing months and serializes
+ * government CSVs — both wrong here. RECORD-KEEPING ONLY: nothing in this
+ * class touches allocations, billing, or WC orders.
+ *
+ * Disciplines carried over (CLAUDE.md):
+ *   - QW-2 fail CLOSED: payload is encrypted at rest (client names are PII);
+ *     an encode failure aborts the write, never stores plaintext.
+ *   - STR-LOG boundary: lifecycle + edits (committed record changes) → audit
+ *     log; failures → operational trunk (degraded). Per-row CONFIRMS are
+ *     attested inside the payload only (~300/week would bloat the append-only
+ *     audit log for no investigative value — the discrepancies are the edits).
+ *   - Pattern 7: every public method swallows its own \Throwable and returns
+ *     a sentinel (0 / null / false / WP_Error).
+ */
+defined('ABSPATH') || exit;
+
+class MealsDB_Order_Audit {
+
+    public const STATUS_DRAFT     = 'draft';
+    public const STATUS_FINALIZED = 'finalized';
+
+    public const ROW_PENDING   = 'pending';
+    public const ROW_CONFIRMED = 'confirmed';
+    public const ROW_EDITED    = 'edited';
+
+    /** Payload schema version, for forward migration of the JSON shape. */
+    private const PAYLOAD_SCHEMA = 1;
+
+    public const MAX_NOTE_LEN = 500; // same cap as PO reconcile notes
+
+    // -----------------------------------------------------------------------
+    // Public API — snapshot builder
+    // -----------------------------------------------------------------------
+
+    /**
+     * Pull all active clients for the week, fetch delivered orders via the
+     * slip generator, and return the classified row array keyed by order_id.
+     *
+     * Returns null on unexpected failure (e.g. DB down), [] when no orders
+     * were delivered in the window (not an error).
+     *
+     * @param string $week_start Y-m-d (Monday).
+     * @param string $week_end   Y-m-d (Sunday).
+     * @return array<int, array<string, mixed>>|null Rows keyed by order_id, or null on error.
+     */
+    public static function build_week_rows(string $week_start, string $week_end): ?array {
+        try {
+            $clients = self::get_delivery_clients();
+            if (empty($clients)) {
+                return [];
+            }
+
+            // MealsDB_Delivery_Slip_Generator requires a MealsDB_WC_Order_Query
+            // instance, which in turn wraps $wpdb — mirror the pattern from
+            // class-ajax-delivery-slips.php::make_pdf_generator().
+            global $wpdb;
+            $generator = new MealsDB_Delivery_Slip_Generator(
+                new MealsDB_WC_Order_Query($wpdb)
+            );
+            $orders = $generator->get_orders_for_delivery_range($clients, $week_start, $week_end);
+
+            return self::build_rows_from_orders($orders, $clients);
+        } catch (\Throwable $e) {
+            self::log_error('build_week_rows', $e);
+            return null;
+        }
+    }
+
+    /**
+     * Fetch all active clients with a linked WP user, keyed by wp_user_id.
+     * first_name / last_name are NOT encrypted columns — no decrypt step needed.
+     *
+     * @return array<int, array<string, mixed>> Clients keyed by wp_user_id.
+     */
+    private static function get_delivery_clients(): array {
+        global $wpdb;
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+
+        // wp_user_id > 0 guards against the (valid but edge) case of a client
+        // record that was never linked to a WP user — those have no orders.
+        $rows = $wpdb->get_results(
+            "SELECT client_id, wp_user_id, first_name, last_name,
+                    delivery_area_zone, delivery_day, delivery_frequency
+             FROM `{$table}`
+             WHERE active = 1 AND wp_user_id > 0",
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $keyed = [];
+        foreach ($rows as $row) {
+            $uid = (int) ($row['wp_user_id'] ?? 0);
+            if ($uid > 0) {
+                $keyed[$uid] = $row;
+            }
+        }
+        return $keyed;
+    }
+
+    /**
+     * Classify a set of orders (as returned by get_orders_for_delivery_range)
+     * into the audit row shape. Pure data transformation — no DB access.
+     *
+     * Fee and overage product lines are stripped from the items list; mains vs
+     * sides are counted using the same has_term() check as the slip PDF
+     * (MealsDB_Slip_PDF_Generator::resolve_category, ~line 327). Client data is
+     * joined from $clients (keyed by wp_user_id).
+     *
+     * @param array<int, array<string, mixed>> $orders  Orders from get_orders_for_delivery_range().
+     * @param array<int, array<string, mixed>> $clients Clients keyed by wp_user_id.
+     * @return array<int, array<string, mixed>> Rows keyed by order_id.
+     */
+    public static function build_rows_from_orders(array $orders, array $clients): array {
+        // Build the excluded PID set once. get_fee_product_ids() returns a
+        // named assoc ['client_contribution' => int, 'delivery_fee' => int] —
+        // use array_values to get the int list, same pattern used elsewhere
+        // that calls the method (e.g. class-invoice-generator.php ~line 347).
+        $fee_ids = [];
+        if (class_exists('MealsDB_Invoice_Generator')) {
+            $fee_ids = array_map('intval', array_values(MealsDB_Invoice_Generator::get_fee_product_ids()));
+        }
+        $overage_ids = array_map('intval', (array) get_option('mealsdb_overage_product_ids', []));
+        $excluded    = array_merge($fee_ids, $overage_ids);
+
+        $rows = [];
+
+        foreach ($orders as $order) {
+            $oid = (int) ($order['order_id'] ?? 0);
+            if ($oid <= 0) {
+                continue;
+            }
+
+            $uid    = (int) ($order['wp_user_id'] ?? 0);
+            $client = $clients[$uid] ?? [];
+
+            $mains = 0;
+            $sides = 0;
+            $items = [];
+
+            foreach ((array) ($order['items'] ?? []) as $item) {
+                $pid = (int) ($item['wc_product_id'] ?? 0);
+                $qty = (int) ($item['quantity'] ?? 1);
+
+                // Strip fee / overage lines entirely — they are billing
+                // artefacts, not delivery items. The auditor never needs them.
+                if ($pid > 0 && in_array($pid, $excluded, true)) {
+                    continue;
+                }
+
+                // Mirror MealsDB_Slip_PDF_Generator::resolve_category():
+                // has_term() on CATEGORY_ID_MAINS → Main, else Side.
+                $is_main = $pid > 0
+                    && function_exists('has_term')
+                    && has_term(MealsDB_Operational_Constants::CATEGORY_ID_MAINS, 'product_cat', $pid);
+
+                if ($is_main) {
+                    $mains += $qty;
+                } else {
+                    $sides += $qty;
+                }
+
+                $items[] = [
+                    'item_key'     => (int) ($item['order_item_id'] ?? 0),
+                    'product_name' => (string) ($item['order_item_name'] ?? ''),
+                    'qty'          => $qty,
+                ];
+            }
+
+            // delivery_occurrence is injected by get_orders_for_delivery_range()
+            // (the computed delivery date, not the creation date). Fall back to
+            // the date portion of date_created_gmt only when absent.
+            $delivery_date = (string) ($order['delivery_occurrence']
+                ?? substr((string) ($order['date_created_gmt'] ?? ''), 0, 10));
+
+            $rows[$oid] = [
+                'order_id'      => $oid,
+                'wp_user_id'    => $uid,
+                'client_id'     => (int) ($client['client_id'] ?? 0),
+                'client_name'   => trim((string) ($client['first_name'] ?? '') . ' ' . (string) ($client['last_name'] ?? '')),
+                'zone'          => (string) ($client['delivery_area_zone'] ?? ''),
+                'delivery_date' => $delivery_date,
+                'items'         => $items,
+                'mains_count'   => $mains,
+                'sides_count'   => $sides,
+                'audit_status'  => self::ROW_PENDING,
+                'edited_items'  => [],
+                'note'          => '',
+                'audited_by'    => 0,
+                'audited_at'    => '',
+            ];
+        }
+
+        return $rows;
+    }
+
+    // -----------------------------------------------------------------------
+    // Public API — persistence
+    // -----------------------------------------------------------------------
+
+    /**
+     * Persist a new audit for the given week from a pre-built row array.
+     * The payload is encrypted at rest (QW-2 fail CLOSED). Returns the new
+     * audit_id, or 0 on any failure (never throws, never stores plaintext).
+     *
+     * @param string                           $week_start Y-m-d.
+     * @param string                           $week_end   Y-m-d.
+     * @param array<int, array<string, mixed>> $rows       From build_rows_from_orders().
+     * @return int audit_id, or 0 on failure.
+     */
+    public static function create_for_week(string $week_start, string $week_end, array $rows): int {
+        try {
+            $payload = [
+                'schema'    => self::PAYLOAD_SCHEMA,
+                'generated' => $rows,   // immutable snapshot of what the system produced
+                'current'   => $rows,   // editable working copy — starts identical
+            ];
+
+            $encoded = MealsDB_Encryption::encode_payload($payload);
+            if ($encoded === false) {
+                // QW-2 fail-closed: refuse to store PII as plaintext. Surface
+                // as a degraded event on the operational trunk (STR-LOG: this
+                // is an attempt/failure, NOT a committed artifact change).
+                self::record_degraded('create.encrypt_failed', 'Order audit not created: payload encryption failed.');
+                return 0;
+            }
+
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+
+            $ok = $wpdb->insert($table, [
+                'week_start'      => $week_start,
+                'week_end'        => $week_end,
+                'status'          => self::STATUS_DRAFT,
+                'payload'         => $encoded,
+                'row_count'       => count($rows),
+                'confirmed_count' => 0,
+                'edited_count'    => 0,
+                'created_by'      => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
+                'created_at'      => gmdate('Y-m-d H:i:s'),
+            ], ['%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d', '%s']);
+
+            if ($ok === false) {
+                return 0;
+            }
+
+            $audit_id = (int) $wpdb->insert_id;
+
+            // Audit: a new audit record was created (committed artifact → audit
+            // log, NOT the operational trunk — STR-LOG boundary). Isolated
+            // try/catch: a broken audit-log backend should not roll back
+            // a successfully-created record or suppress the returned ID.
+            if (class_exists('MealsDB_Logger')) {
+                try {
+                    MealsDB_Logger::log('order_audit_created', $audit_id, 'week_start', null, $week_start);
+                } catch (\Throwable $log_e) {
+                    // Breadcrumb only — audit-log failure is not fatal.
+                    error_log('[MealsDB Order_Audit] audit log write failed: ' . $log_e->getMessage());
+                }
+            }
+
+            return $audit_id;
+        } catch (\Throwable $e) {
+            self::log_error('create_for_week', $e);
+            return 0;
+        }
+    }
+
+    /**
+     * Return the audit_id for the audit whose week_start matches, or 0 if
+     * none exists. The caller (AJAX) uses this to guard against duplicate
+     * creation — one audit per week.
+     *
+     * @param string $week_start Y-m-d.
+     * @return int audit_id or 0.
+     */
+    public static function find_by_week(string $week_start): int {
+        try {
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+
+            $row = $wpdb->get_row($wpdb->prepare(
+                "SELECT audit_id FROM `{$table}` WHERE week_start = %s LIMIT 1",
+                $week_start
+            ), ARRAY_A);
+
+            return isset($row['audit_id']) ? (int) $row['audit_id'] : 0;
+        } catch (\Throwable $e) {
+            self::log_error('find_by_week', $e);
+            return 0;
+        }
+    }
+
+    /**
+     * Load and decrypt an audit by ID. Returns null if missing, undecryptable,
+     * or on any error. The 'payload' key in the returned array is the decoded
+     * array (['schema', 'generated', 'current']).
+     *
+     * @param int $audit_id
+     * @return array|null Audit row with decoded payload, or null.
+     */
+    public static function get(int $audit_id): ?array {
+        try {
+            if ($audit_id <= 0) {
+                return null;
+            }
+
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+
+            $row = $wpdb->get_row($wpdb->prepare(
+                "SELECT audit_id, week_start, week_end, status, payload,
+                        row_count, confirmed_count, edited_count,
+                        created_by, created_at, finalized_by, finalized_at,
+                        unfinalized_at, unfinalize_reason
+                 FROM `{$table}` WHERE audit_id = %d LIMIT 1",
+                $audit_id
+            ), ARRAY_A);
+
+            if (!is_array($row) || empty($row)) {
+                return null;
+            }
+
+            $payload = MealsDB_Encryption::decode_payload((string) ($row['payload'] ?? ''));
+            if (!is_array($payload)) {
+                // Undecryptable / corrupt — return null rather than handing
+                // back raw ciphertext or a partial array.
+                return null;
+            }
+
+            $row['payload'] = $payload;
+            return $row;
+        } catch (\Throwable $e) {
+            self::log_error('get', $e);
+            return null;
+        }
+    }
+
+    /**
+     * Return a lightweight list of all audits (no payload decryption).
+     * Sorted newest-first, capped at 200 rows (a weekly audit produces ~52/year).
+     *
+     * @return array<int, array<string, mixed>> List of audit meta rows.
+     */
+    public static function list_audits(): array {
+        try {
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+
+            $rows = $wpdb->get_results(
+                "SELECT audit_id, week_start, week_end, status,
+                        row_count, confirmed_count, edited_count,
+                        created_by, created_at, finalized_by, finalized_at
+                 FROM `{$table}`
+                 ORDER BY week_start DESC
+                 LIMIT 200",
+                ARRAY_A
+            );
+
+            return is_array($rows) ? $rows : [];
+        } catch (\Throwable $e) {
+            self::log_error('list_audits', $e);
+            return [];
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    /**
+     * Push a degraded event to the operational trunk (STR-LOG: attempt/failure,
+     * not a committed record change). Guarded against missing class so the
+     * service is safe to load in test stubs that don't boot the full plugin.
+     */
+    private static function record_degraded(string $event, string $message): void {
+        if (class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'  => 'error',
+                'category'  => 'audit',
+                'subsystem' => 'order_audit',
+                'event'     => $event,
+                'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message'   => $message,
+            ]);
+        }
+    }
+
+    /**
+     * Log an unexpected exception: error_log breadcrumb + degraded event on
+     * the operational trunk. Both calls are class_exists-guarded so the
+     * service loads safely in CLI / test contexts.
+     */
+    private static function log_error(string $op, \Throwable $e): void {
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::error('[MealsDB Order_Audit] ' . $op . ' failed: ' . $e->getMessage());
+        }
+        self::record_degraded($op . '.failed', $e->getMessage());
+    }
+}
