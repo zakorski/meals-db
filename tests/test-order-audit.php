@@ -35,7 +35,7 @@ class OAWpdb extends wpdb {
     public $insert_id = 0;
     public $last_error = '';
     public array $rows = [];       // audit_id => stored row (assoc)
-    public array $audit_log = [];  // captured MealsDB_Logger rows
+    public array $audit_log = [];  // captured MealsDB_Logger rows (raw SQL strings)
     private $next_id = 1;
 
     public function prepare($sql, ...$args) {
@@ -46,7 +46,21 @@ class OAWpdb extends wpdb {
         }
         return $sql;
     }
+    /**
+     * MealsDB_Logger::log() builds an INSERT via $wpdb->prepare() and then
+     * executes it through $wpdb->query() (not insert()). Capture SQL strings
+     * that target the audit_log table so tests can assert the write happened.
+     */
+    public function query($sql) {
+        if (stripos((string) $sql, 'audit_log') !== false) {
+            $this->audit_log[] = (string) $sql;
+            return 1;
+        }
+        return 1;
+    }
     public function insert($table, $data, $formats = null) {
+        // insert() is NOT used by MealsDB_Logger::log() (it uses query()), but
+        // keep the audit_log branch in case a future caller takes that path.
         if (stripos($table, 'audit_log') !== false) { $this->audit_log[] = $data; return 1; }
         if (stripos($table, 'event_log') !== false) { return 1; }
         $id = $this->next_id++;
@@ -144,6 +158,34 @@ oa_chk(count($rows[501]['items']) === 2, '3.1: fee line (5675) excluded from ite
 oa_chk($rows[501]['audit_status'] === 'pending', '3.1: rows start pending');
 oa_chk($rows[501]['note'] === '' && $rows[501]['edited_items'] === [], '3.1: empty note/edits');
 
+// Edge fixture A: order whose wp_user_id has no matching client row.
+// build_rows_from_orders() must still emit a row; client_id defaults to 0
+// and client_name to '' (the trim(' ') → '' path in the builder).
+$edge_orders_a = [
+    ['order_id' => 600, 'wp_user_id' => 999, 'date_created_gmt' => '2026-07-20 08:00:00',
+     'delivery_occurrence' => '2026-07-22',
+     'items' => [['order_item_id' => 9, 'order_item_name' => 'Beef Stew', 'wc_product_id' => 100, 'quantity' => 1]]],
+];
+$edge_rows_a = MealsDB_Order_Audit::build_rows_from_orders($edge_orders_a, oa_clients());
+oa_chk(isset($edge_rows_a[600]), '3.1 edge-A: row emitted even when wp_user_id has no client');
+oa_chk((int) ($edge_rows_a[600]['client_id'] ?? -1) === 0, '3.1 edge-A: client_id is 0');
+oa_chk(($edge_rows_a[600]['client_name'] ?? 'x') === '', '3.1 edge-A: client_name is empty string');
+
+// Edge fixture B: item with explicit quantity 0.
+// The builder must still include the item in the items list (qty 0) and
+// add 0 to the counts — it does not filter zero-quantity items.
+$edge_orders_b = [
+    ['order_id' => 601, 'wp_user_id' => 60, 'date_created_gmt' => '2026-07-20 08:00:00',
+     'delivery_occurrence' => '2026-07-22',
+     'items' => [['order_item_id' => 10, 'order_item_name' => 'Cancelled Main', 'wc_product_id' => 100, 'quantity' => 0]]],
+];
+$edge_rows_b = MealsDB_Order_Audit::build_rows_from_orders($edge_orders_b, oa_clients());
+oa_chk(isset($edge_rows_b[601]), '3.1 edge-B: row emitted for order with zero-qty item');
+oa_chk(count($edge_rows_b[601]['items']) === 1
+    && (int) $edge_rows_b[601]['items'][0]['qty'] === 0, '3.1 edge-B: zero-qty item present in items with qty 0');
+oa_chk((int) ($edge_rows_b[601]['mains_count'] ?? -1) === 0
+    && (int) ($edge_rows_b[601]['sides_count'] ?? -1) === 0, '3.1 edge-B: zero-qty adds nothing to counts');
+
 // 2. create_for_week(): persists encrypted payload, generated == current,
 //    counts denormalized; get() round-trips.
 $wpdb = oa_reset();
@@ -157,6 +199,12 @@ $loaded = MealsDB_Order_Audit::get(1);
 oa_chk(is_array($loaded) && $loaded['payload']['generated'] == $loaded['payload']['current'],
     '3.2: get() decrypts; generated == current at creation');
 oa_chk($loaded['payload']['current'][501]['client_name'] === 'Pat Doe', '3.2: row content round-trips');
+// Audit-log write: create_for_week() calls MealsDB_Logger::log('order_audit_created', ...)
+// which builds an INSERT via $wpdb->prepare() and executes it through $wpdb->query().
+// OAWpdb::query() captures any SQL containing 'audit_log' into $this->audit_log[].
+oa_chk(count($wpdb->audit_log) === 1, '3.2: exactly one audit-log write occurred on create');
+oa_chk(stripos($wpdb->audit_log[0] ?? '', 'order_audit_created') !== false,
+    '3.2: audit-log SQL references order_audit_created action');
 
 // 3. find_by_week(): returns the existing audit_id; create is expected to be
 //    guarded by the caller (AJAX) via find_by_week — one audit per week.
