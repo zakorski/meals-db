@@ -258,17 +258,10 @@ class MealsDB_Order_Audit {
             $audit_id = (int) $wpdb->insert_id;
 
             // Audit: a new audit record was created (committed artifact → audit
-            // log, NOT the operational trunk — STR-LOG boundary). Isolated
-            // try/catch: a broken audit-log backend should not roll back
-            // a successfully-created record or suppress the returned ID.
-            if (class_exists('MealsDB_Logger')) {
-                try {
-                    MealsDB_Logger::log('order_audit_created', $audit_id, 'week_start', null, $week_start);
-                } catch (\Throwable $log_e) {
-                    // Breadcrumb only — audit-log failure is not fatal.
-                    error_log('[MealsDB Order_Audit] audit log write failed: ' . $log_e->getMessage());
-                }
-            }
+            // log, NOT the operational trunk — STR-LOG boundary). log_lifecycle
+            // isolates the write so a broken audit-log backend cannot suppress
+            // the returned ID or roll back the record.
+            self::log_lifecycle('order_audit_created', $audit_id, 'week_start', null, $week_start);
 
             return $audit_id;
         } catch (\Throwable $e) {
@@ -447,17 +440,11 @@ class MealsDB_Order_Audit {
         if ($result instanceof WP_Error) {
             return $result;
         }
-        if (class_exists('MealsDB_Logger')) {
-            try {
-                // Deltas only — item keys and counts, no PII in old/new.
-                MealsDB_Logger::log('order_audit_row_edited', $audit_id, 'order_' . $order_id,
-                    null, implode(', ', $deltas) . ($note !== '' ? ' (note)' : ''));
-            } catch (\Throwable $e) {
-                // Same rationale as create_for_week: a broken audit-log backend
-                // must not make a successfully stored edit report failure.
-                error_log('[MealsDB Order_Audit] audit log write failed: ' . $e->getMessage());
-            }
-        }
+        // Deltas only — item keys and counts, no PII in old/new. log_lifecycle
+        // isolates the write: a broken audit-log backend must not make a
+        // successfully stored edit report failure (same rationale as create_for_week).
+        self::log_lifecycle('order_audit_row_edited', $audit_id, 'order_' . $order_id,
+            null, implode(', ', $deltas) . ($note !== '' ? ' (note)' : ''));
         return true;
     }
 
@@ -528,6 +515,115 @@ class MealsDB_Order_Audit {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Lifecycle
+    // ------------------------------------------------------------------
+
+    /**
+     * Finalize: every row must be confirmed or edited (server-side gate — the
+     * JS disable is a convenience, not the enforcement). Locks the audit
+     * read-only. No output artifact: the record IS the artifact.
+     * @return true|WP_Error
+     */
+    public static function finalize(int $audit_id) {
+        try {
+            $audit = self::get($audit_id);
+            if ($audit === null) {
+                return new WP_Error('not_found', __('Audit not found.', 'meals-db'));
+            }
+            if ($audit['status'] !== self::STATUS_DRAFT) {
+                return new WP_Error('not_draft', __('Only a draft audit can be finalized.', 'meals-db'));
+            }
+            foreach ($audit['payload']['current'] as $row) {
+                if (($row['audit_status'] ?? self::ROW_PENDING) === self::ROW_PENDING) {
+                    return new WP_Error('pending_rows',
+                        __('Every order must be confirmed or edited before the audit can be saved.', 'meals-db'));
+                }
+            }
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            $ok = $wpdb->update($table, [
+                'status'       => self::STATUS_FINALIZED,
+                'finalized_by' => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
+                'finalized_at' => gmdate('Y-m-d H:i:s'),
+            ], ['audit_id' => $audit_id], ['%s', '%d', '%s'], ['%d']);
+            if ($ok === false) {
+                return new WP_Error('db', __('Could not finalize the audit.', 'meals-db'));
+            }
+            self::log_lifecycle('order_audit_finalized', $audit_id, 'status', self::STATUS_DRAFT, self::STATUS_FINALIZED);
+            return true;
+        } catch (\Throwable $e) {
+            self::log_error('finalize', $e);
+            return new WP_Error('internal', __('Could not finalize the audit.', 'meals-db'));
+        }
+    }
+
+    /**
+     * Reopen a finalized audit. Requires a non-blank typed reason (mirrors the
+     * invoice-draft unfinish flow). Row states are untouched. No cascade
+     * concept — nothing downstream consumes the audit. @return true|WP_Error
+     */
+    public static function unfinalize(int $audit_id, string $reason) {
+        try {
+            $reason = trim($reason);
+            if ($reason === '') {
+                return new WP_Error('reason_required', __('A reason is required to reopen a finalized audit.', 'meals-db'));
+            }
+            if (function_exists('mb_strlen') ? mb_strlen($reason) > self::MAX_NOTE_LEN : strlen($reason) > self::MAX_NOTE_LEN) {
+                return new WP_Error('reason_too_long', __('Reason is too long (500 characters max).', 'meals-db'));
+            }
+            $audit = self::get($audit_id);
+            if ($audit === null) {
+                return new WP_Error('not_found', __('Audit not found.', 'meals-db'));
+            }
+            if ($audit['status'] !== self::STATUS_FINALIZED) {
+                return new WP_Error('not_finalized', __('Only a finalized audit can be reopened.', 'meals-db'));
+            }
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            $ok = $wpdb->update($table, [
+                'status'            => self::STATUS_DRAFT,
+                'unfinalized_at'    => gmdate('Y-m-d H:i:s'),
+                'unfinalize_reason' => $reason,
+            ], ['audit_id' => $audit_id], ['%s', '%s', '%s'], ['%d']);
+            if ($ok === false) {
+                return new WP_Error('db', __('Could not reopen the audit.', 'meals-db'));
+            }
+            self::log_lifecycle('order_audit_unfinalized', $audit_id, 'reason', null, $reason);
+            return true;
+        } catch (\Throwable $e) {
+            self::log_error('unfinalize', $e);
+            return new WP_Error('internal', __('Could not reopen the audit.', 'meals-db'));
+        }
+    }
+
+    /**
+     * Delete a DRAFT (never a finalized record) so a bad pull can be redone —
+     * find_by_week() otherwise blocks regenerating the week. @return true|WP_Error
+     */
+    public static function delete_draft(int $audit_id) {
+        try {
+            $audit = self::get($audit_id);
+            if ($audit === null) {
+                return new WP_Error('not_found', __('Audit not found.', 'meals-db'));
+            }
+            if ($audit['status'] !== self::STATUS_DRAFT) {
+                return new WP_Error('not_draft', __('A finalized audit cannot be deleted.', 'meals-db'));
+            }
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            $ok = $wpdb->delete($table, ['audit_id' => $audit_id], ['%d']);
+            if ($ok === false || $ok === 0) {
+                return new WP_Error('db', __('Could not delete the audit draft.', 'meals-db'));
+            }
+            self::log_lifecycle('order_audit_draft_deleted', $audit_id, 'week_start', (string) $audit['week_start'], null);
+            return true;
+        } catch (\Throwable $e) {
+            self::log_error('delete_draft', $e);
+            return new WP_Error('internal', __('Could not delete the audit draft.', 'meals-db'));
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -547,6 +643,23 @@ class MealsDB_Order_Audit {
                 'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
                 'message'   => $message,
             ]);
+        }
+    }
+
+    /**
+     * Audit-log a committed change, isolated so a broken audit-log backend
+     * cannot make an already-persisted change report failure (the
+     * swallowed-error-reported-as-success class, Pattern 7 — but inverted:
+     * here the WORK succeeded and only the logging failed).
+     */
+    private static function log_lifecycle(string $action, int $audit_id, string $field, ?string $old, ?string $new): void {
+        if (!class_exists('MealsDB_Logger')) {
+            return;
+        }
+        try {
+            MealsDB_Logger::log($action, $audit_id, $field, $old, $new);
+        } catch (\Throwable $e) {
+            error_log('[MealsDB Order_Audit] audit log write failed: ' . $e->getMessage());
         }
     }
 

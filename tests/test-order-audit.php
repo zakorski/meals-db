@@ -275,6 +275,57 @@ oa_chk($a['payload']['current'][501]['audit_status'] === 'pending'
     && $a['payload']['current'][501]['note'] === '', '4.5: row back to pristine pending');
 oa_chk((int) $GLOBALS['wpdb']->rows[$id]['edited_count'] === 0, '4.5: edited_count restored');
 
+// ---------------------------------------------------------------------------
+// Task 5 checks: finalize / unfinalize / delete
+// ---------------------------------------------------------------------------
+
+// 1. Finalize refused while any row is pending (server-side gate).
+[$wpdb, $id] = oa_make_audit();
+MealsDB_Order_Audit::confirm_row($id, 501); // 502 still pending
+oa_chk(MealsDB_Order_Audit::finalize($id) instanceof WP_Error, '5.1: finalize refused with a pending row');
+oa_chk($wpdb->rows[$id]['status'] === 'draft', '5.1: still draft');
+
+// 2. Finalize succeeds when every row is resolved; audit becomes read-only.
+MealsDB_Order_Audit::edit_row($id, 502, [4 => 1], 'pie missing');
+oa_chk(MealsDB_Order_Audit::finalize($id) === true, '5.2: finalize succeeds when all resolved');
+oa_chk($wpdb->rows[$id]['status'] === 'finalized' && !empty($wpdb->rows[$id]['finalized_at']), '5.2: stamped');
+oa_chk(MealsDB_Order_Audit::confirm_row($id, 501) instanceof WP_Error, '5.2: finalized audit refuses row changes');
+$fin_logged = false;
+foreach ($wpdb->audit_log as $logged_sql) {
+    if (stripos((string) $logged_sql, 'order_audit_finalized') !== false) { $fin_logged = true; }
+}
+oa_chk($fin_logged, '5.2: finalize audit-logged');
+
+// 3. Unfinalize requires a reason; restores editability with states intact.
+oa_chk(MealsDB_Order_Audit::unfinalize($id, '   ') instanceof WP_Error, '5.3: blank reason refused');
+oa_chk(MealsDB_Order_Audit::unfinalize($id, 'found another slip') === true, '5.3: unfinalize with reason');
+oa_chk($GLOBALS['wpdb']->rows[$id]['status'] === 'draft', '5.3: back to draft');
+oa_chk($GLOBALS['wpdb']->rows[$id]['unfinalize_reason'] === 'found another slip', '5.3: reason stored');
+$a = MealsDB_Order_Audit::get($id);
+oa_chk($a['payload']['current'][502]['audit_status'] === 'edited', '5.3: row states preserved');
+
+// 4. Confirm-from-edited supersedes the edit (Task-4 review gap: pin it here
+//    while the row is conveniently in edited state).
+oa_chk(MealsDB_Order_Audit::confirm_row($id, 502) === 'confirmed', '5.4: confirm over an edited row');
+$a = MealsDB_Order_Audit::get($id);
+oa_chk($a['payload']['current'][502]['edited_items'] === [] && $a['payload']['current'][502]['note'] === '',
+    '5.4: confirming an edited row clears the edit (supersedes)');
+
+// 5. Delete: allowed for drafts, refused for finalized.
+oa_chk(MealsDB_Order_Audit::delete_draft($id) === true, '5.5: draft deletable');
+oa_chk(MealsDB_Order_Audit::get($id) === null, '5.5: gone');
+[$wpdb2, $id2] = oa_make_audit();
+MealsDB_Order_Audit::confirm_row($id2, 501);
+MealsDB_Order_Audit::confirm_row($id2, 502);
+MealsDB_Order_Audit::finalize($id2);
+oa_chk(MealsDB_Order_Audit::delete_draft($id2) instanceof WP_Error, '5.5: finalized audit not deletable');
+
+// 6. Empty week: zero rows is a valid draft and finalizes immediately.
+oa_reset();
+$empty_id = MealsDB_Order_Audit::create_for_week('2026-06-01', '2026-06-07', []);
+oa_chk($empty_id > 0, '5.6: empty week creates a valid draft');
+oa_chk(MealsDB_Order_Audit::finalize($empty_id) === true, '5.6: empty audit finalizes');
+
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
 exit(empty($failures) ? 0 : 1);
