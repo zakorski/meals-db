@@ -814,6 +814,51 @@ class MealsDB_Schema {
                     ],
                 ],
             ],
+
+            // Weekly order audit (spec 2026-07-30). One row per audited
+            // Mon–Sun week. `payload` is the encrypted {generated, current}
+            // snapshot of the week's delivered orders (client names = PII,
+            // hence encryption at rest like the invoice-draft payload).
+            // One-audit-per-week is enforced in the SERVICE
+            // (MealsDB_Order_Audit::find_by_week before insert), not by a
+            // UNIQUE index — Schema_Sync is additive-only and its index
+            // support is exercised only with plain INDEX entries; a service
+            // check also lets create() surface the existing audit instead
+            // of erroring. Additive table — STR-11 schema-sync ADDS it.
+            MealsDB_Tables::ORDER_AUDITS => [
+                'table'   => MealsDB_Tables::ORDER_AUDITS,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'audit_id'          => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    // Monday and Sunday of the audited week.
+                    'week_start'        => 'DATE NOT NULL',
+                    'week_end'          => 'DATE NOT NULL',
+                    'status'            => "ENUM('draft','finalized') NOT NULL DEFAULT 'draft'",
+                    'payload'           => 'LONGTEXT NOT NULL',
+                    'row_count'         => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'confirmed_count'   => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'edited_count'      => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'created_by'        => 'BIGINT UNSIGNED NULL',
+                    'created_at'        => 'DATETIME NOT NULL',
+                    'finalized_by'      => 'BIGINT UNSIGNED NULL',
+                    'finalized_at'      => 'DATETIME NULL',
+                    'unfinalized_at'    => 'DATETIME NULL',
+                    'unfinalize_reason' => 'VARCHAR(500) NULL',
+                ],
+                'primary_key' => ['audit_id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_week_start',
+                        'type'    => 'INDEX',
+                        'columns' => ['week_start'],
+                    ],
+                    [
+                        'name'    => 'idx_status',
+                        'type'    => 'INDEX',
+                        'columns' => ['status'],
+                    ],
+                ],
+            ],
         ];
     }
 

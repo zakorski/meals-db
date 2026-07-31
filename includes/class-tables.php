@@ -60,6 +60,21 @@ class MealsDB_Tables
     public const SLIP_BATCHES = 'meals_slip_batches';
 
     /**
+     * Weekly order audit (spec 2026-07-30). One row per audited Mon–Sun week.
+     * `payload` is the encrypted {generated, current} snapshot of the week's
+     * delivered orders (client names = PII, hence encryption at rest like the
+     * invoice-draft payload). One-audit-per-week uniqueness is enforced in the
+     * service layer (MealsDB_Order_Audit::find_by_week before insert), not by
+     * a UNIQUE index — Schema_Sync is additive-only and its index support is
+     * exercised only with plain INDEX entries; a service check also lets
+     * create() surface the existing audit instead of erroring. This is an
+     * additive table (STR-11 schema-sync handles it) and is in all() below,
+     * so install/uninstall manage it via the standard loops — no
+     * literal-name special-casing needed. Mirrors INVOICE_DRAFTS.
+     */
+    public const ORDER_AUDITS = 'meals_order_audits';
+
+    /**
      * Retrieve all canonical table names.
      *
      * @return string[]
@@ -84,6 +99,7 @@ class MealsDB_Tables
             self::ALLOCATION_ERRORS,
             self::INVOICE_DRAFTS,
             self::SLIP_BATCHES,
+            self::ORDER_AUDITS,
         ];
     }
 }
