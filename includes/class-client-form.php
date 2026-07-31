@@ -70,6 +70,7 @@ class MealsDB_Client_Form {
         'per_sdnb_req',
         'payment_method',
         'client_contribution',
+        'use_legacy_billing',
         'delivery_fee',
         'delivery_day',
         'delivery_area_name',
@@ -1915,6 +1916,13 @@ class MealsDB_Client_Form {
                 }
                 break;
             case 'do_not_call_client_phone':
+            // use_legacy_billing drives the SDNB invoice-pipeline split
+            // (1 = legacy zone CSV, 0 = new portal). The form renders it as
+            // a "New Portal" checkbox posting '0' when checked, with a
+            // hidden '1' fallback for the unchecked state — so unlike a
+            // bare checkbox, the key is always present when the SDNB row is
+            // active and absent (column untouched) for other client types.
+            case 'use_legacy_billing':
                 $normalized = strtolower(trim($value));
                 $value = in_array($normalized, ['1', 'true', 'yes', 'y', 'on'], true) ? '1' : '0';
                 break;

@@ -1657,7 +1657,11 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-client-type="sdnb,veteran,private">
                     <th><label for="do_not_call_client_phone"><?php esc_html_e("Do Not Call Client's Phone", 'meals-db'); ?></label></th>
-                    <td><label><input type="checkbox" name="do_not_call_client_phone" id="do_not_call_client_phone" value="1" <?php checked($client['do_not_call_client_phone'] ?? '0', '1'); ?> /> <?php esc_html_e('Call alternate contact instead', 'meals-db'); ?></label></td>
+                    <td>
+                        <?php // Hidden '0' fallback: without it an unchecked box posts nothing and update() leaves the column at 1 — the flag could never be turned off from the form. ?>
+                        <input type="hidden" name="do_not_call_client_phone" value="0" />
+                        <label><input type="checkbox" name="do_not_call_client_phone" id="do_not_call_client_phone" value="1" <?php checked($client['do_not_call_client_phone'] ?? '0', '1'); ?> /> <?php esc_html_e('Call alternate contact instead', 'meals-db'); ?></label>
+                    </td>
                 </tr>
                 <?php
             },
@@ -1929,6 +1933,27 @@ class MealsDB_Admin_UI {
 
         $sdnb_program_fields = [
             '__attributes' => ['data-client-type' => 'sdnb'],
+            static function (array $client) {
+                ?>
+                <tr>
+                    <th><label for="use_legacy_billing"><?php esc_html_e('New Portal', 'meals-db'); ?></label></th>
+                    <td>
+                        <?php
+                        // Drives the SDNB invoice-pipeline split (use_legacy_billing:
+                        // 0 = new-portal CSV, 1 = legacy zone-based CSV). Checked
+                        // means NEW PORTAL, so the checkbox posts '0' and the hidden
+                        // input supplies '1' for the unchecked state — without it an
+                        // unchecked box would post nothing and the column could never
+                        // be switched back to legacy. New clients default to the new
+                        // portal (operator decision 2026-07-30); the DB default of 1
+                        // only covers rows that predate this field.
+                        ?>
+                        <input type="hidden" name="use_legacy_billing" value="1" />
+                        <label><input type="checkbox" name="use_legacy_billing" id="use_legacy_billing" value="0" <?php checked($client['use_legacy_billing'] ?? '0', '0'); ?> /> <?php esc_html_e('Invoice through the new SDNB portal (unchecked = legacy zone-based invoice)', 'meals-db'); ?></label>
+                    </td>
+                </tr>
+                <?php
+            },
             static function (array $client) {
                 ?>
                 <tr>
