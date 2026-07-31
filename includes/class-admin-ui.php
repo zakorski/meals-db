@@ -1657,7 +1657,11 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-client-type="sdnb,veteran,private">
                     <th><label for="do_not_call_client_phone"><?php esc_html_e("Do Not Call Client's Phone", 'meals-db'); ?></label></th>
-                    <td><label><input type="checkbox" name="do_not_call_client_phone" id="do_not_call_client_phone" value="1" <?php checked($client['do_not_call_client_phone'] ?? '0', '1'); ?> /> <?php esc_html_e('Call alternate contact instead', 'meals-db'); ?></label></td>
+                    <td>
+                        <?php // Hidden '0' fallback: without it an unchecked box posts nothing and update() leaves the column at 1 — the flag could never be turned off from the form. ?>
+                        <input type="hidden" name="do_not_call_client_phone" value="0" />
+                        <label><input type="checkbox" name="do_not_call_client_phone" id="do_not_call_client_phone" value="1" <?php checked($client['do_not_call_client_phone'] ?? '0', '1'); ?> /> <?php esc_html_e('Call alternate contact instead', 'meals-db'); ?></label>
+                    </td>
                 </tr>
                 <?php
             },
