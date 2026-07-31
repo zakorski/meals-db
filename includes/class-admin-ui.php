@@ -1932,6 +1932,27 @@ class MealsDB_Admin_UI {
             static function (array $client) {
                 ?>
                 <tr>
+                    <th><label for="use_legacy_billing"><?php esc_html_e('New Portal', 'meals-db'); ?></label></th>
+                    <td>
+                        <?php
+                        // Drives the SDNB invoice-pipeline split (use_legacy_billing:
+                        // 0 = new-portal CSV, 1 = legacy zone-based CSV). Checked
+                        // means NEW PORTAL, so the checkbox posts '0' and the hidden
+                        // input supplies '1' for the unchecked state — without it an
+                        // unchecked box would post nothing and the column could never
+                        // be switched back to legacy. New clients default to the new
+                        // portal (operator decision 2026-07-30); the DB default of 1
+                        // only covers rows that predate this field.
+                        ?>
+                        <input type="hidden" name="use_legacy_billing" value="1" />
+                        <label><input type="checkbox" name="use_legacy_billing" id="use_legacy_billing" value="0" <?php checked($client['use_legacy_billing'] ?? '0', '0'); ?> /> <?php esc_html_e('Invoice through the new SDNB portal (unchecked = legacy zone-based invoice)', 'meals-db'); ?></label>
+                    </td>
+                </tr>
+                <?php
+            },
+            static function (array $client) {
+                ?>
+                <tr>
                     <th><label for="client_contribution"><?php esc_html_e('Client Contributions', 'meals-db'); ?></label></th>
                     <td><input type="text" name="client_contribution" id="client_contribution" class="regular-text" value="<?php echo esc_attr($client['client_contribution'] ?? ''); ?>" /></td>
                 </tr>
