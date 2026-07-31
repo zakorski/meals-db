@@ -104,6 +104,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Staff::init();
     MealsDB_WC_Product_Tab::init();
     MealsDB_Invoice_Draft_Page::init();
+    MealsDB_Order_Audit_Page::init();
     MealsDB_Slip_Batch_Page::init();
     MealsDB_Rate_Definitions_Page::init();
     MealsDB_Ajax_Rate_Definitions::init();
