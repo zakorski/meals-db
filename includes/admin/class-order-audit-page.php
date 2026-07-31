@@ -80,11 +80,18 @@ class MealsDB_Order_Audit_Page {
             // query string client-side.
             'detailUrlBase' => admin_url('admin.php?page=' . self::PAGE_SLUG . '&audit_id='),
             'i18n'          => [
-                'confirmFinalize' => __('Save this weekly audit? It becomes read-only.', 'meals-db'),
+                'confirmFinalize'  => __('Save this weekly audit? It becomes read-only.', 'meals-db'),
                 'promptUnfinalize' => __('Enter a reason to reopen this audit (required — it is audited):', 'meals-db'),
-                'confirmDelete'   => __('Delete this draft audit? This cannot be undone.', 'meals-db'),
-                'errorGeneric'    => __('Something went wrong. Please try again.', 'meals-db'),
-                'ofResolved'      => __('of', 'meals-db'),
+                'confirmDelete'    => __('Delete this draft audit? This cannot be undone.', 'meals-db'),
+                'errorGeneric'     => __('Something went wrong. Please try again.', 'meals-db'),
+                'ofResolved'       => __('of', 'meals-db'),
+                // Live-toggle labels: applyRowStatus reads these instead of
+                // hardcoded English so translators can reach them via .po/.mo.
+                'statusPending'    => __('Pending', 'meals-db'),
+                'statusConfirmed'  => __('Confirmed', 'meals-db'),
+                'statusEdited'     => __('Edited', 'meals-db'),
+                'btnConfirm'       => __('✓ Confirm', 'meals-db'),
+                'btnConfirmed'     => __('✓ Confirmed', 'meals-db'),
             ],
         ]);
     }
@@ -137,9 +144,14 @@ class MealsDB_Order_Audit_Page {
         echo '<h2>' . esc_html__('Audits', 'meals-db') . '</h2>';
         echo '<p class="description">' . esc_html__('Times are UTC.', 'meals-db') . '</p>';
         echo '<table class="widefat striped"><thead><tr>';
-        foreach (['Week', 'Status', 'Progress', 'Created (UTC)', ''] as $h) {
-            echo '<th>' . esc_html__($h, 'meals-db') . '</th>';
-        }
+        // Explicit literal strings so WP string extraction sees each one. A
+        // variable argument to esc_html__() is opaque to xgettext / WP-CLI i18n.
+        // The last column is an actions column with no heading text.
+        echo '<th>' . esc_html__('Week', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Status', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Progress', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Created (UTC)', 'meals-db') . '</th>';
+        echo '<th></th>';
         echo '</tr></thead><tbody>';
 
         if (empty($audits)) {
@@ -218,9 +230,16 @@ class MealsDB_Order_Audit_Page {
 
         echo '<table class="widefat striped" id="oa-grid" data-audit-id="' . esc_attr((string) $audit_id) . '">';
         echo '<thead><tr>';
-        foreach (['Client', 'Delivery date', 'Order #', 'Mains', 'Sides', 'Status', 'Note', 'Actions'] as $h) {
-            echo '<th>' . esc_html__($h, 'meals-db') . '</th>';
-        }
+        // Explicit literal strings so WP string extraction sees each one. A
+        // variable argument to esc_html__() is opaque to xgettext / WP-CLI i18n.
+        echo '<th>' . esc_html__('Client', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Delivery date', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Order #', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Mains', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Sides', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Status', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Note', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('Actions', 'meals-db') . '</th>';
         echo '</tr></thead><tbody>';
 
         if (empty($rows)) {

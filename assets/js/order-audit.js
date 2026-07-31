@@ -176,25 +176,24 @@
 
     // Update a row's status cell text + the confirm button's pressed state/label
     // from a server-returned status ('confirmed' | 'pending' | 'edited').
+    // Labels come from the wp_localize_script i18n object so translators reach
+    // them; the JS never holds hardcoded English strings for these.
     function applyRowStatus($row, status) {
-        var label;
+        var statusLabel;
         if (status === 'confirmed') {
-            label = capitalize(status);
+            statusLabel = i18n.statusConfirmed || 'Confirmed';
         } else if (status === 'edited') {
-            label = capitalize(status);
+            statusLabel = i18n.statusEdited || 'Edited';
         } else {
-            label = 'Pending';
+            statusLabel = i18n.statusPending || 'Pending';
             status = 'pending';
         }
-        // Prefer the label the server semantics imply; fixed English fallbacks
-        // match the server-rendered labels closely enough for the live toggle.
-        $row.find('.oa-status').text(label === 'Pending' ? 'Pending'
-            : (label === 'Confirmed' ? 'Confirmed' : 'Edited'));
+        $row.find('.oa-status').text(statusLabel);
 
         var $confirm = $row.find('.oa-confirm');
         var isConfirmed = (status === 'confirmed');
         $confirm.attr('aria-pressed', isConfirmed ? 'true' : 'false')
-            .text(isConfirmed ? '✓ Confirmed' : '✓ Confirm');
+            .text(isConfirmed ? (i18n.btnConfirmed || '✓ Confirmed') : (i18n.btnConfirm || '✓ Confirm'));
     }
 
     // Show/hide the note pencil icon in a row from the just-typed note value.
@@ -209,10 +208,6 @@
         } else if ($icon.length) {
             $icon.remove();
         }
-    }
-
-    function capitalize(s) {
-        return s.charAt(0).toUpperCase() + s.slice(1);
     }
 
 })(jQuery);
