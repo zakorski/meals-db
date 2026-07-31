@@ -375,6 +375,159 @@ class MealsDB_Order_Audit {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Row mutations (draft only)
+    // ------------------------------------------------------------------
+
+    /**
+     * Toggle a row confirmed <-> pending. Returns the NEW row status string,
+     * or WP_Error. Confirms are attested in the payload (audited_by/at), NOT
+     * the audit log — see the class docblock for the volume rationale.
+     */
+    public static function confirm_row(int $audit_id, int $order_id) {
+        return self::mutate_row($audit_id, $order_id, static function (array $row) {
+            if ($row['audit_status'] === self::ROW_CONFIRMED) {
+                $row['audit_status'] = self::ROW_PENDING;
+                $row['audited_by']   = 0;
+                $row['audited_at']   = '';
+            } else {
+                // From pending OR edited: an explicit confirm supersedes.
+                $row['audit_status'] = self::ROW_CONFIRMED;
+                $row['edited_items'] = [];
+                $row['note']         = '';
+                $row['audited_by']   = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+                $row['audited_at']   = gmdate('Y-m-d H:i:s');
+            }
+            return $row;
+        });
+    }
+
+    /**
+     * Record a discrepancy: adjusted per-item quantities + note. Quantities
+     * are a map item_key => received qty for the items being changed; items
+     * not in the map keep their snapshot qty. Edits ARE the audit's reason
+     * to exist, so each one is audit-logged with its deltas.
+     *
+     * @param array<int,int> $qtys item_key => received qty (>= 0)
+     * @return true|WP_Error
+     */
+    public static function edit_row(int $audit_id, int $order_id, array $qtys, string $note) {
+        $note = trim($note);
+        if (function_exists('mb_strlen') ? mb_strlen($note) > self::MAX_NOTE_LEN : strlen($note) > self::MAX_NOTE_LEN) {
+            return new WP_Error('note_too_long', __('Note is too long (500 characters max).', 'meals-db'));
+        }
+        $deltas = [];
+        $result = self::mutate_row($audit_id, $order_id, static function (array $row) use ($qtys, $note, &$deltas) {
+            $known = [];
+            foreach ($row['items'] as $item) {
+                $known[(int) $item['item_key']] = (int) $item['qty'];
+            }
+            $clean = [];
+            foreach ($qtys as $key => $qty) {
+                $key = (int) $key;
+                $qty = (int) $qty;
+                if (!array_key_exists($key, $known)) {
+                    return new WP_Error('unknown_item', __('Unknown order item.', 'meals-db'));
+                }
+                if ($qty < 0) {
+                    return new WP_Error('bad_qty', __('Quantities must be zero or more.', 'meals-db'));
+                }
+                $clean[$key] = $qty;
+                if ($qty !== $known[$key]) {
+                    $deltas[] = $key . ':' . $known[$key] . '→' . $qty;
+                }
+            }
+            $row['audit_status'] = self::ROW_EDITED;
+            $row['edited_items'] = $clean;
+            $row['note']         = $note;
+            $row['audited_by']   = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+            $row['audited_at']   = gmdate('Y-m-d H:i:s');
+            return $row;
+        });
+        if ($result instanceof WP_Error) {
+            return $result;
+        }
+        if (class_exists('MealsDB_Logger')) {
+            try {
+                // Deltas only — item keys and counts, no PII in old/new.
+                MealsDB_Logger::log('order_audit_row_edited', $audit_id, 'order_' . $order_id,
+                    null, implode(', ', $deltas) . ($note !== '' ? ' (note)' : ''));
+            } catch (\Throwable $e) {
+                // Same rationale as create_for_week: a broken audit-log backend
+                // must not make a successfully stored edit report failure.
+                error_log('[MealsDB Order_Audit] audit log write failed: ' . $e->getMessage());
+            }
+        }
+        return true;
+    }
+
+    /** Discard an edit (or a confirm) back to pristine pending. @return true|WP_Error */
+    public static function revert_row(int $audit_id, int $order_id) {
+        $result = self::mutate_row($audit_id, $order_id, static function (array $row) {
+            $row['audit_status'] = self::ROW_PENDING;
+            $row['edited_items'] = [];
+            $row['note']         = '';
+            $row['audited_by']   = 0;
+            $row['audited_at']   = '';
+            return $row;
+        });
+        return ($result instanceof WP_Error) ? $result : true;
+    }
+
+    /**
+     * Shared load → mutate one row → re-encrypt → persist path. $mutator gets
+     * the current row and returns the replacement (or WP_Error to abort).
+     * Returns the new audit_status string, or WP_Error. Draft-only.
+     */
+    private static function mutate_row(int $audit_id, int $order_id, callable $mutator) {
+        try {
+            $audit = self::get($audit_id);
+            if ($audit === null) {
+                return new WP_Error('not_found', __('Audit not found.', 'meals-db'));
+            }
+            if ($audit['status'] !== self::STATUS_DRAFT) {
+                return new WP_Error('finalized', __('This audit is finalized and read-only.', 'meals-db'));
+            }
+            $payload = $audit['payload'];
+            if (!isset($payload['current'][$order_id])) {
+                return new WP_Error('row_not_found', __('Order not found in this audit.', 'meals-db'));
+            }
+            $new_row = $mutator($payload['current'][$order_id]);
+            if ($new_row instanceof WP_Error) {
+                return $new_row;
+            }
+            $payload['current'][$order_id] = $new_row;
+
+            $confirmed = 0; $edited = 0;
+            foreach ($payload['current'] as $r) {
+                if (($r['audit_status'] ?? '') === self::ROW_CONFIRMED) { $confirmed++; }
+                if (($r['audit_status'] ?? '') === self::ROW_EDITED)    { $edited++; }
+            }
+
+            $encoded = MealsDB_Encryption::encode_payload($payload);
+            if ($encoded === false) {
+                // QW-2 fail closed: refuse the mutation rather than store plaintext.
+                self::record_degraded('mutate.encrypt_failed', 'Order-audit row change dropped: payload encryption failed.');
+                return new WP_Error('encrypt_failed', __('Could not save the change (encryption unavailable).', 'meals-db'));
+            }
+
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            $ok = $wpdb->update($table, [
+                'payload'         => $encoded,
+                'confirmed_count' => $confirmed,
+                'edited_count'    => $edited,
+            ], ['audit_id' => $audit_id], ['%s', '%d', '%d'], ['%d']);
+            if ($ok === false) {
+                return new WP_Error('db', __('Could not save the change.', 'meals-db'));
+            }
+            return (string) $new_row['audit_status'];
+        } catch (\Throwable $e) {
+            self::log_error('mutate_row', $e);
+            return new WP_Error('internal', __('Could not save the change.', 'meals-db'));
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------

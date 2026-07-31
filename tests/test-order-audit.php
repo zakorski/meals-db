@@ -219,6 +219,62 @@ $bad = [501 => ['broken' => "\xB1\x31"]];
 $audit_id = MealsDB_Order_Audit::create_for_week('2026-07-27', '2026-08-02', $bad);
 oa_chk($audit_id === 0 && empty($wpdb->rows), '3.4: unencodable payload → create fails closed, nothing stored');
 
+// ---------------------------------------------------------------------------
+// Task 4 checks: confirm toggle / edit / revert
+// ---------------------------------------------------------------------------
+
+function oa_make_audit(): array {
+    $wpdb = oa_reset();
+    $rows = MealsDB_Order_Audit::build_rows_from_orders(oa_orders(), oa_clients());
+    $id   = MealsDB_Order_Audit::create_for_week('2026-07-20', '2026-07-26', $rows);
+    return [$wpdb, $id];
+}
+
+// 1. Confirm marks the row confirmed and bumps confirmed_count.
+[$wpdb, $id] = oa_make_audit();
+$res = MealsDB_Order_Audit::confirm_row($id, 501);
+oa_chk($res === 'confirmed', '4.1: confirm returns new status');
+$a = MealsDB_Order_Audit::get($id);
+oa_chk($a['payload']['current'][501]['audit_status'] === 'confirmed', '4.1: row status stored');
+oa_chk((int) $wpdb->rows[$id]['confirmed_count'] === 1, '4.1: confirmed_count denormalized');
+oa_chk((int) $a['payload']['current'][501]['audited_by'] === 7, '4.1: confirm attested by user in payload');
+oa_chk($a['payload']['generated'][501]['audit_status'] === 'pending', '4.1: generated snapshot untouched');
+
+// 2. Confirm again toggles back to pending (misclick recovery).
+$res = MealsDB_Order_Audit::confirm_row($id, 501);
+oa_chk($res === 'pending', '4.2: second confirm toggles to pending');
+oa_chk((int) $GLOBALS['wpdb']->rows[$id]['confirmed_count'] === 0, '4.2: count restored');
+
+// 3. Edit stores per-item quantities + note, sets edited, audit-logs the deltas.
+$res = MealsDB_Order_Audit::edit_row($id, 501, [1 => 4, 2 => 3], 'one stew damaged');
+oa_chk($res === true, '4.3: edit accepted');
+$a = MealsDB_Order_Audit::get($id);
+oa_chk($a['payload']['current'][501]['audit_status'] === 'edited', '4.3: row edited');
+oa_chk($a['payload']['current'][501]['edited_items'] === [1 => 4, 2 => 3], '4.3: edited quantities stored');
+oa_chk($a['payload']['current'][501]['note'] === 'one stew damaged', '4.3: note stored');
+oa_chk((int) $GLOBALS['wpdb']->rows[$id]['edited_count'] === 1, '4.3: edited_count denormalized');
+$edit_logged = false;
+foreach ($GLOBALS['wpdb']->audit_log as $logged_sql) {
+    if (stripos((string) $logged_sql, 'order_audit_row_edited') !== false) { $edit_logged = true; }
+}
+oa_chk($edit_logged, '4.3: edit hits the audit log');
+
+// 4. Edit validation: negative qty rejected; overlong note rejected; unknown
+//    item_key rejected; unknown order rejected.
+oa_chk(MealsDB_Order_Audit::edit_row($id, 501, [1 => -2], '') instanceof WP_Error, '4.4: negative qty → WP_Error');
+oa_chk(MealsDB_Order_Audit::edit_row($id, 501, [999 => 1], '') instanceof WP_Error, '4.4: unknown item_key → WP_Error');
+oa_chk(MealsDB_Order_Audit::edit_row($id, 501, [1 => 1], str_repeat('x', 501)) instanceof WP_Error, '4.4: overlong note → WP_Error');
+oa_chk(MealsDB_Order_Audit::edit_row($id, 777, [1 => 1], '') instanceof WP_Error, '4.4: unknown order → WP_Error');
+
+// 5. Revert clears the edit back to pending.
+$res = MealsDB_Order_Audit::revert_row($id, 501);
+oa_chk($res === true, '4.5: revert accepted');
+$a = MealsDB_Order_Audit::get($id);
+oa_chk($a['payload']['current'][501]['audit_status'] === 'pending'
+    && $a['payload']['current'][501]['edited_items'] === []
+    && $a['payload']['current'][501]['note'] === '', '4.5: row back to pristine pending');
+oa_chk((int) $GLOBALS['wpdb']->rows[$id]['edited_count'] === 0, '4.5: edited_count restored');
+
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
 exit(empty($failures) ? 0 : 1);
