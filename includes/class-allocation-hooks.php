@@ -36,8 +36,14 @@ class MealsDB_Allocation_Hooks {
         add_action('woocommerce_trash_order', [self::class, 'on_order_trashed'], 20, 1);
         add_action('woocommerce_delete_order', [self::class, 'on_order_deleted'], 20, 1);
 
-        // Quick Order creates orders via wc_create_order() which fires woocommerce_new_order.
-        // No additional hook needed for Quick Order.
+        // Quick Order coverage: woocommerce_new_order DOES fire for QO orders,
+        // but inside wc_create_order() — before QO sets the customer, items, or
+        // mealsdb_* meta — so on_order_created sees an EMPTY order and the fee
+        // applier no-ops. QO orders are instead covered by the status-changed
+        // reprocess branch below: create_wc_order() sets `processing`, and the
+        // pending->processing transition at the caller's save() re-runs
+        // apply_to_order() + allocate_order() against the populated order.
+        // See DIRECTIVE-quick-order-status-fix.md.
 
         // Nightly cron for recalculating current and next month
         add_action('mealsdb_nightly_allocation_sync', [self::class, 'nightly_sync']);

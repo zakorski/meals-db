@@ -948,6 +948,21 @@ class MealsDB_Quick_Order_Ajax {
             }
         }
 
+        // Quick Order creates operator-entered delivery orders, not card-payment
+        // e-commerce orders. Put them straight into an active, slip-eligible status so
+        // they (a) appear on packer/driver slip runs and (b) fire the allocation +
+        // fee/contribution hooks on the pending->processing transition, like a normal
+        // placed order. Without this they default to wc-pending, which the slip query
+        // excludes — and because woocommerce_new_order fires inside wc_create_order()
+        // on a still-EMPTY order (no customer, no items, no meta), the fee applier
+        // no-ops at creation and nothing ever re-runs it. The pending->processing
+        // transition at the caller's save() is what re-runs fees/allocation against
+        // the populated order. Kept AFTER the rejection guards above (never activate
+        // an order we're about to delete); the caller's save() persists the status
+        // and fires the woocommerce_order_status_* transition hooks.
+        // See DIRECTIVE-quick-order-status-fix.md.
+        $order->set_status('processing', __('Created via Meals DB Quick Order.', 'meals-db'));
+
         return $order;
     }
 
