@@ -1131,9 +1131,14 @@ class MealsDB_Quick_Order_Ajax {
 
         global $wpdb;
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        // delivery_area_name feeds the zone-schedule fallback in
+        // resolve_delivery_prefill() (A2/B7 directive): a not-yet-resynced
+        // row has blank delivery_day / next_delivery_date, and echoing those
+        // starved the QO prefill and day-mismatch warning of data.
         $client = $wpdb->get_row(
             $wpdb->prepare(
-                "SELECT ordering_frequency, delivery_frequency, delivery_day, next_order_date, next_delivery_date
+                "SELECT ordering_frequency, delivery_frequency, delivery_day, delivery_area_name,
+                        next_order_date, next_delivery_date
                  FROM `{$clients_table}` WHERE client_id = %d",
                 $client_id
             ),
@@ -1164,16 +1169,21 @@ class MealsDB_Quick_Order_Ajax {
         $rule_order    = MealsDB_Date_Calculator::next_date($order_date_ymd, $ordering_freq, $delivery_day);
         $rule_delivery = MealsDB_Date_Calculator::next_date($order_date_ymd, $delivery_freq, $delivery_day);
 
+        // A2/B7 directive: derive reliable prefill values instead of echoing
+        // possibly-blank stored columns. rule_default_* above deliberately
+        // keep the stored-day behaviour (directive step 3: unchanged).
+        $prefill = self::resolve_delivery_prefill($client, $order_date_ymd);
+
         wp_send_json_success([
             'has_client'            => true,
             'next_order_date'       => $client['next_order_date'] ?: null,
-            'next_delivery_date'    => $client['next_delivery_date'] ?: null,
+            'next_delivery_date'    => $prefill['next_delivery_date'],
             'rule_default_order'    => $rule_order,
             'rule_default_delivery' => $rule_delivery,
             // Delivery-date-override directive (Section A): the client's
             // canonical delivery day, so the JS soft-warning can flag an
             // off-day override without another round trip.
-            'delivery_day'          => $delivery_day ? strtolower((string) $delivery_day) : null,
+            'delivery_day'          => $prefill['delivery_day'],
             // U07-quick-order-1: these two keys previously emitted the
             // never-defined $ordering_days / $delivery_days — an E_WARNING on
             // every call and a null field for any consumer. Emit the actual
@@ -1181,6 +1191,64 @@ class MealsDB_Quick_Order_Ajax {
             'ordering_frequency'    => $ordering_freq,
             'delivery_frequency'    => $delivery_freq,
         ]);
+    }
+
+    /**
+     * Reliable delivery-day + next-delivery-date for the QO prefill and
+     * day-mismatch warning (A2/B7 directive). Pure: derives from the row
+     * the caller already loaded — NOT expected_day_for_wp_user(), whose
+     * own `wp_user_id ... LIMIT 1` query can pick a DIFFERENT client than
+     * the get_active_client_id_for_user() resolution under the MAJ-1
+     * duplicate-wp_user_id case.
+     *
+     * delivery_day: stored column first (lowercased), zone-schedule
+     * fallback when blank — the same precedence expected_day_for_wp_user()
+     * applies internally, so QO and the WC order-edit warning agree even
+     * on a stale stored day. Do not flip to zone-first.
+     *
+     * next_delivery_date: stored column first; when blank, computed with
+     * the SLIP occurrence semantics (delivery_occurrence_for_order:
+     * same-week snap, roll a cycle only once the weekday has passed) —
+     * NOT Date_Calculator::next_date(), which always projects a full
+     * cycle and would prefill one week late whenever the delivery day is
+     * still upcoming. The prefill is written as the _delivery_date
+     * override on create, so a late prefill would actively delay real
+     * deliveries; parity with the slip's no-override fallback is the
+     * correctness bar.
+     *
+     * @param array<string, mixed> $client         Row with delivery_day,
+     *                                             delivery_area_name,
+     *                                             next_delivery_date,
+     *                                             delivery_frequency.
+     * @param string               $order_date_ymd Anchor date (site-TZ Y-m-d).
+     * @return array{delivery_day: ?string, next_delivery_date: ?string}
+     */
+    public static function resolve_delivery_prefill(array $client, string $order_date_ymd): array {
+        $delivery_day = strtolower(trim((string) ($client['delivery_day'] ?? '')));
+        if ($delivery_day === '') {
+            $delivery_day = (string) (MealsDB_Zone_Day::day_for_zone(
+                isset($client['delivery_area_name']) ? (string) $client['delivery_area_name'] : null
+            ) ?? '');
+        }
+
+        $next_delivery = trim((string) ($client['next_delivery_date'] ?? ''));
+        if ($next_delivery === '' && $delivery_day !== '') {
+            // delivery_occurrence_for_order defaults a missing/zero
+            // frequency to 1 (weekly) — deliberate parity with the slip
+            // pipeline, not a bug.
+            $next_delivery = (string) MealsDB_Delivery_Slip_Generator::delivery_occurrence_for_order(
+                $order_date_ymd,
+                [
+                    'delivery_day'       => $delivery_day,
+                    'delivery_frequency' => (int) ($client['delivery_frequency'] ?? 0),
+                ]
+            );
+        }
+
+        return [
+            'delivery_day'       => $delivery_day !== '' ? $delivery_day : null,
+            'next_delivery_date' => $next_delivery !== '' ? $next_delivery : null,
+        ];
     }
 
     /**
