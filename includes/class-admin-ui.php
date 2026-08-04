@@ -227,6 +227,11 @@ class MealsDB_Admin_UI {
         add_filter('woocommerce_admin_order_actions', [$this, 'add_quick_order_clone_action'], 10, 2);
         add_filter('woocommerce_admin_order_preview_actions', [$this, 'add_quick_order_clone_preview_action'], 10, 2);
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_quick_order_clone_button']);
+        // Manual delivery-date override on the regular WC order-edit
+        // screen (delivery-date-override directive, Section B). The
+        // process hook fires for HPOS order saves with (order_id, order).
+        add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_delivery_date_field']);
+        add_action('woocommerce_process_shop_order_meta', [$this, 'save_delivery_date_field'], 10, 2);
     }
 
     /**
@@ -530,6 +535,131 @@ class MealsDB_Admin_UI {
             esc_url($url),
             esc_html__('Clone to Quick Order', 'meals-db')
         );
+    }
+
+    /**
+     * Render the manual delivery-date override field on the WC order-edit
+     * screen (delivery-date-override directive, Section B.5). Pre-filled
+     * from the order's _delivery_date meta; blank means "computed
+     * occurrence" (the normal cadence-derived slip date). A stored value
+     * that is off-day or in the past shows the advisory warning inline —
+     * soft-warn only, the save is never blocked.
+     *
+     * @param WC_Order $order Order instance.
+     */
+    public function render_delivery_date_field($order): void
+    {
+        $order_id = $this->validate_order_id($order);
+        if ($order_id <= 0 || !MealsDB_Permissions::can_access_plugin()) {
+            return;
+        }
+
+        $wc_order = is_object($order) && is_a($order, 'WC_Order') ? $order : wc_get_order($order_id);
+        if (!$wc_order) {
+            return;
+        }
+
+        $stored  = MealsDB_Delivery_Date_Advisor::sanitize_ymd((string) $wc_order->get_meta('_delivery_date', true));
+        $warning = '';
+        if ($stored !== '') {
+            $warning = MealsDB_Delivery_Date_Advisor::warning_for(
+                $stored,
+                MealsDB_Delivery_Date_Advisor::expected_day_for_wp_user((int) $wc_order->get_customer_id())
+            );
+        }
+
+        wp_nonce_field('mealsdb_delivery_date_save', 'mealsdb_delivery_date_nonce');
+        ?>
+        <p class="form-field form-field-wide mealsdb-delivery-date-override">
+            <label for="mealsdb_delivery_date"><?php esc_html_e('Delivery date (Meals DB)', 'meals-db'); ?></label>
+            <input type="date"
+                   name="mealsdb_delivery_date"
+                   id="mealsdb_delivery_date"
+                   value="<?php echo esc_attr($stored); ?>" />
+            <span class="description">
+                <?php esc_html_e('Overrides the delivery date for THIS order only (slips select on it). Clear to revert to the computed schedule date. Does not change the client\'s recurring cadence.', 'meals-db'); ?>
+            </span>
+            <?php if ($warning !== '') : ?>
+                <span class="description" style="color:#996800;"><?php echo esc_html($warning); ?></span>
+            <?php endif; ?>
+        </p>
+        <?php
+    }
+
+    /**
+     * Persist the delivery-date override from the order-edit screen
+     * (directive Section B.6): valid date → write _delivery_date; field
+     * cleared → DELETE the meta so the order reverts to the computed
+     * occurrence; malformed input or an unchanged value → leave the
+     * stored meta alone. Guarded by nonce + edit_shop_orders; changes
+     * are audit-logged (a committed change to a data record — the
+     * Pattern 6 boundary).
+     *
+     * @param int   $order_id WC order ID.
+     * @param mixed $posted   Post object / order (unused; meta comes from $_POST).
+     */
+    public function save_delivery_date_field($order_id, $posted = null): void
+    {
+        // The nonce field only exists when our render ran on this screen;
+        // absent means some other save context — never touch the meta.
+        $nonce = isset($_POST['mealsdb_delivery_date_nonce'])
+            ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_delivery_date_nonce']))
+            : '';
+        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_delivery_date_save')) {
+            return;
+        }
+        if (!current_user_can('edit_shop_orders') || !MealsDB_Permissions::can_access_plugin()) {
+            return;
+        }
+
+        $order_id = (int) $order_id;
+        $wc_order = $order_id > 0 && function_exists('wc_get_order') ? wc_get_order($order_id) : null;
+        if (!$wc_order) {
+            return;
+        }
+
+        $raw = array_key_exists('mealsdb_delivery_date', $_POST)
+            ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_delivery_date']))
+            : null;
+        $existing = MealsDB_Delivery_Date_Advisor::sanitize_ymd((string) $wc_order->get_meta('_delivery_date', true));
+
+        $decision = MealsDB_Delivery_Date_Advisor::resolve_action($raw, $existing);
+        if ($decision['action'] === 'noop') {
+            return;
+        }
+
+        try {
+            if ($decision['action'] === 'set') {
+                $wc_order->update_meta_data('_delivery_date', $decision['value']);
+            } else {
+                $wc_order->delete_meta_data('_delivery_date');
+            }
+            $wc_order->save();
+
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::log(
+                    'order_delivery_date_override',
+                    $order_id,
+                    '_delivery_date',
+                    $existing !== '' ? $existing : null,
+                    $decision['action'] === 'set' ? $decision['value'] : null
+                );
+            }
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Admin UI] delivery date save failed: ' . $e->getMessage());
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'error',
+                    'category'    => 'quick_order',
+                    'subsystem'   => 'admin_ui',
+                    'event'       => 'delivery_date_override.save_failed',
+                    'outcome'     => 'degraded',
+                    'message'     => $e->getMessage(),
+                    'entity_type' => 'wc_order',
+                    'entity_id'   => $order_id,
+                ]);
+            }
+        }
     }
 
     /**

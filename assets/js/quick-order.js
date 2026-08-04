@@ -219,6 +219,12 @@
                 $('#mealsdb-qo-next-delivery-date').val(defaults.delivery || '');
             });
 
+            // Manual delivery-date override: re-check the soft warning on
+            // every edit. Advisory only — never disables Create.
+            $(document).on('change input', '#mealsdb-qo-delivery-date', () => {
+                this.refreshDeliveryDateWarning();
+            });
+
             if (this.$rateSelect && this.$rateSelect.length) {
                 this.$rateSelect.on('change', () => {
                     this.updateSummaryRate();
@@ -1429,6 +1435,9 @@
                     rate_id: rateId,
                     next_order_date: $('#mealsdb-qo-next-order-date').val() || '',
                     next_delivery_date: $('#mealsdb-qo-next-delivery-date').val() || '',
+                    // One-time delivery-date override for THIS order only
+                    // ('' = none; server writes _delivery_date when valid).
+                    delivery_date: $('#mealsdb-qo-delivery-date').val() || '',
                 },
             }).done((response) => {
                 if (!this.isSuccessfulResponse(response)) {
@@ -1477,6 +1486,12 @@
                 } else {
                     qoShowToast(successMessage, 'success');
                 }
+
+                // The override is one-time-only: clear it after a
+                // successful create so it can't silently ride along on
+                // the operator's next order.
+                $('#mealsdb-qo-delivery-date').val('');
+                this.refreshDeliveryDateWarning();
 
                 this.showOrderSuccess(successMessage, orderId, orderLink);
 
@@ -1755,6 +1770,13 @@
                     order: d.rule_default_order || '',
                     delivery: d.rule_default_delivery || '',
                 };
+                // Delivery-date override (directive Section A.1): prefill
+                // the per-order delivery date with the client's computed
+                // next_delivery_date; blank when no cadence (the slip
+                // pipeline then falls back to the computed occurrence).
+                self.state.clientDeliveryDay = d.has_client ? (d.delivery_day || '') : '';
+                $('#mealsdb-qo-delivery-date').val(d.has_client ? (d.next_delivery_date || '') : '');
+                self.refreshDeliveryDateWarning();
                 const $panel = $('#mealsdb-qo-next-dates');
                 if (!d.has_client) { $panel.hide(); return; }
                 $panel.show();
@@ -1770,6 +1792,51 @@
                     d.rule_default_delivery ? 'Normally: ' + d.rule_default_delivery : ''
                 );
             });
+        },
+
+        /**
+         * Client-side mirror of MealsDB_Delivery_Date_Advisor::warning_for()
+         * (soft-warn, don't block): past date or off-day gets an advisory
+         * string, '' when the date looks fine. expectedDay is the client's
+         * canonical delivery_day (lowercase) or '' → Mon–Fri fallback.
+         */
+        deliveryDateWarning(ymd, expectedDay) {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || '');
+            if (!m) {
+                return '';
+            }
+            const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const weekday = dayNames[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
+
+            const now = new Date();
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+            const parts = [];
+            if (ymd < today) {
+                parts.push(`${ymd} is in the past.`);
+            }
+            const expected = (expectedDay || '').toLowerCase();
+            if (expected) {
+                if (weekday.toLowerCase() !== expected) {
+                    const expectedLabel = expected.charAt(0).toUpperCase() + expected.slice(1);
+                    parts.push(`${ymd} is a ${weekday} — this client's deliveries run on ${expectedLabel}.`);
+                }
+            } else if (weekday === 'Saturday' || weekday === 'Sunday') {
+                parts.push(`${ymd} is a ${weekday} — no delivery runs that day.`);
+            }
+            return parts.length ? `Heads up: ${parts.join(' ')} Saving anyway is allowed.` : '';
+        },
+
+        refreshDeliveryDateWarning() {
+            const $warning = $('#mealsdb-qo-delivery-date-warning');
+            if (!$warning.length) {
+                return;
+            }
+            const warning = this.deliveryDateWarning(
+                $('#mealsdb-qo-delivery-date').val() || '',
+                (this.state && this.state.clientDeliveryDay) || ''
+            );
+            $warning.text(warning).toggle(warning !== '');
         },
 
         fetchClientRates(userId, preselectRateId) {

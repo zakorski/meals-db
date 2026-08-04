@@ -43,6 +43,26 @@ if (!class_exists('FakeOrderQueryForDelivery')) {
             }
             return $out;
         }
+
+        // Override-aware selection (Section D) queries these too; this
+        // scenario has no _delivery_date overrides, so they return empty
+        // (occurrence-only behaviour, which is what this test pins).
+        public function get_orders_with_items_for_users_by_delivery_date(
+            array $wp_user_ids,
+            string $start_date,
+            string $end_date,
+            array $exclude_statuses = []
+        ): array {
+            return [];
+        }
+
+        public function get_delivery_date_overrides(array $order_ids): array {
+            return [];
+        }
+
+        public function get_user_ids_with_delivery_date_override(string $start_date, string $end_date): array {
+            return [];
+        }
     }
 }
 

@@ -108,6 +108,13 @@ class MealsDB_Quick_Order_UI {
                     <label for="mealsdb-quick-order-date"><?php esc_html_e('Order Date', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-quick-order-date" class="mealsdb-quick-order__order-date" />
                 </div>
+                <div class="mealsdb-quick-order__control">
+                    <label for="mealsdb-qo-delivery-date"><?php esc_html_e('Delivery Date (this order)', 'meals-db'); ?></label>
+                    <input type="date" id="mealsdb-qo-delivery-date" class="mealsdb-quick-order__delivery-date" />
+                    <?php // Soft-warn, don't block (delivery-date-override directive): the
+                          // warning is advisory; the Create button is never disabled by it. ?>
+                    <p class="description" id="mealsdb-qo-delivery-date-warning" style="display:none; color:#996800; margin:4px 0 0; max-width:250px;"></p>
+                </div>
                 <div class="mealsdb-quick-order__control" id="mealsdb-quick-order-rate-container" style="display: none;">
                     <label for="mealsdb-quick-order-rate">
                         <?php esc_html_e('Billing Rate', 'meals-db'); ?>
