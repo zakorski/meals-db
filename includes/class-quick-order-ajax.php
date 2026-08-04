@@ -349,6 +349,19 @@ class MealsDB_Quick_Order_Ajax {
                 $order->update_meta_data('mealsdb_rate_id', $rate_id);
             }
 
+            // Manual delivery-date override (delivery-date-override
+            // directive, Section A.3): a valid posted delivery_date is
+            // written to _delivery_date — the slip pipeline's
+            // authoritative selection + header source. Blank/invalid
+            // writes nothing (order rides the computed occurrence). This
+            // is deliberately NOT fed to persist_next_dates() below:
+            // the override is one-time-only and must not re-anchor the
+            // client's recurring cadence.
+            $delivery_override = self::apply_delivery_date_override(
+                $order,
+                isset($_POST['delivery_date']) ? wp_unslash((string) $_POST['delivery_date']) : ''
+            );
+
             $order->save();
 
             // Update operational wp_usermeta fields (matches old admin-pos-order behavior).
@@ -383,11 +396,12 @@ class MealsDB_Quick_Order_Ajax {
                     'wc_order',
                     null,
                     wp_json_encode([
-                        'wp_user_id'   => $wp_user_id,
-                        'client_id'    => $client_id,
-                        'order_date'   => $order_date->format('Y-m-d'),
-                        'rate_id'      => $rate_id > 0 ? $rate_id : null,
-                        'item_count'   => count($items),
+                        'wp_user_id'    => $wp_user_id,
+                        'client_id'     => $client_id,
+                        'order_date'    => $order_date->format('Y-m-d'),
+                        'delivery_date' => $delivery_override !== '' ? $delivery_override : null,
+                        'rate_id'       => $rate_id > 0 ? $rate_id : null,
+                        'item_count'    => count($items),
                     ])
                 );
             }
@@ -436,6 +450,14 @@ class MealsDB_Quick_Order_Ajax {
                 'order_link' => $order->get_edit_order_url(),
                 'dropped_items' => $dropped_items,
                 'clamped_items' => $clamped_items,
+                // Advisory only (soft-warn, don't block): the order IS
+                // saved with the override; the JS surfaces this string.
+                'delivery_date_warning' => $delivery_override !== ''
+                    ? MealsDB_Delivery_Date_Advisor::warning_for(
+                        $delivery_override,
+                        MealsDB_Delivery_Date_Advisor::expected_day_for_wp_user($wp_user_id)
+                    )
+                    : '',
             ]);
         } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] Order error: ' . $e->getMessage());
@@ -444,6 +466,26 @@ class MealsDB_Quick_Order_Ajax {
                 'message' => __('Order creation failed. Please try again.', 'meals-db'),
             ]);
         }
+    }
+
+    /**
+     * Sanitize + apply the operator's one-time delivery-date override to
+     * a freshly built order (delivery-date-override directive, Section
+     * A.3). Writes _delivery_date ONLY when the raw value is a real
+     * Y-m-d calendar date; returns the applied date, or '' when nothing
+     * was written. Public+static so the contract is unit-testable
+     * without the full AJAX stack.
+     *
+     * @param object $order Order-like object exposing update_meta_data().
+     * @param mixed  $raw   Raw posted delivery_date value.
+     */
+    public static function apply_delivery_date_override($order, $raw): string {
+        $ymd = MealsDB_Delivery_Date_Advisor::sanitize_ymd($raw);
+        if ($ymd === '' || !is_object($order) || !method_exists($order, 'update_meta_data')) {
+            return '';
+        }
+        $order->update_meta_data('_delivery_date', $ymd);
+        return $ymd;
     }
 
     /**
@@ -1113,6 +1155,10 @@ class MealsDB_Quick_Order_Ajax {
             'next_delivery_date'    => $client['next_delivery_date'] ?: null,
             'rule_default_order'    => $rule_order,
             'rule_default_delivery' => $rule_delivery,
+            // Delivery-date-override directive (Section A): the client's
+            // canonical delivery day, so the JS soft-warning can flag an
+            // off-day override without another round trip.
+            'delivery_day'          => $delivery_day ? strtolower((string) $delivery_day) : null,
             // U07-quick-order-1: these two keys previously emitted the
             // never-defined $ordering_days / $delivery_days — an E_WARNING on
             // every call and a null field for any consumer. Emit the actual

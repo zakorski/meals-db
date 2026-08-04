@@ -238,6 +238,205 @@ class MealsDB_WC_Order_Query {
     }
 
     /**
+     * Fetch orders (with items) whose operator-set _delivery_date meta
+     * falls within [$start_date, $end_date] inclusive — the override
+     * candidates for slip selection (delivery-date-override directive,
+     * Section D rule 10).
+     *
+     * This is deliberately a SEPARATE query from the creation-window
+     * fetch: an override can move delivery arbitrarily far from the
+     * order's creation date, so no widening of the creation pre-filter
+     * can be guaranteed to catch it. _delivery_date is written as
+     * strict Y-m-d (MealsDB_Delivery_Date_Advisor::sanitize_ymd), so
+     * lexical string comparison on meta_value is date-correct.
+     *
+     * Each row carries `delivery_date_override` (the meta value) so the
+     * caller can select on it without a second lookup.
+     *
+     * @param int[]    $wp_user_ids      WordPress user IDs.
+     * @param string   $start_date       Y-m-d range start (inclusive).
+     * @param string   $end_date         Y-m-d range end (inclusive).
+     * @param string[] $exclude_statuses Order statuses to exclude.
+     *
+     * @return array<int, array<string, mixed>> Orders with 'items' key.
+     */
+    public function get_orders_with_items_for_users_by_delivery_date(
+        array $wp_user_ids,
+        string $start_date,
+        string $end_date,
+        // Keep in lockstep with get_orders_with_items_for_users(): an
+        // overridden order must obey the same status rules as any other
+        // slip candidate.
+        array $exclude_statuses = [
+            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
+            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
+        ]
+    ): array {
+        $wp_user_ids = array_filter(array_map('intval', $wp_user_ids));
+        if (empty($wp_user_ids)) {
+            return [];
+        }
+
+        $orders_table = $this->orders_table();
+        $meta_table   = $this->orders_meta_table();
+
+        $user_placeholders   = implode(',', array_fill(0, count($wp_user_ids), '%d'));
+        $status_placeholders = implode(',', array_fill(0, count($exclude_statuses), '%s'));
+
+        // Same correlated-subquery discipline as get_orders_for_users():
+        // a JOIN on the non-unique (order_id, meta_key) would multiply
+        // rows if a stray duplicate _delivery_date meta ever appeared.
+        // HAVING filters on the alias (MySQL permits alias refs there).
+        $sql = "
+            SELECT
+                o.id              AS order_id,
+                o.customer_id     AS wp_user_id,
+                o.status,
+                o.date_created_gmt,
+                o.total_amount,
+                o.tax_amount,
+                (
+                    SELECT dd.meta_value
+                    FROM {$meta_table} dd
+                    WHERE dd.order_id = o.id AND dd.meta_key = '_delivery_date'
+                    ORDER BY dd.id ASC
+                    LIMIT 1
+                ) AS delivery_date_override,
+                (
+                    SELECT m.meta_value
+                    FROM {$meta_table} m
+                    WHERE m.order_id = o.id AND m.meta_key = 'mealsdb_rate_id'
+                    ORDER BY m.id ASC
+                    LIMIT 1
+                ) AS mealsdb_rate_id
+            FROM {$orders_table} o
+            WHERE o.customer_id IN ({$user_placeholders})
+                AND o.status NOT IN ({$status_placeholders})
+                AND o.type = 'shop_order'
+            HAVING delivery_date_override >= %s AND delivery_date_override <= %s
+            ORDER BY o.date_created_gmt ASC
+        ";
+
+        $params = array_merge(
+            $wp_user_ids,
+            $exclude_statuses,
+            [$start_date, $end_date]
+        );
+
+        $prepared = $this->wpdb->prepare($sql, $params);
+        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
+        if (!is_array($rows) || empty($rows)) {
+            return [];
+        }
+
+        $order_ids = array_column($rows, 'order_id');
+        $items     = $this->get_order_items(array_map('intval', $order_ids));
+
+        $items_by_order = [];
+        foreach ($items as $item) {
+            $oid = (int) $item['order_id'];
+            $items_by_order[$oid][] = $item;
+        }
+        foreach ($rows as &$row) {
+            $oid = (int) $row['order_id'];
+            $row['items'] = isset($items_by_order[$oid]) ? $items_by_order[$oid] : [];
+        }
+        unset($row);
+
+        return $rows;
+    }
+
+    /**
+     * Map order IDs to their _delivery_date override values (Y-m-d), for
+     * the override-aware slip selection's "overridden OUT of range"
+     * exclusion (Section D rule 9): a creation-window candidate carrying
+     * an out-of-range override must leave its computed-occurrence slip.
+     *
+     * Only well-formed Y-m-d values are returned; anything else is
+     * treated as "no override" (matching the selection rule).
+     *
+     * @param int[] $order_ids WC order IDs.
+     * @return array<int, string> order_id => Y-m-d.
+     */
+    public function get_delivery_date_overrides(array $order_ids): array {
+        $order_ids = array_filter(array_map('intval', $order_ids));
+        if (empty($order_ids)) {
+            return [];
+        }
+
+        $meta_table   = $this->orders_meta_table();
+        $placeholders = implode(',', array_fill(0, count($order_ids), '%d'));
+
+        // ORDER BY id ASC so a stray duplicate meta resolves to the first
+        // row, matching the correlated-subquery LIMIT 1 above.
+        $sql = "
+            SELECT order_id, meta_value
+            FROM {$meta_table}
+            WHERE meta_key = '_delivery_date'
+                AND order_id IN ({$placeholders})
+            ORDER BY id ASC
+        ";
+
+        $prepared = $this->wpdb->prepare($sql, $order_ids);
+        $rows     = $this->wpdb->get_results($prepared, ARRAY_A);
+
+        $map = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $oid = (int) ($row['order_id'] ?? 0);
+                $val = (string) ($row['meta_value'] ?? '');
+                if ($oid > 0 && !isset($map[$oid]) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $val)) {
+                    $map[$oid] = $val;
+                }
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * WP user IDs owning at least one order overridden into
+     * [$start_date, $end_date] — the client-inclusion feed for slip
+     * client queries (Section D rule 11): a Saturday-overridden order's
+     * owner matches no delivery_day weekday, so the client query must
+     * pull them in by user ID instead.
+     *
+     * @param string $start_date Y-m-d range start (inclusive).
+     * @param string $end_date   Y-m-d range end (inclusive).
+     * @return int[] Distinct WP user IDs.
+     */
+    public function get_user_ids_with_delivery_date_override(string $start_date, string $end_date): array {
+        $orders_table = $this->orders_table();
+        $meta_table   = $this->orders_meta_table();
+
+        // Same status exclusions as the order fetches: a cancelled order's
+        // override must not conjure its owner onto a slip.
+        $exclude_statuses = [
+            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
+            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
+        ];
+        $status_placeholders = implode(',', array_fill(0, count($exclude_statuses), '%s'));
+
+        $sql = "
+            SELECT DISTINCT o.customer_id
+            FROM {$orders_table} o
+            INNER JOIN {$meta_table} dd
+                ON dd.order_id = o.id
+                AND dd.meta_key = '_delivery_date'
+            WHERE dd.meta_value >= %s AND dd.meta_value <= %s
+                AND o.customer_id > 0
+                AND o.status NOT IN ({$status_placeholders})
+                AND o.type = 'shop_order'
+        ";
+
+        $params   = array_merge([$start_date, $end_date], $exclude_statuses);
+        $prepared = $this->wpdb->prepare($sql, $params);
+        $rows     = $this->wpdb->get_col($prepared);
+
+        return is_array($rows) ? array_values(array_filter(array_map('intval', $rows))) : [];
+    }
+
+    /**
      * Look up product metadata from the external meals_products table.
      *
      * @param int[] $wc_product_ids WooCommerce product IDs.

@@ -56,14 +56,24 @@ class MealsDB_Delivery_Slip_Generator {
         // delivery_day + delivery_frequency are needed by the delivery-basis
         // order filter (delivery_occurrence_for_order, MAJ-6) to map each
         // candidate order to its intended delivery occurrence.
-        $sql   = $wpdb->prepare(
+        //
+        // Override owners (Section D rule 11): a client whose order was
+        // manually overridden onto this date must be selected even when the
+        // date is not their delivery_day weekday — for a Saturday override
+        // NO client matches by weekday, so without this clause the
+        // overridden order could never reach a slip at all.
+        [$where, $params] = self::client_where_with_override_owners(
+            $this->order_query->get_user_ids_with_delivery_date_override($delivery_date, $delivery_date),
+            $day_lower
+        );
+        $sql = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     client_type, delivery_fee, payment_method,
                     delivery_day, delivery_frequency
              FROM `{$table}`
-             WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s",
-            $day_lower
+             {$where}",
+            ...$params
         );
 
         $rows = $wpdb->get_results($sql, ARRAY_A);
@@ -112,7 +122,13 @@ class MealsDB_Delivery_Slip_Generator {
         // the alternate contact rendered blank on the slip and its persisted
         // batch snapshot (U06-slips-1); the skip-empty renderer hid it. None
         // are in ENCRYPTED_CLIENT_COLUMNS, so no decrypt step is needed.
-        $sql   = $wpdb->prepare(
+        // Override owners join by user ID regardless of weekday (Section D
+        // rule 11) — same clause as get_clients_for_delivery_date().
+        [$where, $params] = self::client_where_with_override_owners(
+            $this->order_query->get_user_ids_with_delivery_date_override($delivery_date, $delivery_date),
+            $day_lower
+        );
+        $sql = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
                     first_name, last_name, client_phone_1, delivery_fee,
@@ -121,8 +137,8 @@ class MealsDB_Delivery_Slip_Generator {
                     alternate_contact_phone_1, alternate_contact_phone_2,
                     delivery_day, delivery_frequency
              FROM `{$table}`
-             WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s",
-            $day_lower
+             {$where}",
+            ...$params
         );
 
         $rows = $wpdb->get_results($sql, ARRAY_A);
@@ -148,6 +164,33 @@ class MealsDB_Delivery_Slip_Generator {
         }
 
         return $clients;
+    }
+
+    /**
+     * Build the client WHERE clause + prepare() params for a slip date,
+     * optionally widened to include override owners by wp_user_id
+     * (Section D rule 11). With no owners this reduces to the original
+     * weekday-only clause — the query shape for the non-override case is
+     * unchanged.
+     *
+     * @param int[]  $override_uids WP user IDs owning overridden orders on the date.
+     * @param string $day_lower     Lowercase full weekday name of the slip date.
+     * @return array{0: string, 1: array<int, int|string>} [WHERE sql, params]
+     */
+    private static function client_where_with_override_owners(array $override_uids, string $day_lower): array {
+        $override_uids = array_values(array_filter(array_map('intval', $override_uids)));
+        if (empty($override_uids)) {
+            return [
+                'WHERE active = 1 AND wp_user_id > 0 AND LOWER(delivery_day) = %s',
+                [$day_lower],
+            ];
+        }
+        $placeholders = implode(',', array_fill(0, count($override_uids), '%d'));
+        return [
+            "WHERE active = 1 AND wp_user_id > 0
+               AND (LOWER(delivery_day) = %s OR wp_user_id IN ({$placeholders}))",
+            array_merge([$day_lower], $override_uids),
+        ];
     }
 
     /**
@@ -349,17 +392,71 @@ class MealsDB_Delivery_Slip_Generator {
             $window_start,
             $end_date
         );
-        if (empty($candidates)) {
+
+        // Override-aware selection (delivery-date-override directive,
+        // Section D). Rule 9: an operator-set _delivery_date meta decides
+        // which slip the order belongs to — "meta wins, occurrence
+        // otherwise". Rule 10: overridden orders are fetched by a meta
+        // query, because an override can move delivery arbitrarily far
+        // from the creation date, outside any widened creation window.
+        $override_rows = $this->order_query->get_orders_with_items_for_users_by_delivery_date(
+            array_keys($clients),
+            $start_date,
+            $end_date
+        );
+
+        $by_id        = [];
+        $override_map = [];
+        foreach ($candidates as $order) {
+            $by_id[(int) ($order['order_id'] ?? 0)] = $order;
+        }
+        foreach ($override_rows as $order) {
+            $oid = (int) ($order['order_id'] ?? 0);
+            $val = (string) ($order['delivery_date_override'] ?? '');
+            if ($oid > 0 && preg_match('/^\d{4}-\d{2}-\d{2}$/', $val)) {
+                $override_map[$oid] = $val;
+            }
+            $by_id[$oid] = $order;
+        }
+
+        if (empty($by_id)) {
             return [];
         }
 
+        // A creation-window candidate may be overridden OUT of this range
+        // (its meta isn't in $override_rows — that query is range-bound),
+        // in which case it must LEAVE its computed-occurrence slip. Look
+        // up the remaining candidates' overrides in one query.
+        $unknown = array_diff(array_keys($by_id), array_keys($override_map));
+        if (!empty($unknown)) {
+            foreach ($this->order_query->get_delivery_date_overrides(array_values($unknown)) as $oid => $val) {
+                $override_map[(int) $oid] = (string) $val;
+            }
+        }
+
         $matched = [];
-        foreach ($candidates as $order) {
+        foreach ($by_id as $oid => $order) {
             $uid    = (int) ($order['wp_user_id'] ?? 0);
             $client = $clients[$uid] ?? null;
             if ($client === null) {
                 continue;
             }
+
+            // Rule 9: a well-formed override is authoritative for slip
+            // MEMBERSHIP, not just the printed header. In range → selected
+            // on the override date; out of range → excluded outright (it
+            // moved to another day's slip). Either way the occurrence math
+            // below is never consulted, so an order can appear on exactly
+            // one slip date.
+            $override = $override_map[$oid] ?? '';
+            if ($override !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $override)) {
+                if ($override >= $start_date && $override <= $end_date) {
+                    $order['delivery_occurrence'] = $override;
+                    $matched[] = $order;
+                }
+                continue;
+            }
+
             $created    = (string) ($order['date_created_gmt'] ?? '');
             $occurrence = self::delivery_occurrence_for_order($created, $client);
             // Y-m-d strings compare correctly with lexical >=/<=.
