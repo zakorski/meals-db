@@ -204,7 +204,13 @@ if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_li
 
 The plugin's tables are defined in the canonical schema (`MealsDB_Schema`). Schema setup/upgrade runs through `MealsDB_Installer::install()` → **`MealsDB_Schema_Sync::run_full_sync()`**.
 
-> **CRITICAL — corrected from the previous CLAUDE.md, and a known bug (audit LB-6 / recon-02):** the installer does **NOT** use `dbDelta`. It uses `MealsDB_Schema_Sync`, which **only ADDS missing tables and columns — it NEVER MODIFIES an existing column.** It computes a type/ENUM/width mismatch report and then **discards it.** This means: **bumping the version will NOT apply a column type change, ENUM-value change, or width change to existing installs.** If you need to MODIFY an existing column (not just add one), Schema_Sync will silently not do it — you must write an explicit `ALTER` migration or add ALTER support to Schema_Sync. Do not assume "the installer handles it idempotently"; it only handles additions.
+> **Schema_Sync now MODIFIES (H7 — this replaces the old "NEVER MODIFIES" note).** The installer does **NOT** use `dbDelta`. It uses `MealsDB_Schema_Sync::run_full_sync()`, which:
+> - **ADDs** missing tables and columns (always).
+> - **Auto-applies SAFE column MODIFYs** on the version-bump path — value-preserving changes (widen `VARCHAR`/`CHAR`/`TEXT`, `INT`→`BIGINT`, add an `ENUM` value, relax `NOT NULL`, change a `DEFAULT`) via **online DDL** (`ALGORITHM=INPLACE, LOCK=NONE`). `MealsDB_Schema_Alter_Planner::classify()` is the SAFE-vs-RISKY authority; `MealsDB_Schema_Alter_Executor` applies them.
+> - **Does NOT auto-apply RISKY changes** — narrowing, removing an `ENUM` value, tightening to `NOT NULL`, a type/sign change, or **any `DECIMAL`/money change** (money is always manual, by operator decision). It also won't auto-apply a SAFE change MySQL can't do INPLACE (a COPY). These are surfaced in the **Data-Ops → "Schema Changes"** tool, where the operator reviews the exact ALTER, a **pre-flight** row-count check *blocks* anything that would lose data, and a typed `ALTER` confirmation applies it (under maintenance mode if a COPY is needed).
+> - **PRIMARY KEY drift** is detected/surfaced but never auto-altered.
+>
+> So: for a SAFE column widening, just update the canonical schema + bump the version — it applies on the next admin load, idempotently. For a RISKY change, use the tool (or write a bespoke `ALTER` migration in `install-schema.php`, e.g. `widen_vet_health_card_column`). A SAFE ALTER that genuinely fails feeds `$results['errors']`, so the version isn't marked current on a real DDL failure. Production is **MySQL 8.0.46**, so online DDL is available. (This closes audit LB-6 / recon-02: the drift report is no longer discarded.)
 
 To add a NEW column or table (additions are handled):
 1. Update the canonical schema.
