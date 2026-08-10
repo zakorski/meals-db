@@ -307,9 +307,17 @@ class MealsDB_Task_Rules {
     /**
      * Run the cron pass — spawn any due rules' tasks.
      *
-     * @return int number of tasks created
+     * Each rule is processed in its OWN try/catch so a single failing rule (a
+     * throwing query-strategy callback, a malformed next_run_at timestamp, a
+     * TypeError from an unexpected row shape, ...) cannot abort the whole
+     * nightly pass. Before this, one bad rule threw straight out of the loop,
+     * skipping every remaining due rule and marking the job failed — silencing
+     * ALL task spawning for that night (audit-2026-08 B11).
+     *
+     * @return array{created:int, failed:int} tasks created + rules that threw
+     *         (the caller marks the job degraded when failed > 0).
      */
-    public function run_cron_pass(?DateTimeImmutable $now = null): int {
+    public function run_cron_pass(?DateTimeImmutable $now = null): array {
         if ($now === null) {
             $now = self::now();
         }
@@ -321,31 +329,58 @@ class MealsDB_Task_Rules {
         );
         $rules = $this->wpdb->get_results($sql, ARRAY_A);
         if (!is_array($rules) || empty($rules)) {
-            return 0;
+            return ['created' => 0, 'failed' => 0];
         }
 
         $created = 0;
+        $failed  = 0;
         foreach ($rules as $raw) {
-            $rule = self::hydrate_rule_row($raw);
-            $created += $this->spawn_from_rule($rule);
+            $rule_id = (int) ($raw['rule_id'] ?? 0);
+            try {
+                $rule = self::hydrate_rule_row($raw);
+                $created += $this->spawn_from_rule($rule);
 
-            // Advance next_run_at past the run point, then record last_run_at.
-            $after = new DateTimeImmutable($rule['next_run_at'], new DateTimeZone('UTC'));
-            // Defensive: a row with a non-array recurrence (e.g. a legacy NULL
-            // persisted before the update_rule guard) would throw a TypeError
-            // in compute_next_run(array) and abort the entire nightly pass.
-            // Treat it as a spent rule (next_run_at=NULL) rather than crashing.
-            $next = is_array($rule['recurrence'])
-                ? $this->compute_next_run($rule['recurrence'], $after)
-                : null;
-            $update = [
-                'last_run_at' => $now->format('Y-m-d H:i:s'),
-                'next_run_at' => $next instanceof DateTimeImmutable ? $next->format('Y-m-d H:i:s') : null,
-            ];
-            $this->wpdb->update($table, $update, ['rule_id' => (int) $rule['rule_id']]);
+                // Advance next_run_at past the run point, then record last_run_at.
+                $after = new DateTimeImmutable($rule['next_run_at'], new DateTimeZone('UTC'));
+                // Defensive: a row with a non-array recurrence (e.g. a legacy NULL
+                // persisted before the update_rule guard) would throw a TypeError
+                // in compute_next_run(array). Treat it as a spent rule.
+                $next = is_array($rule['recurrence'])
+                    ? $this->compute_next_run($rule['recurrence'], $after)
+                    : null;
+                $update = [
+                    'last_run_at' => $now->format('Y-m-d H:i:s'),
+                    'next_run_at' => $next instanceof DateTimeImmutable ? $next->format('Y-m-d H:i:s') : null,
+                ];
+                $this->wpdb->update($table, $update, ['rule_id' => (int) $rule['rule_id']]);
+            } catch (\Throwable $e) {
+                // Isolate this one rule and keep going. next_run_at is left
+                // UNADVANCED so it retries next pass (spawns are idempotent via
+                // the spawn_key unique index), and the degraded event nags until
+                // an operator fixes or deactivates the rule.
+                $failed++;
+                if (class_exists('MealsDB_Logger')) {
+                    MealsDB_Logger::error(sprintf(
+                        '[MealsDB Task Rules] rule %d failed during cron pass: %s',
+                        $rule_id,
+                        $e->getMessage()
+                    ));
+                }
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity'  => 'error',
+                        'category'  => 'task',
+                        'subsystem' => 'task_rules',
+                        'event'     => 'rule.cron_pass_failed',
+                        'outcome'   => 'degraded',
+                        'message'   => sprintf('Rule %d threw during the nightly spawn pass: %s', $rule_id, $e->getMessage()),
+                        'context'   => ['rule_id' => $rule_id],
+                    ]);
+                }
+            }
         }
 
-        return $created;
+        return ['created' => $created, 'failed' => $failed];
     }
 
     /**
