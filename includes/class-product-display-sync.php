@@ -105,41 +105,48 @@ class MealsDB_Product_Display_Sync {
      * @param WC_Product $product WooCommerce product instance.
      */
     /**
-     * Side category slugs that are considered taxable.
+     * @return bool True if every write for this product succeeded.
      */
-    private const TAXABLE_SIDE_SLUGS = ['dessert', 'muffin'];
-
-    /**
-     * All side category slugs.
-     */
-    private const SIDE_CATEGORY_SLUGS = ['cereal', 'dessert', 'soup', 'muffin', 'thickened'];
-
-    public static function sync_single_product(WC_Product $product): void {
+    public static function sync_single_product(WC_Product $product): bool {
         $product_id = $product->get_id();
         if ($product_id <= 0) {
-            return;
+            return false;
         }
 
         $display = self::extract_display_data($product);
-        MealsDB_Products::update_display_fields($product_id, $display);
+        $ok = MealsDB_Products::update_display_fields($product_id, $display);
 
-        // Auto-set product_type and taxable based on WC categories.
+        // Auto-set product_type + taxable from WC categories, but NEVER clobber
+        // an operator's explicit taxable override (audit-2026-08 B10). The
+        // taxable-side rule is sourced from MealsDB_Operational_Constants (the
+        // single source of truth), not a local hardcoded copy.
         $terms = get_the_terms($product_id, 'product_cat');
         if (is_array($terms)) {
             $slugs = array_map(static function ($t) {
                 return $t instanceof WP_Term ? $t->slug : '';
             }, $terms);
 
-            $is_side = !empty(array_intersect($slugs, self::SIDE_CATEGORY_SLUGS));
+            $is_side = !empty(array_intersect($slugs, MealsDB_Operational_Constants::side_category_slugs()));
             if ($is_side) {
-                $taxable = !empty(array_intersect($slugs, self::TAXABLE_SIDE_SLUGS)) ? 1 : 0;
                 $existing = MealsDB_Products::get_product_data($product_id);
-                MealsDB_Products::save_product_data($product_id, array_merge($existing, [
-                    'product_type' => 'side',
-                    'taxable'      => $taxable,
-                ]));
+                if (!empty($existing['taxable_overridden'])) {
+                    // Operator forced this product's taxability — preserve it;
+                    // only ensure the product_type is 'side'.
+                    $taxable            = (int) $existing['taxable'];
+                    $taxable_overridden = 1;
+                } else {
+                    $taxable            = !empty(array_intersect($slugs, MealsDB_Operational_Constants::taxable_side_category_slugs())) ? 1 : 0;
+                    $taxable_overridden = 0;
+                }
+                $ok = MealsDB_Products::save_product_data($product_id, array_merge($existing, [
+                    'product_type'       => 'side',
+                    'taxable'            => $taxable,
+                    'taxable_overridden' => $taxable_overridden,
+                ])) && $ok;
             }
         }
+
+        return $ok;
     }
 
     /**
@@ -178,12 +185,21 @@ class MealsDB_Product_Display_Sync {
 
         $result = self::full_sync();
 
-        wp_send_json([
-            'success' => true,
-            'message' => sprintf(
+        $message = $result['failed'] > 0
+            ? sprintf(
+                /* translators: 1: number synced, 2: number failed */
+                __('Synced %1$d products; %2$d failed (see the Event Log).', 'meals-db'),
+                $result['synced'],
+                $result['failed']
+            )
+            : sprintf(
                 __('Synced %d products successfully.', 'meals-db'),
-                $result
-            ),
+                $result['synced']
+            );
+
+        wp_send_json([
+            'success' => $result['failed'] === 0,
+            'message' => $message,
         ]);
     }
 
@@ -236,17 +252,22 @@ class MealsDB_Product_Display_Sync {
     /**
      * Run a full rebuild of display fields for all published WC products.
      *
-     * @return int Number of products synced.
+     * @return array{synced:int, failed:int} Products that wrote OK vs failed.
+     *         Previously this returned a bare synced count and incremented it
+     *         unconditionally — so a run where every write failed still reported
+     *         "Synced N products" (audit-2026-08 B10). Now each product's write
+     *         result is checked and failures are counted + surfaced.
      */
-    public static function full_sync(): int {
+    public static function full_sync(): array {
         if (!function_exists('wc_get_products')) {
-            return 0;
+            return ['synced' => 0, 'failed' => 0];
         }
 
         $allowed_slugs = MealsDB_Quick_Order_Products::get_allowed_category_slugs();
 
         $page    = 1;
         $synced  = 0;
+        $failed  = 0;
         $per_page = 100;
 
         do {
@@ -269,8 +290,11 @@ class MealsDB_Product_Display_Sync {
                     continue;
                 }
 
-                self::sync_single_product($product);
-                $synced++;
+                if (self::sync_single_product($product)) {
+                    $synced++;
+                } else {
+                    $failed++;
+                }
             }
 
             $page++;
@@ -279,7 +303,20 @@ class MealsDB_Product_Display_Sync {
         // Mark products not in allowed categories as unpublished.
         self::mark_unlisted_products_unpublished();
 
-        return $synced;
+        // Don't let a run that partially (or wholly) failed report clean —
+        // surface it on the dashboard/digest (Pattern 6/7).
+        if ($failed > 0 && class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'  => 'warning',
+                'category'  => 'products',
+                'subsystem' => 'product_display_sync',
+                'event'     => 'full_sync.partial',
+                'outcome'   => 'degraded',
+                'message'   => sprintf('Product display sync wrote %d products; %d failed.', $synced, $failed),
+            ]);
+        }
+
+        return ['synced' => $synced, 'failed' => $failed];
     }
 
     /**

@@ -122,6 +122,11 @@ class MealsDB_Schema {
                     'is_published'   => 'TINYINT(1) NOT NULL DEFAULT 1',
                     'product_type'   => "ENUM('meal','side','fee','other') NOT NULL DEFAULT 'meal'",
                     'taxable'        => 'TINYINT(1) NOT NULL DEFAULT 0',
+                    // 1 when an operator has explicitly overridden `taxable` via
+                    // the product tab to a value that differs from the category
+                    // default; the display sync then preserves `taxable` for
+                    // this row instead of re-deriving it (audit-2026-08 B10).
+                    'taxable_overridden' => 'TINYINT(1) NOT NULL DEFAULT 0',
                     'main_ingredient'=> "VARCHAR(40) NOT NULL DEFAULT ''",
                     'dietary_tags'   => 'JSON NULL',
                     'allergen_flags' => 'JSON NULL',

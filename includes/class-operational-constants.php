@@ -82,6 +82,38 @@ class MealsDB_Operational_Constants {
     const CATEGORY_ID_DESSERT = 25;
 
     // -------------------------------------------------------------
+    // Side-category taxability — the SINGLE source of truth
+    // -------------------------------------------------------------
+    //
+    // Which product categories are SIDES, and which of those are TAXABLE
+    // (dessert & muffin attract HST; cereal, soup and thickened do not).
+    // Mains are never taxed. Both the product-tab writer
+    // (MealsDB_WC_Product_Tab::determine_side_taxable) and the display sync
+    // (MealsDB_Product_Display_Sync::sync_single_product) read these, so the
+    // rule lives in ONE place. Previously it was hardcoded in three
+    // independent copies, so adding/renaming a taxable side category in one
+    // and not the others silently under-reported HST on the government CSV
+    // (audit-2026-08 B10).
+    //
+    // These are SLUGS to match get_the_terms(..., 'product_cat')->slug, which
+    // is what the product code compares against. The CATEGORY_ID_* term-id
+    // constants above describe the same taxonomy by id; a future hardening
+    // could switch the derivation to term ids (rename-proof), which would also
+    // need a THICKENED id constant (not currently defined).
+    const SIDE_CATEGORY_SLUGS         = ['cereal', 'dessert', 'soup', 'muffin', 'thickened'];
+    const TAXABLE_SIDE_CATEGORY_SLUGS = ['dessert', 'muffin'];
+
+    /** @return string[] Category slugs treated as SIDE products. */
+    public static function side_category_slugs(): array {
+        return self::SIDE_CATEGORY_SLUGS;
+    }
+
+    /** @return string[] Side-category slugs that are TAXABLE (attract HST). */
+    public static function taxable_side_category_slugs(): array {
+        return self::TAXABLE_SIDE_CATEGORY_SLUGS;
+    }
+
+    // -------------------------------------------------------------
     // SDNB billing rates (CAD dollars)
     // -------------------------------------------------------------
     //
