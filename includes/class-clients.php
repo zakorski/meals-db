@@ -79,14 +79,31 @@ class MealsDB_Clients {
     }
 
     /**
+     * Whether the current request may perform a DESTRUCTIVE client operation.
+     *
+     * Fail CLOSED. The previous inline form gated the check on
+     * `function_exists('current_user_can')`, so in a context where the WP
+     * capability API is unavailable (a non-WP / pre-init / WP-CLI-early path)
+     * the guard was skipped ENTIRELY and the destructive op ran unguarded. We
+     * cannot verify permission without the capability API, so we refuse — not
+     * allow through (audit low-vuln, class-clients.php).
+     */
+    private static function is_permitted(): bool {
+        return function_exists('current_user_can')
+            && function_exists('is_user_logged_in')
+            && is_user_logged_in()
+            && class_exists('MealsDB_Permissions')
+            && MealsDB_Permissions::can_access_plugin();
+    }
+
+    /**
      * Permanently delete a client and any optionally related rows.
      */
     public static function delete_client(int $client_id): bool {
         // Defence-in-depth: enforce capability here even if a future caller
         // skips the AJAX gate. Deletes cascade across drafts, conflicts,
-        // and the client row itself.
-        if (function_exists('current_user_can')
-            && (!is_user_logged_in() || !MealsDB_Permissions::can_access_plugin())) {
+        // and the client row itself. Fail closed (see is_permitted).
+        if (!self::is_permitted()) {
             error_log('[MealsDB] delete_client blocked: insufficient permissions.');
             return false;
         }
@@ -197,9 +214,8 @@ class MealsDB_Clients {
     private static function set_client_active_status(int $client_id, int $active, string $action): bool {
         // Defence-in-depth (Pattern 1, layer 3): re-check capability here as
         // delete_client does, so a future caller reaching activate/deactivate
-        // without the AJAX gate can't flip a client's active status.
-        if (function_exists('current_user_can')
-            && (!is_user_logged_in() || !MealsDB_Permissions::can_access_plugin())) {
+        // without the AJAX gate can't flip a client's active status. Fail closed.
+        if (!self::is_permitted()) {
             error_log('[MealsDB] ' . $action . ' blocked: insufficient permissions.');
             return false;
         }
