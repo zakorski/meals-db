@@ -71,6 +71,20 @@ eq(MealsDB_Money::to_cents(-0.125), -13,   'to_cents: -12.5c -> -13 (symmetric h
 eq(MealsDB_Money::to_cents(-10.24), -1024, 'to_cents: -10.24 -> -1024');
 eq(MealsDB_Money::to_cents(-1),     -100,  'to_cents: -1.00 -> -100');
 
+// Representation-error boundaries — the 2026-08 regression (audit B04).
+// Unlike the 1/8-fraction cases above, these inputs are NOT exactly
+// representable in binary float: 1.005 * 100 evaluates to 100.4999…, so the
+// old floor($value*100 + 0.5) mis-rounded true half-cents DOWNWARD. They must
+// round HALF-UP. This is the case the original test conspicuously avoided.
+eq(MealsDB_Money::to_cents(1.005),   101,  'to_cents: 1.005 -> 101 (float-repr half-up)');
+eq(MealsDB_Money::to_cents(0.145),   15,   'to_cents: 0.145 -> 15 (float-repr half-up)');
+eq(MealsDB_Money::to_cents(2.675),   268,  'to_cents: 2.675 -> 268 (half-up)');
+eq(MealsDB_Money::to_cents(5.055),   506,  'to_cents: 5.055 -> 506 (half-up)');
+eq(MealsDB_Money::to_cents('1.005'), 101,  'to_cents: "1.005" string -> 101');
+eq(MealsDB_Money::to_cents(-1.005),  -101, 'to_cents: -1.005 -> -101 (symmetric half-up)');
+eq(MealsDB_Money::to_cents(0.144),   14,   'to_cents: 0.144 -> 14 (just below boundary, down)');
+eq(MealsDB_Money::to_cents(0.146),   15,   'to_cents: 0.146 -> 15 (just above boundary, up)');
+
 // Non-numeric input coerces to 0 (logs a debug breadcrumb; return is what
 // matters). NB: to_cents() error_logs here — that stderr line is expected.
 eq(MealsDB_Money::to_cents('abc'), 0, 'to_cents: "abc" -> 0');
@@ -121,6 +135,14 @@ eq(MealsDB_Money::multiply(3, -4.25),  -1275,'multiply: 3 x -4.25 -> -1275');
 eq(MealsDB_Money::multiply(2, 'abc'),  0,    'multiply: non-numeric rate -> 0');
 eq(MealsDB_Money::multiply(2, null),   0,    'multiply: null rate -> 0');
 
+// Representation-error boundary (audit B04): 7 x 1.005 = 7.035 -> 703.5 -> 704.
+// The old float multiply-then-floor produced 703, a cent short per line. Note
+// the fix must NOT pre-round the rate to cents first (that would bill 7 x 101c
+// = 707); the half-cent lives in the units x rate product.
+eq(MealsDB_Money::multiply(7, 1.005),  704,  'multiply: 7 x 1.005 -> 704 (half-up)');
+eq(MealsDB_Money::multiply(10, 1.005), 1005, 'multiply: 10 x 1.005 -> 1005');
+eq(MealsDB_Money::multiply(3, 5.05),   1515, 'multiply: 3 x 5.05 -> 1515');
+
 // ---------------------------------------------------------------------------
 // percent_of(): percentage of a cents amount, half-up.
 // ---------------------------------------------------------------------------
@@ -145,6 +167,13 @@ eq(MealsDB_Money::percent_of(2000, 'abc'), 0, 'percent_of: non-numeric multiplie
 //   $10,000,000 = 1e9 cents, 15% = $1,500,000 = 150000000c.
 eq(MealsDB_Money::percent_of(1000000000, 0.15), 150000000,
     'percent_of: 15% of 1e9 cents -> 150000000 (no false overflow)');
+
+// Representation-error boundary (audit B04): the same floor(x+0.5) anti-pattern
+// bites percent_of when cents x mult lands on an exact half that the float
+// evaluates slightly low. 90 x 0.35 = 31.5 -> 32 (old path gave 31).
+eq(MealsDB_Money::percent_of(90, 0.35),  32,  'percent_of: 31.5c half-up -> 32');
+eq(MealsDB_Money::percent_of(170, 0.35), 60,  'percent_of: 59.5c half-up -> 60');
+eq(MealsDB_Money::percent_of(350, 0.35), 123, 'percent_of: 122.5c half-up -> 123');
 
 // Overflow guard: cents x mult would exceed PHP_INT_MAX -> returns 0 (logs),
 // never a wrapped-around wrong value. PHP_INT_MAX x 2.0 overflows.
