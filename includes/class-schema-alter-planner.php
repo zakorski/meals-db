@@ -64,6 +64,7 @@ class MealsDB_Schema_Alter_Planner {
         $reasons          = [];
         $tier             = self::TIER_SAFE;
         $needs_null_check = false;
+        $preflight        = [];
 
         // --- type ---------------------------------------------------------
         $type_result = self::classify_type($expected['type'], $actual['type']);
@@ -73,12 +74,16 @@ class MealsDB_Schema_Alter_Planner {
         if ($type_result['reason'] !== '') {
             $reasons[] = $type_result['reason'];
         }
+        if (isset($type_result['preflight'])) {
+            $preflight[] = $type_result['preflight'];
+        }
 
         // --- nullability --------------------------------------------------
         if ($actual['nullable'] && !$expected['nullable']) {
             // NULL -> NOT NULL: could fail if existing NULLs. Executor must probe.
             $tier             = self::TIER_RISKY;
             $needs_null_check = true;
+            $preflight[]      = ['check' => 'no_nulls'];
             $reasons[]        = 'tightens NULL -> NOT NULL (needs a 0-NULL-rows check)';
         } elseif (!$actual['nullable'] && $expected['nullable']) {
             $reasons[] = 'relaxes NOT NULL -> NULL';
@@ -103,7 +108,72 @@ class MealsDB_Schema_Alter_Planner {
             'tier'             => $tier,
             'reason'           => implode('; ', $reasons),
             'needs_null_check' => $needs_null_check,
+            'preflight'        => $preflight,
         ];
+    }
+
+    /**
+     * Turn a Schema_Sync column mismatch into a full executable plan: the ALTER
+     * SQL (online + plain fallback) and the pre-flight probe SQL for each RISKY
+     * check. Pure — no DB; the executor runs it.
+     *
+     * @param array{table:string,column:string,expected:string,actual:array} $mismatch
+     * @return array<string,mixed>
+     */
+    public static function plan(array $mismatch): array {
+        $table      = (string) ($mismatch['table'] ?? '');
+        $column     = (string) ($mismatch['column'] ?? '');
+        $definition = (string) ($mismatch['expected'] ?? '');
+        $actual     = is_array($mismatch['actual'] ?? null) ? $mismatch['actual'] : [];
+
+        $class = self::classify($definition, $actual);
+
+        $esc_table  = str_replace('`', '``', $table);
+        $esc_column = str_replace('`', '``', $column);
+        // $definition is already the constraint-stripped canonical column
+        // definition — exactly what MODIFY COLUMN expects.
+        $modify = sprintf('ALTER TABLE `%s` MODIFY COLUMN `%s` %s', $esc_table, $esc_column, $definition);
+
+        $preflight = [];
+        foreach ($class['preflight'] as $check) {
+            $preflight[] = array_merge($check, ['sql' => self::preflight_sql($esc_table, $esc_column, $check)]);
+        }
+
+        return [
+            'table'            => $table,
+            'column'           => $column,
+            'tier'             => $class['tier'],
+            'reason'           => $class['reason'],
+            'needs_null_check' => $class['needs_null_check'],
+            'alter_plain'      => $modify,
+            // MySQL 8 online DDL: no table rebuild / no lock when the change
+            // supports it. The executor falls back to the plain form (under
+            // maintenance mode) when the server rejects INPLACE.
+            'alter_online'     => $modify . ', ALGORITHM=INPLACE, LOCK=NONE',
+            'preflight'        => $preflight,
+        ];
+    }
+
+    /**
+     * Build the read-only COUNT probe that BLOCKS a RISKY apply if it would lose
+     * data. Identifiers come from the canonical schema (trusted); ENUM values
+     * are single-quote-escaped defensively.
+     */
+    private static function preflight_sql(string $esc_table, string $esc_column, array $check): string {
+        switch ($check['check'] ?? '') {
+            case 'no_nulls':
+                return sprintf('SELECT COUNT(*) FROM `%s` WHERE `%s` IS NULL', $esc_table, $esc_column);
+            case 'max_length':
+                return sprintf('SELECT COUNT(*) FROM `%s` WHERE CHAR_LENGTH(`%s`) > %d', $esc_table, $esc_column, (int) ($check['limit'] ?? 0));
+            case 'no_values':
+                $vals = array_map(
+                    static function ($v) { return "'" . str_replace("'", "''", (string) $v) . "'"; },
+                    (array) ($check['values'] ?? [])
+                );
+                return sprintf('SELECT COUNT(*) FROM `%s` WHERE `%s` IN (%s)', $esc_table, $esc_column, implode(',', $vals));
+            default:
+                return '';
+        }
     }
 
     /**
@@ -129,7 +199,11 @@ class MealsDB_Schema_Alter_Planner {
                 $el = (int) $e['args'];
                 $al = (int) $a['args'];
                 if ($el < $al) {
-                    return ['tier' => self::TIER_RISKY, 'reason' => sprintf('narrows %s(%d) -> (%d)', $eb, $al, $el)];
+                    return [
+                        'tier'      => self::TIER_RISKY,
+                        'reason'    => sprintf('narrows %s(%d) -> (%d)', $eb, $al, $el),
+                        'preflight' => ['check' => 'max_length', 'limit' => $el],
+                    ];
                 }
                 return ['tier' => self::TIER_SAFE, 'reason' => $el > $al ? sprintf('widens %s(%d) -> (%d)', $eb, $al, $el) : ''];
             }
@@ -137,7 +211,11 @@ class MealsDB_Schema_Alter_Planner {
                 // Any value present today must still exist (no removal/rename).
                 $removed = array_diff($a['values'], $e['values']);
                 if (!empty($removed)) {
-                    return ['tier' => self::TIER_RISKY, 'reason' => 'removes ENUM value(s): ' . implode(',', $removed)];
+                    return [
+                        'tier'      => self::TIER_RISKY,
+                        'reason'    => 'removes ENUM value(s): ' . implode(',', $removed),
+                        'preflight' => ['check' => 'no_values', 'values' => array_values($removed)],
+                    ];
                 }
                 $added = array_diff($e['values'], $a['values']);
                 return ['tier' => self::TIER_SAFE, 'reason' => !empty($added) ? 'adds ENUM value(s): ' . implode(',', $added) : ''];
@@ -238,7 +316,8 @@ class MealsDB_Schema_Alter_Planner {
      * @return array{base:string, args:?string, unsigned:bool, values:array<int,string>}
      */
     private static function parse_type(string $type): array {
-        $t = strtolower(trim($type));
+        $orig = trim($type);
+        $t = strtolower($orig);
         $unsigned = strpos($t, 'unsigned') !== false;
         $t = trim(preg_replace('/\b(unsigned|zerofill)\b/', '', $t));
 
@@ -253,9 +332,14 @@ class MealsDB_Schema_Alter_Planner {
         }
 
         $values = [];
-        if (($base === 'enum' || $base === 'set') && $args !== null && $args !== '') {
-            foreach (str_getcsv($args, ',', "'") as $v) {
-                $values[] = trim($v);
+        if ($base === 'enum' || $base === 'set') {
+            // ENUM/SET labels are case-sensitive and must match the stored value
+            // in the pre-flight probe, so extract them from the ORIGINAL
+            // (case-preserving) string, not the lowercased form.
+            if (preg_match('/\((.*)\)/s', $orig, $om)) {
+                foreach (str_getcsv($om[1], ',', "'") as $v) {
+                    $values[] = trim($v);
+                }
             }
         }
 
