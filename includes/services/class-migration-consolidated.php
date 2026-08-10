@@ -135,6 +135,33 @@ class MealsDB_Migration_Consolidated {
     }
 
     /**
+     * Service-layer authorization gate for the destructive migration phases
+     * (audit-2026-08 H12). Every run_phase_* worker calls this first.
+     *
+     * These public statics DELETE/INSERT/UPDATE live client + allocation data
+     * and are reachable by any non-AJAX caller (a future WP-CLI command, REST
+     * endpoint, or import script) — the exact "a caller reaches the service
+     * without going through the view layer" scenario the MealsDB_Client_Form
+     * guard was written to defend against. Today only the (already-gated) AJAX
+     * controllers call them, but this fails CLOSED so the capability check
+     * can't be bypassed by reaching a worker directly.
+     *
+     * The migration_destructive RATE limit deliberately stays at the AJAX layer
+     * (MealsDB_Ajax_Migration / MealsDB_Ajax_Db_Sync), which owns the chunked
+     * walk and charges it first-chunk-only. Duplicating it here would double-
+     * charge the 5/hr bucket and 429 a legitimate multi-phase migration mid-run;
+     * a direct non-AJAX caller is still capability-gated to administrators.
+     *
+     * @return array{error:string}|null Error payload to return, or null when allowed.
+     */
+    private static function guard_phase(): ?array {
+        if (function_exists('current_user_can') && !current_user_can('manage_options')) {
+            return ['error' => 'You do not have permission to run migration phases.'];
+        }
+        return null;
+    }
+
+    /**
      * Dispatch a phase by number. Single funnel so the AJAX controller never
      * needs a switch — it forwards (phase, offset, dry_run[, extra]).
      *
@@ -169,6 +196,7 @@ class MealsDB_Migration_Consolidated {
      * @param array<string,mixed> $args Unused.
      */
     public static function run_phase_create_clients(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -578,6 +606,7 @@ class MealsDB_Migration_Consolidated {
      * @param array<string,mixed> $args Unused.
      */
     public static function run_phase_create_rates(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -751,6 +780,7 @@ class MealsDB_Migration_Consolidated {
      * @param array<string,mixed> $args Unused.
      */
     public static function run_phase_allowances(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -888,6 +918,7 @@ class MealsDB_Migration_Consolidated {
      * @param array<string,mixed> $args Unused.
      */
     public static function run_phase_addresses(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -1085,6 +1116,7 @@ class MealsDB_Migration_Consolidated {
      * @param array<string,mixed> $args Unused.
      */
     public static function run_phase_next_dates(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -1206,6 +1238,7 @@ class MealsDB_Migration_Consolidated {
      * @param array<string,mixed> $args { lookback_months?: int }
      */
     public static function run_phase_private_clients(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         $lookback = isset($args['lookback_months']) ? max(1, (int) $args['lookback_months']) : self::DEFAULT_LOOKBACK_MONTHS;
 
         $eligible = self::private_preview($lookback);
@@ -1330,6 +1363,7 @@ class MealsDB_Migration_Consolidated {
      *                                     end_month?: string YYYY-MM }
      */
     public static function run_phase_allocations(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
 
         $end_month   = isset($args['end_month']) && self::is_ym((string) $args['end_month'])
@@ -1524,6 +1558,7 @@ class MealsDB_Migration_Consolidated {
      * @return array<string,mixed>
      */
     public static function run_phase_delivery_day(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
 
         $schedule = get_option('mealsdb_zone_delivery_schedule', []);
