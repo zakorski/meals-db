@@ -185,30 +185,13 @@ class MealsDB_WP_User_Mapper {
     /**
      * Normalise a phone number to the (###)-###-#### shape validate() expects.
      *
-     * Strips to digits, drops a leading country-code 1 on an 11-digit NANP
-     * number, and only reformats when exactly 10 digits remain; otherwise the
-     * trimmed original is returned so the operator can correct it on screen.
+     * Thin shim over MealsDB_Phone::format() (the single source of truth since
+     * audit T8). Kept as a public method because MealsDB_Private_Intake and the
+     * Pull-Data path call it by this name; the normalisation LOGIC lives once,
+     * in MealsDB_Phone.
      */
     public static function normalize_phone(string $value): string {
-        $value = trim($value);
-        if ($value === '') {
-            return '';
-        }
-        // preg_replace returns null on a PCRE error; coalesce so strlen() never
-        // gets null (a PHP 8.1 deprecation). Mirrors the guarded sibling in
-        // class-sync-query.php.
-        $digits = preg_replace('/\D+/', '', $value) ?? '';
-        if (strlen($digits) === 11 && $digits[0] === '1') {
-            $digits = substr($digits, 1);
-        }
-        if (strlen($digits) === 10) {
-            return sprintf('(%s)-%s-%s',
-                substr($digits, 0, 3),
-                substr($digits, 3, 3),
-                substr($digits, 6, 4)
-            );
-        }
-        return $value;
+        return MealsDB_Phone::format($value);
     }
 
     /**

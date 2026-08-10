@@ -439,33 +439,14 @@ class MealsDB_Sync_Compare {
     }
 
     /**
-     * Canonicalise a phone number so two formats of the same number
-     * compare equal.
-     *
-     *   - Strip every non-digit character (parens, spaces, dashes, "+").
-     *   - Drop a leading NANP country-code '1' when the residue is
-     *     exactly 11 digits. "+1 5065550100" → "5065550100".
-     *   - Keep at most the last 10 digits. Tolerates extension tails
-     *     ("…x123") and best-effort matches international numbers
-     *     the user typed with a longer country code.
-     *
-     * Previously this was just preg_replace('/\D+/', '', $value), so
-     * "(506) 555-0100" and "5065550100" normalised to different
-     * lengths and the downstream compare_fields() flagged them as
-     * mismatches on every dashboard render.
+     * Canonicalise a phone number so two formats of the same number compare
+     * equal. Thin wrapper over MealsDB_Phone::canonical() (the single source of
+     * truth since audit T8) — strips non-digits, drops a leading NANP '1', and
+     * compares by the last 10 digits, so "(506) 555-0100" and "5065550100" no
+     * longer flag as a mismatch on every dashboard render.
      */
     private function normalize_phone(string $value): string {
-        $digits = preg_replace('/\D+/', '', $value);
-        if ($digits === null || $digits === '') {
-            return '';
-        }
-        if (strlen($digits) === 11 && strpos($digits, '1') === 0) {
-            $digits = substr($digits, 1);
-        }
-        if (strlen($digits) > 10) {
-            $digits = substr($digits, -10);
-        }
-        return $digits;
+        return MealsDB_Phone::canonical($value);
     }
 
     /**

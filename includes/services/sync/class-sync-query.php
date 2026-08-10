@@ -324,13 +324,10 @@ class MealsDB_Sync_Query {
         //     comparison and produce false negatives,
         //   - international numbers with longer country codes still
         //     compare against their last 10 digits (best effort).
-        $normalized_phone = preg_replace('/\D+/', '', $phone_raw);
-        if ($normalized_phone !== null && strlen($normalized_phone) === 11 && strpos($normalized_phone, '1') === 0) {
-            $normalized_phone = substr($normalized_phone, 1);
-        }
-        if ($normalized_phone !== null && strlen($normalized_phone) > 10) {
-            $normalized_phone = substr($normalized_phone, -10);
-        }
+        // Canonical last-10-digits form (single source of truth since audit
+        // T8): strip non-digits, drop a leading NANP '1', keep the last 10 —
+        // so the LIKE below matches regardless of how the number was typed.
+        $normalized_phone = MealsDB_Phone::canonical((string) $phone_raw);
 
         $conditions = [];
         $params     = [];
