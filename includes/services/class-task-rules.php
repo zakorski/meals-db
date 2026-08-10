@@ -248,8 +248,25 @@ class MealsDB_Task_Rules {
             return false;
         }
 
+        // Un-orphan any tasks spawned from this rule (source_rule_id -> NULL).
+        // The rule is already gone; if this cleanup fails the tasks are silently
+        // orphaned (STR-1) while the method reports a clean delete. Check the
+        // return and surface a failure as degraded rather than discarding it
+        // (audit-2026-08 B11 / theme T1). The delete itself succeeded, so the
+        // method still returns true.
         $tasks_table = MealsDB_DB::get_table_name(MealsDB_Tables::TASKS);
-        $this->wpdb->update($tasks_table, ['source_rule_id' => null], ['source_rule_id' => $rule_id]);
+        $unorphan = $this->wpdb->update($tasks_table, ['source_rule_id' => null], ['source_rule_id' => $rule_id]);
+        if ($unorphan === false && class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'  => 'warning',
+                'category'  => 'task',
+                'subsystem' => 'task_rules',
+                'event'     => 'rule.delete_unorphan_failed',
+                'outcome'   => 'degraded',
+                'message'   => sprintf('Rule %d deleted, but un-orphaning its tasks (source_rule_id -> NULL) failed; tasks may be orphaned.', $rule_id),
+                'context'   => ['rule_id' => $rule_id],
+            ]);
+        }
 
         return true;
     }

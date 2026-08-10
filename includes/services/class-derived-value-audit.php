@@ -261,6 +261,14 @@ class MealsDB_Derived_Value_Audit {
         if ($result === false) {
             return false;
         }
+        if ($result === 0) {
+            // 0 rows affected: the stored value already equalled the expected
+            // value (or no row matched). Nothing was corrected, so do NOT write
+            // a phantom 'derived_value_corrected' audit entry or count it — the
+            // audit log is append-only and the job stat must not over-count
+            // (audit-2026-08 B04 / theme T1).
+            return false;
+        }
         // Committed change to a client record -> audit log (STR-LOG boundary).
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log(
