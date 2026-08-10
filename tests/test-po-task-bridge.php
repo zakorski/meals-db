@@ -354,6 +354,36 @@ $id = $svc->create_draft(forecast_rows());
 chk($svc->approve($id, '2026-07-24'), true, 'B-6: approve still succeeds when task spawn explodes');
 chk($svc->get_with_payload($id)['status'], 'placed', 'B-6: PO approved despite bridge failure');
 
+// ===========================================================================
+// B-7 (audit-2026-08 B11): on_received must tolerate a malformed PO payload —
+// the reconcile task still spawns (with no pre-filled rows) and the handler
+// never fails/throws. get_with_payload() nulls a payload with no valid
+// 'current', and on_received additionally skips non-array rows, so neither a
+// missing 'current' nor a 'current' of scalar rows can break the workflow step.
+// Regression guard for the row-shape hardening.
+// ===========================================================================
+foreach ([
+    'missing-current' => ['ordered' => 'nonsense'],
+    'scalar-rows'     => ['current' => ['CD-001', 'SD-002']],
+] as $shape => $bad_payload) {
+    $w = fresh();
+    $GLOBALS['wc_stock'] = [101 => 50, 102 => 20];
+    MealsDB_Event_Log::$records = [];
+    $svc = new MealsDB_Purchase_Orders();
+    $id  = $svc->create_draft(forecast_rows());
+    $svc->approve($id, '2026-07-24');
+    $w->pos[$id]['payload'] = json_encode($bad_payload);
+    do_action('mealsdb_po_received', $id);
+
+    $rec = open_of($w, 'po_reconcile');
+    chk(count($rec), 1, "B-7[$shape]: reconcile still spawns on a malformed payload");
+    if (!empty($rec)) {
+        $payload = json_decode((string) $rec[0]['payload'], true);
+        chk($payload['rows'], [], "B-7[$shape]: reconcile spawned with no pre-filled rows");
+    }
+    chk(count(degraded_events('po_bridge.received_failed')), 0, "B-7[$shape]: no received_failed degraded event");
+}
+
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }

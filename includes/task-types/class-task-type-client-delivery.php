@@ -49,8 +49,13 @@ class MealsDB_Task_Type_Client_Delivery {
      * delivered date entered on the form (falls back to today).
      */
     public static function handle_complete(array $task, array $form_data, int $completed_by): void {
+        $task_id   = (int) ($task['task_id'] ?? 0);
         $client_id = isset($task['related_entity_id']) ? (int) $task['related_entity_id'] : 0;
         if ($client_id <= 0) {
+            // Completed with no client to advance — the cadence bookkeeping
+            // can't run. Surface it rather than silently doing nothing
+            // (audit-2026-08 B11).
+            self::degrade($task_id, 'client_delivery.no_entity', 'Delivery task has no related client; cadence not advanced.');
             return;
         }
 
@@ -59,8 +64,46 @@ class MealsDB_Task_Type_Client_Delivery {
             $delivered = gmdate('Y-m-d');
         }
 
-        if (class_exists('MealsDB_Client_Dates')) {
-            MealsDB_Client_Dates::mark_delivered($client_id, $delivered);
+        if (!class_exists('MealsDB_Client_Dates')) {
+            self::degrade($task_id, 'client_delivery.dep_missing', 'MealsDB_Client_Dates unavailable; delivery cadence not advanced.');
+            return;
+        }
+
+        // The delivery physically happened (the operator marked it), so we do
+        // NOT reopen the task. But if the cadence advance fails, the client's
+        // next_delivery_date never moves and no fresh delivery task will spawn —
+        // surface it as degraded so an operator can advance the dates by hand
+        // (audit-2026-08 B11). mark_delivered returns false on a bad/missing
+        // client or an uncomputable next date.
+        if (MealsDB_Client_Dates::mark_delivered($client_id, $delivered) === false) {
+            self::degrade(
+                $task_id,
+                'client_delivery.cadence_not_advanced',
+                sprintf('mark_delivered failed for client %d; next_delivery_date not advanced.', $client_id)
+            );
+        }
+    }
+
+    /**
+     * The completion callback fires post-commit (the task is already
+     * 'completed'). Because the delivery itself DID happen, the failure surface
+     * is a degraded Event Log entry — the operator's signal to advance the
+     * client's dates by hand — not a task reopen.
+     */
+    private static function degrade(int $task_id, string $event, string $message): void {
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::error('[MealsDB Task client_delivery] ' . $message);
+        }
+        if (class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'  => 'warning',
+                'category'  => 'task',
+                'subsystem' => 'client_delivery',
+                'event'     => $event,
+                'outcome'   => 'degraded',
+                'message'   => $message,
+                'context'   => ['task_id' => $task_id],
+            ]);
         }
     }
 

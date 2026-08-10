@@ -107,19 +107,29 @@ class MealsDB_PO_Task_Bridge {
             }
             // Rows in CASES for the task form, from the workflow payload
             // (ordered rows only — zero-case rows were never ordered).
+            // get_with_payload() already guarantees payload is null OR carries a
+            // well-formed 'current' array, but guard the key AND each row's shape
+            // defensively (audit-2026-08 B11): a scalar row must be skipped, not
+            // reached into with $row['sku'] — an unexpected shape must never
+            // throw here (the outer catch would swallow it and the reconcile task
+            // would silently never spawn).
             $rows = [];
-            if (is_array($po['payload'])) {
-                foreach ($po['payload']['current'] as $row) {
-                    $cases = (int) ($row['cases'] ?? 0);
-                    if ($cases <= 0) {
-                        continue;
-                    }
-                    $rows[] = [
-                        'sku'           => (string) $row['sku'],
-                        'product_name'  => (string) ($row['product_name'] ?? ''),
-                        'ordered_cases' => $cases,
-                    ];
+            $current = (is_array($po['payload']) && isset($po['payload']['current']) && is_array($po['payload']['current']))
+                ? $po['payload']['current']
+                : [];
+            foreach ($current as $row) {
+                if (!is_array($row)) {
+                    continue;
                 }
+                $cases = (int) ($row['cases'] ?? 0);
+                if ($cases <= 0) {
+                    continue;
+                }
+                $rows[] = [
+                    'sku'           => (string) ($row['sku'] ?? ''),
+                    'product_name'  => (string) ($row['product_name'] ?? ''),
+                    'ordered_cases' => $cases,
+                ];
             }
             $engine->create_task([
                 'task_type'           => MealsDB_Task_Type_PO_Reconcile::TYPE_ID,
