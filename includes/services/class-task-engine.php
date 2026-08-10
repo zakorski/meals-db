@@ -436,30 +436,6 @@ class MealsDB_Task_Engine {
     }
 
     /**
-     * Bulk skip — apply skip to every task matching a filter set.
-     *
-     * @return int number of tasks skipped
-     */
-    public function bulk_skip(array $filters, ?string $reason = null): int {
-        // Force the filter to only non-terminal statuses unless the caller
-        // explicitly opts in; we never want bulk_skip to re-skip completed
-        // work.
-        if (empty($filters['status'])) {
-            $filters['status'] = [self::STATUS_PENDING, self::STATUS_IN_PROGRESS, self::STATUS_DEFERRED];
-        }
-        $filters['limit'] = isset($filters['limit']) ? (int) $filters['limit'] : 1000;
-
-        $tasks = $this->query_tasks($filters);
-        $count = 0;
-        foreach ($tasks as $task) {
-            if ($this->skip_task((int) $task['task_id'], $reason)) {
-                $count++;
-            }
-        }
-        return $count;
-    }
-
-    /**
      * Mark a task as in_progress — called when the assignee opens it.
      */
     public function start_task(int $task_id, int $user_id): bool {

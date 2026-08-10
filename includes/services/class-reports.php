@@ -483,68 +483,6 @@ class MealsDB_Reports {
     }
 
     /**
-     * Export a seasonally-adjusted purchase order to CSV string.
-     *
-     * NOTE (2026-07-11): no production caller since the forecast-tab preview
-     * was removed (one-click draft flow); kept as a tested pure exporter —
-     * the draft detail page builds its CSV client-side via Report.csvRow/csvCell.
-     *
-     * @param array $po_rows Rows from generate_purchase_order().
-     *
-     * @return string CSV content.
-     */
-    public function export_purchase_order_csv(array $po_rows): string {
-        $handle = fopen('php://temp', 'r+');
-        if ($handle === false) {
-            return '';
-        }
-
-        // MealsDB_CSV::row() neutralises formula injection in every cell
-        // — matters here because product_name is user-controlled and
-        // seasonal_note is a server-generated string that could be
-        // edited by a future caller.
-        fwrite($handle, MealsDB_CSV::row([
-            'SKU', 'Product Name', 'Avg/Week', 'Seasonal Idx', 'Adj/Week',
-            'Projected', 'Stock',
-            'Available', 'Units Needed', 'Case Size', 'Cases', 'Order Qty', 'Note',
-        ]) . "\n");
-
-        $total_cases = 0;
-
-        foreach ($po_rows as $row) {
-            fwrite($handle, MealsDB_CSV::row([
-                $row['sku'],
-                $row['product_name'],
-                $row['weighted_avg_weekly'],
-                $row['seasonal_index'],
-                $row['adjusted_weekly'],
-                $row['projected_need'],
-                $row['current_stock'],
-                $row['total_available'],
-                $row['units_needed'],
-                $row['case_size'],
-                $row['cases_to_buy'],
-                $row['order_quantity'],
-                $row['seasonal_note'],
-            ]) . "\n");
-            $total_cases += $row['cases_to_buy'];
-        }
-
-        // Blank separator row then grand-total row. The Cases total sits under
-        // the 'Cases' column (index 11 of the 14-column layout).
-        fwrite($handle, "\n");
-        fwrite($handle, MealsDB_CSV::row([
-            'TOTAL', '', '', '', '', '', '', '', '', '', '', $total_cases, '', '',
-        ]) . "\n");
-
-        rewind($handle);
-        $csv = stream_get_contents($handle);
-        fclose($handle);
-
-        return is_string($csv) ? $csv : '';
-    }
-
-    /**
      * OPTIONAL freight optimisation: snap a purchase order to whole Apetito
      * pallets to avoid paying to ship (or waste the deck space of) a partial
      * pallet.
@@ -1486,44 +1424,6 @@ class MealsDB_Reports {
      */
     private static function empty_delivery_summary(): array {
         return ['total_clients' => 0, 'total_owed' => 0, 'total_paid' => 0, 'total_difference' => 0];
-    }
-
-    /**
-     * Normalise date inputs to MySQL datetime strings.
-     *
-     * @param string|int $start_date
-     * @param string|int $end_date
-     *
-     * @return array<string, string>|null
-     */
-    private function normalise_dates($start_date, $end_date): ?array {
-        $start = is_int($start_date) ? $start_date : strtotime((string) $start_date);
-        $end   = is_int($end_date) ? $end_date : strtotime((string) $end_date);
-
-        if ($start === false || $end === false) {
-            return null;
-        }
-
-        if ($start > $end) {
-            $tmp   = $start;
-            $start = $end;
-            $end   = $tmp;
-        }
-
-        // Half-open interval: start of the start day (inclusive) to start of the
-        // day AFTER the end day (exclusive). Previously this returned the end day
-        // at 00:00:00 and the queries compared with `<= %s`, so an order at any
-        // time after midnight on the final day was `> end` and silently excluded —
-        // "report through Jan 31" dropped all of Jan 31 (audit MAJ-5). gmdate/UTC
-        // so the boundary does not drift across DST (mirrors
-        // MealsDB_WC_Order_Query::get_orders_for_users). Every consumer must use
-        // `>= start AND < end_exclusive`; the key is renamed from `end` to
-        // `end_exclusive` deliberately, so any missed call site trips an
-        // undefined-index notice rather than silently inheriting old semantics.
-        return [
-            'start'         => gmdate('Y-m-d 00:00:00', $start),
-            'end_exclusive' => gmdate('Y-m-d 00:00:00', strtotime('+1 day', $end)),
-        ];
     }
 
     /**

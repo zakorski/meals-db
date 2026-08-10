@@ -2,7 +2,7 @@
 /**
  * Tests for MealsDB_Task_Engine state transitions.
  *
- * Covers: complete, defer, skip, start, bulk_skip, terminal-state guards,
+ * Covers: complete, defer, skip, start, terminal-state guards,
  * on_complete callback invocation, update_task_payload.
  *
  * Run with: php tests/test-task-engine-transitions.php
@@ -192,13 +192,6 @@ assert_equals($fake->tasks[$t4]['status'], 'in_progress', 'status in_progress');
 // Idempotent.
 $ok = $engine->start_task($t4, 9);
 assert_equals($ok, true, 'start is idempotent');
-
-// ---- bulk_skip ----
-$a = $engine->create_task(['task_type' => 'test_type', 'payload' => [], 'next_run_date' => '2026-04-22']);
-$b = $engine->create_task(['task_type' => 'test_type', 'payload' => [], 'next_run_date' => '2026-04-23']);
-$c = $engine->create_task(['task_type' => 'test_type', 'payload' => [], 'next_run_date' => '2026-04-24']);
-$count = $engine->bulk_skip(['task_type' => 'test_type']);
-assert_true($count >= 3, 'bulk_skip skipped at least 3 tasks');
 
 // ---- update_task_payload ----
 $t5 = $engine->create_task(['task_type' => 'test_type', 'payload' => ['k' => 1], 'next_run_date' => '2026-04-22']);

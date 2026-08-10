@@ -150,28 +150,11 @@ $csv = $reports->export_to_csv($rows_generic);
 assert_contains("'=EVIL", $csv, 'generic export neutralises leading = in headers');
 assert_contains("'@payload", $csv, 'generic export neutralises leading @ in body values');
 
-// ---------------------------------------------------------------------------
-// export_purchase_order_csv: product_name is user-supplied via WC.
-// ---------------------------------------------------------------------------
-$po = [[
-    'sku'                 => 'ABC',
-    'product_name'        => '=IMPORTXML("bad","//x")',
-    'weighted_avg_weekly' => 0,
-    'seasonal_index'      => 1.0,
-    'adjusted_weekly'     => 0,
-    'projected_need'      => 0,
-    'current_stock'       => 0,
-    'total_available'     => 0,
-    'units_needed'        => 0,
-    'case_size'           => 1,
-    'cases_to_buy'        => 0,
-    'order_quantity'      => 0,
-    'seasonal_note'       => '',
-]];
-$csv = $reports->export_purchase_order_csv($po);
-
-assert_contains("'=IMPORTXML", $csv, 'purchase-order export neutralises leading = in product_name');
-assert_not_contains(',=IMPORTXML', $csv, 'raw =IMPORTXML at cell start is absent');
+// NOTE: the PHP export_purchase_order_csv() serializer was removed as dead code
+// (audit T8 dead-code sweep) — the live PO CSV is now built client-side in
+// purchase-orders.js via Report.csvRow/csvCell (report-utils.js). Its formula-
+// injection neutralisation is a JS-side concern; the shared server-side guard
+// MealsDB_CSV::row() remains covered by the generic export_to_csv case above.
 
 // ---------------------------------------------------------------------------
 // Output

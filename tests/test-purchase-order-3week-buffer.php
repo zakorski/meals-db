@@ -20,8 +20,8 @@
  *   P-1  signature takes NO forecasting parameters
  *   P-2  projected_need reflects 9-week coverage (90)
  *   P-3  order_quantity == 72 (9 weeks, flat buffer ignored despite meta=1000)
- *   P-4  the dropped Buffer/Needed columns are absent from the row
- *   P-5  CSV header no longer carries 'Buffer' / 'Qty Needed'
+ *   P-4  the dropped Buffer/Needed columns are absent from the row (so no CSV,
+ *        PHP or the live client-side one, can emit them from row data)
  *   P-6  source no longer reads get_post_meta($pid, 'buffer')
  *
  * Run: php tests/test-purchase-order-3week-buffer.php
@@ -125,13 +125,6 @@ chk($row['order_quantity'] ?? null, 72, 'P-3 order_quantity = 72 (9wk coverage; 
 // P-4 — dropped columns absent.
 chk_true(!array_key_exists('buffer', $row), 'P-4a row has no buffer key');
 chk_true(!array_key_exists('qty_needed', $row), 'P-4b row has no qty_needed key');
-
-// P-5 — CSV header drops Buffer / Qty Needed.
-$csv = $reports->export_purchase_order_csv($rows);
-chk_true(strpos($csv, 'Buffer') === false, 'P-5a CSV header has no Buffer column');
-chk_true(strpos($csv, 'Qty Needed') === false, 'P-5b CSV header has no Qty Needed column');
-// The Future column was removed with the future-dated-inventory read.
-chk_true(strpos($csv, 'Future') === false, 'P-5c CSV header has no Future column');
 
 // P-6 — source no longer reads the flat buffer meta.
 $src = file_get_contents(__DIR__ . '/../includes/services/class-reports.php');
