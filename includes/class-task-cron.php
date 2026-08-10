@@ -69,16 +69,28 @@ class MealsDB_Task_Cron {
             : 0;
 
         try {
-            $rules = new MealsDB_Task_Rules();
-            $count = $rules->run_cron_pass();
-            error_log(sprintf('[MealsDB Task Engine] Nightly sync created %d tasks.', $count));
+            $rules  = new MealsDB_Task_Rules();
+            $result = $rules->run_cron_pass();
+            $count  = (int) ($result['created'] ?? 0);
+            $failed = (int) ($result['failed'] ?? 0);
+            error_log(sprintf('[MealsDB Task Engine] Nightly sync created %d tasks (%d rule(s) failed).', $count, $failed));
 
             if ($log_id > 0) {
-                MealsDB_Job_Logger::finish($log_id, [
+                $stats = [
                     'records_processed' => $count,
                     'records_updated'   => $count,
                     'tasks_created'     => $count,
-                ]);
+                    'rules_failed'      => $failed,
+                ];
+                if ($failed > 0 && class_exists('MealsDB_Event_Log')) {
+                    // Rules were isolated after throwing (run_cron_pass swallowed
+                    // them so the pass could finish) — the job continued but ate
+                    // problems, so mark it DEGRADED rather than a clean success
+                    // (Pattern 6). The per-rule degraded events carry the detail.
+                    MealsDB_Event_Log::finish_job($log_id, $stats, MealsDB_Event_Log::OUTCOME_DEGRADED);
+                } else {
+                    MealsDB_Job_Logger::finish($log_id, $stats);
+                }
             }
         } catch (\Throwable $e) {
             if ($log_id > 0) {

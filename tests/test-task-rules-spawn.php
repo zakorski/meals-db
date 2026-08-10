@@ -280,6 +280,58 @@ $created_now_reg = $rules_unreg->spawn_from_rule($orphan_rule);
 assert_equals($created_now_reg, 1, 'registered task type spawns 1 task');
 assert_equals(count($fake_unreg->tasks), 1, 'exactly 1 task row after registering type');
 
+// ---- run_cron_pass isolates a throwing rule (audit-2026-08 B11) ----
+// A single rule whose spawn throws (a throwing query strategy, a malformed
+// next_run_at, ...) must NOT abort the whole nightly pass: every other due
+// rule must still spawn, the pass must not propagate the error, and the
+// failure must be counted (so the job can be marked degraded, not succeeded).
+MealsDB_Task_Registry::reset();
+MealsDB_Task_Rules::reset_strategies();
+MealsDB_Task_Registry::register('reminder', ['label' => 'Reminder', 'form_schema' => []]);
+MealsDB_Task_Rules::register_strategy('boom', function ($rule, $params) {
+    throw new RuntimeException('strategy boom');
+});
+
+$fake = new SpawnFakeWpdb();
+$GLOBALS['wpdb'] = $fake;
+$rules = new MealsDB_Task_Rules($fake);
+
+// Throwing rule created FIRST so it is processed before the healthy one (the
+// fake returns rules in insertion order) — pre-fix, this aborts the pass and
+// the healthy rule never spawns.
+$bad_id = $rules->create_rule([
+    'name' => 'boom rule', 'task_type' => 'reminder', 'spawn_type' => 'query',
+    'recurrence' => ['type' => 'daily', 'interval' => 1, 'time' => '06:00'],
+    'query_criteria' => ['strategy' => 'boom', 'params' => []],
+    'payload_template' => ['description' => 'x'],
+]);
+$good_id = $rules->create_rule([
+    'name' => 'healthy rule', 'task_type' => 'reminder', 'spawn_type' => 'fixed',
+    'recurrence' => ['type' => 'daily', 'interval' => 1, 'time' => '06:00'],
+    'payload_template' => ['description' => 'healthy'],
+    'assignee_role' => 'admin',
+]);
+// Both rules are due now (fake ignores the WHERE, but keep the data honest).
+$fake->rules[$bad_id]['next_run_at']  = gmdate('Y-m-d H:i:s', time() - 3600);
+$fake->rules[$good_id]['next_run_at'] = gmdate('Y-m-d H:i:s', time() - 1800);
+
+$threw  = false;
+$result = ['created' => 0, 'failed' => 0];
+try {
+    $result = $rules->run_cron_pass(new DateTimeImmutable('now', new DateTimeZone('UTC')));
+} catch (\Throwable $e) {
+    $threw = true;
+}
+assert_true(!$threw, 'run_cron_pass does not propagate a single rule failure');
+assert_equals($result['created'], 1, 'healthy rule created its 1 task despite the throwing rule');
+assert_equals($result['failed'], 1, 'the throwing rule is counted as failed');
+
+$healthy_spawned = false;
+foreach ($fake->tasks as $t) {
+    if ((int) ($t['source_rule_id'] ?? 0) === $good_id) { $healthy_spawned = true; break; }
+}
+assert_true($healthy_spawned, 'healthy rule still spawned after the throwing rule was isolated');
+
 echo "Ran " . ($passed + count($failures)) . " checks: $passed passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }
 exit(empty($failures) ? 0 : 1);
