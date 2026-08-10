@@ -116,6 +116,39 @@ class MealsDB_Schema_Alter_Executor {
     }
 
     /**
+     * Operator-facing preview for ONE column change: classify + plan + run the
+     * live pre-flight probes. `can_apply` is false when a probe finds rows that
+     * would be lost, so the tool can disable the confirm control (H7 slice 4).
+     *
+     * @param array{table:string,column:string,expected:string,actual:array} $mismatch
+     * @return array{table:string,column:string,tier:string,reason:string,alter_sql:string,preflight:array,can_apply:bool}
+     */
+    public function preview(array $mismatch): array {
+        $plan = MealsDB_Schema_Alter_Planner::plan($mismatch);
+
+        $preflight = [];
+        $can_apply = true;
+        foreach ($plan['preflight'] as $check) {
+            $count  = empty($check['sql']) ? 0 : (int) $this->wpdb->get_var($check['sql']);
+            $blocks = $count > 0;
+            if ($blocks) {
+                $can_apply = false;
+            }
+            $preflight[] = ['check' => (string) $check['check'], 'count' => $count, 'blocks' => $blocks];
+        }
+
+        return [
+            'table'     => $plan['table'],
+            'column'    => $plan['column'],
+            'tier'      => $plan['tier'],
+            'reason'    => $plan['reason'],
+            'alter_sql' => $plan['alter_plain'],
+            'preflight' => $preflight,
+            'can_apply' => $can_apply,
+        ];
+    }
+
+    /**
      * Run each pre-flight probe; a probe that finds rows is a blocker.
      *
      * @return array<int,array{check:string,count:int,sql:string}>

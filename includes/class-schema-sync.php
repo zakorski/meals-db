@@ -198,6 +198,48 @@ class MealsDB_Schema_Sync {
     }
 
     /**
+     * Scan existing tables for column DRIFT without applying anything — the
+     * read-only feed for the RISKY-change preview tool (H7 slice 4). Returns the
+     * same {table, column, expected, actual} shape run_full_sync collects, for
+     * every column that EXISTS but no longer matches its canonical definition.
+     * Missing columns are ADDs (not drift) and PRIMARY KEY drift is excluded —
+     * both are out of scope for the column-MODIFY tool.
+     *
+     * @return array<int,array{table:string,column:string,expected:string,actual:array}>
+     */
+    public static function detect_column_mismatches($wpdb = null): array {
+        $wpdb = $wpdb ?? ($GLOBALS['wpdb'] ?? null);
+        if (!$wpdb) {
+            return [];
+        }
+
+        $mismatches = [];
+        foreach (MealsDB_Schema::get_canonical_schema() as $schema) {
+            $table = MealsDB_DB::get_table_name($schema['table']);
+            try {
+                if (!self::table_exists($wpdb, $table)) {
+                    continue;
+                }
+                $existing = self::fetch_existing_columns($wpdb, $table);
+            } catch (Throwable $e) {
+                continue;
+            }
+            foreach ($schema['columns'] as $column => $definition) {
+                $clean = self::sanitize_column_definition($definition);
+                if (isset($existing[$column]) && !self::column_matches_definition($clean, $existing[$column])) {
+                    $mismatches[] = [
+                        'table'    => $table,
+                        'column'   => $column,
+                        'expected' => $clean,
+                        'actual'   => $existing[$column],
+                    ];
+                }
+            }
+        }
+        return $mismatches;
+    }
+
+    /**
      * SURFACE the REMAINING drift and failures rather than silently discarding
      * them (U11-schema-3). Historically every caller threw the computed report
      * away: install() checked only is_wp_error(), and the Data-Ops handler

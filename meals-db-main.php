@@ -111,6 +111,7 @@ add_action('plugins_loaded', function () {
     MealsDB_Migration_Page::init();
     MealsDB_Ajax_Migration::init();
     MealsDB_Ajax_DB_Sync::init();
+    MealsDB_Ajax_Schema_Alter::init();
     MealsDB_Ajax_Settings::init();
     MealsDB_Product_Display_Sync::init();
     MealsDB_Sync::register_hooks();
