@@ -117,11 +117,30 @@ class MealsDB_Task_Type_PO_Reconcile {
             return;
         }
 
+        // complete_reconcile refused and the PO is NOT reconciled — the stock
+        // correction did NOT happen. Reopen the task so it reverts to visibly
+        // pending instead of sitting falsely 'completed' (audit-2026-08 B11),
+        // mirroring the count_received=no terminal reversal above.
         $message = is_wp_error($result) ? $result->get_error_message() : 'complete_reconcile refused';
         if (!empty($row_errors)) {
             $message .= ' | rows: ' . implode(' | ', $row_errors);
         }
+        self::reopen($task, sprintf('Reopened: complete_reconcile refused for PO %d (status "%s").', $po_id, $status));
         self::degrade($task, 'po_task.reconcile_failed', sprintf('PO %d status "%s": %s', $po_id, $status, $message));
+    }
+
+    /**
+     * Reverse the just-committed completion so a failed on_complete leaves the
+     * task visibly pending (deferred to today) rather than falsely done — the
+     * same terminal-reversal defer the count_received=no path uses (B11).
+     */
+    private static function reopen(array $task, string $reason): void {
+        (new MealsDB_Task_Engine())->defer_task(
+            (int) ($task['task_id'] ?? 0),
+            gmdate('Y-m-d'),
+            $reason,
+            true // allow_from_terminal
+        );
     }
 
     /** Post-commit failure surface — see po_confirm_arrival for rationale. */

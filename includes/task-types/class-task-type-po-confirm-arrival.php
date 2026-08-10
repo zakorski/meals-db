@@ -83,8 +83,28 @@ class MealsDB_Task_Type_PO_Confirm_Arrival {
             return; // already received — nothing to do, no degraded noise
         }
 
+        // mark_received refused and the PO is NOT already received — the work
+        // did NOT happen (no inventory was added). Reopen the task so it reverts
+        // to visibly pending instead of sitting falsely 'completed' (audit-2026-08
+        // B11), mirroring the arrived=no terminal reversal above. The degraded
+        // event still records WHY on the dashboard.
         $message = is_wp_error($result) ? $result->get_error_message() : 'mark_received refused';
+        self::reopen($task, sprintf('Reopened: mark_received refused for PO %d (status "%s").', $po_id, $status));
         self::degrade($task, 'po_task.stale_confirm', sprintf('PO %d status "%s": %s', $po_id, $status, $message));
+    }
+
+    /**
+     * Reverse the just-committed completion so a failed on_complete leaves the
+     * task visibly pending (deferred to today) rather than falsely done — the
+     * same terminal-reversal defer the arrived=no path uses (audit-2026-08 B11).
+     */
+    private static function reopen(array $task, string $reason): void {
+        (new MealsDB_Task_Engine())->defer_task(
+            (int) ($task['task_id'] ?? 0),
+            gmdate('Y-m-d'),
+            $reason,
+            true // allow_from_terminal
+        );
     }
 
     /**
