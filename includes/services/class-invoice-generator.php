@@ -116,6 +116,16 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * The site's display timezone for turning stored dates into local period
+     * windows. Single source of truth (audit T8): prefer WP's configured zone
+     * (wp_timezone()) and fall back to the server default only outside WP (test
+     * fixtures / CLI). Was duplicated verbatim at three serialize/window sites.
+     */
+    private static function site_tz(): DateTimeZone {
+        return function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone(date_default_timezone_get());
+    }
+
+    /**
      * Canonical billing data fetcher.
      *
      * Returns ONE ROW PER CLIENT for the billing month, holding what the
@@ -635,7 +645,7 @@ class MealsDB_Invoice_Generator {
         // comparison correctly. Without this, a server set to a non-UTC
         // default timezone re-interprets `user_registered` as local time
         // and can drop the registration into the wrong billing month.
-        $site_tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone(date_default_timezone_get());
+        $site_tz = self::site_tz();
         $utc_tz  = new DateTimeZone('UTC');
 
         try {
@@ -996,7 +1006,7 @@ class MealsDB_Invoice_Generator {
         // Y-m-d string, so parse it in the site timezone rather than the
         // server default (which on some hosts is UTC and can shift the
         // label across the midnight boundary).
-        $site_tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone(date_default_timezone_get());
+        $site_tz = self::site_tz();
         try {
             $end_date_obj = new DateTime($end_date, $site_tz);
         } catch (Exception $e) {
@@ -1485,7 +1495,7 @@ class MealsDB_Invoice_Generator {
 
         // Date-of-service / signature date in DD/MM/YY format (same as the
         // pre-printed form expects).
-        $site_tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone(date_default_timezone_get());
+        $site_tz = self::site_tz();
         try {
             $end_date_obj = new DateTime($end_date, $site_tz);
         } catch (Exception $e) {
