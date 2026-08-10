@@ -417,6 +417,27 @@ class MealsDB_Allocation_Engine {
      * Returns YYYY-MM or null if the order has no usable date.
      */
     private function resolve_billing_month_for_order(int $wc_order_id): ?string {
+        // An operator `_delivery_date` override is authoritative for the billing
+        // month, exactly as it is for slip membership and the rebuilder's
+        // delivery-date resolution: mark the OVERRIDE's month dirty so the
+        // rebuilder materialises the month the meals actually land in. Without
+        // this an override that crosses a month boundary marked the order-created
+        // month dirty instead, and the true (override) month was never rebuilt —
+        // the delivery silently billed to the wrong month or not at all
+        // (audit-2026-08 B04). Only a well-formed Y-m-d counts (matching
+        // MealsDB_Allocation_Rebuilder::resolve_delivery_date); anything else
+        // falls through to the order-created month.
+        $meta_table = $this->wpdb->prefix . 'wc_orders_meta';
+        $override = (string) $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT meta_value FROM {$meta_table}
+             WHERE order_id = %d AND meta_key = '_delivery_date'
+             ORDER BY id ASC LIMIT 1",
+            $wc_order_id
+        ));
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $override)) {
+            return substr($override, 0, 7);
+        }
+
         $orders_table = $this->wpdb->prefix . 'wc_orders';
         $order_date = (string) $this->wpdb->get_var($this->wpdb->prepare(
             "SELECT DATE(date_created_gmt) FROM {$orders_table} WHERE id = %d",
@@ -425,11 +446,11 @@ class MealsDB_Allocation_Engine {
         if (!$order_date) {
             return null;
         }
-        // Delivery month = the month the order's delivery falls in. For
-        // mark-dirty purposes the order-date month is sufficient: the
-        // rebuilder rebuilds (prior, month, next) together, so this order's
-        // overflow spill into the next month is materialised by the same
-        // rebuild, and any month-boundary delivery still lands in one of those.
+        // Delivery month = the month the order's delivery falls in. For a
+        // non-overridden order the rebuilder rebuilds (prior, month, next)
+        // together, so this order's overflow spill into the next month is
+        // materialised by the same rebuild, and any month-boundary delivery
+        // still lands in one of those.
         return substr($order_date, 0, 7);
     }
 

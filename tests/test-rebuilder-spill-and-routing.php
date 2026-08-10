@@ -117,6 +117,11 @@ class BC1FakeWpdb extends wpdb {
     }
 
     public function get_results($q, $o = null) {
+        // Override-source loaders (they JOIN the _delivery_date meta) — this
+        // fixture has no operator overrides, so they return nothing, mirroring
+        // the real DB. Checked first so they don't fall through to the pinned /
+        // customer buckets below.
+        if (stripos($q, '_delivery_date') !== false) { return []; }
         // Check customer_id FIRST: the fixed code's customer query also mentions
         // mealsdb_client_id inside a NOT EXISTS subquery, so we must not let that
         // misroute it to the pinned bucket.
@@ -166,6 +171,10 @@ class BC1StubOrderQuery {
             foreach ($this->items[$id] ?? [] as $it) { $out[] = $it; }
         }
         return $out;
+    }
+    // No operator _delivery_date overrides in these fixtures.
+    public function get_delivery_date_overrides(array $order_ids): array {
+        return [];
     }
 }
 
