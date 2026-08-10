@@ -146,13 +146,18 @@ class MealsDB_WC_Product_Tab {
 
         echo '<div id="' . esc_attr(self::TAB_ID . '_panel') . '" class="panel woocommerce_options_panel hidden">';
 
+        // All four persisted types are offered. Previously only meal/side were
+        // listed, so opening + saving a 'fee'/'other' product submitted the
+        // first option ('meal') and silently downgraded it (audit-2026-08 B10).
         woocommerce_wp_select([
             'id'      => '_mealsdb_product_type',
             'label'   => __('Product Type', 'meals-db'),
             'value'   => $data['product_type'],
             'options' => [
-                'meal' => __('Meal', 'meals-db'),
-                'side' => __('Side', 'meals-db'),
+                'meal'  => __('Meal', 'meals-db'),
+                'side'  => __('Side', 'meals-db'),
+                'fee'   => __('Fee', 'meals-db'),
+                'other' => __('Other', 'meals-db'),
             ],
         ]);
 
@@ -160,7 +165,7 @@ class MealsDB_WC_Product_Tab {
             'id'          => '_mealsdb_taxable',
             'label'       => __('Taxable', 'meals-db'),
             'value'       => (int) $data['taxable'],
-            'description' => __('If the product type is meal, this will remain disabled.', 'meals-db'),
+            'description' => __('Defaults to the category (dessert/muffin are taxable). Change it to override this product; meals are never taxed.', 'meals-db'),
             'disabled'    => $data['product_type'] === 'meal',
         ]);
 
@@ -225,12 +230,16 @@ class MealsDB_WC_Product_Tab {
             ? sanitize_text_field(wp_unslash($_POST['_mealsdb_product_type']))
             : 'meal';
 
-        $taxable = 0;
-        if ($product_type !== 'meal') {
-            // Auto-determine taxable status from category: dessert and muffin are taxable,
-            // cereal and soup are non-taxable.
-            $taxable = self::determine_side_taxable($product_id);
-        }
+        // Honour the operator's "Taxable" checkbox, but only record it as an
+        // OVERRIDE when it diverges from the category default (dessert/muffin
+        // are taxable). Matching the default leaves the row category-tracked so
+        // the display sync keeps re-deriving it; a genuine override is flagged
+        // so the sync preserves it (audit-2026-08 B10). Meals are never taxed.
+        $derived_taxable = $product_type === 'meal' ? 0 : self::determine_side_taxable($product_id);
+        $posted_taxable  = !empty($_POST['_mealsdb_taxable']);
+        $resolved        = MealsDB_Products::resolve_taxable_override($product_type, $posted_taxable, $derived_taxable);
+        $taxable            = $resolved['taxable'];
+        $taxable_overridden = $resolved['overridden'];
 
         $existing_data  = MealsDB_Products::get_product_data($product_id);
         $main_ingredient = is_array($existing_data) && isset($existing_data['main_ingredient'])
@@ -274,15 +283,34 @@ class MealsDB_WC_Product_Tab {
             }
         }
 
-        MealsDB_Products::save_product_data($product_id, [
-            'product_type'    => $product_type,
-            'taxable'         => $taxable,
-            'main_ingredient' => $main_ingredient,
-            'dietary_tags'    => $dietary_tags,
-            'allergen_flags'  => $allergen_flags,
-            'case_size'       => $case_size,
-            'unit_cost'       => $unit_cost,
+        $saved = MealsDB_Products::save_product_data($product_id, [
+            'product_type'       => $product_type,
+            'taxable'            => $taxable,
+            'taxable_overridden' => $taxable_overridden,
+            'main_ingredient'    => $main_ingredient,
+            'dietary_tags'       => $dietary_tags,
+            'allergen_flags'     => $allergen_flags,
+            'case_size'          => $case_size,
+            'unit_cost'          => $unit_cost,
         ]);
+
+        // The WC tax status was already mutated above; if our own row write
+        // failed the two would diverge silently on the HST-driving flag. Surface
+        // it rather than pretend the save happened (audit-2026-08 B10, Pattern 7).
+        if (!$saved) {
+            MealsDB_Logger::error(sprintf('[MealsDB Product Tab] meals_products save failed for product_id=%d', $product_id));
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'error',
+                    'category'    => 'products',
+                    'subsystem'   => 'wc_product_tab',
+                    'event'       => 'product_save.failed',
+                    'outcome'     => 'degraded',
+                    'message'     => 'meals_products write failed; WC tax status may diverge from the stored taxable flag.',
+                    'context'     => ['product_id' => $product_id],
+                ]);
+            }
+        }
     }
 
     /**
@@ -295,7 +323,9 @@ class MealsDB_WC_Product_Tab {
      * @return int 1 if taxable, 0 otherwise.
      */
     private static function determine_side_taxable(int $product_id): int {
-        $taxable_slugs   = ['dessert', 'muffin'];
+        // Single source of truth — the taxable-side rule lives in
+        // MealsDB_Operational_Constants, not hardcoded here (audit-2026-08 B10).
+        $taxable_slugs = MealsDB_Operational_Constants::taxable_side_category_slugs();
 
         $terms = get_the_terms($product_id, 'product_cat');
         if (!is_array($terms)) {
