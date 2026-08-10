@@ -175,6 +175,18 @@ class MealsDB_Logger {
     ];
 
     /**
+     * The canonical PII field-name list, exposed so other log sinks (notably the
+     * MealsDB_Event_Log trunk) derive their scrub set from this ONE source rather
+     * than keeping a copy that silently drifts — a new key added here is then
+     * scrubbed everywhere (audit synthesis T8).
+     *
+     * @return string[]
+     */
+    public static function sensitive_fields(): array {
+        return self::SENSITIVE_FIELDS;
+    }
+
+    /**
      * Produce the audit fingerprint of a single value (same shape redact_value
      * emits for a sensitive field). Public so callers that log a COMPOSITE blob
      * — e.g. the delete_client snapshot, whose 'record' field name bypasses the
