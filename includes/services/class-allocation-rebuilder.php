@@ -499,6 +499,63 @@ class MealsDB_Allocation_Rebuilder {
         return ['mains_unplaced' => $total_unplaced_mains, 'sides_unplaced' => $total_unplaced_sides];
     }
 
+    /**
+     * Resolve an order's delivery date + coverage-end for allocation.
+     *
+     * An operator-set `_delivery_date` override (Y-m-d) is AUTHORITATIVE: it
+     * decides which billing month the order's meals land in, exactly as it
+     * decides slip membership (delivery-date-override directive / PR #479 —
+     * this is the allocation-side sibling of the slip generator's
+     * resolve_delivery_date). A well-formed override wins outright and the
+     * schedule is never consulted; coverage collapses to the override day.
+     *
+     * Without an override the order maps to the client's computed delivery
+     * schedule for the order's month: an exact delivery-date match first, then
+     * the coverage window that contains the order date, and finally — if the
+     * schedule yields nothing — the order date itself.
+     *
+     * Malformed overrides (not zero-padded Y-m-d, carrying a time component,
+     * etc.) are treated as "no override", mirroring the /^\d{4}-\d{2}-\d{2}$/
+     * guard the slip selection uses — a bad value must never become a
+     * delivery date. Pure function (no DB) so it is unit-tested directly; see
+     * tests/test-allocation-delivery-date-override.php. Before this existed the
+     * rebuilder ignored the override entirely and billed overridden deliveries
+     * to the schedule-derived (wrong) month (audit-2026-08 B04, WONT_WORK HIGH).
+     *
+     * @param string                    $order_date Y-m-d (order created date).
+     * @param list<array<string,mixed>> $schedule   Rows from calculate_delivery_schedule().
+     * @param string                    $override   Raw _delivery_date meta ('' if none).
+     * @return array{0:string,1:string} [delivery_date, coverage_end] as Y-m-d.
+     */
+    public static function resolve_delivery_date(string $order_date, array $schedule, string $override = ''): array {
+        // Operator override wins outright — same rule as slip selection.
+        if ($override !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $override)) {
+            return [$override, $override];
+        }
+
+        // Exact delivery-date match for the order's own date.
+        foreach ($schedule as $delivery) {
+            if (($delivery['delivery_date'] ?? null) === $order_date) {
+                return [
+                    (string) $delivery['delivery_date'],
+                    (string) ($delivery['coverage_end'] ?? $delivery['delivery_date']),
+                ];
+            }
+        }
+        // Otherwise the coverage window that contains the order date.
+        foreach ($schedule as $delivery) {
+            if ($order_date >= ($delivery['coverage_start'] ?? '')
+                && $order_date <= ($delivery['coverage_end'] ?? '')) {
+                return [
+                    (string) $delivery['delivery_date'],
+                    (string) ($delivery['coverage_end'] ?? $delivery['delivery_date']),
+                ];
+            }
+        }
+        // No schedule match: the order date is its own delivery date.
+        return [$order_date, $order_date];
+    }
+
     // =====================================================================
     //  Internal — data access
     // =====================================================================
@@ -592,7 +649,61 @@ class MealsDB_Allocation_Rebuilder {
             }
         }
 
-        // Merge + de-dup by order id (a pinned order may also match customer_id).
+        // (c) Override-loaded orders. An operator `_delivery_date` override can
+        // move a delivery arbitrarily far from the order-created date — outside
+        // the ±7-day padded creation window (a)/(b) scan — so such orders are
+        // invisible above. Load any order for this client whose override lands
+        // inside the requested month range, keyed on the override VALUE rather
+        // than the creation date (mirrors the override-aware slip selection).
+        // resolve_delivery_date() lets the override win, and the delivery-month
+        // filter downstream keeps only those actually in $months.
+        //   (c1) meta-pinned to this client — authoritative.
+        $pinned_override = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT o.id, DATE(o.date_created_gmt) AS order_date
+             FROM `{$orders_table}` o
+             INNER JOIN `{$meta_table}` m ON m.order_id = o.id
+                 AND m.meta_key = 'mealsdb_client_id' AND m.meta_value = %s
+             INNER JOIN `{$meta_table}` dd ON dd.order_id = o.id
+                 AND dd.meta_key = '_delivery_date'
+             WHERE o.type = 'shop_order'
+               AND o.status NOT IN {$excluded_statuses}
+               AND dd.meta_value BETWEEN %s AND %s",
+            (string) $client_id,
+            $range_start,
+            $range_end
+        ), ARRAY_A);
+        $pinned = array_merge((array) $pinned, (array) $pinned_override);
+
+        //   (c2) customer_id-owned — routed through the same single-client
+        //   resolver as (b) so a dual-program user's override order (MAJ-1)
+        //   routes to exactly one client.
+        if ($wp_user_id > 0) {
+            $candidate_override = $this->wpdb->get_results($this->wpdb->prepare(
+                "SELECT o.id, DATE(o.date_created_gmt) AS order_date
+                 FROM `{$orders_table}` o
+                 INNER JOIN `{$meta_table}` dd ON dd.order_id = o.id
+                     AND dd.meta_key = '_delivery_date'
+                 WHERE o.customer_id = %d
+                   AND o.type = 'shop_order'
+                   AND o.status NOT IN {$excluded_statuses}
+                   AND dd.meta_value BETWEEN %s AND %s",
+                $wp_user_id,
+                $range_start,
+                $range_end
+            ), ARRAY_A);
+            foreach ((array) $candidate_override as $co) {
+                $oid = (int) $co['id'];
+                if (!array_key_exists($oid, $this->resolved_client_cache)) {
+                    $this->resolved_client_cache[$oid] = $this->engine->resolve_client_id_for_order($oid);
+                }
+                if ($this->resolved_client_cache[$oid] === $client_id) {
+                    $by_customer[] = $co;
+                }
+            }
+        }
+
+        // Merge + de-dup by order id (a pinned order may also match customer_id,
+        // and an override source may re-surface an order already in (a)/(b)).
         $orders = [];
         foreach (array_merge((array) $pinned, $by_customer) as $o) {
             $orders[(int) $o['id']] = $o;
@@ -602,6 +713,13 @@ class MealsDB_Allocation_Rebuilder {
         if (empty($orders)) {
             return [];
         }
+
+        // Fetch operator `_delivery_date` overrides for every loaded order in one
+        // query, so resolve_delivery_date() can let a well-formed override win
+        // over the computed schedule (it decides the billing month).
+        $override_map = $this->order_query->get_delivery_date_overrides(
+            array_map(static function ($o) { return (int) $o['id']; }, $orders)
+        );
 
         // Extract mains/sides per order using the same product-table lookup
         // as MealsDB_Allocation_Engine::allocate_order, then resolve delivery
@@ -673,7 +791,8 @@ class MealsDB_Allocation_Rebuilder {
                 continue;
             }
 
-            // Delivery date: match to the schedule for the order's month.
+            // Delivery date: an operator `_delivery_date` override wins outright;
+            // otherwise match to the client's schedule for the order's month.
             // X4: the schedule is deterministic per (client, month) and client_id
             // is fixed for this call, so memoise it — several orders share a month
             // and the same (client, month) recurs across adjacent dirty months'
@@ -683,25 +802,12 @@ class MealsDB_Allocation_Rebuilder {
             if (!array_key_exists($sched_key, $this->schedule_cache)) {
                 $this->schedule_cache[$sched_key] = $this->engine->calculate_delivery_schedule($client_id, $order_month);
             }
-            $schedule      = $this->schedule_cache[$sched_key];
-            $delivery_date = $order_date;
-            $coverage_end  = $order_date;
-            foreach ($schedule as $delivery) {
-                if ($delivery['delivery_date'] === $order_date) {
-                    $delivery_date = $delivery['delivery_date'];
-                    $coverage_end  = $delivery['coverage_end'] ?? $delivery_date;
-                    break;
-                }
-            }
-            if ($delivery_date === $order_date) {
-                foreach ($schedule as $delivery) {
-                    if ($order_date >= ($delivery['coverage_start'] ?? '') && $order_date <= ($delivery['coverage_end'] ?? '')) {
-                        $delivery_date = $delivery['delivery_date'];
-                        $coverage_end  = $delivery['coverage_end'] ?? $delivery_date;
-                        break;
-                    }
-                }
-            }
+            $schedule = $this->schedule_cache[$sched_key];
+            [$delivery_date, $coverage_end] = self::resolve_delivery_date(
+                $order_date,
+                $schedule,
+                (string) ($override_map[$wc_order_id] ?? '')
+            );
 
             // Keep only deliveries whose delivery-month is in the requested set.
             if (!in_array(substr($delivery_date, 0, 7), $months, true)) {

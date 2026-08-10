@@ -645,6 +645,20 @@ class MealsDB_Admin_UI {
                     $decision['action'] === 'set' ? $decision['value'] : null
                 );
             }
+
+            // The override changes which billing month this order's meals land
+            // in, but nothing else marks that dirty — so without this the
+            // rebuilder never re-runs and the move never materialises (a limb of
+            // audit-2026-08 B04). Mark BOTH the order's existing allocation
+            // month(s) — so the OLD placement is rebuilt away — and its newly
+            // resolved month (the override month for a 'set', the computed month
+            // for a 'delete'). Marking is cheap + idempotent; the actual rebuild
+            // is deferred to the event-sourced dirty sweep (nightly / invoice).
+            if (class_exists('MealsDB_Allocation_Engine')) {
+                $engine = new MealsDB_Allocation_Engine();
+                $engine->mark_order_months_dirty($order_id); // existing rows' month(s)
+                $engine->allocate_order($order_id);          // newly-resolved month
+            }
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Admin UI] delivery date save failed: ' . $e->getMessage());
             if (class_exists('MealsDB_Event_Log')) {
