@@ -1025,7 +1025,7 @@ class MealsDB_Sync_Mutate {
             case 'phone_primary':
             case 'client_phone_1':
                 $old_value = get_user_meta($woo_user_id, 'billing_phone', true);
-                $update_success = update_user_meta($woo_user_id, 'billing_phone', $new_value) !== false;
+                $update_success = self::persist_user_meta($woo_user_id, 'billing_phone', is_scalar($old_value) ? (string) $old_value : '', $new_value);
                 if (!$update_success) {
                     $error_message = __('Unable to update the customer phone number.', 'meals-db');
                     error_log('[MealsDB Sync] Failed to sync phone for user ' . $woo_user_id . '.');
@@ -1048,7 +1048,7 @@ class MealsDB_Sync_Mutate {
                     }
 
                     $old_value = get_user_meta($woo_user_id, $meta_key, true);
-                    $update_success = update_user_meta($woo_user_id, $meta_key, $new_value) !== false;
+                    $update_success = self::persist_user_meta($woo_user_id, $meta_key, is_scalar($old_value) ? (string) $old_value : '', $new_value);
                     if (!$update_success) {
                         $error_message = sprintf(
                             __('Unable to update user meta "%s".', 'meals-db'),
@@ -1081,5 +1081,26 @@ class MealsDB_Sync_Mutate {
         );
 
         return true;
+    }
+
+    /**
+     * Idempotent user-meta write for the sync-override path.
+     *
+     * update_user_meta() returns false BOTH on a real failure AND when the new
+     * value already equals the stored value, so a bare `!== false` check flags
+     * an already-correct field as a sync FAILURE — surfacing a bogus WP_Error in
+     * the admin UI and a spurious sync_partial_failure audit row (audit-2026-08
+     * B07 / H11). Comparing first makes "already equals target" an explicit
+     * success; only a genuine change that update_user_meta then refuses is a
+     * failure. (The name/email branches don't need this — wp_update_user returns
+     * the user ID on a no-op.)
+     *
+     * @return bool True if the meta now holds $new_value (including a no-op).
+     */
+    private static function persist_user_meta(int $user_id, string $meta_key, string $current_value, string $new_value): bool {
+        if ($current_value === $new_value) {
+            return true;
+        }
+        return update_user_meta($user_id, $meta_key, $new_value) !== false;
     }
 }
