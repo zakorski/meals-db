@@ -38,6 +38,12 @@ class OAWpdb extends wpdb {
     public array $audit_log = [];  // captured MealsDB_Logger rows (raw SQL strings)
     private $next_id = 1;
 
+    // TOCTOU simulation: when set, the NEXT update()/delete() flips the stored
+    // row's status BEFORE evaluating the WHERE — modelling a concurrent writer
+    // whose commit lands inside the service's get()-then-write window. The
+    // one-shot flag clears itself after firing.
+    public $race_status_on_next_write = null;
+
     public function prepare($sql, ...$args) {
         if (count($args) === 1 && is_array($args[0])) { $args = $args[0]; }
         foreach ($args as $a) {
@@ -71,12 +77,29 @@ class OAWpdb extends wpdb {
     public function update($table, $data, $where, $f1 = null, $f2 = null) {
         $id = (int) ($where['audit_id'] ?? 0);
         if (!isset($this->rows[$id])) { return 0; }
+        if ($this->race_status_on_next_write !== null) {
+            $this->rows[$id]['status'] = $this->race_status_on_next_write;
+            $this->race_status_on_next_write = null;
+        }
+        // Honour a status guard in the WHERE (the TOCTOU fix): if the caller
+        // constrains status and the row no longer matches, affect 0 rows —
+        // exactly what real MySQL does for a WHERE that no longer selects.
+        if (array_key_exists('status', $where) && ($this->rows[$id]['status'] ?? null) !== $where['status']) {
+            return 0;
+        }
         $this->rows[$id] = array_merge($this->rows[$id], $data);
         return 1;
     }
     public function delete($table, $where, $formats = null) {
         $id = (int) ($where['audit_id'] ?? 0);
         if (!isset($this->rows[$id])) { return 0; }
+        if ($this->race_status_on_next_write !== null) {
+            $this->rows[$id]['status'] = $this->race_status_on_next_write;
+            $this->race_status_on_next_write = null;
+        }
+        if (array_key_exists('status', $where) && ($this->rows[$id]['status'] ?? null) !== $where['status']) {
+            return 0;
+        }
         unset($this->rows[$id]);
         return 1;
     }
@@ -325,6 +348,42 @@ oa_reset();
 $empty_id = MealsDB_Order_Audit::create_for_week('2026-06-01', '2026-06-07', []);
 oa_chk($empty_id > 0, '5.6: empty week creates a valid draft');
 oa_chk(MealsDB_Order_Audit::finalize($empty_id) === true, '5.6: empty audit finalizes');
+
+// ---------------------------------------------------------------------------
+// Task 6 checks: TOCTOU — every status-gated write must constrain status in its
+// WHERE so a concurrent flip that lands in the get()-then-write window loses
+// (affects 0 rows) rather than clobbering the other writer's committed change.
+// ---------------------------------------------------------------------------
+
+// 1. mutate_row (confirm/edit/revert): audit finalized concurrently mid-change.
+//    get() saw draft; the UPDATE must not land on the now-finalized row.
+[$wpdb, $id] = oa_make_audit();
+$wpdb->race_status_on_next_write = 'finalized';
+$res = MealsDB_Order_Audit::confirm_row($id, 501);
+oa_chk($res instanceof WP_Error, '6.1: row change that loses the finalize race → concurrent-change WP_Error');
+
+// 2. finalize: another finalize landed first inside the window.
+[$wpdb, $id] = oa_make_audit();
+MealsDB_Order_Audit::confirm_row($id, 501);
+MealsDB_Order_Audit::edit_row($id, 502, [4 => 1], 'pie missing');
+$wpdb->race_status_on_next_write = 'finalized';
+oa_chk(MealsDB_Order_Audit::finalize($id) instanceof WP_Error, '6.2: finalize that loses the race → concurrent-change WP_Error');
+
+// 3. unfinalize: a concurrent reopen (finalized → draft) landed first.
+[$wpdb, $id] = oa_make_audit();
+MealsDB_Order_Audit::confirm_row($id, 501);
+MealsDB_Order_Audit::confirm_row($id, 502);
+MealsDB_Order_Audit::finalize($id);
+$wpdb->race_status_on_next_write = 'draft';
+oa_chk(MealsDB_Order_Audit::unfinalize($id, 'found another slip') instanceof WP_Error,
+    '6.3: unfinalize that loses the race → concurrent-change WP_Error');
+
+// 4. delete_draft: a concurrent finalize landed first; the draft-only delete
+//    must not remove the now-finalized record.
+[$wpdb, $id] = oa_make_audit();
+$wpdb->race_status_on_next_write = 'finalized';
+oa_chk(MealsDB_Order_Audit::delete_draft($id) instanceof WP_Error, '6.4: delete_draft that loses the race → WP_Error, row survives');
+oa_chk(isset($GLOBALS['wpdb']->rows[$id]), '6.4: the finalized row was NOT deleted');
 
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
