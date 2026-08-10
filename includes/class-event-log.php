@@ -487,20 +487,20 @@ class MealsDB_Event_Log {
     }
 
     /**
-     * Sensitive context keys — fingerprinted rather than stored raw. Kept
-     * in sync (by intent) with MealsDB_Logger::SENSITIVE_FIELDS; a central
-     * sink with raw PII is a worse leak than the scattered status quo.
+     * Sensitive context keys — fingerprinted rather than stored raw. DERIVED
+     * from MealsDB_Logger::sensitive_fields() (the single source) so a PII key
+     * added there is scrubbed in the trunk too, plus the two generic short forms
+     * ('email', 'phone') the trunk also guards. A central sink with raw PII is a
+     * worse leak than the scattered status quo (audit synthesis T8).
      */
     private static function is_sensitive_key(string $key): bool {
         static $keys = null;
         if ($keys === null) {
-            $keys = array_flip([
-                'individual_id', 'requisition_id', 'vet_health_card', 'diet_concerns',
-                'customer_comments', 'client_comments', 'client_email', 'user_email',
-                'email', 'phone', 'phone_primary', 'phone_secondary', 'client_phone_1',
-                'client_phone_2', 'birth_date', 'postal_code', 'address_postal',
-                'street_name', 'address_street_name', 'delivery_street_name',
-            ]);
+            $base  = class_exists('MealsDB_Logger') ? MealsDB_Logger::sensitive_fields() : [];
+            $keys  = [];
+            foreach (array_merge($base, ['email', 'phone']) as $k) {
+                $keys[strtolower((string) $k)] = true;
+            }
         }
         return isset($keys[strtolower($key)]);
     }

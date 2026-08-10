@@ -14,6 +14,21 @@ defined('ABSPATH') || exit;
 class MealsDB_WC_Order_Query {
 
     /**
+     * Order statuses that never represent a real cooked/delivered order and so
+     * are excluded from every order projection (single source — was duplicated
+     * verbatim across four method signatures; audit synthesis T8). wc-failed /
+     * wc-refunded must never count; wc-checkout-draft is the HPOS abandoned-
+     * checkout placeholder; wc-pending is excluded per the operator (an unpaid
+     * pending order is not delivered until payment clears).
+     *
+     * @var string[]
+     */
+    private const EXCLUDED_ORDER_STATUSES = [
+        'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
+        'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
+    ];
+
+    /**
      * @var wpdb
      */
     private $wpdb;
@@ -45,10 +60,7 @@ class MealsDB_WC_Order_Query {
         // and never represents a real order. wc-pending is excluded per the
         // operator's decision (an unpaid pending order is not cooked/delivered
         // until payment clears).
-        array $exclude_statuses = [
-            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
-            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
-        ]
+        array $exclude_statuses = self::EXCLUDED_ORDER_STATUSES
     ): array {
         $wp_user_ids = array_filter(array_map('intval', $wp_user_ids));
         if (empty($wp_user_ids)) {
@@ -204,10 +216,7 @@ class MealsDB_WC_Order_Query {
         // BC-7: keep this default in lockstep with get_orders_for_users() — slips
         // and PO demand flow through here, so failed/refunded/checkout-draft/
         // pending must all be excluded.
-        array $exclude_statuses = [
-            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
-            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
-        ]
+        array $exclude_statuses = self::EXCLUDED_ORDER_STATUSES
     ): array {
         $orders = $this->get_orders_for_users($wp_user_ids, $start_date, $end_date, $exclude_statuses);
         if (empty($orders)) {
@@ -267,10 +276,7 @@ class MealsDB_WC_Order_Query {
         // Keep in lockstep with get_orders_with_items_for_users(): an
         // overridden order must obey the same status rules as any other
         // slip candidate.
-        array $exclude_statuses = [
-            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
-            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
-        ]
+        array $exclude_statuses = self::EXCLUDED_ORDER_STATUSES
     ): array {
         $wp_user_ids = array_filter(array_map('intval', $wp_user_ids));
         if (empty($wp_user_ids)) {
@@ -411,10 +417,7 @@ class MealsDB_WC_Order_Query {
 
         // Same status exclusions as the order fetches: a cancelled order's
         // override must not conjure its owner onto a slip.
-        $exclude_statuses = [
-            'wc-cancelled', 'wc-on-hold', 'wc-draft', 'draft', 'wc-trash', 'trash',
-            'wc-failed', 'wc-refunded', 'wc-checkout-draft', 'wc-pending',
-        ];
+        $exclude_statuses = self::EXCLUDED_ORDER_STATUSES;
         $status_placeholders = implode(',', array_fill(0, count($exclude_statuses), '%s'));
 
         $sql = "
