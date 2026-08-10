@@ -337,7 +337,9 @@ class MealsDB_Schema_Alter_Planner {
             // in the pre-flight probe, so extract them from the ORIGINAL
             // (case-preserving) string, not the lowercased form.
             if (preg_match('/\((.*)\)/s', $orig, $om)) {
-                foreach (str_getcsv($om[1], ',', "'") as $v) {
+                // Explicit $escape (PHP 8.4 deprecates the implicit default);
+                // the historical '\\' keeps parsing unchanged.
+                foreach (str_getcsv($om[1], ',', "'", '\\') as $v) {
                     $values[] = trim($v);
                 }
             }

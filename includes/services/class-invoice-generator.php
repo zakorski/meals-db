@@ -1516,7 +1516,10 @@ class MealsDB_Invoice_Generator {
         foreach ($lines as $line) {
             $line = trim($line);
             if ($line === '') { continue; }
-            $data = str_getcsv($line);
+            // Explicit delimiter/enclosure/escape: PHP 8.4 deprecates calling
+            // str_getcsv() without $escape. These are the historical defaults,
+            // so parsing is unchanged.
+            $data = str_getcsv($line, ',', '"', '\\');
             if (count($data) < 34) { continue; }
             $data_rows[] = $data;
         }

@@ -194,7 +194,10 @@ class MealsDB_WP_User_Mapper {
         if ($value === '') {
             return '';
         }
-        $digits = preg_replace('/\D+/', '', $value);
+        // preg_replace returns null on a PCRE error; coalesce so strlen() never
+        // gets null (a PHP 8.1 deprecation). Mirrors the guarded sibling in
+        // class-sync-query.php.
+        $digits = preg_replace('/\D+/', '', $value) ?? '';
         if (strlen($digits) === 11 && $digits[0] === '1') {
             $digits = substr($digits, 1);
         }
