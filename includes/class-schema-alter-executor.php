@@ -41,10 +41,15 @@ class MealsDB_Schema_Alter_Executor {
      *
      * @param array{table:string,column:string,expected:string,actual:array} $mismatch
      * @param bool $confirmed_risky The operator confirmed a RISKY change via the tool.
+     * @param bool $online_only     When true (the auto-apply/version-bump path),
+     *                              only attempt online DDL — never fall back to a
+     *                              maintenance-mode COPY on a page load. A SAFE
+     *                              change MySQL can't do INPLACE is DEFERRED to
+     *                              the tool instead.
      * @return array{status:string, plan?:array, blockers?:array, error?:string}
-     *         status: applied | needs_confirmation | blocked | error
+     *         status: applied | needs_confirmation | blocked | deferred_online_unsupported | error
      */
-    public function run(array $mismatch, bool $confirmed_risky = false): array {
+    public function run(array $mismatch, bool $confirmed_risky = false, bool $online_only = false): array {
         $plan = MealsDB_Schema_Alter_Planner::plan($mismatch);
 
         if ($plan['tier'] === MealsDB_Schema_Alter_Planner::TIER_RISKY) {
@@ -57,7 +62,57 @@ class MealsDB_Schema_Alter_Executor {
             }
         }
 
-        return $this->apply($plan);
+        return $this->apply($plan, $online_only);
+    }
+
+    /**
+     * Auto-apply every SAFE column mismatch that online DDL can perform, and
+     * leave RISKY / online-unsupported ones for the operator tool. This is what
+     * the version-bump path calls — it never COPYs or locks on a page load.
+     *
+     * Non-column mismatches (e.g. a PRIMARY KEY drift, whose 'actual' is a
+     * string not an INFORMATION_SCHEMA row) are passed through untouched.
+     *
+     * @param array<int,array<string,mixed>> $mismatches Schema_Sync column_mismatches.
+     * @return array{altered:array,remaining:array,errors:array}
+     */
+    public function apply_safe_batch(array $mismatches): array {
+        $altered = [];
+        $remaining = [];
+        $errors = [];
+
+        foreach ($mismatches as $mm) {
+            if (!is_array($mm['actual'] ?? null) || ($mm['column'] ?? '') === 'PRIMARY KEY') {
+                $remaining[] = $mm; // not a column MODIFY we plan
+                continue;
+            }
+            $class = MealsDB_Schema_Alter_Planner::classify((string) ($mm['expected'] ?? ''), $mm['actual']);
+            if ($class['tier'] !== MealsDB_Schema_Alter_Planner::TIER_SAFE) {
+                $mm['risk'] = $class['tier']; // RISKY -> operator tool
+                $remaining[] = $mm;
+                continue;
+            }
+
+            $outcome = $this->run($mm, false, true); // SAFE, online-only
+            $status  = (string) ($outcome['status'] ?? '');
+            if ($status === 'applied') {
+                $altered[] = ['table' => $mm['table'], 'column' => $mm['column'], 'reason' => $class['reason']];
+            } elseif ($status === 'deferred_online_unsupported') {
+                // SAFE but needs a COPY — defer to the tool (maintenance window),
+                // NOT an error.
+                $mm['risk'] = 'safe_needs_maintenance';
+                $remaining[] = $mm;
+            } else {
+                $errors[] = [
+                    'table'  => $mm['table'],
+                    'column' => $mm['column'],
+                    'error'  => 'SAFE ALTER failed: ' . (string) ($outcome['error'] ?? ''),
+                ];
+                $remaining[] = $mm;
+            }
+        }
+
+        return ['altered' => $altered, 'remaining' => $remaining, 'errors' => $errors];
     }
 
     /**
@@ -82,10 +137,16 @@ class MealsDB_Schema_Alter_Executor {
     /**
      * Apply the ALTER: online DDL first, else a maintenance-mode plain ALTER.
      */
-    protected function apply(array $plan): array {
+    protected function apply(array $plan, bool $online_only = false): array {
         $ok = $this->wpdb->query($plan['alter_online']) !== false;
 
         if (!$ok) {
+            if ($online_only) {
+                // Auto-apply path: never COPY/lock on a page load. The change is
+                // still SAFE, just not INPLACE-able — defer it to the tool, where
+                // it runs under a maintenance window.
+                return ['status' => 'deferred_online_unsupported', 'plan' => $plan];
+            }
             // INPLACE/LOCK=NONE rejected (or otherwise failed) — retry the plain
             // form under maintenance mode, since it may rebuild + lock the table.
             $this->engage_maintenance();

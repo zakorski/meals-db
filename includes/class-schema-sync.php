@@ -172,28 +172,50 @@ class MealsDB_Schema_Sync {
             }
         }
 
+        // H7 slice 3: auto-apply the SAFE (value-preserving) column drifts via
+        // online DDL, and leave RISKY / online-unsupported ones surfaced for the
+        // operator's preview+confirm tool. This runs on the version-bump path,
+        // so it never COPYs or locks a table on a page load (online_only). SAFE
+        // = widen VARCHAR/CHAR/TEXT, INT->BIGINT, add an ENUM value, relax
+        // NOT NULL, change a DEFAULT (see MealsDB_Schema_Alter_Planner).
+        if (!empty($results['column_mismatches'])
+            && class_exists('MealsDB_Schema_Alter_Executor')) {
+            $batch = (new MealsDB_Schema_Alter_Executor($wpdb))
+                ->apply_safe_batch($results['column_mismatches']);
+            $results['columns_altered']   = $batch['altered'];
+            $results['column_mismatches'] = $batch['remaining'];
+            if (!empty($batch['errors'])) {
+                // A SAFE ALTER that genuinely failed is a real DDL error — it must
+                // feed the same path that keeps the schema version from being
+                // marked current (recon-01).
+                $results['errors'] = array_merge($results['errors'], $batch['errors']);
+            }
+        }
+
         self::surface_sync_report($results);
 
         return $results;
     }
 
     /**
-     * SURFACE drift and failures rather than silently discarding them
-     * (U11-schema-3). Schema_Sync is additive-only — it ADDs missing tables
-     * and columns but NEVER issues ALTER ... MODIFY — so a column
-     * type/ENUM/width or PRIMARY KEY mismatch on a deployed install is
-     * invisible unless we say so. Historically every caller threw the
-     * computed report away: install() checked only is_wp_error(), and the
-     * Data-Ops handler showed an unconditional "updated successfully" notice.
-     * Logging here makes drift/failures visible to EVERY caller regardless of
-     * what it does with the returned array.
+     * SURFACE the REMAINING drift and failures rather than silently discarding
+     * them (U11-schema-3). Historically every caller threw the computed report
+     * away: install() checked only is_wp_error(), and the Data-Ops handler
+     * showed an unconditional "updated successfully" notice. Logging here makes
+     * drift/failures visible to EVERY caller regardless of what it does with the
+     * returned array.
      *
-     * We deliberately do NOT auto-ALTER: silently rewriting a column type on a
-     * live billing DB is far riskier than the drift it would fix. The
-     * documented convention is an explicit ALTER migration, and this log is
-     * the trigger to write one. column_mismatches are surfaced but are NOT
-     * treated as a hard failure by callers (a retry can't fix them); ['errors']
-     * are genuine DDL failures (failed table create / column add).
+     * H7: Schema_Sync used to be strictly additive (ADD only, never MODIFY). It
+     * now auto-applies SAFE (value-preserving) column drifts via online DDL on
+     * the version-bump path — see the apply_safe_batch() call above and
+     * MealsDB_Schema_Alter_Planner. What is LEFT in column_mismatches here is
+     * deliberately NOT auto-applied: RISKY changes (narrow, remove-ENUM-value,
+     * tighten-to-NOT-NULL, type/sign change, any DECIMAL/money change) and
+     * SAFE-but-COPY changes go through the operator's preview+typed-confirm
+     * tool, and PRIMARY KEY drift still needs a bespoke migration.
+     * column_mismatches are surfaced but are NOT a hard failure (a retry can't
+     * fix them); ['errors'] are genuine DDL failures (failed table create /
+     * column add / a SAFE ALTER that errored).
      *
      * @param array<string, mixed> $results The run_full_sync() result array.
      */

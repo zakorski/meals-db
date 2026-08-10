@@ -136,6 +136,42 @@ $r = $ex->run($safe_mm);
 eq($r['status'], 'error', 'exec: total DDL failure -> error');
 eq($ex->maint, ['engage', 'clear'], 'exec: maintenance still cleared on failure');
 
+// --- online_only mode (auto-apply / version-bump path) --------------------
+// A SAFE change that MySQL can't do INPLACE (e.g. int->bigint is a COPY) must
+// NOT trigger a maintenance-mode COPY on a page load — it is deferred to the
+// tool instead.
+$w = new AlterFakeWpdb(); $w->online_ok = false; $ex = new TestExecutor($w);
+$r = $ex->run($safe_mm, false, true); // online_only = true
+eq($r['status'], 'deferred_online_unsupported', 'exec: online_only + INPLACE-rejected -> deferred (no COPY)');
+eq($ex->maint, [], 'exec: online_only never engages maintenance');
+truthy(count(alters($w)) === 1, 'exec: online_only tried only the online ALTER');
+
+// --- apply_safe_batch(): partition + auto-apply SAFE (online-only) ---------
+$risky_narrow = mm('wp_meals_clients', 'gender', 'VARCHAR(6) NULL', col('varchar(10)', 'YES'));
+$pk = ['table' => 'wp_meals_clients', 'column' => 'PRIMARY KEY', 'expected' => 'client_id', 'actual' => 'id'];
+
+$w = new AlterFakeWpdb(); $ex = new TestExecutor($w);
+$batch = $ex->apply_safe_batch([$safe_mm, $risky_narrow, $pk]);
+eq(count($batch['altered']), 1, 'batch: one SAFE change applied');
+eq($batch['altered'][0]['column'], 'first_name', 'batch: the SAFE column was altered');
+$remaining_cols = array_map(static fn($m) => $m['column'], $batch['remaining']);
+truthy(in_array('gender', $remaining_cols, true), 'batch: RISKY narrow left remaining (for the tool)');
+truthy(in_array('PRIMARY KEY', $remaining_cols, true), 'batch: PK mismatch left remaining');
+truthy(!in_array('first_name', $remaining_cols, true), 'batch: applied SAFE column not left remaining');
+eq($batch['errors'], [], 'batch: no errors on the happy path');
+
+// A SAFE change online DDL cannot do -> deferred to the tool, not an error.
+$w = new AlterFakeWpdb(); $w->online_ok = false; $ex = new TestExecutor($w);
+$batch2 = $ex->apply_safe_batch([$safe_mm]);
+eq($batch2['altered'], [], 'batch: online-unsupported SAFE is not auto-applied');
+eq(count($batch2['remaining']), 1, 'batch: online-unsupported SAFE is deferred (remaining)');
+eq($batch2['errors'], [], 'batch: online-unsupported SAFE is not an error');
+
+// A SAFE change whose ALTER genuinely errors -> surfaced AND recorded as error.
+$w = new AlterFakeWpdb(); $w->online_ok = false; $w->plain_ok = false; $ex = new TestExecutor($w);
+$batch3 = $ex->apply_safe_batch([$safe_mm]); // online_only -> won't even try plain; still an error path?
+eq($batch3['altered'], [], 'batch: hard-failing SAFE not applied');
+
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
 exit(empty($failures) ? 0 : 1);
