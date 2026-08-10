@@ -418,6 +418,9 @@ $tid = confirm_task($engine, $draft_id); // PO still planned
 $engine->complete_task($tid, ['arrived' => 'yes'], 7);
 chk(count(degraded_events('po_task.stale_confirm')), 1, 'D-1: stale_confirm degraded event');
 chk($svc->get_with_payload($draft_id)['status'], 'planned', 'D-1: draft PO untouched');
+// B11: mark_received refused and inventory was NOT added — the task must
+// revert to visibly pending, not sit falsely 'completed'.
+chk($w->tasks[$tid]['status'], 'deferred', 'D-1: stale confirm task reopened, not left completed [B11]');
 
 // Reconcile task with no related PO → reconcile_no_entity.
 MealsDB_Event_Log::$records = [];
@@ -427,6 +430,34 @@ $tid = $engine->create_task([
 ]);
 $engine->complete_task($tid, ['count_received' => 'yes'], 7);
 chk(count(degraded_events('po_task.reconcile_no_entity')), 1, 'D-1: reconcile_no_entity degraded event');
+
+// ===========================================================================
+// D-2 (B11): complete_reconcile REFUSES on a not-yet-reconciled PO → the
+// reconcile/stock correction did not happen, so the task must reopen rather
+// than sit falsely 'completed'. A reconcile task pointed at a 'placed' (not
+// 'arrived') PO can't complete its reconcile.
+// ===========================================================================
+$w = fresh();
+MealsDB_Event_Log::$records = [];
+[$svc, $engine, $po_id] = placed_po($w); // status 'placed', NOT arrived
+$tid = $engine->create_task([
+    'task_type'           => MealsDB_Task_Type_PO_Reconcile::TYPE_ID,
+    'payload'             => ['po_number' => 'PO-X', 'rows' => [
+        ['sku' => 'CD-001', 'product_name' => 'Chicken Dinner', 'ordered_cases' => 10],
+    ]],
+    'next_run_date'       => gmdate('Y-m-d'),
+    'related_entity_type' => 'po',
+    'related_entity_id'   => $po_id,
+    'assignee_role'       => 'warehouse',
+]);
+$before_status = $svc->get_with_payload($po_id)['status'];
+$engine->complete_task($tid, [
+    'count_received' => 'yes',
+    'sku_rows'       => [['sku' => 'CD-001', 'ordered_cases' => 10, 'received_cases' => 10]],
+], 7);
+chk_true(count(degraded_events('po_task.reconcile_failed')) >= 1, 'D-2: reconcile_failed degraded event');
+chk($w->tasks[$tid]['status'], 'deferred', 'D-2: refused reconcile reopens the task, not left completed [B11]');
+chk($svc->get_with_payload($po_id)['status'], $before_status, 'D-2: PO status unchanged (not reconciled)');
 
 // --- summary ---
 echo "\n" . $passed . " passed, " . count($failures) . " failed\n";
