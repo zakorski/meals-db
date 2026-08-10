@@ -401,6 +401,12 @@ class MealsDB_Allocation_Rebuilder {
         $total_unplaced_mains = 0;
         $total_unplaced_sides = 0;
 
+        // H2: the outermost FUTURE month in this window. A delivery in this month
+        // overflows into a month the current rebuild cannot see, so — unlike a
+        // center-month overflow (which is logged) — its leftover must not be
+        // silently dropped.
+        $trailing_month = ($error_month !== null) ? self::next_month($error_month) : null;
+
         foreach ($deliveries as $d) {
             $delivery_month = substr((string) $d['delivery_date'], 0, 7);
             $next_month     = self::next_month($delivery_month);
@@ -473,26 +479,38 @@ class MealsDB_Allocation_Rebuilder {
             // an $error_month is set, only the center month "owns" the error;
             // prior/next deliveries are recomputed here for context but their
             // errors belong to their own center rebuild.
-            if (($remaining_mains > 0 || $remaining_tax_sides + $remaining_nontax_sides > 0)
-                && ($error_month === null || $delivery_month === $error_month)) {
-                $remaining_sides = $remaining_tax_sides + $remaining_nontax_sides;
-                $this->log_spillover_error(
-                    $client_id,
-                    $delivery_month,
-                    (int) $d['wc_order_id'],
-                    $remaining_mains,
-                    $remaining_sides,
-                    sprintf(
-                        'Delivery %s could not fit in %s or %s. Mains short %d, sides short %d.',
-                        (string) $d['delivery_date'],
+            if ($remaining_mains > 0 || $remaining_tax_sides + $remaining_nontax_sides > 0) {
+                if ($error_month === null || $delivery_month === $error_month) {
+                    $remaining_sides = $remaining_tax_sides + $remaining_nontax_sides;
+                    $this->log_spillover_error(
+                        $client_id,
                         $delivery_month,
-                        $next_month,
+                        (int) $d['wc_order_id'],
                         $remaining_mains,
-                        $remaining_sides
-                    )
-                );
-                $total_unplaced_mains += $remaining_mains;
-                $total_unplaced_sides += $remaining_sides;
+                        $remaining_sides,
+                        sprintf(
+                            'Delivery %s could not fit in %s or %s. Mains short %d, sides short %d.',
+                            (string) $d['delivery_date'],
+                            $delivery_month,
+                            $next_month,
+                            $remaining_mains,
+                            $remaining_sides
+                        )
+                    );
+                    $total_unplaced_mains += $remaining_mains;
+                    $total_unplaced_sides += $remaining_sides;
+                } elseif ($delivery_month === $trailing_month && empty($consume_only[$delivery_month])) {
+                    // H2: a delivery in the TRAILING (next) month overflowed past
+                    // this rebuild's window. It used to vanish with no row and no
+                    // error, on the assumption that month would get its own center
+                    // rebuild — which only happens if it is independently dirty.
+                    // Make that guarantee explicit: mark the month dirty so a
+                    // rebuild centered there (whose wider window includes the spill
+                    // target) can place the overflow, or log it as a genuine
+                    // spillover. This drains — the ensuing rebuild places-or-logs,
+                    // neither of which re-marks this month (no churn).
+                    $this->mark_dirty($client_id, $delivery_month);
+                }
             }
         }
 

@@ -122,6 +122,11 @@ class RebWindowTestable extends MealsDB_Allocation_Rebuilder {
  * by way of a public passthrough.
  */
 class RebTestable extends MealsDB_Allocation_Rebuilder {
+    /** Records mark_dirty($client_id, $month) calls instead of writing to the DB. */
+    public array $marked_dirty = [];
+    public function mark_dirty(int $client_id, string $billing_month): void {
+        $this->marked_dirty[] = [$client_id, $billing_month];
+    }
     public function call_fill(int $client_id, array $caps, array $deliveries, ?string $error_month = null): array {
         $rm = new ReflectionMethod(MealsDB_Allocation_Rebuilder::class, 'fill_months');
         $rm->setAccessible(true);
@@ -152,6 +157,13 @@ function fill($caps, $deliveries, ?string $error_month = null): RebFakeWpdb {
     $rb = new RebTestable();
     $rb->call_fill(1, $caps, $deliveries, $error_month);
     return $GLOBALS['wpdb'];
+}
+/** Like fill(), but returns the rebuilder so mark_dirty() calls can be asserted. */
+function fill_reb($caps, $deliveries, ?string $error_month = null): RebTestable {
+    $GLOBALS['wpdb'] = new RebFakeWpdb();
+    $rb = new RebTestable();
+    $rb->call_fill(1, $caps, $deliveries, $error_month);
+    return $rb;
 }
 function delivery(string $date, int $mains, int $tax = 0, int $nontax = 0, int $wcid = 100): array {
     return [
@@ -355,6 +367,35 @@ $dirty_clears = array_map(
     $GLOBALS['wpdb']->delete_calls[$dirty_table] ?? []
 );
 chk($dirty_clears, ['2025-01'], 'window: only the center month dirty marker is cleared');
+
+// ---------------------------------------------------------------------------
+// H2: a delivery in the TRAILING (next) month whose overflow leaves the rebuild
+// window must mark THAT month dirty (so it earns its own center rebuild)
+// instead of vanishing with no row and no error. Window centered on 2025-01:
+// {2024-11, 2024-12, 2025-01, 2025-02}. Delivery in 2025-02 (trailing) with 8
+// mains, Feb cap 3 -> 3 placed, 5 overflow into 2025-03 (outside window).
+// ---------------------------------------------------------------------------
+$rb = fill_reb(
+    ['2024-11' => cap(0, 0), '2024-12' => cap(0, 0), '2025-01' => cap(10, 10), '2025-02' => cap(3, 100)],
+    [delivery('2025-02-15', 8, 0, 0, 400)],
+    '2025-01' // error_month = center
+);
+$wh2 = $GLOBALS['wpdb'];
+chk(in_array([1, '2025-02'], $rb->marked_dirty, true), true, 'H2: trailing-month overflow marks that month dirty');
+chk(empty($wh2->inserts[err_table_name()] ?? []), true, 'H2: no spurious center spillover error for a trailing delivery');
+$h2_rows = rows_for($wh2, alloc_table_name());
+chk((int) ($h2_rows[0]['mains_count'] ?? 0), 3, 'H2: the in-window portion (3) is still written to 2025-02');
+
+// H2 regression: a CENTER-month delivery overflowing beyond the window still
+// logs a spillover error and is NOT marked dirty (it owns its own spillover).
+$rb2 = fill_reb(
+    ['2024-11' => cap(0, 0), '2024-12' => cap(0, 0), '2025-01' => cap(3, 100), '2025-02' => cap(3, 100)],
+    [delivery('2025-01-15', 20, 0, 0, 500)],
+    '2025-01'
+);
+$wh2b = $GLOBALS['wpdb'];
+chk(count(rows_for($wh2b, err_table_name())), 1, 'H2-reg: center overflow still logs a spillover error');
+chk($rb2->marked_dirty, [], 'H2-reg: center overflow does NOT mark dirty (its own spillover)');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) echo "FAIL: $f\n";
