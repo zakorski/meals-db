@@ -758,6 +758,39 @@ class MealsDB_Admin_UI {
             return;
         }
 
+        if ($is_data_ops_page) {
+            // Schema-changes tool (H7): preview + typed-confirm apply of the
+            // RISKY column drifts the version-bump path leaves for the operator.
+            $sa_path = MEALS_DB_PLUGIN_DIR . 'assets/js/schema-alter-tool.js';
+            if (file_exists($sa_path)) {
+                wp_enqueue_script(
+                    'mealsdb-schema-alter-tool',
+                    MEALS_DB_PLUGIN_URL . 'assets/js/schema-alter-tool.js',
+                    ['jquery'],
+                    filemtime($sa_path),
+                    true
+                );
+                wp_add_inline_script(
+                    'mealsdb-schema-alter-tool',
+                    'window.mealsdbSchemaAlter = ' . wp_json_encode([
+                        'ajaxUrl'  => admin_url('admin-ajax.php'),
+                        'nonce'    => wp_create_nonce('mealsdb_schema_alter'),
+                        'messages' => [
+                            'none'        => __('No pending schema changes — every column matches the canonical schema.', 'meals-db'),
+                            'loadError'   => __('Could not load pending schema changes.', 'meals-db'),
+                            'confirmHint' => __('Type ALTER to confirm', 'meals-db'),
+                            'confirmErr'  => __('Type ALTER (in capitals) to confirm this change.', 'meals-db'),
+                            'applying'    => __('Applying…', 'meals-db'),
+                            'apply'       => __('Apply change', 'meals-db'),
+                            'blockedPre'  => __('Blocked: pre-flight found rows that would be lost. Fix the data first.', 'meals-db'),
+                            'rows'        => __('rows', 'meals-db'),
+                        ],
+                    ]) . ';',
+                    'before'
+                );
+            }
+        }
+
         if ($is_quick_order_page) {
             $quick_order_style_path = MEALS_DB_PLUGIN_DIR . 'assets/css/quick-order.css';
             $quick_order_style_version = file_exists($quick_order_style_path) ? filemtime($quick_order_style_path) : MEALS_DB_VERSION;
