@@ -500,13 +500,23 @@ class MealsDB_Order_Audit {
 
             global $wpdb;
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            // TOCTOU guard: constrain the UPDATE to a still-draft row. Between
+            // the get() above and this write another request could finalize the
+            // audit; without status in the WHERE we'd silently mutate a
+            // finalized (read-only) record. $ok === 0 means the row is no longer
+            // a draft — reliable here because encode_payload's random IV makes
+            // the payload differ every call, so a genuine match always changes
+            // >=1 row (affected-rows==0 iff the WHERE no longer selects).
             $ok = $wpdb->update($table, [
                 'payload'         => $encoded,
                 'confirmed_count' => $confirmed,
                 'edited_count'    => $edited,
-            ], ['audit_id' => $audit_id], ['%s', '%d', '%d'], ['%d']);
+            ], ['audit_id' => $audit_id, 'status' => self::STATUS_DRAFT], ['%s', '%d', '%d'], ['%d', '%s']);
             if ($ok === false) {
                 return new WP_Error('db', __('Could not save the change.', 'meals-db'));
+            }
+            if ($ok === 0) {
+                return new WP_Error('conflict', __('This audit changed in another window; reload and try again.', 'meals-db'));
             }
             return (string) $new_row['audit_status'];
         } catch (\Throwable $e) {
@@ -542,13 +552,19 @@ class MealsDB_Order_Audit {
             }
             global $wpdb;
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            // TOCTOU guard: only a still-draft row may transition to finalized,
+            // so two concurrent finalizes can't both "succeed" ($ok === 0 = a
+            // finalize/reopen landed first).
             $ok = $wpdb->update($table, [
                 'status'       => self::STATUS_FINALIZED,
                 'finalized_by' => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
                 'finalized_at' => gmdate('Y-m-d H:i:s'),
-            ], ['audit_id' => $audit_id], ['%s', '%d', '%s'], ['%d']);
+            ], ['audit_id' => $audit_id, 'status' => self::STATUS_DRAFT], ['%s', '%d', '%s'], ['%d', '%s']);
             if ($ok === false) {
                 return new WP_Error('db', __('Could not finalize the audit.', 'meals-db'));
+            }
+            if ($ok === 0) {
+                return new WP_Error('conflict', __('This audit changed in another window; reload and try again.', 'meals-db'));
             }
             self::log_lifecycle('order_audit_finalized', $audit_id, 'status', self::STATUS_DRAFT, self::STATUS_FINALIZED);
             return true;
@@ -581,13 +597,18 @@ class MealsDB_Order_Audit {
             }
             global $wpdb;
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            // TOCTOU guard: only a still-finalized row may reopen ($ok === 0 = a
+            // concurrent reopen/delete landed first).
             $ok = $wpdb->update($table, [
                 'status'            => self::STATUS_DRAFT,
                 'unfinalized_at'    => gmdate('Y-m-d H:i:s'),
                 'unfinalize_reason' => $reason,
-            ], ['audit_id' => $audit_id], ['%s', '%s', '%s'], ['%d']);
+            ], ['audit_id' => $audit_id, 'status' => self::STATUS_FINALIZED], ['%s', '%s', '%s'], ['%d', '%s']);
             if ($ok === false) {
                 return new WP_Error('db', __('Could not reopen the audit.', 'meals-db'));
+            }
+            if ($ok === 0) {
+                return new WP_Error('conflict', __('This audit changed in another window; reload and try again.', 'meals-db'));
             }
             self::log_lifecycle('order_audit_unfinalized', $audit_id, 'reason', null, $reason);
             return true;
@@ -612,7 +633,11 @@ class MealsDB_Order_Audit {
             }
             global $wpdb;
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
-            $ok = $wpdb->delete($table, ['audit_id' => $audit_id], ['%d']);
+            // TOCTOU guard: delete only while still a draft, so a concurrent
+            // finalize landing in the window can't have its record deleted out
+            // from under it. $ok === 0 (WHERE no longer matches) is already
+            // treated as an error below.
+            $ok = $wpdb->delete($table, ['audit_id' => $audit_id, 'status' => self::STATUS_DRAFT], ['%d', '%s']);
             if ($ok === false || $ok === 0) {
                 return new WP_Error('db', __('Could not delete the audit draft.', 'meals-db'));
             }
