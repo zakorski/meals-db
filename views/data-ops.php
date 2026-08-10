@@ -55,6 +55,17 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     </div>
 
 
+    <div class="mealsdb-schema-changes">
+        <h2><?php echo esc_html__('Schema Changes (column type / width / ENUM)', 'meals-db'); ?></h2>
+        <p class="description">
+            <?php echo esc_html__('Safe, value-preserving column changes (widen a column, add an ENUM value, INT→BIGINT, relax NOT NULL) are applied automatically when the plugin version advances. Riskier changes — narrowing a column, removing an ENUM value, tightening to NOT NULL, a type change, or any money (DECIMAL) change — are listed here to review and apply with a typed confirmation. A pre-flight check blocks any change that would lose data.', 'meals-db'); ?>
+        </p>
+        <div id="mealsdb-schema-alter-tool">
+            <p class="description"><?php echo esc_html__('Checking for schema changes…', 'meals-db'); ?></p>
+        </div>
+    </div>
+
+
     <div class="mealsdb-db-sync">
         <h2><?php echo esc_html__('Complete DB Sync', 'meals-db'); ?></h2>
         <p class="description">
