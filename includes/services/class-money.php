@@ -57,14 +57,15 @@ class MealsDB_Money {
             return (int) $bc;
         }
 
-        $cents = $value * 100;
-        // round() on positive half values is half-up in PHP by default,
-        // but be explicit so behaviour doesn't drift if callers pass
-        // negatives (contributions are sometimes modelled as credits).
-        if ($cents >= 0) {
-            return (int) floor($cents + 0.5);
-        }
-        return -1 * (int) floor((-$cents) + 0.5);
+        // Round to whole cents, half-up. Use round() rather than a hand-rolled
+        // floor($value*100 + 0.5): the latter operates on the raw IEEE-754
+        // product, where an exact half-cent like 1.005 becomes 100.4999… and
+        // silently rounds DOWN to 100¢ instead of 101¢ — a systematic
+        // under-round on amounts that feed HST / the government CSV
+        // (audit-2026-08 B04). round() applies PHP's pre-rounding correction,
+        // which recovers the intended decimal; PHP_ROUND_HALF_UP rounds halves
+        // away from zero so signed amounts round symmetrically about zero.
+        return self::round_half_up($value * 100);
     }
 
     /**
@@ -114,10 +115,23 @@ class MealsDB_Money {
             }
         }
 
-        $value = $cents * $mult;
-        if ($value >= 0) {
-            return (int) floor($value + 0.5);
-        }
-        return -1 * (int) floor((-$value) + 0.5);
+        // Half-up to whole cents via round() (see to_cents): the old
+        // floor($value + 0.5) mis-rounded exact halves such as 90¢ × 0.35 =
+        // 31.5 downward to 31 (audit-2026-08 B04).
+        return self::round_half_up($cents * $mult);
+    }
+
+    /**
+     * Round a float value to the nearest integer, halves away from zero.
+     *
+     * The one rounding rule the money helper uses, in one place. round() is
+     * chosen deliberately over floor($v + 0.5): its pre-rounding correction
+     * absorbs IEEE-754 representation error (e.g. the 100.4999… produced by
+     * 1.005 * 100) so true half-cents round HALF-UP rather than silently down.
+     * PHP_ROUND_HALF_UP rounds away from zero, giving symmetric behaviour for
+     * negative amounts (credits / client contributions). See audit-2026-08 B04.
+     */
+    private static function round_half_up(float $value): int {
+        return (int) round($value, 0, PHP_ROUND_HALF_UP);
     }
 }
