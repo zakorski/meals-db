@@ -111,36 +111,16 @@ class MealsDB_Initials {
     }
 
     /**
-     * Determine if a code already exists in the external database.
+     * Determine if a code already exists in the database.
      *
-     * Note: This method only checks for existence, not address-based sharing.
-     * It will return true even if the duplicate is at the same address.
+     * Delegates to the canonical MealsDB_Initials_Validator::initials_exist()
+     * so there is ONE fail-closed uniqueness lookup, not two hand-written ones
+     * that can drift (audit T8). Behaviour is unchanged: any other client
+     * holding the code makes it taken (no same-address sharing exception), and
+     * an unverifiable lookup (DB error) fails CLOSED (returns true).
      */
     public static function exists_in_db(string $code, ?int $exclude_client_id = null): bool {
-        global $wpdb;
-
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-
-        $sql = "SELECT client_id FROM `{$clients_table}` WHERE delivery_initials = %s";
-
-        if ($exclude_client_id !== null) {
-            $sql .= ' AND client_id != %d';
-            $row = $wpdb->get_row($wpdb->prepare($sql, $code, $exclude_client_id), ARRAY_A);
-        } else {
-            $row = $wpdb->get_row($wpdb->prepare($sql, $code), ARRAY_A);
-        }
-
-        if ($wpdb->last_error) {
-            // Fail CLOSED for a uniqueness gate: when we cannot verify, treat the
-            // code as already-taken (true) rather than "available" (false), so a
-            // transient DB error can't let a duplicate through or hand out a code
-            // we failed to check. The generator just tries another code; the
-            // validator surfaces "not available", prompting a retry.
-            error_log('[MealsDB] Failed to execute initials lookup query: ' . $wpdb->last_error);
-            return true;
-        }
-
-        return $row !== null;
+        return MealsDB_Initials_Validator::initials_exist($code, $exclude_client_id);
     }
 
     /**

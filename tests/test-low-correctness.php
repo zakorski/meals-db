@@ -24,6 +24,7 @@ class LowFakeWpdb extends wpdb {
     public $last_error = '';
     public $insert_id = 1;
     public ?array $get_row_return = null;
+    public array $get_results_return = [];
     public array $inserts = [];
     public function prepare($q, ...$a) {
         if (count($a) === 1 && is_array($a[0])) { $a = $a[0]; }
@@ -34,6 +35,11 @@ class LowFakeWpdb extends wpdb {
         }, $q);
     }
     public function get_row($q, $o = null) { return $this->get_row_return; }
+    // Mirror WP: a failed query returns null (not an array), which the initials
+    // lookup treats as fail-closed. A clean query returns the seeded rows.
+    public function get_results($q, $o = null) {
+        return $this->last_error !== '' ? null : $this->get_results_return;
+    }
     public function get_var($q) { return null; }
     public function insert($table, $row, $fmt = null) { $this->inserts[$table][] = $row; return 1; }
     public function query($q) { return 1; }
@@ -59,6 +65,23 @@ $w2 = new LowFakeWpdb();
 $w2->get_row_return = null;      // genuinely not found, no error.
 $GLOBALS['wpdb'] = $w2;
 chk(MealsDB_Initials::exists_in_db('ABC'), false, '[initials] clean "not found" → available');
+
+// Existence-query consolidation (audit T8): MealsDB_Initials::exists_in_db()
+// delegates to the canonical MealsDB_Initials_Validator::initials_exist(), so
+// the two fail-closed lookups can no longer drift. Both must agree.
+$w3 = new LowFakeWpdb();
+$w3->get_results_return = [['id' => 5, 'first_name' => 'Pat', 'last_name' => 'Doe']];
+$GLOBALS['wpdb'] = $w3;
+chk(MealsDB_Initials::exists_in_db('ABC'), true, '[initials] populated match → taken (via validator)');
+chk(MealsDB_Initials_Validator::initials_exist('ABC'), true, '[initials] validator initials_exist agrees');
+// Editing the sole holder excludes it → the code is available to that client.
+chk(MealsDB_Initials::exists_in_db('ABC', 5), false, '[initials] excluded self → available');
+chk(MealsDB_Initials_Validator::initials_exist('ABC', 5), false, '[initials] validator exclusion agrees');
+// Fail closed also flows through the delegated path.
+$w4 = new LowFakeWpdb();
+$w4->last_error = 'server gone';
+$GLOBALS['wpdb'] = $w4;
+chk(MealsDB_Initials_Validator::initials_exist('ABC'), true, '[initials] validator fails closed on DB error');
 
 // ---------------------------------------------------------------------------
 // Event Log: unrecognised outcome → degraded; absent → succeeded.
