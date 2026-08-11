@@ -47,7 +47,7 @@ class MealsDB_Schema_Alter_Executor {
      *                              change MySQL can't do INPLACE is DEFERRED to
      *                              the tool instead.
      * @return array{status:string, plan?:array, blockers?:array, error?:string}
-     *         status: applied | needs_confirmation | blocked | deferred_online_unsupported | error
+     *         status: applied | needs_confirmation | blocked | deferred_online_unsupported | not_applied | error
      */
     public function run(array $mismatch, bool $confirmed_risky = false, bool $online_only = false): array {
         $plan = MealsDB_Schema_Alter_Planner::plan($mismatch);
@@ -103,10 +103,13 @@ class MealsDB_Schema_Alter_Executor {
                 $mm['risk'] = 'safe_needs_maintenance';
                 $remaining[] = $mm;
             } else {
+                // 'error' or the new 'not_applied' (ALTER ran but the column
+                // still doesn't match) -- either way it did NOT apply, so it
+                // stays in $errors and the schema version is not marked current.
                 $errors[] = [
                     'table'  => $mm['table'],
                     'column' => $mm['column'],
-                    'error'  => 'SAFE ALTER failed: ' . (string) ($outcome['error'] ?? ''),
+                    'error'  => 'SAFE ALTER failed: ' . (string) ($outcome['error'] ?? $outcome['reason'] ?? ''),
                 ];
                 $remaining[] = $mm;
             }
@@ -199,6 +202,24 @@ class MealsDB_Schema_Alter_Executor {
                 ));
             }
             return ['status' => 'error', 'error' => $err, 'plan' => $plan];
+        }
+
+        // A query() that returns 0 (a no-op / silently-unconverted result) is
+        // still !== false, so $ok is NOT proof the column now matches the
+        // canonical definition. Re-read the live column and verify before
+        // declaring success -- a conversion that did not actually run (e.g. a
+        // LONGTEXT that stayed LONGTEXT instead of becoming JSON) is then
+        // reported honestly as 'not_applied' rather than a false 'applied'.
+        $definition = (string) ($plan['definition'] ?? '');
+        if ($definition !== '') {
+            $actual = MealsDB_Schema_Sync::fetch_existing_column($this->wpdb, (string) $plan['table'], (string) $plan['column']);
+            if ($actual === null || !MealsDB_Schema_Sync::column_matches($definition, $actual)) {
+                return [
+                    'status' => 'not_applied',
+                    'plan'   => $plan,
+                    'reason' => 'ALTER ran but the column still does not match the canonical definition',
+                ];
+            }
         }
 
         // A committed change to the data model -> audit log.

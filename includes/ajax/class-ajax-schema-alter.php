@@ -104,7 +104,7 @@ class MealsDB_Ajax_Schema_Alter {
 
         wp_send_json_error([
             'status'  => $status,
-            'message' => (string) ($outcome['error'] ?? __('The change could not be applied.', 'meals-db')),
+            'message' => (string) ($outcome['error'] ?? $outcome['reason'] ?? __('The change could not be applied.', 'meals-db')),
         ]);
     }
 

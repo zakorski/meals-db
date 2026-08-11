@@ -417,8 +417,20 @@ class MealsDB_Schema_Sync {
      * Compare a live column to the canonical definition.
      */
     private static function column_matches_definition(string $expected_definition, array $actual_column): bool {
-        $expected_definition = self::sanitize_column_definition($expected_definition);
-        $expected            = self::normalize_expected_definition($expected_definition);
+        $expected_definition_raw = $expected_definition;
+        $expected_definition     = self::sanitize_column_definition($expected_definition);
+        $expected                = self::normalize_expected_definition($expected_definition);
+
+        // A PRIMARY KEY column is implicitly NOT NULL in MySQL even when the
+        // canonical definition doesn't spell it out -- but sanitize_column_definition()
+        // strips 'PRIMARY KEY' before normalize sees it, so derive it from the RAW
+        // definition and reflect the implicit NOT NULL. Otherwise a correct PK
+        // column (an 'id' declared PRIMARY KEY without AUTO_INCREMENT) is
+        // perpetually re-flagged as drifted.
+        if (preg_match('/\bprimary\s+key\b/i', $expected_definition_raw)) {
+            $expected['nullable'] = false;
+        }
+
         $actual   = [
             'type'           => self::normalize_column_type((string) ($actual_column['column_type'] ?? '')),
             'nullable'       => strtoupper((string) ($actual_column['is_nullable'] ?? '')) === 'YES',
@@ -430,6 +442,33 @@ class MealsDB_Schema_Sync {
             && $expected['nullable'] === $actual['nullable']
             && $expected['default'] === $actual['default']
             && $expected['auto_increment'] === $actual['auto_increment'];
+    }
+
+    /**
+     * Public wrapper: does the live column match the canonical definition?
+     * Lets the schema-alter executor verify a post-ALTER column without
+     * reaching into the private comparator.
+     *
+     * @param array<string,mixed> $actual_column INFORMATION_SCHEMA-shaped row.
+     */
+    public static function column_matches(string $expected_definition, array $actual_column): bool {
+        return self::column_matches_definition($expected_definition, $actual_column);
+    }
+
+    /**
+     * Public wrapper: fetch ONE live column's INFORMATION_SCHEMA metadata (the
+     * shape column_matches() expects), or null if the column is absent or the
+     * lookup fails. Used by the schema-alter executor's post-apply verification.
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function fetch_existing_column($wpdb, string $table, string $column): ?array {
+        try {
+            $columns = self::fetch_existing_columns($wpdb, $table);
+        } catch (\Throwable $e) {
+            return null;
+        }
+        return $columns[$column] ?? null;
     }
 
     /**
@@ -495,6 +534,17 @@ class MealsDB_Schema_Sync {
         $type           = self::normalize_column_type(substr($trimmed, 0, $cut_position));
         $nullable       = stripos($masked_lower, 'not null') === false;
         $auto_increment = stripos($masked_lower, 'auto_increment') !== false;
+
+        // MySQL forces AUTO_INCREMENT columns to NOT NULL implicitly, and
+        // INFORMATION_SCHEMA reports is_nullable=NO for them. A canonical
+        // 'INT AUTO_INCREMENT' carries no explicit 'not null', so without this
+        // the detector computes nullable=true, never matches the live NO, and
+        // re-flags the column on every run (the meals_products.id infinite
+        // drift). Reflect the implicit NOT NULL here.
+        if ($auto_increment) {
+            $nullable = false;
+        }
+
         $default        = null;
 
         $default_position = stripos($masked_lower, 'default');
