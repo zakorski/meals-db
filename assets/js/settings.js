@@ -110,6 +110,7 @@
                 var orphans = d.orphans || [];
                 $result.text(
                     d.updated + ' client(s) updated, ' +
+                    (d.dates_recomputed != null ? d.dates_recomputed + ' delivery date(s) recomputed, ' : '') +
                     (d.already_correct != null ? d.already_correct + ' already correct, ' : '') +
                     orphans.length + ' orphan(s).'
                 );
