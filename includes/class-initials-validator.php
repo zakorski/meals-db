@@ -121,6 +121,36 @@ class MealsDB_Initials_Validator {
 	}
 
 	/**
+	 * Existence primitive for the uniqueness gate: is this code held by any
+	 * OTHER client? Fails CLOSED (returns true) when the lookup can't be
+	 * verified, so a transient DB error can't report a taken code as available.
+	 *
+	 * This is the single source of truth the backward-compat wrapper
+	 * MealsDB_Initials::exists_in_db() now delegates to — previously a SECOND
+	 * hand-written fail-closed query on the same gate, exactly the kind of
+	 * duplicate that drifts (audit T8). The input is passed through as-is (NOT
+	 * upper-cased) to preserve the wrapper's prior behaviour, which relied on
+	 * the column's case-insensitive collation for a match.
+	 *
+	 * @param string   $initials          The code to check.
+	 * @param int|null $exclude_client_id Client to exclude (when editing).
+	 * @return bool True if taken (or unverifiable — fail closed), false if free.
+	 */
+	public static function initials_exist(string $initials, ?int $exclude_client_id = null): bool {
+		$existing = self::get_clients_with_initials($initials);
+		if ($existing === false) {
+			// Unverifiable lookup (DB error) — fail closed.
+			return true;
+		}
+		if ($exclude_client_id !== null) {
+			$existing = array_filter($existing, static function ($c) use ($exclude_client_id) {
+				return (int) $c['id'] !== (int) $exclude_client_id;
+			});
+		}
+		return !empty($existing);
+	}
+
+	/**
 	 * Generate unique initials for a client
 	 *
 	 * Attempts to create initials based on name, checking against:
