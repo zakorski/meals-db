@@ -119,8 +119,14 @@ class MealsDB_Event_Log_Page {
         echo '</form>';
 
         echo '<table class="widefat striped"><thead><tr>';
-        foreach (['Occurred (UTC)', 'Sev', 'Category', 'Subsystem', 'Event', 'Outcome', 'Entity', 'Correlation', 'Message'] as $h) {
-            echo '<th>' . esc_html__($h, 'meals-db') . '</th>';
+        // Wrap each label at the literal so string-extraction sees it; loop escapes.
+        $headers = [
+            __('Occurred (UTC)', 'meals-db'), __('Sev', 'meals-db'), __('Category', 'meals-db'),
+            __('Subsystem', 'meals-db'), __('Event', 'meals-db'), __('Outcome', 'meals-db'),
+            __('Entity', 'meals-db'), __('Correlation', 'meals-db'), __('Message', 'meals-db'),
+        ];
+        foreach ($headers as $h) {
+            echo '<th>' . esc_html($h) . '</th>';
         }
         echo '</tr></thead><tbody>';
 
@@ -207,8 +213,14 @@ class MealsDB_Event_Log_Page {
         $rows = class_exists('MealsDB_Logger') ? MealsDB_Logger::get_recent_logs(200) : [];
 
         echo '<table class="widefat striped"><thead><tr>';
-        foreach (['When', 'User', 'Action', 'Target', 'Field', 'Old', 'New', 'Source'] as $h) {
-            echo '<th>' . esc_html__($h, 'meals-db') . '</th>';
+        // Wrap each label at the literal so string-extraction sees it; loop escapes.
+        $headers = [
+            __('When', 'meals-db'), __('User', 'meals-db'), __('Action', 'meals-db'),
+            __('Target', 'meals-db'), __('Field', 'meals-db'), __('Old', 'meals-db'),
+            __('New', 'meals-db'), __('Source', 'meals-db'),
+        ];
+        foreach ($headers as $h) {
+            echo '<th>' . esc_html($h) . '</th>';
         }
         echo '</tr></thead><tbody>';
         if (empty($rows)) {

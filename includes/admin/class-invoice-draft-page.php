@@ -165,8 +165,17 @@ class MealsDB_Invoice_Draft_Page {
         }));
 
         echo '<table class="widefat striped"><thead><tr>';
-        foreach (['Pipeline', 'Period', 'Month', 'Status', 'Rows', 'Edits', 'Created by', 'Created (UTC)', 'Finalized by', 'Finalized (UTC)', ''] as $h) {
-            echo '<th>' . esc_html__($h, 'meals-db') . '</th>';
+        // Labels are wrapped in __() at the literal (so string-extraction picks
+        // them up); the loop only escapes. The trailing '' is the actions
+        // column — never pass '' to __(), which returns the .po header block.
+        $headers = [
+            __('Pipeline', 'meals-db'), __('Period', 'meals-db'), __('Month', 'meals-db'),
+            __('Status', 'meals-db'), __('Rows', 'meals-db'), __('Edits', 'meals-db'),
+            __('Created by', 'meals-db'), __('Created (UTC)', 'meals-db'),
+            __('Finalized by', 'meals-db'), __('Finalized (UTC)', 'meals-db'), '',
+        ];
+        foreach ($headers as $h) {
+            echo '<th>' . esc_html($h) . '</th>';
         }
         echo '</tr></thead><tbody>';
 
