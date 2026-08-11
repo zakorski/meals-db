@@ -163,8 +163,13 @@ class MealsDB_Slip_Batch_Page {
 
         echo '<h2>' . esc_html__('Batches', 'meals-db') . '</h2>';
         echo '<table class="widefat striped" id="mealsdb-slip-table"><thead><tr>';
-        foreach (['Zone', 'Delivery date', '# orders', 'Generated (UTC)', 'Status', 'Actions'] as $h) {
-            echo '<th>' . esc_html__($h, 'meals-db') . '</th>';
+        // Wrap each label at the literal so string-extraction sees it; loop escapes.
+        $headers = [
+            __('Zone', 'meals-db'), __('Delivery date', 'meals-db'), __('# orders', 'meals-db'),
+            __('Generated (UTC)', 'meals-db'), __('Status', 'meals-db'), __('Actions', 'meals-db'),
+        ];
+        foreach ($headers as $h) {
+            echo '<th>' . esc_html($h) . '</th>';
         }
         echo '</tr></thead><tbody>';
 
