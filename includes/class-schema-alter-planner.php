@@ -142,6 +142,9 @@ class MealsDB_Schema_Alter_Planner {
         return [
             'table'            => $table,
             'column'           => $column,
+            // Carried so the executor can verify the post-ALTER column against
+            // the canonical definition (already constraint-stripped).
+            'definition'       => $definition,
             'tier'             => $class['tier'],
             'reason'           => $class['reason'],
             'needs_null_check' => $class['needs_null_check'],

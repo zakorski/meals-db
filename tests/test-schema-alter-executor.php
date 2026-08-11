@@ -71,6 +71,31 @@ class AlterFakeWpdb {
     public bool $online_ok = true;
     public bool $plain_ok = true;
     public string $last_error = '';
+    // Live column state served to the executor's post-apply VERIFY. Defaults
+    // reflect a successful ALTER (the column now matches the canonical target),
+    // so the happy paths verify true; a test can override to simulate a no-op.
+    public array $live = [];
+    public function __construct() {
+        $this->live = [
+            'first_name' => col('varchar(120)', 'NO'),  // == VARCHAR(120) NOT NULL
+            'gender'     => col('varchar(6)', 'YES'),   // == VARCHAR(6) NULL
+        ];
+    }
+    public function prepare($q, ...$a) { return $q; }
+    public function get_results($q, $out = null) {
+        $this->queries[] = ['get_results', $q];
+        $rows = [];
+        foreach ($this->live as $name => $c) {
+            $rows[] = [
+                'COLUMN_NAME'    => $name,
+                'COLUMN_TYPE'    => $c['column_type'],
+                'IS_NULLABLE'    => $c['is_nullable'],
+                'COLUMN_DEFAULT' => $c['column_default'],
+                'EXTRA'          => $c['extra'],
+            ];
+        }
+        return $rows;
+    }
     public function get_var($q) { $this->queries[] = ['get_var', $q]; return $this->count_return; }
     public function query($q) {
         $this->queries[] = ['query', $q];
@@ -171,6 +196,36 @@ eq($batch2['errors'], [], 'batch: online-unsupported SAFE is not an error');
 $w = new AlterFakeWpdb(); $w->online_ok = false; $w->plain_ok = false; $ex = new TestExecutor($w);
 $batch3 = $ex->apply_safe_batch([$safe_mm]); // online_only -> won't even try plain; still an error path?
 eq($batch3['altered'], [], 'batch: hard-failing SAFE not applied');
+
+// --- post-apply VERIFY: an ALTER that runs but leaves the column unchanged is
+// reported honestly (idempotency / release-gate fix). query() !== false is NOT
+// proof; the live column is re-read and compared.
+$w = new AlterFakeWpdb(); MealsDB_Logger::$logs = [];
+$w->live['first_name'] = col('varchar(100)', 'NO'); // no-op: still the OLD width
+$ex = new TestExecutor($w);
+$r = $ex->run($safe_mm);
+eq($r['status'], 'not_applied', 'verify: ALTER ran but column still wrong -> not_applied');
+truthy(!empty($r['reason']), 'verify: not_applied carries a reason');
+eq(count(MealsDB_Logger::$logs), 0, 'verify: not_applied is NOT audit-logged');
+
+// A no-op SAFE change surfaces in apply_safe_batch() as an error (so the schema
+// version is not marked current), not a false success.
+$w = new AlterFakeWpdb(); $w->live['first_name'] = col('varchar(100)', 'NO');
+$ex = new TestExecutor($w);
+$batch4 = $ex->apply_safe_batch([$safe_mm]);
+eq($batch4['altered'], [], 'verify: no-op SAFE is not counted as applied');
+eq(count($batch4['errors']), 1, 'verify: no-op SAFE is recorded as an error');
+
+// --- drift idempotency: implicit NOT NULL on AUTO_INCREMENT / PRIMARY KEY.
+// The canonical 'INT AUTO_INCREMENT' (no explicit NOT NULL) must match a live
+// column MySQL reports as NOT NULL + auto_increment -- otherwise it re-flags
+// forever (the meals_products.id bug). Before the fix this returned false.
+truthy(MealsDB_Schema_Sync::column_matches('INT AUTO_INCREMENT', col('int', 'NO', null, 'auto_increment')),
+    'drift: INT AUTO_INCREMENT matches live NOT NULL auto_increment');
+truthy(MealsDB_Schema_Sync::column_matches('BIGINT PRIMARY KEY', col('bigint', 'NO')),
+    'drift: BIGINT PRIMARY KEY matches live NOT NULL');
+eq(MealsDB_Schema_Sync::column_matches('INT NOT NULL', col('int', 'YES')), false,
+    'drift: a real nullability mismatch is still detected');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
