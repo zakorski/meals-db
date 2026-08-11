@@ -130,7 +130,7 @@ class MealsDB_Zone_Day {
             return $day === '' ? null : $day;
         };
 
-        $stats = ['changed_zones' => [], 'clients_updated' => 0, 'dropped_zones' => []];
+        $stats = ['changed_zones' => [], 'clients_updated' => 0, 'dates_recomputed' => 0, 'dropped_zones' => []];
 
         foreach ($new_schedule as $zone => $config) {
             $new_day = $norm($config);
@@ -141,21 +141,20 @@ class MealsDB_Zone_Day {
             if ($new_day === $old_day) {
                 continue; // day unchanged (label-only edits don't touch clients)
             }
-            $affected = (int) $wpdb->query($wpdb->prepare(
-                "UPDATE `{$table}` SET delivery_day = %s
-                 WHERE delivery_area_name = %s AND active = 1",
-                $new_day,
-                (string) $zone
-            ));
-            $stats['changed_zones'][]   = (string) $zone;
-            $stats['clients_updated']  += max(0, $affected);
+            // Per-client: correct delivery_day AND recompute next_delivery_date
+            // so the stored date can't keep pointing at the old weekday
+            // (directive: next-delivery-date-resync-fix).
+            $result = self::apply_zone_day($wpdb, $table, (string) $zone, $new_day);
+            $stats['changed_zones'][]    = (string) $zone;
+            $stats['clients_updated']   += $result['updated'];
+            $stats['dates_recomputed']  += $result['dates_recomputed'];
             if (class_exists('MealsDB_Logger')) {
                 MealsDB_Logger::log(
                     'zone_day_propagated',
                     0,
                     'delivery_day',
                     (string) ($old_day ?? ''),
-                    sprintf('%s (%s, %d clients)', $new_day, $zone, max(0, $affected))
+                    sprintf('%s (%s, %d clients, %d dates recomputed)', $new_day, $zone, $result['updated'], $result['dates_recomputed'])
                 );
             }
         }
@@ -225,19 +224,22 @@ class MealsDB_Zone_Day {
         ), ARRAY_A);
         $orphans = is_array($orphans) ? $orphans : [];
 
-        // One UPDATE per zone: only rows whose cached day is wrong.
+        // Per-zone, per-client resync: correct the cached delivery_day AND
+        // recompute the stored next_delivery_date whenever either has drifted
+        // off the zone's day (directive: next-delivery-date-resync-fix). We
+        // scan EVERY in-zone client, not just those with a wrong delivery_day,
+        // so this also remediates clients whose delivery_day was already
+        // corrected by a prior resync but whose next_delivery_date still points
+        // at the old weekday (the concrete 12C.1 case: a Friday for a Wednesday
+        // client). Per-client because next_delivery_date depends on each
+        // client's own frequency/anchor and can't be done in one bulk UPDATE.
         $updated = 0;
+        $dates_recomputed = 0;
         foreach ($schedule as $zone => $config) {
-            $day = strtolower($config['day']);
-            $affected = (int) $wpdb->query($wpdb->prepare(
-                "UPDATE `{$table}` SET delivery_day = %s
-                 WHERE delivery_area_name = %s AND active = 1
-                   AND (delivery_day IS NULL OR delivery_day <> %s)",
-                $day,
-                (string) $zone,
-                $day
-            ));
-            $updated += max(0, $affected);
+            $day    = strtolower($config['day']);
+            $result = self::apply_zone_day($wpdb, $table, (string) $zone, $day);
+            $updated          += $result['updated'];
+            $dates_recomputed += $result['dates_recomputed'];
         }
 
         // Spec §D response contract: callers (settings.js, AJAX handler) expect
@@ -258,7 +260,7 @@ class MealsDB_Zone_Day {
                 0,
                 'delivery_day',
                 null,
-                sprintf('%d updated, %d already correct, %d orphans', $updated, $already_correct, count($orphans))
+                sprintf('%d updated, %d dates recomputed, %d already correct, %d orphans', $updated, $dates_recomputed, $already_correct, count($orphans))
             );
         }
         if (!empty($orphans) && class_exists('MealsDB_Event_Log')) {
@@ -273,6 +275,145 @@ class MealsDB_Zone_Day {
             ]);
         }
 
-        return ['updated' => $updated, 'already_correct' => $already_correct, 'orphans' => $orphans];
+        return ['updated' => $updated, 'dates_recomputed' => $dates_recomputed, 'already_correct' => $already_correct, 'orphans' => $orphans];
+    }
+
+    /**
+     * Resync one zone's active clients to $new_day (lowercase full weekday
+     * name): correct delivery_day and recompute next_delivery_date wherever
+     * either has drifted. Per-client (not a bulk UPDATE) because
+     * next_delivery_date depends on each client's own frequency/anchor.
+     *
+     * @return array{updated: int, dates_recomputed: int}
+     */
+    private static function apply_zone_day($wpdb, string $table, string $zone, string $new_day): array {
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT client_id, wp_user_id, delivery_frequency, delivery_day, next_delivery_date
+             FROM `{$table}`
+             WHERE delivery_area_name = %s AND active = 1",
+            $zone
+        ), ARRAY_A);
+        $rows = is_array($rows) ? $rows : [];
+
+        $updated          = 0;
+        $dates_recomputed = 0;
+        foreach ($rows as $row) {
+            $patch = self::plan_client_day_update($row, $new_day);
+            if ($patch === null) {
+                continue; // already correct on both axes
+            }
+            // Skip on a DB error for this row rather than aborting the whole
+            // sweep — one bad row shouldn't strand every other client.
+            if ($wpdb->update($table, $patch, ['client_id' => (int) $row['client_id']]) === false) {
+                continue;
+            }
+            if (isset($patch['delivery_day'])) {
+                $updated++;
+            }
+            if (isset($patch['next_delivery_date'])) {
+                $dates_recomputed++;
+            }
+        }
+
+        return ['updated' => $updated, 'dates_recomputed' => $dates_recomputed];
+    }
+
+    /**
+     * Build the meals_clients update patch for one client row given the zone's
+     * canonical $new_day (lowercase full weekday name). Returns null when the
+     * row is already correct on BOTH delivery_day and next_delivery_date, so
+     * the caller can skip the write.
+     *
+     * @param array<string, mixed> $row client_id, wp_user_id, delivery_frequency, delivery_day, next_delivery_date
+     * @return array<string, string>|null
+     */
+    private static function plan_client_day_update(array $row, string $new_day): ?array {
+        $current_day = strtolower(trim((string) ($row['delivery_day'] ?? '')));
+        $day_wrong   = ($current_day !== $new_day);
+
+        // Substring the stored value (0..10) so a DATE or DATETIME column both
+        // reduce to Y-m-d before comparison.
+        $stored_ymd = substr((string) ($row['next_delivery_date'] ?? ''), 0, 10);
+        $next       = self::compute_next_delivery_date($row, $new_day);
+        $date_wrong = ($next !== null && $next !== $stored_ymd);
+
+        if (!$day_wrong && !$date_wrong) {
+            return null;
+        }
+
+        $patch = [];
+        if ($day_wrong) {
+            $patch['delivery_day'] = $new_day;
+        }
+        if ($date_wrong) {
+            $patch['next_delivery_date'] = $next;
+        }
+        return $patch;
+    }
+
+    /**
+     * Compute the next_delivery_date a client SHOULD carry for the zone's
+     * $new_day, using ONLY the canonical MealsDB_Date_Calculator (no date math
+     * is reimplemented here). Two cases, in priority order:
+     *
+     *   1. A stored next_delivery_date already exists — this is the drift
+     *      remediation case (the 12C.1 defect). Keep that occurrence but move
+     *      it to the zone's weekday WITHIN its own Sun..Sat week
+     *      (snap_to_delivery_day) — the minimal, faithful correction. Only if
+     *      moving the weekday lands the date in the past do we roll forward one
+     *      cadence cycle so it stays a valid upcoming date. If the stored date
+     *      is already on the right weekday it is returned unchanged (even if in
+     *      the past — advancing a correct-weekday past date is out of scope for
+     *      a weekday-drift resync).
+     *   2. No stored occurrence to correct — seed one the way the backfill does
+     *      (MealsDB_Migration_Consolidated::run_phase_next_dates): project the
+     *      client's last_delivery_date forward by delivery_frequency weeks,
+     *      snapped to $new_day. The anchor lives in WP usermeta (written only by
+     *      mark_delivered), so it is frequently absent.
+     *
+     * Returns null when neither a stored date nor a usable anchor exists — the
+     * caller then leaves next_delivery_date untouched (never nulls a value it
+     * can't replace).
+     *
+     * @param array<string, mixed> $row
+     */
+    private static function compute_next_delivery_date(array $row, string $new_day): ?string {
+        if (!class_exists('MealsDB_Date_Calculator')) {
+            return null;
+        }
+        $freq       = (int) ($row['delivery_frequency'] ?? 0);
+        $stored_ymd = substr((string) ($row['next_delivery_date'] ?? ''), 0, 10);
+
+        // Case 1 — correct the weekday of the existing occurrence in place.
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $stored_ymd)) {
+            $snapped = MealsDB_Date_Calculator::snap_to_delivery_day($stored_ymd, $new_day);
+            if ($snapped !== null) {
+                if ($snapped !== $stored_ymd && $snapped < gmdate('Y-m-d')) {
+                    // We moved the weekday and it landed in the past — advance
+                    // to the next cadence occurrence of that weekday. A missing
+                    // frequency degrades to a one-week step (freq 0 can't drive
+                    // next_date), which still yields a valid future date.
+                    $forward = MealsDB_Date_Calculator::next_date($snapped, $freq > 0 ? $freq : 1, $new_day);
+                    if ($forward !== null) {
+                        return $forward;
+                    }
+                }
+                return $snapped;
+            }
+        }
+
+        // Case 2 — no stored occurrence: seed from last_delivery_date usermeta.
+        $wp_user_id = (int) ($row['wp_user_id'] ?? 0);
+        if ($wp_user_id > 0 && $freq > 0 && function_exists('get_user_meta')) {
+            $last = substr((string) get_user_meta($wp_user_id, 'last_delivery_date', true), 0, 10);
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $last)) {
+                $next = MealsDB_Date_Calculator::next_date($last, $freq, $new_day);
+                if ($next !== null) {
+                    return $next;
+                }
+            }
+        }
+
+        return null;
     }
 }

@@ -89,9 +89,8 @@ if (!class_exists('MealsDB_Tables', false)) {
  */
 class ZdWpdb {
     public array $queries = [];
+    public array $updates = [];
     public array $results_queue = [];
-    public int $rows_affected = 0;
-    public int $affected_per_update = 0;
     public function prepare($sql, ...$args) {
         foreach ($args as $a) {
             $sql = preg_replace('/%[ds]/', is_int($a) ? (string) $a : "'" . $a . "'", $sql, 1);
@@ -100,8 +99,7 @@ class ZdWpdb {
     }
     public function query($sql) {
         $this->queries[] = $sql;
-        $this->rows_affected = $this->affected_per_update;
-        return $this->affected_per_update;
+        return 0;
     }
     public function get_results($sql, $output = null) {
         $this->queries[] = $sql;
@@ -111,14 +109,31 @@ class ZdWpdb {
         $this->queries[] = $sql;
         return array_shift($this->results_queue) ?? 0;
     }
+    public function update($table, $data, $where, $format = null, $where_format = null) {
+        $this->updates[] = ['table' => $table, 'data' => $data, 'where' => $where];
+        return 1;
+    }
+}
+
+if (!function_exists('get_user_meta')) {
+    function get_user_meta($user_id, $key, $single = false) {
+        return $GLOBALS['zd_meta'][$user_id][$key] ?? '';
+    }
+}
+// Lowercase full weekday name of a Y-m-d (UTC), for asserting the fix moved
+// next_delivery_date onto the zone's day.
+function zd_weekday(string $ymd): string {
+    if (!preg_match('/^\\d{4}-\\d{2}-\\d{2}$/', $ymd)) { return ''; }
+    return strtolower((new DateTimeImmutable($ymd, new DateTimeZone('UTC')))->format('l'));
 }
 
 // ------------------------------------------------------------------
-// propagate_schedule_change()
+// propagate_schedule_change() — per-client: corrects delivery_day AND
+// recomputes next_delivery_date so the stored date can't keep the old weekday.
 // ------------------------------------------------------------------
 $GLOBALS['zd_schedule'] = []; // propagate takes schedules as args, not the option
+$GLOBALS['zd_meta'] = [];
 $wpdb_stub = new ZdWpdb();
-$wpdb_stub->affected_per_update = 3;
 $GLOBALS['wpdb'] = $wpdb_stub;
 MealsDB_Logger::$logged = [];
 MealsDB_Event_Log::$events = [];
@@ -129,69 +144,109 @@ $old = [
     'Gone'   => ['day' => 'Friday',    'label' => 'c'],
 ];
 $new = [
-    'Zone 1' => ['day' => 'Thursday',  'label' => 'a'],  // changed
+    'Zone 1' => ['day' => 'Thursday',  'label' => 'a'],  // changed Wed -> Thu
     'Zone 2' => ['day' => 'Wednesday', 'label' => 'b2'], // label-only change: no propagation
 ];
-$wpdb_stub->results_queue = [2]; // get_var: 2 active clients still reference 'Gone'
+// Zone 1 client whose day is being changed; stored date is on a non-Thursday.
+$prop_client = ['client_id' => 7, 'wp_user_id' => 0, 'delivery_frequency' => 1,
+                'delivery_day' => 'wednesday', 'next_delivery_date' => '2099-08-19'];
+// Call order: get_results(Zone 1 clients) -> get_var(COUNT for dropped 'Gone').
+$wpdb_stub->results_queue = [
+    [$prop_client],
+    2, // 2 active clients still reference 'Gone'
+];
 $stats = MealsDB_Zone_Day::propagate_schedule_change($old, $new);
 
 zd_check('propagate: changed zones', $stats['changed_zones'], ['Zone 1']);
-zd_check('propagate: rows updated', $stats['clients_updated'], 3);
+zd_check('propagate: clients updated', $stats['clients_updated'], 1);
+zd_check('propagate: dates recomputed', $stats['dates_recomputed'], 1);
 zd_check('propagate: dropped zones', $stats['dropped_zones'], ['Gone' => 2]);
-$has_update = false;
-foreach ($wpdb_stub->queries as $q) {
-    if (strpos($q, 'UPDATE') !== false && strpos($q, "'thursday'") !== false && strpos($q, "'Zone 1'") !== false) {
-        $has_update = true;
-    }
+$prop_data = null;
+foreach ($wpdb_stub->updates as $u) {
+    if (($u['where']['client_id'] ?? null) === 7) { $prop_data = $u['data']; }
 }
-zd_check('propagate: UPDATE uses lowercase day + zone key', $has_update, true);
+zd_check('propagate: delivery_day written lowercase', $prop_data['delivery_day'] ?? null, 'thursday');
+zd_check('propagate: next_delivery_date moved to Thursday', zd_weekday($prop_data['next_delivery_date'] ?? ''), 'thursday');
+zd_check('propagate: next_delivery_date via Date_Calculator',
+    $prop_data['next_delivery_date'] ?? '',
+    MealsDB_Date_Calculator::snap_to_delivery_day('2099-08-19', 'thursday'));
 zd_check('propagate: audit-logged', count(MealsDB_Logger::$logged), 1);
 zd_check('propagate: dropped zone degraded event', MealsDB_Event_Log::$events[0]['outcome'] ?? '', 'degraded');
 
 // No changes → no writes, no events.
+$wpdb_stub->updates = [];
 $wpdb_stub->queries = [];
 MealsDB_Event_Log::$events = [];
 $stats = MealsDB_Zone_Day::propagate_schedule_change($new, $new);
 zd_check('propagate no-op: zones', $stats['changed_zones'], []);
-zd_check('propagate no-op: no queries', $wpdb_stub->queries, []);
+zd_check('propagate no-op: no updates', $wpdb_stub->updates, []);
 zd_check('propagate no-op: no events', MealsDB_Event_Log::$events, []);
 
 // ------------------------------------------------------------------
-// resync_all()
+// resync_all() — per-client sweep: corrects delivery_day AND recomputes
+// next_delivery_date, INCLUDING clients whose day is already correct but whose
+// stored date drifted onto the wrong weekday (the 12C.1 remediation case).
 // ------------------------------------------------------------------
 $GLOBALS['zd_schedule'] = [
     'Zone 1' => ['day' => 'Wednesday', 'label' => 'a'],
     'Zone 5' => ['day' => 'Friday',    'label' => 'b'],
 ];
+$GLOBALS['zd_meta'] = [555 => ['last_delivery_date' => '2099-08-05']];
 $wpdb_stub = new ZdWpdb();
-$wpdb_stub->affected_per_update = 4; // per-zone UPDATE reports 4 corrected rows
 $GLOBALS['wpdb'] = $wpdb_stub;
 MealsDB_Event_Log::$events = [];
-// Call order in resync_all(): get_results (orphans) → query ×2 (UPDATEs) →
-// get_var (COUNT of active clients in schedule zones).  The COUNT returns 10
-// so already_correct = max(0, 10 − 8) = 2.
+
+$already_wed = MealsDB_Date_Calculator::snap_to_delivery_day('2099-08-21', 'wednesday'); // a real Wednesday
+$zone1_clients = [
+    // C1: wrong day AND wrong-weekday date -> both corrected.
+    ['client_id' => 7,  'wp_user_id' => 0,   'delivery_frequency' => 1, 'delivery_day' => 'friday',    'next_delivery_date' => '2099-08-21'],
+    // C2: day already correct, stored date on the wrong weekday -> date only (the Marjorie case).
+    ['client_id' => 8,  'wp_user_id' => 0,   'delivery_frequency' => 1, 'delivery_day' => 'wednesday', 'next_delivery_date' => '2099-08-21'],
+    // C3: fully correct -> skipped, no write.
+    ['client_id' => 9,  'wp_user_id' => 0,   'delivery_frequency' => 1, 'delivery_day' => 'wednesday', 'next_delivery_date' => $already_wed],
+    // C4: correct day, empty stored date -> seeded from last_delivery_date usermeta.
+    ['client_id' => 10, 'wp_user_id' => 555, 'delivery_frequency' => 1, 'delivery_day' => 'wednesday', 'next_delivery_date' => ''],
+];
+// Call order: get_results(orphans) -> get_results(Zone 1) -> get_results(Zone 5) -> get_var(COUNT).
 $wpdb_stub->results_queue = [
-    [
-        ['client_id' => 7, 'first_name' => 'A', 'last_name' => 'B', 'delivery_area_name' => 'Old Zone'],
-    ],
-    10, // get_var: total active clients whose zone is in the schedule
+    [ ['client_id' => 99, 'first_name' => 'A', 'last_name' => 'B', 'delivery_area_name' => 'Old Zone'] ],
+    $zone1_clients,
+    [],
+    10,
 ];
 $out = MealsDB_Zone_Day::resync_all();
 
-zd_check('resync: updated', $out['updated'], 8); // 2 zones × 4
-zd_check('resync: already_correct', $out['already_correct'], 2); // 10 in-schedule − 8 updated
+zd_check('resync: updated (days changed)', $out['updated'], 1);       // only C1's day changed
+zd_check('resync: dates recomputed', $out['dates_recomputed'], 3);   // C1, C2, C4
+zd_check('resync: already_correct', $out['already_correct'], 9);     // 10 - 1
 zd_check('resync: orphan count', count($out['orphans']), 1);
 zd_check('resync: orphan zone value', $out['orphans'][0]['delivery_area_name'], 'Old Zone');
 zd_check('resync: orphan degraded event', MealsDB_Event_Log::$events[0]['event'] ?? '', 'delivery_day.orphaned_clients');
-$zone_updates = 0;
-foreach ($wpdb_stub->queries as $q) {
-    if (strpos($q, 'UPDATE') !== false) { $zone_updates++; }
-}
-zd_check('resync: one UPDATE per zone', $zone_updates, 2);
+
+$byid = [];
+foreach ($wpdb_stub->updates as $u) { $byid[$u['where']['client_id']] = $u['data']; }
+
+// C1: day corrected, and next_delivery_date snapped onto a Wednesday.
+zd_check('resync C1: delivery_day corrected', $byid[7]['delivery_day'] ?? null, 'wednesday');
+zd_check('resync C1: next_delivery on Wednesday', zd_weekday($byid[7]['next_delivery_date'] ?? ''), 'wednesday');
+zd_check('resync C1: next_delivery via Date_Calculator',
+    $byid[7]['next_delivery_date'] ?? '',
+    MealsDB_Date_Calculator::snap_to_delivery_day('2099-08-21', 'wednesday'));
+// C2 (Marjorie): day already correct, so NO delivery_day in the patch — only the date.
+zd_check('resync C2: delivery_day untouched', isset($byid[8]['delivery_day']), false);
+zd_check('resync C2: drifted date fixed to Wednesday', zd_weekday($byid[8]['next_delivery_date'] ?? ''), 'wednesday');
+// C3: already correct on both axes -> no write at all.
+zd_check('resync C3: fully correct skipped', isset($byid[9]), false);
+// C4: empty stored date seeded from last_delivery_date usermeta, on a Wednesday.
+zd_check('resync C4: seeded on Wednesday', zd_weekday($byid[10]['next_delivery_date'] ?? ''), 'wednesday');
+zd_check('resync C4: seeded via Date_Calculator',
+    $byid[10]['next_delivery_date'] ?? '',
+    MealsDB_Date_Calculator::next_date('2099-08-05', 1, 'wednesday'));
 
 // Empty schedule → refuses (null), no queries.
 $GLOBALS['zd_schedule'] = [];
 $wpdb_stub->queries = [];
+$wpdb_stub->updates = [];
 zd_check('resync: empty schedule refuses', MealsDB_Zone_Day::resync_all(), null);
 zd_check('resync: empty schedule no queries', $wpdb_stub->queries, []);
 
