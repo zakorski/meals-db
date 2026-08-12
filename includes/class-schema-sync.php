@@ -584,6 +584,19 @@ class MealsDB_Schema_Sync {
             $normalized = 'tinyint';
         }
 
+        // JSON is a distinct type on MySQL 8 but a stored ALIAS for LONGTEXT (+CHECK)
+        // on MariaDB, where INFORMATION_SCHEMA.COLUMN_TYPE always reports 'longtext'
+        // for a JSON column. Collapse the two to one token so a canonical `JSON`
+        // column backed by MariaDB longtext storage is not perpetually flagged as
+        // drifted (11 columns were false-positives forever, which also blocked Sync
+        // Products on MariaDB). Safe on real MySQL 8 too: this schema never declares
+        // a given column as BOTH a json and a longtext canonically, so treating them
+        // as equivalent cannot mask a meaningful difference. Because this runs on
+        // BOTH the expected and actual type strings, the fold is symmetric.
+        if ($normalized === 'json') {
+            $normalized = 'longtext';
+        }
+
         return $normalized ?? '';
     }
 
