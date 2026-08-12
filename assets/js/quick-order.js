@@ -1759,7 +1759,7 @@
                 dataType: 'json',
                 data: {
                     action: 'mealsdb_qo_get_next_dates',
-                    nonce: this.getSecurityNonce('createOrder'),
+                    nonce: this.getSecurityNonce(),
                     client_id: userId,
                     order_date: this.$orderDate ? (this.$orderDate.val() || '') : '',
                 },
