@@ -71,6 +71,7 @@ class MealsDB_Installer {
         // Run one-time migrations
         self::migrate_rate_to_client_rates();
         self::widen_vet_health_card_column();
+        self::drop_taxable_overridden_column();
         self::drop_defunct_transaction_tables();
 
         // Seed the first task-engine rule so a freshly-installed site has
@@ -327,6 +328,47 @@ class MealsDB_Installer {
         $alter_sql = "ALTER TABLE `{$clients_table}` MODIFY COLUMN `vet_health_card` VARCHAR(500) NULL";
         if ($wpdb->query($alter_sql) === false) {
             error_log('[MealsDB Installer] Failed to widen vet_health_card column: ' . $wpdb->last_error);
+        }
+    }
+
+    /**
+     * One-time: drop meals_products.taxable_overridden.
+     *
+     * The per-product "Taxable" override was removed (DIRECTIVE ITEM 3) —
+     * taxability is now purely category-derived, so the override marker is
+     * vestigial. The `taxable` COLUMN itself STAYS (the allocation rebuilder
+     * reads it for HST side counts); only the override flag is dropped.
+     *
+     * Idempotent: only ALTERs when the column is still present, so it no-ops on
+     * fresh installs (the canonical schema no longer defines it) and after the
+     * first successful drop. schema_sync never removes columns, so this bespoke
+     * migration is the only thing that clears the legacy column on upgrades.
+     *
+     * OPERATOR NOTE: the pre-drop audit (confirm no product had an override
+     * differing from its category) was completed before this shipped — dropping
+     * the flag therefore changes no product's taxability.
+     */
+    private static function drop_taxable_overridden_column(): void {
+        global $wpdb;
+
+        $products_table = MealsDB_DB::get_table_name(MealsDB_Tables::PRODUCTS);
+
+        $col_exists = $wpdb->get_var($wpdb->prepare(
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = %s
+                AND COLUMN_NAME = 'taxable_overridden'",
+            $products_table
+        ));
+        if (!$col_exists) {
+            return;
+        }
+
+        $drop_sql = "ALTER TABLE `{$products_table}` DROP COLUMN `taxable_overridden`";
+        if ($wpdb->query($drop_sql) === false) {
+            error_log('[MealsDB Installer] Failed to drop meals_products.taxable_overridden column: ' . $wpdb->last_error);
+        } else {
+            error_log('[MealsDB Installer] Dropped meals_products.taxable_overridden column');
         }
     }
 

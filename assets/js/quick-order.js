@@ -1409,8 +1409,23 @@
             const items = Object.values(this.state.cart || {}).filter((entry) => entry && entry.quantity > 0);
             const rateId = this.$rateSelect && this.$rateSelect.length ? parseInt(this.$rateSelect.val(), 10) || 0 : 0;
 
-            if (!Number.isInteger(clientId) || clientId <= 0 || !orderDate || !items.length) {
-                qoShowToast('Please select a client, date, and at least one product.', 'error');
+            if (!Number.isInteger(clientId) || clientId <= 0 || !items.length) {
+                qoShowToast('Please select a client and at least one product.', 'error');
+                this.clearCreateOrderLoading(createButton);
+                return;
+            }
+
+            // Never silently no-op on a missing Order Date. It's the required
+            // creation field but easy to miss, so surface a PERSISTENT inline
+            // notice (not just a transient toast) and focus the field. This is
+            // the safety net for the client-select prefill above — if that ever
+            // regresses, the failure stays legible instead of a dead button.
+            if (!orderDate) {
+                this.addNotice('Please set an Order Date.', 'error');
+                qoShowToast('Please set an Order Date.', 'error');
+                if (this.$orderDate && this.$orderDate.length) {
+                    this.$orderDate.trigger('focus');
+                }
                 this.clearCreateOrderLoading(createButton);
                 return;
             }
@@ -1777,6 +1792,16 @@
                 self.state.clientDeliveryDay = d.has_client ? (d.delivery_day || '') : '';
                 $('#mealsdb-qo-delivery-date').val(d.has_client ? (d.next_delivery_date || '') : '');
                 self.refreshDeliveryDateWarning();
+                // Prefill the required Order Date so Create Order doesn't silently
+                // no-op (the create guard requires it, but nothing populated it).
+                // Order date is normally "today", NOT the future cadence date, so
+                // default to today's LOCAL date. Only fill when empty — never
+                // overwrite a value the operator already typed.
+                if (self.$orderDate && self.$orderDate.length && !self.$orderDate.val()) {
+                    const now = new Date();
+                    const todayYmd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                    self.$orderDate.val(todayYmd);
+                }
                 const $panel = $('#mealsdb-qo-next-dates');
                 if (!d.has_client) { $panel.hide(); return; }
                 $panel.show();

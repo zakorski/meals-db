@@ -1127,7 +1127,7 @@ class MealsDB_Migration_Consolidated {
 
         $rows = $wpdb->get_results($wpdb->prepare(
             "SELECT client_id, wp_user_id, ordering_frequency, delivery_frequency,
-                    delivery_day, next_order_date, next_delivery_date
+                    delivery_day, delivery_area_name, next_order_date, next_delivery_date
              FROM `{$clients_table}`
              WHERE wp_user_id > 0 AND active = 1
              ORDER BY client_id ASC
@@ -1166,13 +1166,14 @@ class MealsDB_Migration_Consolidated {
 
             if (empty($row['next_delivery_date'])) {
                 $last_delivery = self::read_meta_date($wp_user_id, 'last_delivery_date');
-                if ($last_delivery !== null) {
-                    $next_delivery = MealsDB_Date_Calculator::next_date(
-                        $last_delivery, (int) ($row['delivery_frequency'] ?? 0), $delivery_day
-                    );
-                    if ($next_delivery !== null) {
-                        $patch['next_delivery_date'] = $next_delivery;
-                    }
+                // Anchor the no-history fallback on the order date the delivery
+                // pairs with: the freshly-computed next_order_date if we just
+                // set it, else the stored one, else today (UTC). ITEM 2 fix.
+                $anchor = $patch['next_order_date']
+                    ?? (!empty($row['next_order_date']) ? (string) $row['next_order_date'] : gmdate('Y-m-d'));
+                $next_delivery = self::resolve_backfill_delivery_date($row, $last_delivery, $anchor);
+                if (!empty($next_delivery)) {
+                    $patch['next_delivery_date'] = $next_delivery;
                 }
             }
 
@@ -1213,6 +1214,56 @@ class MealsDB_Migration_Consolidated {
             'total'    => $total,
             'complete' => count($rows) < self::BATCH_SIZE,
         ];
+    }
+
+    /**
+     * Resolve the next_delivery_date to store during Backfill Next Dates.
+     *
+     * Two paths, chosen by whether the client has delivery HISTORY:
+     *   - $last_delivery present -> project a full cycle from it via the
+     *     canonical MealsDB_Date_Calculator::next_date (unchanged historic
+     *     behaviour; snaps to the stored delivery_day when set).
+     *   - $last_delivery absent  -> the ITEM 2 fix. Previously this branch
+     *     did nothing, so history-less clients got ZERO delivery dates
+     *     ("7 order dates, 0 delivery dates updated"). Now we mirror the
+     *     get_next_dates endpoint EXACTLY by delegating to its own public
+     *     derivation, MealsDB_Quick_Order_Ajax::resolve_delivery_prefill
+     *     (stored delivery_day -> zone-schedule fallback -> slip-occurrence
+     *     semantics), anchored on the order date. Reusing that method — not
+     *     re-deriving here — guarantees the backfilled date is byte-identical
+     *     to what the operator sees prefilled in Quick Order.
+     *
+     * Returns null when nothing can be derived, so the caller leaves the
+     * column untouched (never overwrites a non-empty stored value — the
+     * caller only calls this when next_delivery_date is empty).
+     *
+     * @param array<string,mixed> $row           Client row (delivery_day,
+     *                                            delivery_area_name,
+     *                                            delivery_frequency,
+     *                                            next_delivery_date).
+     * @param string|null         $last_delivery Y-m-d from last_delivery_date
+     *                                            usermeta, or null if absent.
+     * @param string              $anchor        Y-m-d order date to anchor the
+     *                                            history-less fallback on.
+     * @return string|null Y-m-d, or null if nothing is derivable.
+     */
+    public static function resolve_backfill_delivery_date(array $row, ?string $last_delivery, string $anchor): ?string {
+        if ($last_delivery !== null) {
+            return MealsDB_Date_Calculator::next_date(
+                $last_delivery,
+                (int) ($row['delivery_frequency'] ?? 0),
+                $row['delivery_day'] ?? null
+            );
+        }
+
+        // No delivery history to project from. Mirror the QO prefill / the
+        // get_next_dates endpoint. resolve_delivery_prefill returns
+        // next_delivery_date already normalised to null when unresolvable.
+        $prefill = MealsDB_Quick_Order_Ajax::resolve_delivery_prefill(
+            $row,
+            substr($anchor, 0, 10)
+        );
+        return $prefill['next_delivery_date'];
     }
 
     // =====================================================================

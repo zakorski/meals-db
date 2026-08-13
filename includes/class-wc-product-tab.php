@@ -161,13 +161,17 @@ class MealsDB_WC_Product_Tab {
             ],
         ]);
 
-        $this->render_checkbox_field([
-            'id'          => '_mealsdb_taxable',
-            'label'       => __('Taxable', 'meals-db'),
-            'value'       => (int) $data['taxable'],
-            'description' => __('Defaults to the category (dessert/muffin are taxable). Change it to override this product; meals are never taxed.', 'meals-db'),
-            'disabled'    => $data['product_type'] === 'meal',
-        ]);
+        // Taxability is category-derived (dessert/muffin are taxable; meals are
+        // never taxed) and is NOT operator-editable — the vestigial per-product
+        // "Taxable" checkbox was removed (DIRECTIVE ITEM 3). The value is shown
+        // read-only so editors can still see how the product will be taxed.
+        $tax_label = $data['product_type'] === 'meal'
+            ? __('Not taxed (meal)', 'meals-db')
+            : ((int) $data['taxable'] === 1 ? __('Taxable (by category)', 'meals-db') : __('Not taxed (by category)', 'meals-db'));
+        echo '<p class="form-field _mealsdb_taxable_display_field">';
+        echo '<label>' . esc_html__('Taxable', 'meals-db') . '</label>';
+        echo '<span class="mealsdb-readonly-value">' . esc_html($tax_label) . '</span>';
+        echo '</p>';
 
         $this->render_multi_checkbox_field(
             '_mealsdb_dietary_tags',
@@ -230,16 +234,11 @@ class MealsDB_WC_Product_Tab {
             ? sanitize_text_field(wp_unslash($_POST['_mealsdb_product_type']))
             : 'meal';
 
-        // Honour the operator's "Taxable" checkbox, but only record it as an
-        // OVERRIDE when it diverges from the category default (dessert/muffin
-        // are taxable). Matching the default leaves the row category-tracked so
-        // the display sync keeps re-deriving it; a genuine override is flagged
-        // so the sync preserves it (audit-2026-08 B10). Meals are never taxed.
-        $derived_taxable = $product_type === 'meal' ? 0 : self::determine_side_taxable($product_id);
-        $posted_taxable  = !empty($_POST['_mealsdb_taxable']);
-        $resolved        = MealsDB_Products::resolve_taxable_override($product_type, $posted_taxable, $derived_taxable);
-        $taxable            = $resolved['taxable'];
-        $taxable_overridden = $resolved['overridden'];
+        // Taxability is purely category-derived — the per-product override was
+        // removed (DIRECTIVE ITEM 3). Meals are never taxed; sides are taxable
+        // iff they carry a taxable-side category (dessert/muffin). There is no
+        // longer a `_mealsdb_taxable` POST field to honour.
+        $taxable = $product_type === 'meal' ? 0 : self::determine_side_taxable($product_id);
 
         $existing_data  = MealsDB_Products::get_product_data($product_id);
         $main_ingredient = is_array($existing_data) && isset($existing_data['main_ingredient'])
@@ -286,7 +285,6 @@ class MealsDB_WC_Product_Tab {
         $saved = MealsDB_Products::save_product_data($product_id, [
             'product_type'       => $product_type,
             'taxable'            => $taxable,
-            'taxable_overridden' => $taxable_overridden,
             'main_ingredient'    => $main_ingredient,
             'dietary_tags'       => $dietary_tags,
             'allergen_flags'     => $allergen_flags,
@@ -323,51 +321,22 @@ class MealsDB_WC_Product_Tab {
      * @return int 1 if taxable, 0 otherwise.
      */
     private static function determine_side_taxable(int $product_id): int {
-        // Single source of truth — the taxable-side rule lives in
-        // MealsDB_Operational_Constants, not hardcoded here (audit-2026-08 B10).
-        $taxable_slugs = MealsDB_Operational_Constants::taxable_side_category_slugs();
-
         $terms = get_the_terms($product_id, 'product_cat');
         if (!is_array($terms)) {
             return 0;
         }
 
+        $slugs = [];
         foreach ($terms as $term) {
-            if (!$term instanceof WP_Term) {
-                continue;
-            }
-            if (in_array($term->slug, $taxable_slugs, true)) {
-                return 1;
+            if ($term instanceof WP_Term) {
+                $slugs[] = $term->slug;
             }
         }
 
-        return 0;
-    }
-
-    /**
-     * Render a simple checkbox field consistent with WooCommerce meta box styling.
-     *
-     * @param array<string, mixed> $args
-     */
-    private function render_checkbox_field(array $args): void {
-        $defaults = [
-            'id'          => '',
-            'label'       => '',
-            'value'       => 0,
-            'description' => '',
-            'disabled'    => false,
-        ];
-
-        $args = array_merge($defaults, $args);
-
-        woocommerce_wp_checkbox([
-            'id'                => $args['id'],
-            'label'             => $args['label'],
-            'value'             => $args['value'],
-            'cbvalue'           => '1',
-            'description'       => $args['description'],
-            'custom_attributes' => $args['disabled'] ? ['disabled' => 'disabled'] : [],
-        ]);
+        // Delegate to the single category-taxability decision point (which
+        // reads the taxable-side rule from MealsDB_Operational_Constants), so
+        // the product tab and the display sync can never disagree.
+        return MealsDB_Product_Display_Sync::taxable_for_slugs($slugs);
     }
 
     /**
