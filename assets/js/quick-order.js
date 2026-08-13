@@ -199,10 +199,7 @@
 
             if (this.$orderDate && this.$orderDate.length) {
                 this.$orderDate.on('change', () => {
-                    const value = this.$orderDate.val();
-                    if (this.$summaryDate && this.$summaryDate.length) {
-                        this.$summaryDate.text(value ? value : this.translate('Not set'));
-                    }
+                    this.updateSummaryDate();
                     // Re-derive the rule-default next dates from the
                     // new order date.
                     const clientId = this.$clientSelect && this.$clientSelect.length
@@ -248,6 +245,19 @@
                         this.searchProducts(keyword);
                     }, 300);
                 });
+            }
+        },
+
+        // Single source of truth for the Order Summary's date line. Callable
+        // after a programmatic prefill so the summary reflects the field
+        // WITHOUT firing the $orderDate 'change' handler — that handler also
+        // re-runs fetchNextDates() (a network round-trip that rewrites the
+        // delivery-date field), so triggering it just to refresh the summary
+        // would be a redundant fetch on the prefill path. Keep this display-only.
+        updateSummaryDate() {
+            if (this.$summaryDate && this.$summaryDate.length) {
+                const value = this.$orderDate && this.$orderDate.length ? this.$orderDate.val() : '';
+                this.$summaryDate.text(value ? value : this.translate('Not set'));
             }
         },
 
@@ -418,6 +428,10 @@
 
                 if (payload.order_date && this.$orderDate && this.$orderDate.length) {
                     this.$orderDate.val(payload.order_date);
+                    // Keep the Order Summary in sync with the prefilled value
+                    // (display-only; see updateSummaryDate — avoids re-firing
+                    // the change handler's fetchNextDates round-trip).
+                    this.updateSummaryDate();
                 }
 
                 if (hasItems) {
@@ -1801,6 +1815,11 @@
                     const now = new Date();
                     const todayYmd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
                     self.$orderDate.val(todayYmd);
+                    // Sync the summary display for the just-prefilled date.
+                    // Display-only on purpose: we are already inside
+                    // fetchNextDates()'s done handler, so triggering 'change'
+                    // here would recursively re-fetch next dates.
+                    self.updateSummaryDate();
                 }
                 const $panel = $('#mealsdb-qo-next-dates');
                 if (!d.has_client) { $panel.hide(); return; }
