@@ -441,14 +441,44 @@
                 this.setMissingCloneItems(hasMissing ? parsedItems.missing : []);
                 this.renderUnavailableTilesFromState();
 
-                const successMessage =
-                    payload.message ||
-                    this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.');
+                // Notice must reflect what actually landed in the cart — a
+                // cloned order can resolve to zero cart items (all source
+                // products delisted), and reporting that as success is the
+                // false-success bug this path guards against. addNotice shows
+                // ONE notice at a time (empty().append), so combine into a
+                // single message per case rather than stacking two calls.
+                const missingCount = parsedItems.missing.length;
                 const orderLabel = payload.order_number || payload.order_id || orderId;
-                const bannerMessage = orderLabel
-                    ? this.getCloneMessage('cloneLoaded', `Loaded from order #${orderLabel}.`)
-                    : successMessage;
-                this.addNotice(successMessage || bannerMessage, 'success');
+
+                if (hasItems) {
+                    const successMessage =
+                        payload.message ||
+                        (orderLabel
+                            ? this.getCloneMessage('cloneLoaded', `Loaded from order #${orderLabel}.`)
+                            : this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.'));
+
+                    if (hasMissing) {
+                        // Partial load — resolvable items are in the cart, but
+                        // some source products are no longer available. Say so
+                        // in the same notice so a partial clone can't pass for
+                        // a complete one.
+                        const partialSuffix = this.getCloneMessage(
+                            'clonePartial',
+                            `${missingCount} product(s) from the source order are no longer available and were not added.`
+                        );
+                        this.addNotice(`${successMessage} ${partialSuffix}`, 'warning');
+                    } else {
+                        this.addNotice(successMessage, 'success');
+                    }
+                } else {
+                    // hasMissing && !hasItems: nothing landed in the cart.
+                    // Emit an error, never a success notice.
+                    const noneMessage = this.getCloneMessage(
+                        'cloneAllUnavailable',
+                        `No products from the source order could be added — ${missingCount} product(s) are no longer available.`
+                    );
+                    this.addNotice(noneMessage, 'error');
+                }
                 this.scrollToSummaryPanel();
             }).fail((jqXHR) => {
                 let message = this.getCloneMessage('cloneFailed', 'Unable to load products from the selected order.');
@@ -1682,6 +1712,8 @@
                 classes.push('notice-error');
             } else if (type === 'success') {
                 classes.push('notice-success');
+            } else if (type === 'warning') {
+                classes.push('notice-warning');
             } else {
                 classes.push('notice-info');
             }
