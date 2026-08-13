@@ -116,10 +116,12 @@ class MealsDB_Product_Display_Sync {
         $display = self::extract_display_data($product);
         $ok = MealsDB_Products::update_display_fields($product_id, $display);
 
-        // Auto-set product_type + taxable from WC categories, but NEVER clobber
-        // an operator's explicit taxable override (audit-2026-08 B10). The
-        // taxable-side rule is sourced from MealsDB_Operational_Constants (the
-        // single source of truth), not a local hardcoded copy.
+        // Auto-set product_type + taxable from WC categories. Taxability is now
+        // PURELY category-derived (DIRECTIVE ITEM 3) — the per-product override
+        // and its `taxable_overridden` flag were removed, which eliminates the
+        // same-request clobber bug by construction. The taxable-side rule is
+        // sourced from MealsDB_Operational_Constants (the single source of
+        // truth), not a local hardcoded copy.
         $terms = get_the_terms($product_id, 'product_cat');
         if (is_array($terms)) {
             $slugs = array_map(static function ($t) {
@@ -129,24 +131,28 @@ class MealsDB_Product_Display_Sync {
             $is_side = !empty(array_intersect($slugs, MealsDB_Operational_Constants::side_category_slugs()));
             if ($is_side) {
                 $existing = MealsDB_Products::get_product_data($product_id);
-                if (!empty($existing['taxable_overridden'])) {
-                    // Operator forced this product's taxability — preserve it;
-                    // only ensure the product_type is 'side'.
-                    $taxable            = (int) $existing['taxable'];
-                    $taxable_overridden = 1;
-                } else {
-                    $taxable            = !empty(array_intersect($slugs, MealsDB_Operational_Constants::taxable_side_category_slugs())) ? 1 : 0;
-                    $taxable_overridden = 0;
-                }
                 $ok = MealsDB_Products::save_product_data($product_id, array_merge($existing, [
-                    'product_type'       => 'side',
-                    'taxable'            => $taxable,
-                    'taxable_overridden' => $taxable_overridden,
+                    'product_type' => 'side',
+                    'taxable'      => self::taxable_for_slugs($slugs),
                 ])) && $ok;
             }
         }
 
         return $ok;
+    }
+
+    /**
+     * Category-derived taxability for a side product, from its WC category
+     * slugs. Pure (no DB / no WP) — the single decision point for side
+     * taxability now that the per-product override is gone (DIRECTIVE ITEM 3).
+     * A product is taxable iff it carries at least one taxable-side category
+     * (dessert / muffin), per MealsDB_Operational_Constants.
+     *
+     * @param array<int,string> $slugs WC product_cat slugs for the product.
+     * @return int 1 if taxable, 0 otherwise.
+     */
+    public static function taxable_for_slugs(array $slugs): int {
+        return !empty(array_intersect($slugs, MealsDB_Operational_Constants::taxable_side_category_slugs())) ? 1 : 0;
     }
 
     /**

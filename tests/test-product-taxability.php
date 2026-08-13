@@ -11,12 +11,12 @@
  *     (a rename/addition in one and not the others silently under-reported
  *     HST on the government CSV).
  *
- *  2. MealsDB_Products::resolve_taxable_override() — the per-product override
- *     decision. The operator's "Taxable" checkbox is now honoured, but a value
- *     is only marked as an OVERRIDE when it DIVERGES from the category-derived
- *     default; re-matching the default releases it back to category tracking
- *     (so a later category change re-derives normally, and the display sync
- *     does not clobber a genuine override).
+ *  2. MealsDB_Product_Display_Sync::taxable_for_slugs() — the ONLY taxability
+ *     decision for sides now that the per-product "Taxable" checkbox and its
+ *     `taxable_overridden` flag are removed (DIRECTIVE-remaining-items-
+ *     consolidated ITEM 3). Taxability is purely category-derived; the removed
+ *     override path (and its same-request clobber bug) is gone by construction.
+ *     The old resolve_taxable_override() must no longer exist.
  *
  * Run: php tests/test-product-taxability.php
  */
@@ -56,25 +56,22 @@ eq(in_array('cereal', $taxable, true), false, 'cereal is a non-taxable side');
 eq(in_array('soup', $taxable, true),   false, 'soup is a non-taxable side');
 eq(in_array('thickened', $taxable, true), false, 'thickened is a non-taxable side');
 
-// --- resolve_taxable_override(): meals are never taxed --------------------
-// Mains are never taxed and the control is disabled for meals — a stray
-// posted "checked" must not tax a meal, and it is never an override.
-eq($P::resolve_taxable_override('meal', true,  1), ['taxable' => 0, 'overridden' => 0], 'meal + checked  -> not taxed, not overridden');
-eq($P::resolve_taxable_override('meal', false, 0), ['taxable' => 0, 'overridden' => 0], 'meal + unchecked -> not taxed');
+// --- ITEM 3: the override path is removed ---------------------------------
+// The vestigial per-product checkbox + taxable_overridden flag are gone;
+// resolve_taxable_override() must not be reintroduced.
+eq(method_exists($P, 'resolve_taxable_override'), false, 'resolve_taxable_override() is removed');
 
-// --- resolve_taxable_override(): side matching the category default -------
-// Checkbox agrees with the derived value => NOT an override (stays category-tracked).
-eq($P::resolve_taxable_override('side', true,  1), ['taxable' => 1, 'overridden' => 0], 'side checked, derived taxable -> taxed, not overridden');
-eq($P::resolve_taxable_override('side', false, 0), ['taxable' => 0, 'overridden' => 0], 'side unchecked, derived non-taxable -> not taxed, not overridden');
-
-// --- resolve_taxable_override(): side DIVERGING from the default ----------
-// The operator forces a value different from the category => override flagged.
-eq($P::resolve_taxable_override('side', true,  0), ['taxable' => 1, 'overridden' => 1], 'side checked on a non-taxable category -> override');
-eq($P::resolve_taxable_override('side', false, 1), ['taxable' => 0, 'overridden' => 1], 'side unchecked on a taxable category -> override');
-
-// --- resolve_taxable_override(): fee/other behave like non-meals ----------
-eq($P::resolve_taxable_override('fee',   true,  0), ['taxable' => 1, 'overridden' => 1], 'fee checked on non-taxable default -> override');
-eq($P::resolve_taxable_override('other', false, 0), ['taxable' => 0, 'overridden' => 0], 'other unchecked, non-taxable default -> not overridden');
+// --- taxable_for_slugs(): purely category-derived side taxability ---------
+$S = 'MealsDB_Product_Display_Sync';
+eq($S::taxable_for_slugs(['dessert']),          1, 'dessert -> taxable');
+eq($S::taxable_for_slugs(['muffin']),           1, 'muffin -> taxable');
+eq($S::taxable_for_slugs(['cereal']),           0, 'cereal -> non-taxable');
+eq($S::taxable_for_slugs(['soup']),             0, 'soup -> non-taxable');
+eq($S::taxable_for_slugs(['thickened']),        0, 'thickened -> non-taxable');
+// A product carrying any taxable-side category is taxable.
+eq($S::taxable_for_slugs(['cereal', 'dessert']), 1, 'mixed with a taxable category -> taxable');
+// No categories at all -> non-taxable.
+eq($S::taxable_for_slugs([]),                   0, 'no categories -> non-taxable');
 
 $total = $passed + count($failures);
 echo "Ran {$total} checks: {$passed} passed, " . count($failures) . " failed\n";

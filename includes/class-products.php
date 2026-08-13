@@ -18,35 +18,6 @@ class MealsDB_Products {
     public const PRODUCT_TYPES = ['meal', 'side', 'fee', 'other'];
 
     /**
-     * Resolve the persisted taxable flag + override marker from an operator's
-     * "Taxable" checkbox and the category-derived default.
-     *
-     * The per-product checkbox is honoured (audit-2026-08 B10 — it used to be a
-     * silent no-op), but a value is only recorded as an OVERRIDE when it
-     * DIVERGES from the category-derived default. Re-matching the default
-     * releases the row back to category tracking, so a later category change
-     * re-derives normally and the display sync only preserves genuine overrides
-     * (it must not clobber them, nor freeze every saved product at its current
-     * value). Mains are never taxed and never overridden — the control is
-     * disabled for meals.
-     *
-     * Pure function (no DB / no WP) — unit-tested in tests/test-product-taxability.php.
-     *
-     * @param string $product_type   Resolved product type ('meal' never taxed).
-     * @param bool   $posted_taxable  Whether the operator's checkbox is checked.
-     * @param int    $derived_taxable Category-derived taxable (0/1).
-     * @return array{taxable:int, overridden:int}
-     */
-    public static function resolve_taxable_override(string $product_type, bool $posted_taxable, int $derived_taxable): array {
-        if ($product_type === 'meal') {
-            return ['taxable' => 0, 'overridden' => 0];
-        }
-        $taxable    = $posted_taxable ? 1 : 0;
-        $overridden = ($taxable !== ($derived_taxable ? 1 : 0)) ? 1 : 0;
-        return ['taxable' => $taxable, 'overridden' => $overridden];
-    }
-
-    /**
      * Retrieve product metadata for a WooCommerce product.
      *
      * @param int $product_id WooCommerce product ID.
@@ -64,7 +35,7 @@ class MealsDB_Products {
         $table = MealsDB_DB::get_table_name(self::TABLE);
 
         $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT wc_product_id, product_type, taxable, taxable_overridden, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost, last_updated FROM `{$table}` WHERE wc_product_id = %d LIMIT 1",
+            "SELECT wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost, last_updated FROM `{$table}` WHERE wc_product_id = %d LIMIT 1",
             $product_id
         ), ARRAY_A);
 
@@ -76,9 +47,6 @@ class MealsDB_Products {
             'wc_product_id'   => (int) $row['wc_product_id'],
             'product_type'    => in_array($row['product_type'], self::PRODUCT_TYPES, true) ? (string) $row['product_type'] : 'meal',
             'taxable'         => (int) $row['taxable'],
-            // Older installs may not have this column yet (additive migration);
-            // treat a missing value as "not overridden" so reads stay safe.
-            'taxable_overridden' => (int) ($row['taxable_overridden'] ?? 0),
             'main_ingredient' => (string) $row['main_ingredient'],
             'dietary_tags'    => self::decode_json_field($row['dietary_tags']),
             'allergen_flags'  => self::decode_json_field($row['allergen_flags']),
@@ -122,12 +90,11 @@ class MealsDB_Products {
             // Row-alias form (INSERT ... AS new): VALUES(col) inside ON DUPLICATE
             // KEY UPDATE is deprecated as of MySQL 8.0.20; new.col is the
             // equivalent replacement (needs MySQL 8.0.19+, target is MySQL 8.x).
-            "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, taxable_overridden, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
-                VALUES (%d, %s, %d, %d, %s, %s, %s, %d, %f) AS new
+            "INSERT INTO `{$table}` (wc_product_id, product_type, taxable, main_ingredient, dietary_tags, allergen_flags, case_size, unit_cost)
+                VALUES (%d, %s, %d, %s, %s, %s, %d, %f) AS new
                 ON DUPLICATE KEY UPDATE
                     product_type = new.product_type,
                     taxable = new.taxable,
-                    taxable_overridden = new.taxable_overridden,
                     main_ingredient = new.main_ingredient,
                     dietary_tags = new.dietary_tags,
                     allergen_flags = new.allergen_flags,
@@ -136,7 +103,6 @@ class MealsDB_Products {
             $prepared['wc_product_id'],
             $prepared['product_type'],
             $prepared['taxable'],
-            $prepared['taxable_overridden'],
             $prepared['main_ingredient'],
             $prepared['dietary_tags'],
             $prepared['allergen_flags'],
@@ -161,7 +127,6 @@ class MealsDB_Products {
             'wc_product_id'   => $product_id,
             'product_type'    => 'meal',
             'taxable'         => 0,
-            'taxable_overridden' => 0,
             'main_ingredient' => '',
             'dietary_tags'    => [],
             'allergen_flags'  => [],
@@ -190,8 +155,7 @@ class MealsDB_Products {
         $dietary_tags   = self::encode_json_field($merged['dietary_tags']);
         $allergen_flags = self::encode_json_field($merged['allergen_flags']);
 
-        $taxable            = (int) (!empty($merged['taxable']));
-        $taxable_overridden = (int) (!empty($merged['taxable_overridden']));
+        $taxable   = (int) (!empty($merged['taxable']));
         $case_size = isset($merged['case_size']) ? (int) $merged['case_size'] : 1;
         if ($case_size < 1) {
             $case_size = 1;
@@ -212,7 +176,6 @@ class MealsDB_Products {
             'wc_product_id'   => (int) $product_id,
             'product_type'    => $product_type,
             'taxable'         => $taxable,
-            'taxable_overridden' => $taxable_overridden,
             'main_ingredient' => isset($merged['main_ingredient']) ? (string) $merged['main_ingredient'] : '',
             'dietary_tags'    => $dietary_tags,
             'allergen_flags'  => $allergen_flags,

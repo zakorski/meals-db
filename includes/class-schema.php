@@ -121,12 +121,13 @@ class MealsDB_Schema {
                     'category_data'  => 'JSON NULL',
                     'is_published'   => 'TINYINT(1) NOT NULL DEFAULT 1',
                     'product_type'   => "ENUM('meal','side','fee','other') NOT NULL DEFAULT 'meal'",
+                    // Category-derived cache (dessert/muffin => taxable; meals
+                    // never taxed). The allocation rebuilder reads it for HST
+                    // side counts, so the COLUMN stays even though the operator-
+                    // facing "Taxable" checkbox + `taxable_overridden` override
+                    // flag were removed (DIRECTIVE ITEM 3). Purely derived — the
+                    // display sync re-derives it from categories on every save.
                     'taxable'        => 'TINYINT(1) NOT NULL DEFAULT 0',
-                    // 1 when an operator has explicitly overridden `taxable` via
-                    // the product tab to a value that differs from the category
-                    // default; the display sync then preserves `taxable` for
-                    // this row instead of re-deriving it (audit-2026-08 B10).
-                    'taxable_overridden' => 'TINYINT(1) NOT NULL DEFAULT 0',
                     'main_ingredient'=> "VARCHAR(40) NOT NULL DEFAULT ''",
                     'dietary_tags'   => 'JSON NULL',
                     'allergen_flags' => 'JSON NULL',
