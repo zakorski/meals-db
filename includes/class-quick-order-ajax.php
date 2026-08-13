@@ -597,6 +597,50 @@ class MealsDB_Quick_Order_Ajax {
 
             $rate_id = intval($source_order->get_meta('mealsdb_rate_id'));
 
+            // Drop fee + overage PRODUCT line items from the clone payload.
+            // Per-client fees (client_contribution 5675 / delivery_fee 4122)
+            // and legacy overage SKUs are carried as real product line items
+            // (not WC_Order_Item_Fee) so reconciliation can sum _line_subtotal
+            // uniformly — so they show up in $items here. They are NOT in the
+            // Quick Order catalog, so if left in they resolve to null on the
+            // client and get filed under "missing", rendering as bogus
+            // "unavailable" tiles and inflating the not-added warning. They
+            // must not be cloned as cart lines anyway: Order_Fees re-applies
+            // the fee at creation from the client's per-client columns. Use
+            // the CONFIGURED ids (option overlay), matching Order_Fees.
+            $excluded_ids = [];
+            if (class_exists('MealsDB_Invoice_Generator')
+                && method_exists('MealsDB_Invoice_Generator', 'get_fee_product_ids')) {
+                $excluded_ids = array_merge($excluded_ids, array_values(MealsDB_Invoice_Generator::get_fee_product_ids()));
+            } elseif (class_exists('MealsDB_Operational_Constants')) {
+                $excluded_ids = array_merge($excluded_ids, array_values(MealsDB_Operational_Constants::default_fee_product_ids()));
+            }
+            if (class_exists('MealsDB_Operational_Constants')) {
+                $excluded_ids = array_merge($excluded_ids, array_values(MealsDB_Operational_Constants::overage_product_ids()));
+            }
+            foreach ($excluded_ids as $excluded_id) {
+                unset($items[(int) $excluded_id]);
+            }
+
+            // Resolve the QO product payloads for the remaining cloned ids so
+            // the client can put them straight into the cart. Without this the
+            // JS resolves every id to null and files all of them under
+            // "missing" (empty cart, false success). Reuse the QO product
+            // builder (transient-cached — not a per-product query storm); ids
+            // that resolve to no QO payload legitimately fall through to
+            // "missing" (genuinely delisted product), which the unavailable-
+            // tile UI is for. Cast to object so a 0..n-sequential or empty map
+            // still encodes as {} — an array would break productData[id] lookups.
+            $products = [];
+            if (!empty($items) && class_exists('MealsDB_Quick_Order_Products')) {
+                foreach (MealsDB_Quick_Order_Products::get_all_quick_order_products() as $payload) {
+                    $pid = isset($payload['product_id']) ? (int) $payload['product_id'] : 0;
+                    if ($pid > 0 && isset($items[$pid])) {
+                        $products[$pid] = $payload;
+                    }
+                }
+            }
+
             // The JS frontend sends `client_id` containing a WP user
             // ID when it later calls create_order, so the response
             // key here stays `client_id` (=WP user id) to keep the
@@ -607,7 +651,8 @@ class MealsDB_Quick_Order_Ajax {
                 'client_id'   => $wp_user_id > 0 ? $wp_user_id : null,
                 'client_type' => $client_type,
                 'order_date'  => $order_date,
-                'items'       => $items,
+                'items'       => (object) $items,
+                'products'    => (object) $products,
                 'rate_id'     => $rate_id > 0 ? $rate_id : null,
             ]);
         } catch (\Throwable $e) {
