@@ -1411,7 +1411,7 @@
             const $footer = $('<div class="mealsdb-quick-order__summary-footer" />');
             $footer.append($('<div class="mealsdb-quick-order__summary-total-qty" />').text(`Items: ${totalQuantity}`));
             if (!govInvoiced) {
-                $footer.append($('<div class="mealsdb-quick-order__summary-total-price" />').text(`Total: ${this.formatPrice(totalPrice)}`));
+                $footer.append($('<div class="mealsdb-quick-order__summary-total-price" />').text(`Subtotal (before tax): ${this.formatPrice(totalPrice)}`));
             }
 
             this.$summaryContent.empty().append($list, $footer);
@@ -2631,6 +2631,7 @@
                             $('<div class="client-option"></div>')
                                 .attr('data-id', client.wp_user_id)
                                 .attr('data-name', client.name)
+                                .attr('data-client-type', client.client_type || '')
                                 .text(client.name)
                                 .appendTo(dropdown);
                         });
@@ -2661,6 +2662,10 @@
         dropdown.on('click', '.client-option', function() {
             const id = $(this).data('id');
             const name = $(this).data('name');
+            // jQuery camel-cases data-client-type -> clientType. Carry the real
+            // type through so isGovernmentInvoiced() can suppress prices for
+            // SDNB/Veteran clients. Empty stays '' -> fails OPEN (prices show).
+            const type = $(this).data('clientType') || '';
 
             if (!id) {
                 return;
@@ -2668,7 +2673,7 @@
 
             search.val(name);
             hidden.val(id);
-            hidden.data('clientType', '');
+            hidden.data('clientType', type);
 
             dropdown.hide();
 

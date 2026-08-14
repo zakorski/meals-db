@@ -192,7 +192,7 @@ class MealsDB_Quick_Order_Ajax {
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $like  = '%' . $wpdb->esc_like($term) . '%';
         $sql   = $wpdb->prepare(
-            "SELECT client_id, wp_user_id, first_name, last_name
+            "SELECT client_id, wp_user_id, first_name, last_name, client_type
             FROM `{$table}`
             WHERE active = 1
               AND (first_name LIKE %s OR last_name LIKE %s OR CONCAT(first_name, ' ', last_name) LIKE %s)
@@ -211,9 +211,15 @@ class MealsDB_Quick_Order_Ajax {
         $clients = [];
         foreach ($rows as $row) {
             $clients[] = [
-                'client_id'  => (int) $row['client_id'],
-                'wp_user_id' => (int) $row['wp_user_id'],
-                'name'       => $row['first_name'] . ' ' . $row['last_name'],
+                'client_id'   => (int) $row['client_id'],
+                'wp_user_id'  => (int) $row['wp_user_id'],
+                'name'        => $row['first_name'] . ' ' . $row['last_name'],
+                // Feeds the JS government-invoiced check so per-meal prices are
+                // suppressed for SDNB/Veteran clients on the manual-selection
+                // path (the clone path already carries this). Not encrypted, so
+                // no decryption needed. Empty string when unset → JS fails OPEN
+                // (prices show), never suppresses a private client's prices.
+                'client_type' => (string) ($row['client_type'] ?? ''),
             ];
         }
 
