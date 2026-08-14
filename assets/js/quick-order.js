@@ -448,14 +448,17 @@
                 // ONE notice at a time (empty().append), so combine into a
                 // single message per case rather than stacking two calls.
                 const missingCount = parsedItems.missing.length;
-                const orderLabel = payload.order_number || payload.order_id || orderId;
 
                 if (hasItems) {
+                    // ITEM 3: the localized `cloneLoaded` string is always defined
+                    // (class-admin-ui.php), so getCloneMessage never falls through
+                    // to an order-labelled variant — dropped the dead
+                    // payload.order_number/order_id lookup. The `payload.message ||`
+                    // guard stays as a forward-compatible default for a server that
+                    // may later send a message.
                     const successMessage =
                         payload.message ||
-                        (orderLabel
-                            ? this.getCloneMessage('cloneLoaded', `Loaded from order #${orderLabel}.`)
-                            : this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.'));
+                        this.getCloneMessage('cloneLoaded', 'Products from the selected order have been added to Quick Order.');
 
                     if (hasMissing) {
                         // Partial load — resolvable items are in the cart, but
@@ -2062,6 +2065,12 @@
             return rate;
         },
 
+        // CURRENTLY UNUSED by the summary (ITEM 1): the summary shows a pre-tax
+        // subtotal, not an estimated total. Kept — with state.taxRate /
+        // state.taxableClientTypes and the mealsdb_quick_order_tax_settings filter —
+        // pending verification that the meals `taxable` column agrees with each
+        // product's WooCommerce tax class; a per-product estimate is the likely
+        // follow-up. Do not mistake this for live math.
         getApplicableTaxRate() {
             const baseRate = Number.isFinite(this.state.taxRate) ? this.state.taxRate : 0;
             if (baseRate <= 0) {
@@ -2109,18 +2118,23 @@
                 subtotal += quantity * price;
             });
 
-            const taxRate = govInvoiced ? 0 : this.getApplicableTaxRate();
             const precision = this.getCurrencyPrecision();
             const factor = Math.pow(10, precision);
-            const taxAmount = Math.round((subtotal * taxRate + Number.EPSILON) * factor) / factor;
-            const total = Math.round((subtotal + taxAmount + Number.EPSILON) * factor) / factor;
+            // The summary figure is a PRE-TAX subtotal. It deliberately does NOT
+            // estimate tax: the flat-rate estimate this replaced applied the full
+            // rate to every line regardless of the product's taxability, overstating
+            // private-pay orders by the full rate (staging #28530: showed 655.50 for
+            // a 570.00 order). WooCommerce computes the authoritative tax per product
+            // tax class at creation — do not duplicate that math here. See
+            // DIRECTIVE-qo-pretax-relabel-and-clone-contract.md ITEM 1.
+            const displayTotal = Math.round((subtotal + Number.EPSILON) * factor) / factor;
 
             if (this.$qoItemsCount && this.$qoItemsCount.length) {
                 this.$qoItemsCount.text(totalItems);
             }
 
             if (this.$qoTotal && this.$qoTotal.length) {
-                this.$qoTotal.text(govInvoiced ? '' : this.formatPrice(total));
+                this.$qoTotal.text(govInvoiced ? '' : this.formatPrice(displayTotal));
                 this.$qoTotal.toggle(!govInvoiced);
             }
         },

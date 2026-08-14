@@ -595,18 +595,36 @@ class MealsDB_Quick_Order_Ajax {
                 }
             }
 
-            if ($client_id <= 0 && $wp_user_id > 0) {
+            // ITEM 4: guard this residual branch with the same MAJ-1 check as the
+            // customer_id path above. It's reachable when $wp_user_id came from
+            // mealsdb_client_user_id meta WITHOUT mealsdb_client_id (QO writes the
+            // user-id meta unconditionally, the client-id meta only when > 0), and
+            // get_active_client_id_for_user() is LIMIT 1 with no ORDER BY —
+            // nondeterministic when a user backs multiple active clients. Only
+            // auto-resolve when the mapping is unambiguous; 0 or >1 leaves
+            // $client_id at 0 so the response returns null and the operator picks
+            // deliberately. (On the customer_id path this re-counts a value already
+            // known to be 1 — a cheap, deliberate redundancy to keep the guard
+            // uniform.)
+            if ($client_id <= 0 && $wp_user_id > 0
+                && self::count_active_clients_for_user($wp_user_id) === 1) {
                 $client_id = self::get_active_client_id_for_user($wp_user_id);
             }
 
             $client_type = '';
+            $client_name = '';
             if ($client_id > 0) {
                 global $wpdb;
 
+                // Fetch the name parts in the SAME query that already resolves
+                // client_type (ITEM 2) so the clone can show the client's name
+                // rather than the raw "Client #<wp_user_id>" JS fallback. These
+                // columns are NOT in ENCRYPTED_CLIENT_COLUMNS (plaintext), so no
+                // decryption is needed.
                 $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
                 $row = $wpdb->get_row(
                     $wpdb->prepare(
-                        "SELECT client_type FROM `{$table_name}` WHERE client_id = %d LIMIT 1",
+                        "SELECT client_type, first_name, last_name FROM `{$table_name}` WHERE client_id = %d LIMIT 1",
                         $client_id
                     ),
                     ARRAY_A
@@ -615,6 +633,14 @@ class MealsDB_Quick_Order_Ajax {
                 if (isset($row['client_type'])) {
                     $client_type = (string) $row['client_type'];
                 }
+
+                $name_parts = array_filter([
+                    isset($row['first_name']) ? trim((string) $row['first_name']) : '',
+                    isset($row['last_name']) ? trim((string) $row['last_name']) : '',
+                ], static function ($part) {
+                    return $part !== '';
+                });
+                $client_name = implode(' ', $name_parts);
             }
 
             $rate_id = intval($source_order->get_meta('mealsdb_rate_id'));
@@ -668,10 +694,17 @@ class MealsDB_Quick_Order_Ajax {
             // key here stays `client_id` (=WP user id) to keep the
             // existing JS contract working. The local variable is
             // now $wp_user_id for clarity.
+            //
+            // Clone response contract (the full surface, in one place):
+            //   success, client_id (=WP user id), client_type, client_name,
+            //   order_date, items, products, rate_id.
+            // client_name is '' when client_id is unresolvable (MAJ-1 guard or
+            // no active client); the JS then falls back to "Client #<id>".
             wp_send_json([
                 'success'     => true,
                 'client_id'   => $wp_user_id > 0 ? $wp_user_id : null,
                 'client_type' => $client_type,
+                'client_name' => $client_name,
                 'order_date'  => $order_date,
                 'items'       => (object) $items,
                 'products'    => (object) $products,
