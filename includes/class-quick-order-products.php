@@ -205,7 +205,13 @@ class MealsDB_Quick_Order_Products {
 
             $categories[] = [
                 'id'   => (int) $term->term_id,
-                'name' => $term->name,
+                // Decode HTML entities WordPress stores in wp_terms.name (e.g.
+                // "Chicken &amp; Turkey") so the category tab reads literally.
+                // SAFE ONLY because category names are consumed as TEXT (jQuery
+                // text:/textContent), never injected as HTML. If a name is ever
+                // moved into .html() or a concatenated HTML string, it MUST be
+                // escaped at that point or this decode becomes an XSS vector.
+                'name' => html_entity_decode((string) $term->name, ENT_QUOTES, 'UTF-8'),
                 'slug' => $term->slug,
             ];
         }
@@ -472,7 +478,13 @@ class MealsDB_Quick_Order_Products {
 
             $categories[] = [
                 'id'   => (int) $term->term_id,
-                'name' => $term->name,
+                // Decode HTML entities (e.g. "Chicken &amp; Turkey") — this
+                // feeds the per-product category.name embedded in every QO
+                // product payload. SAFE ONLY because category names are consumed
+                // as TEXT (jQuery text:/textContent), never as HTML; buildProductTileHTML
+                // touches only category.slug/id. Escape at the point of use if a
+                // name is ever placed into an HTML string.
+                'name' => html_entity_decode((string) $term->name, ENT_QUOTES, 'UTF-8'),
                 'slug' => $term->slug,
             ];
         }

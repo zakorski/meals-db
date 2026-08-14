@@ -74,6 +74,16 @@ class MealsDB_Installer {
         self::drop_taxable_overridden_column();
         self::drop_defunct_transaction_tables();
 
+        // Flush the Quick Order category/product caches so the HTML-entity
+        // decode of category names (e.g. "Chicken &amp; Turkey") takes effect
+        // immediately rather than after the transient TTL — both the category
+        // cache and the product cache embed category.name. Idempotent and cheap
+        // (two transient deletes; the caches rebuild on the next page load).
+        if (class_exists('MealsDB_Quick_Order_Products')
+            && method_exists('MealsDB_Quick_Order_Products', 'clear_cache')) {
+            MealsDB_Quick_Order_Products::clear_cache();
+        }
+
         // Seed the first task-engine rule so a freshly-installed site has
         // something to exercise the cron pass with. Safe to call on every
         // install — it no-ops when the seed rule already exists.
