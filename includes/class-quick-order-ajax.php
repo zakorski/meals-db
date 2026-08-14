@@ -573,6 +573,28 @@ class MealsDB_Quick_Order_Ajax {
                 $wp_user_id = self::get_user_id_for_client($client_id);
             }
 
+            // Third fallback, mirroring MealsDB_Order_Fees::resolve_government_client():
+            // legacy/imported and WooCommerce-native orders carry no mealsdb_* meta, so
+            // fall back to the order's native customer_id (HPOS: wc_orders.customer_id IS
+            // the WP user id). Without this, cloning any non-Quick-Order order returns a
+            // null client and the operator must re-pick it by hand.
+            //
+            // MAJ-1 guard: a single wp_user_id can LEGITIMATELY back more than one active
+            // client (an SDNB recipient who is also a Veteran; a government client who also
+            // buys personally). get_active_client_id_for_user() would pick one arbitrarily
+            // (LIMIT 1). QO-created orders pin the exact client via mealsdb_client_id meta,
+            // so this ambiguity exists only on THIS customer_id path. Rather than guess the
+            // wrong duplicate — and have the operator TRUST a wrong auto-fill — only adopt
+            // customer_id when it resolves to EXACTLY ONE active client. Zero or multiple
+            // leaves it unresolved and the response returns null exactly as before, so the
+            // operator selects the client deliberately.
+            if ($wp_user_id <= 0) {
+                $candidate_user_id = (int) $source_order->get_customer_id();
+                if ($candidate_user_id > 0 && self::count_active_clients_for_user($candidate_user_id) === 1) {
+                    $wp_user_id = $candidate_user_id;
+                }
+            }
+
             if ($client_id <= 0 && $wp_user_id > 0) {
                 $client_id = self::get_active_client_id_for_user($wp_user_id);
             }
@@ -748,6 +770,33 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         return (int) $row['client_id'];
+    }
+
+    /**
+     * Count ACTIVE Meals DB client rows bound to a WP user id.
+     *
+     * Supports the MAJ-1 guard on the clone client-resolution path: a WP user
+     * can legitimately back more than one active client (there is no UNIQUE on
+     * meals_clients.wp_user_id — intentional, see CLAUDE.md MAJ-1), so before
+     * auto-selecting a client from an order's native customer_id we confirm the
+     * mapping is unambiguous (exactly one). Returns 0 for a non-positive id.
+     */
+    private static function count_active_clients_for_user(int $user_id): int {
+        if ($user_id <= 0) {
+            return 0;
+        }
+
+        global $wpdb;
+
+        $table_name = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $count = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM `{$table_name}` WHERE wp_user_id = %d AND active = 1",
+                $user_id
+            )
+        );
+
+        return (int) $count;
     }
 
     /**
