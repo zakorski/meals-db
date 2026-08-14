@@ -204,7 +204,7 @@ class MealsDB_Quick_Order_UI {
                                 <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-items">0</dd>
                             </div>
                             <div class="mealsdb-quick-order__summary-total-row">
-                                <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Total', 'meals-db'); ?></dt>
+                                <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Subtotal (before tax)', 'meals-db'); ?></dt>
                                 <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-total">0</dd>
                             </div>
                         </dl>
