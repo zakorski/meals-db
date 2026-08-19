@@ -2,7 +2,7 @@
 /**
  * AJAX handlers for the Purchase Order draft workflow (spec 2026-07-10).
  *
- * Eight endpoints, each carrying the plugin guard spine in order:
+ * Ten endpoints, each carrying the plugin guard spine in order:
  *   1. nonce       (check_ajax_referer, fail-closed; one context for the
  *                   family, like the invoice-draft endpoints)
  *   2. capability  (BASELINE plugin capability, NOT manage_options: PO rows
@@ -37,6 +37,8 @@ class MealsDB_Ajax_Purchase_Orders {
         add_action('wp_ajax_mealsdb_po_reconcile_edit',     [__CLASS__, 'reconcile_edit']);
         add_action('wp_ajax_mealsdb_po_approve',            [__CLASS__, 'approve']);
         add_action('wp_ajax_mealsdb_po_unapprove',          [__CLASS__, 'unapprove']);
+        add_action('wp_ajax_mealsdb_po_mark_accepted',      [__CLASS__, 'mark_accepted']);
+        add_action('wp_ajax_mealsdb_po_unaccept',           [__CLASS__, 'unaccept']);
         add_action('wp_ajax_mealsdb_po_mark_received',      [__CLASS__, 'mark_received']);
         add_action('wp_ajax_mealsdb_po_complete_reconcile', [__CLASS__, 'complete_reconcile']);
         add_action('wp_ajax_mealsdb_po_cancel',             [__CLASS__, 'cancel']);
@@ -118,6 +120,8 @@ class MealsDB_Ajax_Purchase_Orders {
 
     public static function approve(): void            { self::transition_endpoint('approve'); }
     public static function unapprove(): void          { self::transition_endpoint('unapprove'); }
+    public static function mark_accepted(): void      { self::transition_endpoint('mark_accepted'); }
+    public static function unaccept(): void           { self::transition_endpoint('unaccept'); }
     public static function mark_received(): void      { self::transition_endpoint('mark_received'); }
     public static function complete_reconcile(): void { self::transition_endpoint('complete_reconcile'); }
     public static function cancel(): void             { self::transition_endpoint('cancel_draft'); }
@@ -127,8 +131,9 @@ class MealsDB_Ajax_Purchase_Orders {
     // -----------------------------------------------------------------
 
     /**
-     * All five lifecycle transitions share one shape: settings_modify bucket
-     * (destructive-ish, 20/hr), a po_id, and for unapprove a required reason.
+     * All lifecycle transitions share one shape: settings_modify bucket
+     * (destructive-ish, 20/hr), a po_id, and for unapprove/unaccept a required
+     * reason (accept/receive/cancel/complete need only the po_id).
      */
     private static function transition_endpoint(string $method): void {
         if (!self::guard('settings_modify')) {
@@ -141,9 +146,9 @@ class MealsDB_Ajax_Purchase_Orders {
                 return;
             }
             $service = new MealsDB_Purchase_Orders();
-            if ($method === 'unapprove') {
+            if ($method === 'unapprove' || $method === 'unaccept') {
                 $reason = sanitize_text_field(wp_unslash($_POST['reason'] ?? ''));
-                $result = $service->unapprove($po_id, $reason);
+                $result = $service->{$method}($po_id, $reason);
             } elseif ($method === 'approve') {
                 // Optional expected-arrival date for the confirm-arrival task's
                 // due date; the service normalizes (malformed → null → the

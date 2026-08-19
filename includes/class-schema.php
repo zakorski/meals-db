@@ -487,21 +487,24 @@ class MealsDB_Schema {
                     'placed_date'      => 'DATE NULL',
                     'expected_arrival' => 'DATE NULL',
                     'arrival_date'     => 'DATE NULL',
-                    'status'           => "ENUM('planned','placed','arrived','counted','reconciled','cancelled') NOT NULL DEFAULT 'planned'",
+                    'status'           => "ENUM('planned','placed','accepted','arrived','reconciled','cancelled') NOT NULL DEFAULT 'planned'",
                     'items'            => 'JSON NULL',
                     'notes'            => 'TEXT NULL',
                     'reconciled_at'    => 'DATETIME NULL',
-                    // --- PO draft workflow (2026-07 spec). ADDITIVE ONLY: Schema_Sync
-                    // cannot ALTER existing columns, which is exactly why the workflow
-                    // reuses the existing status ENUM ('planned' displays as "Draft")
-                    // instead of adding new ENUM values. payload IS NULL marks a legacy
-                    // task-created PO (read-only in the new UI; its lifecycle stays with
-                    // the task chain so the two paths can never double-bump stock).
+                    // --- PO draft workflow (2026-07 spec; 'accepted' added 2026-08).
+                    // ADDITIVE column changes are auto-applied by Schema_Sync; the
+                    // status ENUM edit (add 'accepted', drop the dead 'counted') is a
+                    // RISKY change (ENUM narrowing) surfaced in Data-Ops → Schema
+                    // Changes for a typed ALTER — safe here because existing POs are
+                    // wiped at cutover, so no row holds 'counted'. payload IS NULL
+                    // marks a legacy task-created PO (read-only in the new UI).
                     'payload'          => 'LONGTEXT NULL',
                     'edit_count'       => 'INT UNSIGNED NOT NULL DEFAULT 0',
                     'created_by'       => 'BIGINT UNSIGNED NULL',
                     'approved_by'      => 'BIGINT UNSIGNED NULL',
                     'approved_at'      => 'DATETIME NULL',
+                    'accepted_by'      => 'BIGINT UNSIGNED NULL',
+                    'accepted_at'      => 'DATETIME NULL',
                     'received_by'      => 'BIGINT UNSIGNED NULL',
                     'received_at'      => 'DATETIME NULL',
                     'reconciled_by'    => 'BIGINT UNSIGNED NULL',

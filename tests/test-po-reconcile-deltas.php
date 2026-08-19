@@ -216,7 +216,8 @@ function arrived_po(PoWpdb $w): array {
     $svc = new MealsDB_Purchase_Orders();
     $id = $svc->create_draft(forecast_rows());
     $svc->approve($id);
-    $svc->mark_received($id); // stock now 110 / 44
+    $svc->mark_accepted($id); // stock committed here now (110 / 44)
+    $svc->mark_received($id);  // pure marker; stock unchanged
     return [$svc, $id];
 }
 

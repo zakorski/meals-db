@@ -2,9 +2,9 @@
  * Purchase Orders tab — draft workflow list + detail interactivity.
  *
  * Reads config from the JSON island #mealsdb-po-admin-data. Four concerns:
- *   1. List/detail lifecycle buttons (approve / un-approve / receive /
- *      cancel / complete-reconcile) with confirms and the un-approve
- *      reason prompt (mirrors invoice un-finalize UX).
+ *   1. List/detail lifecycle buttons (approve / accept / un-accept /
+ *      un-approve / receive / cancel / complete-reconcile) with confirms and
+ *      the un-approve / un-accept reason prompt (mirrors invoice un-finalize UX).
  *   2. Draft mode: +/- case steppers, debounced per-row saves, "was:" hints,
  *      live totals.
  *   3. Coverage warnings, recomputed on every click from the row's
@@ -179,9 +179,11 @@
     // ------------------------------------------------------------------
     var ACTION_MAP = {
         approve:   { action: 'mealsdb_po_approve',       confirm: t('confirmApprove', 'Approve this purchase order?') },
-        receive:   { action: 'mealsdb_po_mark_received', confirm: t('confirmReceive', 'Mark received? Quantities will be added to inventory.') },
+        accept:    { action: 'mealsdb_po_mark_accepted', confirm: t('confirmAccept', 'Mark accepted? Quantities will be added to inventory.') },
+        receive:   { action: 'mealsdb_po_mark_received', confirm: t('confirmReceive', 'Mark received? Stock was already committed at Accept.') },
         cancel:    { action: 'mealsdb_po_cancel',        confirm: t('confirmCancel', 'Cancel this draft purchase order?') },
-        unapprove: { action: 'mealsdb_po_unapprove',     confirm: null }
+        unapprove: { action: 'mealsdb_po_unapprove',     confirm: null },
+        unaccept:  { action: 'mealsdb_po_unaccept',      confirm: null }
     };
 
     $(document).on('click', '.mealsdb-po-action', function () {
@@ -205,8 +207,11 @@
                 if (picked === null) { return; }
                 data.expected_arrival = picked;
             }
-        } else if (kind === 'unapprove') {
-            var reason = window.prompt(t('promptUnapprove', 'Enter a reason for un-approving (required):'));
+        } else if (kind === 'unapprove' || kind === 'unaccept') {
+            var promptTxt = (kind === 'unaccept')
+                ? t('promptUnaccept', 'Enter a reason for un-accepting (required):')
+                : t('promptUnapprove', 'Enter a reason for un-approving (required):');
+            var reason = window.prompt(promptTxt);
             if (reason === null) { return; }
             if (!reason.replace(/\s/g, '').length) {
                 msg(t('reasonRequired', 'A reason is required.'), true);

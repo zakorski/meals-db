@@ -407,19 +407,29 @@ $w = fresh();
 $GLOBALS['wc_stock'] = [101 => 50, 102 => 20];
 $svc = new MealsDB_Purchase_Orders();
 $id = $svc->create_draft(forecast_rows());
-chk($svc->mark_received($id)->get_error_code(), 'locked', 'T-10: receive before approve rejected');
+chk($svc->mark_accepted($id)->get_error_code(), 'locked', 'T-10: accept before approve rejected');
 $svc->approve($id);
+chk($svc->mark_received($id)->get_error_code(), 'locked', 'T-10: receive before accept rejected');
+// Accept commits stock exactly once.
+$r = $svc->mark_accepted($id);
+chk($r, true, 'T-10: mark_accepted succeeds');
+$po = $svc->get_with_payload($id);
+chk($po['status'], 'accepted', 'T-10: status → accepted');
+chk_true(!empty($po['accepted_at']), 'T-10: accepted_at set');
+// CD-001: 10 cases × 6 = 60 units onto 50; SD-002: 2 cases × 12 = 24 onto 20.
+chk($GLOBALS['wc_stock'][101], 110, 'T-10: CD-001 stock committed at accept');
+chk($GLOBALS['wc_stock'][102], 44, 'T-10: SD-002 stock committed at accept');
+chk_true(audit_has($w, 'po_accepted'), 'T-10: po_accepted audited');
+// Received is now a pure marker: status advances, stock unchanged.
 $r = $svc->mark_received($id);
-chk($r, true, 'T-10: mark_received succeeds');
+chk($r, true, 'T-10: mark_received succeeds from accepted');
 $po = $svc->get_with_payload($id);
 chk($po['status'], 'arrived', 'T-10: status → arrived (Received)');
 chk_true(!empty($po['received_at']), 'T-10: received_at set');
 chk_true(!empty($po['arrival_date']), 'T-10: arrival_date set');
-// CD-001: 10 cases × 6 = 60 units onto 50; SD-002: 2 cases × 12 = 24 onto 20.
-chk($GLOBALS['wc_stock'][101], 110, 'T-10: CD-001 stock bumped by ordered units');
-chk($GLOBALS['wc_stock'][102], 44, 'T-10: SD-002 stock bumped by ordered units');
+chk($GLOBALS['wc_stock'][101], 110, 'T-10: received does not re-bump');
 chk_true(audit_has($w, 'po_received'), 'T-10: po_received audited');
-// Second click: guard loses, NO second bump.
+// Second receive click: guard loses.
 chk($svc->mark_received($id)->get_error_code(), 'locked', 'T-10: double receive rejected');
 chk($GLOBALS['wc_stock'][101], 110, 'T-10: no double bump');
 
@@ -453,13 +463,17 @@ chk($po['expected_arrival'], null, 'T-11: expected_arrival cleared on unapprove'
 $f = fired('mealsdb_po_unapproved');
 chk($f[0]['args'], [$id, 'window moved'], 'T-11: unapproved hook args');
 
-// malformed expected_arrival → stored as null, hook gets null.
+// malformed (or absent) expected_arrival → falls back to the derived cadence
+// arrival (T+13 from today's order date), NOT null — directive item 3.
+$derived_arrival = MealsDB_Purchase_Orders::po_schedule_from_order_date(gmdate('Y-m-d'))['expected_arrival'];
 chk($svc->approve($id, 'not-a-date'), true, 'T-11: approve tolerates malformed date');
-chk($svc->get_with_payload($id)['expected_arrival'], null, 'T-11: malformed date stored as null');
+chk($svc->get_with_payload($id)['expected_arrival'], $derived_arrival, 'T-11: malformed date → derived T+13 arrival');
 $f = fired('mealsdb_po_approved');
-chk($f[1]['args'], [$id, null], 'T-11: hook gets null for malformed date');
+chk($f[1]['args'], [$id, $derived_arrival], 'T-11: hook gets derived arrival for malformed date');
 
-// mark_received with an explicit arrival date.
+// mark_accepted commits stock, then mark_received with an explicit arrival date.
+chk($svc->mark_accepted($id), true, 'T-11: mark_accepted before receive');
+chk(count(fired('mealsdb_po_accepted')), 1, 'T-11: mealsdb_po_accepted fired');
 chk($svc->mark_received($id, '2026-07-22'), true, 'T-11: mark_received accepts arrival_date');
 $po = $svc->get_with_payload($id);
 chk($po['arrival_date'], '2026-07-22', 'T-11: explicit arrival_date stored');
