@@ -1406,7 +1406,7 @@ class MealsDB_Quick_Order_Ajax {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $client = $wpdb->get_row($wpdb->prepare(
             "SELECT client_id, client_type, delivery_frequency,
-                    delivery_fee, client_contribution
+                    delivery_fee, client_contribution, delivery_area_zone
              FROM {$clients_table}
              WHERE wp_user_id = %d AND active = 1
              LIMIT 1",
@@ -1419,6 +1419,11 @@ class MealsDB_Quick_Order_Ajax {
 
         $client_id   = (int) $client['client_id'];
         $client_type = $client['client_type'];
+        // Plain column (not in ENCRYPTED_CLIENT_COLUMNS). Sent at the TOP LEVEL
+        // of the response — NOT inside `allocation`, which only exists for
+        // SDNB/Veteran — so private clients (the bulk of zoned clients) get it too.
+        $delivery_area_zone = isset($client['delivery_area_zone']) && $client['delivery_area_zone'] !== ''
+            ? (string) $client['delivery_area_zone'] : null;
         // U07-quick-order-8: orders are dated in the SITE timezone
         // (parse_order_date() uses wp_timezone()), so the allocation summary is
         // keyed on the site-local month. Deriving the preview month with UTC
@@ -1428,7 +1433,7 @@ class MealsDB_Quick_Order_Ajax {
         $billing_month = current_time('Y-m');
 
         if (!in_array($client_type, ['SDNB', 'Veteran'], true)) {
-            wp_send_json(['success' => true, 'allocation' => null, 'client_type' => $client_type]);
+            wp_send_json(['success' => true, 'allocation' => null, 'client_type' => $client_type, 'delivery_area_zone' => $delivery_area_zone]);
         }
 
         $engine  = new MealsDB_Allocation_Engine();
@@ -1480,9 +1485,10 @@ class MealsDB_Quick_Order_Ajax {
         $collect_total = $delivery_fee + ($contribution_due ? $client_contribution : 0);
 
         wp_send_json([
-            'success'           => true,
-            'client_type'       => $client_type,
-            'allocation'        => $summary ? [
+            'success'            => true,
+            'client_type'        => $client_type,
+            'delivery_area_zone' => $delivery_area_zone,
+            'allocation'         => $summary ? [
                 'billing_month'   => $summary['billing_month'],
                 'permitted_mains' => (int) $summary['permitted_mains'],
                 'permitted_sides' => (int) $summary['permitted_sides'],
@@ -1539,6 +1545,16 @@ class MealsDB_Quick_Order_Ajax {
         $history = $engine->get_client_history($client_id, 12);
 
         $details = $engine->get_client_month_details($client_id, $billing_month);
+        // Flag whether each order still exists so the client-side renders a live
+        // link vs. plain text — a deleted order (e.g. #28528) must not become a
+        // dead link, and the ledger row can outlive the WC order. HPOS-correct.
+        if (function_exists('wc_get_order')) {
+            foreach ($details as &$detail_row) {
+                $oid = isset($detail_row['wc_order_id']) ? (int) $detail_row['wc_order_id'] : 0;
+                $detail_row['order_exists'] = ($oid > 0 && wc_get_order($oid) instanceof WC_Order);
+            }
+            unset($detail_row);
+        }
 
         wp_send_json([
             'success'       => true,

@@ -159,9 +159,20 @@
                     '<th>' + escHtml(i18n.colSides || '') + '</th>' +
                 '</tr></thead><tbody>';
             $.each(details, function (i, d) {
+                var orderId = parseInt(d.wc_order_id, 10) || 0;
+                var orderCell;
+                if (orderId > 0 && d.order_exists && config.adminOrderUrlBase) {
+                    // Open in a new tab so the operator doesn't lose the client
+                    // record. A deleted order (order_exists false) stays plain text.
+                    var href = config.adminOrderUrlBase + encodeURIComponent(orderId);
+                    orderCell = '<a href="' + escHtml(href) + '" target="_blank" rel="noopener noreferrer">'
+                        + escHtml(orderId) + '</a>';
+                } else {
+                    orderCell = intText(d.wc_order_id);
+                }
                 html += '<tr>' +
                     '<td>' + escHtml(d.delivery_date || '') + '</td>' +
-                    '<td>' + intText(d.wc_order_id) + '</td>' +
+                    '<td>' + orderCell + '</td>' +
                     '<td>' + intText(d.mains_count) + '</td>' +
                     '<td>' + intText(d.sides_count) + '</td>' +
                 '</tr>';

@@ -432,6 +432,15 @@
                     // (display-only; see updateSummaryDate — avoids re-firing
                     // the change handler's fetchNextDates round-trip).
                     this.updateSummaryDate();
+                    // Recompute Next Order / Next Delivery from the CLONED date:
+                    // the change-triggered fetch ran before this date was set, so
+                    // the panel showed pre-clone values. Call directly, never via a
+                    // change event — change re-enters fetchNextDates and one clone
+                    // call site is inside that handler (recursion). Override stays
+                    // empty (skipDeliveryPrefill).
+                    if (payload.client_id) {
+                        this.fetchNextDates(parseInt(payload.client_id, 10), { skipDeliveryPrefill: true });
+                    }
                 }
 
                 if (hasItems) {
@@ -440,6 +449,16 @@
 
                 this.setMissingCloneItems(hasMissing ? parsedItems.missing : []);
                 this.renderUnavailableTilesFromState();
+
+                // Monthly Allowance can read empty after a clone if the
+                // change-triggered allocation fetch is raced by the subsequent
+                // clone rendering. Re-fetch explicitly with the resolved client id
+                // as the last writer (idempotent). fetchClientAllocation also
+                // drives hide/showProductPrices off client_type, so this re-asserts
+                // v553 government price suppression on the clone path.
+                if (payload.client_id) {
+                    this.fetchClientAllocation(parseInt(payload.client_id, 10));
+                }
 
                 // Notice must reflect what actually landed in the cart — a
                 // cloned order can resolve to zero cart items (all source
@@ -1801,7 +1820,9 @@
             this.renderSummary();
             this.fetchClientRates(clientId);
             this.fetchClientAllocation(clientId);
-            this.fetchNextDates(clientId);
+            // While cloning, don't let the change-triggered fetch prefill the
+            // one-time delivery override (it must stay empty after a clone).
+            this.fetchNextDates(clientId, { skipDeliveryPrefill: this.state.isCloning });
 
             $(document).trigger('mealsdb_update_summary');
         },
@@ -1811,7 +1832,8 @@
          * and the "rule defaults" (order date + configured frequency), and
          * populate the next-cycle panel.
          */
-        fetchNextDates(userId) {
+        fetchNextDates(userId, options = {}) {
+            const skipDeliveryPrefill = !!options.skipDeliveryPrefill;
             if (!Number.isInteger(userId) || userId <= 0) {
                 $('#mealsdb-qo-next-dates').hide();
                 return;
@@ -1838,9 +1860,15 @@
                 // the per-order delivery date with the client's computed
                 // next_delivery_date; blank when no cadence (the slip
                 // pipeline then falls back to the computed occurrence).
-                self.state.clientDeliveryDay = d.has_client ? (d.delivery_day || '') : '';
-                $('#mealsdb-qo-delivery-date').val(d.has_client ? (d.next_delivery_date || '') : '');
-                self.refreshDeliveryDateWarning();
+                // SKIPPED when cloning — the one-time override must stay empty
+                // after a clone (v550 TEST G). The option is captured in this
+                // closure, so it survives async completion (state.isCloning is
+                // reset in the clone .always() before this .done() runs).
+                if (!skipDeliveryPrefill) {
+                    self.state.clientDeliveryDay = d.has_client ? (d.delivery_day || '') : '';
+                    $('#mealsdb-qo-delivery-date').val(d.has_client ? (d.next_delivery_date || '') : '');
+                    self.refreshDeliveryDateWarning();
+                }
                 // Prefill the required Order Date so Create Order doesn't silently
                 // no-op (the create guard requires it, but nothing populated it).
                 // Order date is normally "today", NOT the future cadence date, so
@@ -2137,6 +2165,10 @@
                 this.$qoTotal.text(govInvoiced ? '' : this.formatPrice(displayTotal));
                 this.$qoTotal.toggle(!govInvoiced);
             }
+            // Hide the whole Subtotal row for government clients so the
+            // `Subtotal (before tax)` label doesn't strand beside an empty
+            // figure (v552/v553: suppression now applies to manual selection too).
+            $('#mealsdb-qo-subtotal-row').toggle(!govInvoiced);
         },
 
         refreshProductPriceDisplay() {
@@ -2182,6 +2214,13 @@
                     this.state.clientFees = response.fees || null;
                     this.state.nextDelivery = response.next_delivery || null;
                     this.state.straddlesMonth = response.straddles_month || false;
+                    const $zone = $('#mealsdb-quick-order-summary-zone');
+                    if ($zone.length) {
+                        const zoneVal = response.delivery_area_zone;
+                        $zone.text((zoneVal === null || zoneVal === undefined || zoneVal === '')
+                            ? this.translate('No zone')
+                            : this.translate('Zone %s').replace('%s', String(zoneVal)));
+                    }
                     this.renderAllocationPanel();
 
                     if (['SDNB', 'Veteran'].includes(response.client_type)) {

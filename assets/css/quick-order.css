@@ -56,6 +56,38 @@
     border-radius: 4px;
     padding: 1rem;
     background: #fff;
+    /* Item 2: keep the Order Summary in view on long product lists. A long
+       cart scrolls INSIDE the panel rather than growing past the viewport.
+       top/max-height clear the WP admin bar (32px desktop / 46px collapsed). */
+    position: sticky;
+    top: 42px;
+    max-height: calc(100vh - 52px);
+    overflow-y: auto;
+    align-self: start;
+}
+
+@media screen and (max-width: 782px) {
+    .mealsdb-quick-order__summary {
+        top: 56px;
+        max-height: calc(100vh - 66px);
+    }
+}
+
+/* Item 3: align each cart line into name | qty | price columns; right-align
+   the numerics into a readable money column. Government clients emit only
+   name + qty — the empty third column collapses without a stranded cell. */
+.mealsdb-quick-order__summary-item {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    column-gap: 12px;
+    align-items: baseline;
+}
+
+.mealsdb-quick-order__summary-item-qty,
+.mealsdb-quick-order__summary-item-total {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 .mealsdb-quick-order__summary h2 {
