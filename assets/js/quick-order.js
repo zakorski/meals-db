@@ -24,6 +24,7 @@
                 cart: {},
                 hasLoadedClone: false,
                 isCloning: false,
+                nextDatesSeq: 0,
                 cloneOrderId: null,
                 currentClientId: null,
                 currentClientType: '',
@@ -1838,6 +1839,7 @@
                 $('#mealsdb-qo-next-dates').hide();
                 return;
             }
+            const seq = ++this.state.nextDatesSeq;
             const self = this;
             $.ajax({
                 url: this.getAjaxUrl(),
@@ -1850,6 +1852,12 @@
                     order_date: this.$orderDate ? (this.$orderDate.val() || '') : '',
                 },
             }).done(function(resp) {
+                // Discard a superseded response: only the most recent
+                // fetchNextDates may write the panel. This kills the clone race —
+                // the change-triggered fetch (pre-clone date) and the clone's
+                // fetch (cloned date) are both in flight; last-issued wins,
+                // last-to-RESOLVE no longer does (v558 ITEM 2).
+                if (seq !== self.state.nextDatesSeq) { return; }
                 if (!resp || !resp.success) return;
                 const d = resp.data || {};
                 self.state.nextDatesDefaults = {

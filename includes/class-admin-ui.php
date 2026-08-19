@@ -2294,10 +2294,11 @@ class MealsDB_Admin_UI {
                             <th><?php esc_html_e('Sides Used', 'meals-db'); ?></th>
                             <th><?php esc_html_e('Sides Overage', 'meals-db'); ?></th>
                             <th><?php esc_html_e('Status', 'meals-db'); ?></th>
+                            <th><?php esc_html_e('Order', 'meals-db'); ?></th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr><td colspan="8"><?php esc_html_e('Loading...', 'meals-db'); ?></td></tr>
+                        <tr><td colspan="9"><?php esc_html_e('Loading...', 'meals-db'); ?></td></tr>
                     </tbody>
                 </table>
             </div>

@@ -487,17 +487,18 @@ class MealsDB_Schema {
                     'placed_date'      => 'DATE NULL',
                     'expected_arrival' => 'DATE NULL',
                     'arrival_date'     => 'DATE NULL',
-                    'status'           => "ENUM('planned','placed','accepted','arrived','reconciled','cancelled') NOT NULL DEFAULT 'planned'",
+                    'status'           => "ENUM('planned','placed','accepted','arrived','counted','reconciled','cancelled') NOT NULL DEFAULT 'planned'",
                     'items'            => 'JSON NULL',
                     'notes'            => 'TEXT NULL',
                     'reconciled_at'    => 'DATETIME NULL',
                     // --- PO draft workflow (2026-07 spec; 'accepted' added 2026-08).
-                    // ADDITIVE column changes are auto-applied by Schema_Sync; the
-                    // status ENUM edit (add 'accepted', drop the dead 'counted') is a
-                    // RISKY change (ENUM narrowing) surfaced in Data-Ops → Schema
-                    // Changes for a typed ALTER — safe here because existing POs are
-                    // wiped at cutover, so no row holds 'counted'. payload IS NULL
-                    // marks a legacy task-created PO (read-only in the new UI).
+                    // 'accepted' is added as a SAFE, auto-applied ENUM drift. 'counted'
+                    // is retained UNUSED on purpose: bundling its removal with the
+                    // 'accepted' addition reclassified the whole column change as RISKY
+                    // and withheld BOTH (v558 ITEM 1 — the accepted migration silently
+                    // never applied, coercing writes to ''). Remove 'counted' later as a
+                    // standalone operator-confirmed risky change, never bundled. payload
+                    // IS NULL marks a legacy task-created PO (read-only in the new UI).
                     'payload'          => 'LONGTEXT NULL',
                     'edit_count'       => 'INT UNSIGNED NOT NULL DEFAULT 0',
                     'created_by'       => 'BIGINT UNSIGNED NULL',

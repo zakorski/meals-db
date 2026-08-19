@@ -1554,6 +1554,14 @@ class MealsDB_Quick_Order_Ajax {
                 $detail_row['order_exists'] = ($oid > 0 && wc_get_order($oid) instanceof WC_Order);
             }
             unset($detail_row);
+            // Same existence flag for the summary rows' contribution order (v558
+            // ITEM 3): the summary table links contribution_order_id, deleted →
+            // plain text. get_client_history() is SELECT *, so the id is present.
+            foreach ($history as &$hist_row) {
+                $coid = isset($hist_row['contribution_order_id']) ? (int) $hist_row['contribution_order_id'] : 0;
+                $hist_row['order_exists'] = ($coid > 0 && wc_get_order($coid) instanceof WC_Order);
+            }
+            unset($hist_row);
         }
 
         wp_send_json([

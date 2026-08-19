@@ -188,6 +188,20 @@
                     + esc(i18n.addedLabel || 'added — not on original order') + '</span> ');
                 $line.append($sel).append(' ').append($qty).append(' ').append($rm);
                 $added.append($line);
+                // Searchable picker (v558 ITEM 4): selectWoo matches the option
+                // text ("Name (SKU)") on substring, case-insensitively — so typing
+                // "pot pie" or "12135" both find the product. Falls back to the
+                // plain <select> if selectWoo isn't available. The existing
+                // change handler still fires under selectWoo, so data-product-id
+                // keeps updating.
+                if ($.fn.selectWoo) {
+                    $sel.selectWoo({
+                        width: '260px',
+                        placeholder: i18n.selectProduct || 'Select a product…',
+                        dropdownParent: $line
+                    });
+                    $sel.trigger('focus');
+                }
             });
         });
 

@@ -68,6 +68,12 @@ class AcceptWpdb extends wpdb {
         if (stripos($q, 'meals_purchase_orders') !== false && preg_match('/po_id = (\d+)/', $q, $m)) { return $this->pos[(int) $m[1]] ?? null; }
         return null;
     }
+    public function get_var($q) {
+        if (stripos($q, 'meals_purchase_orders') !== false && preg_match('/po_id = (\d+)/', $q, $m)) {
+            return $this->pos[(int) $m[1]]['status'] ?? null;
+        }
+        return null;
+    }
     public function get_results($q, $o = null) {
         if (stripos($q, 'meals_purchase_orders') !== false) { return array_values($this->pos); }
         return [];
@@ -83,6 +89,19 @@ class AcceptWpdb extends wpdb {
         return 0;
     }
     public function query($q) { if (stripos($q, 'meals_audit_log') !== false) { $this->audit[] = $q; } return 1; }
+}
+
+// Simulates a non-strict MySQL connection whose status column has NOT migrated
+// to allow 'accepted': the invalid write is silently coerced to '' and still
+// reports 1 row changed (v558 ITEM 1).
+class CoerceWpdb extends AcceptWpdb {
+    public function update($table, $data, $where, $df = null, $wf = null) {
+        if (strpos($table, 'meals_purchase_orders') !== false
+            && isset($data['status']) && $data['status'] === 'accepted') {
+            $data['status'] = '';
+        }
+        return parent::update($table, $data, $where, $df, $wf);
+    }
 }
 
 // WC stock stub — 'decrease' op works (used by unaccept).
@@ -182,6 +201,21 @@ $svc->approve($id);
 $svc->mark_accepted($id);
 chk($svc->mark_accepted($id)->get_error_code(), 'locked', 'A-6: second accept rejected');
 chk($GLOBALS['wc_stock'][101], 110, 'A-6: no double bump on CD-001');
+
+// ===========================================================================
+// A-drift: a coerced status (unmigrated ENUM) aborts BEFORE the stock bump.
+// ===========================================================================
+$w = new CoerceWpdb();
+$GLOBALS['wpdb'] = $w;
+$GLOBALS['wc_stock'] = [101 => 50, 102 => 20];
+$svc = new MealsDB_Purchase_Orders();
+$id = $svc->create_draft(forecast_rows());
+$svc->approve($id);
+$res = $svc->mark_accepted($id);
+chk_true(is_wp_error($res), 'A-drift: coerced status returns WP_Error');
+chk($res->get_error_code(), 'schema_drift', 'A-drift: error code names schema drift');
+chk($GLOBALS['wc_stock'][101], 50, 'A-drift: CD-001 stock NOT bumped on drift');
+chk($GLOBALS['wc_stock'][102], 20, 'A-drift: SD-002 stock NOT bumped on drift');
 
 // ===========================================================================
 // A-7..A-8: cadence helper.

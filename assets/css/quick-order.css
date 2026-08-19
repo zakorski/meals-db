@@ -56,9 +56,12 @@
     border-radius: 4px;
     padding: 1rem;
     background: #fff;
-    /* Item 2: keep the Order Summary in view on long product lists. A long
-       cart scrolls INSIDE the panel rather than growing past the viewport.
-       top/max-height clear the WP admin bar (32px desktop / 46px collapsed). */
+    box-sizing: border-box;
+    /* Item 2 (#523): keep the Order Summary in view on long product lists. A
+       long cart scrolls INSIDE the panel rather than growing past the viewport.
+       top/max-height clear the WP admin bar (32px desktop / 46px collapsed).
+       box-sizing:border-box (v558 ITEM 6b) folds the 1rem padding INTO
+       max-height so the panel bottom — with Create Order — no longer overruns. */
     position: sticky;
     top: 42px;
     max-height: calc(100vh - 52px);

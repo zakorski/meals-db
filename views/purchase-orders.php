@@ -388,7 +388,7 @@ $rows = $service->query($filters);
         </button>
     </div>
 
-    <p class="description"><?php esc_html_e('Generate creates a seasonally-adjusted, pallet-optimized draft and opens it for review. Approve locks a draft; Mark received adds it to inventory; Reconcile records what actually arrived.', 'meals-db'); ?></p>
+    <p class="description"><?php esc_html_e('Generate creates a seasonally-adjusted, pallet-optimized draft and opens it for review. Approve locks a draft; Accept commits it to inventory (vendor confirmed); Mark received records arrival; Reconcile records what actually arrived.', 'meals-db'); ?></p>
 
     <details style="margin-bottom:12px;">
         <summary class="description" style="cursor:pointer;"><?php esc_html_e('How the forecast works', 'meals-db'); ?></summary>

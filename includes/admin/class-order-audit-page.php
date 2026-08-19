@@ -67,10 +67,16 @@ class MealsDB_Order_Audit_Page {
         wp_enqueue_script(
             'mealsdb-order-audit-js',
             plugins_url('assets/js/order-audit.js', dirname(dirname(__FILE__))),
-            ['jquery'],
+            ['jquery', 'selectWoo'],
             defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false,
             true
         );
+        // selectWoo (WooCommerce's select2 fork) powers the searchable Add-Item
+        // product picker (v558 ITEM 4). Registered by WC in admin; style handle
+        // is 'select2'. Enqueue defensively so a missing handle can't fatal.
+        if (wp_style_is('select2', 'registered')) {
+            wp_enqueue_style('select2');
+        }
 
         wp_localize_script('mealsdb-order-audit-js', 'mealsdbOrderAudit', [
             'ajaxUrl'       => admin_url('admin-ajax.php'),
@@ -316,7 +322,22 @@ class MealsDB_Order_Audit_Page {
             $s = is_array($it) ? trim((string) ($it['sku'] ?? '')) : '';
             if ($s !== '') { $skus[] = $s; }
         }
-        echo '<td class="oa-sku">' . esc_html(implode(', ', $skus)) . '</td>';
+        $sku_html = esc_html(implode(', ', $skus));
+        // Added items (shipped but not on the original order) render here too, so
+        // they survive into the FINALIZED read-only view — the editor block that
+        // also lists them only renders while $editable (v558 ITEM 5). Amber, and
+        // shown as "Name (SKU)" so the permanent record names what was added.
+        $added_items = (isset($row['added_items']) && is_array($row['added_items'])) ? $row['added_items'] : [];
+        foreach ($added_items as $ai) {
+            if (!is_array($ai)) { continue; }
+            $a_name = trim((string) ($ai['product_name'] ?? ''));
+            $a_sku  = trim((string) ($ai['sku'] ?? ''));
+            $label  = $a_name . ($a_sku !== '' ? ' (' . $a_sku . ')' : '');
+            $sku_html .= ' <span class="oa-sku-added" style="color:#8a6d00;" title="'
+                . esc_attr__('added — not on original order', 'meals-db') . '">&#10010; '
+                . esc_html($label) . '</span>';
+        }
+        echo '<td class="oa-sku">' . $sku_html . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput -- each piece escaped above
         // Mains/Sides: snapshot counts always. A Δ marker (via the oa-delta
         // span, toggled by JS on save) flags that per-item quantities were
         // adjusted — we cannot re-derive mains/sides without product categories.

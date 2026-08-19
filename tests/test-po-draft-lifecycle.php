@@ -100,6 +100,12 @@ class PoWpdb extends wpdb {
         }
         return null;
     }
+    public function get_var($q) {
+        if (stripos($q, 'meals_purchase_orders') !== false && preg_match('/po_id = (\d+)/', $q, $m)) {
+            return $this->pos[(int) $m[1]]['status'] ?? null;
+        }
+        return null;
+    }
 
     public function get_results($q, $o = null) {
         if (stripos($q, 'meals_purchase_orders') !== false) {
