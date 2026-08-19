@@ -41,6 +41,23 @@
         return $('#oa-grid').data('audit-id');
     }
 
+    function esc(s) {
+        var d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+    }
+
+    // Product catalogue for Add-Item, fetched once and cached. Each entry is
+    // {product_id, name, sku}. On failure the Add-Item control alerts and no-ops.
+    var _catalogue = null;
+    function withCatalogue(cb) {
+        if (_catalogue) { cb(_catalogue); return; }
+        post('mealsdb_order_audit_products', {}, function (d) {
+            _catalogue = (d && d.products) || [];
+            cb(_catalogue);
+        });
+    }
+
     // "{resolved} of {row_count} orders resolved" — mirror the server format and
     // toggle the finalize button. resolved = confirmed + edited.
     function updateProgress(d) {
@@ -110,12 +127,20 @@
                 var raw = parseInt($(this).val(), 10);
                 qtys[key] = isNaN(raw) ? 0 : raw;
             });
+            var added = [];
+            $editor.find('.oa-added-line').each(function () {
+                var pid = parseInt($(this).attr('data-product-id'), 10) || 0;
+                if (pid <= 0) { return; } // an un-picked new line is skipped
+                var q = parseInt($(this).find('.oa-added-qty').val(), 10);
+                added.push({ product_id: pid, qty: isNaN(q) ? 1 : q });
+            });
             var note = $editor.find('.oa-note').val() || '';
             post('mealsdb_order_audit_edit', {
                 audit_id: auditId(),
                 order_id: orderId,
                 qtys: qtys,
-                note: note
+                note: note,
+                added: added
             }, function (d) {
                 var $row = auditRow(orderId);
                 applyRowStatus($row, 'edited');
@@ -140,6 +165,35 @@
         // --- Cancel: just hide the editor row (no server call) ---
         $('#oa-grid').on('click', '.oa-editor-cancel', function () {
             $(this).closest('.oa-editor-row').hide();
+        });
+
+        // --- Add Item: append a product picker + qty + remove to the editor ---
+        $('#oa-grid').on('click', '.oa-editor-add-item', function () {
+            var $added = $(this).closest('.oa-editor-row').find('.oa-editor-added');
+            withCatalogue(function (products) {
+                var $line = $('<div class="oa-added-line" data-product-id="0" style="margin:3px 0;"></div>');
+                var $sel = $('<select class="oa-added-select"></select>');
+                $sel.append('<option value="0">' + esc(i18n.selectProduct || 'Select a product…') + '</option>');
+                products.forEach(function (p) {
+                    var label = p.name + (p.sku ? ' (' + p.sku + ')' : '');
+                    $('<option></option>').attr('value', p.product_id).attr('data-sku', p.sku || '')
+                        .text(label).appendTo($sel);
+                });
+                $sel.on('change', function () {
+                    $line.attr('data-product-id', String(parseInt($(this).val(), 10) || 0));
+                });
+                var $qty = $('<input type="number" min="1" class="oa-added-qty" value="1" style="width:70px;" />');
+                var $rm = $('<button type="button" class="button-link oa-added-remove">&times;</button>');
+                $line.append('<span class="oa-added-label" style="color:#8a6d00;">'
+                    + esc(i18n.addedLabel || 'added — not on original order') + '</span> ');
+                $line.append($sel).append(' ').append($qty).append(' ').append($rm);
+                $added.append($line);
+            });
+        });
+
+        // --- Remove an added line (unsaved or saved; persistence is on Save) ---
+        $('#oa-grid').on('click', '.oa-added-remove', function () {
+            $(this).closest('.oa-added-line').remove();
         });
 
         // --- Finalize the whole audit ---
