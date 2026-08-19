@@ -4,7 +4,9 @@
  * draft-workflow lifecycle (spec 2026-07-10).
  *
  * Workflow states (status column doubles as state):
- *   planned=Draft → placed=Approved → arrived=Received → reconciled
+ *   planned=Draft → placed=Approved → accepted=Accepted → arrived=Received → reconciled
+ * Inventory is committed at ACCEPTED (vendor confirmed); Received is a pure
+ * state marker. Un-accept reverses the committed stock.
  * Transitions are guarded here; each step is driven by a direct service
  * call (create_draft, approve_draft, etc.), NOT by task on_complete callbacks.
  *
@@ -21,6 +23,7 @@ class MealsDB_Purchase_Orders {
 
     public const STATUS_PLANNED    = 'planned';
     public const STATUS_PLACED     = 'placed';
+    public const STATUS_ACCEPTED   = 'accepted';
     public const STATUS_ARRIVED    = 'arrived';
     public const STATUS_RECONCILED = 'reconciled';
     public const STATUS_CANCELLED  = 'cancelled';
@@ -28,7 +31,7 @@ class MealsDB_Purchase_Orders {
     /**
      * PO draft workflow (spec 2026-07-10). The existing statuses double as
      * the workflow states — displayed via status_label():
-     *   planned=Draft, placed=Approved, arrived=Received, reconciled, cancelled.
+     *   planned=Draft, placed=Approved, accepted=Accepted, arrived=Received, reconciled, cancelled.
      * payload IS NULL ⇒ legacy task-created PO: the new workflow refuses to
      * touch it (its lifecycle belongs to the task chain — prevents a task and
      * a list action double-applying the same inventory bump).
@@ -57,15 +60,13 @@ class MealsDB_Purchase_Orders {
      * but never set anywhere. The legacy physical_count task type (now
      * deleted — feat/po-task-integration) handled both counting and
      * reconciliation in one step, so the intermediate state had no
-     * place in the workflow. Removed for clarity. The schema ENUM in
-     * class-schema.php still tolerates 'counted' for now — a dev-side
-     * `SELECT COUNT(*) ... WHERE
-     * status='counted'` check is required before tightening the
-     * ENUM, since any orphan row would fail the new constraint.
+     * place in the workflow. Removed for clarity. The schema ENUM no longer
+     * carries 'counted' either (dropped alongside adding 'accepted', 2026-08).
      */
     public const ALLOWED_STATUSES = [
         self::STATUS_PLANNED,
         self::STATUS_PLACED,
+        self::STATUS_ACCEPTED,
         self::STATUS_ARRIVED,
         self::STATUS_RECONCILED,
         self::STATUS_CANCELLED,
@@ -283,6 +284,43 @@ class MealsDB_Purchase_Orders {
         return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) ? $value : null;
     }
 
+    /**
+     * Derive the Apetito order cadence from a single order date T (a Tuesday in
+     * the normal 4-week cycle). Calendar-day math anchored to UTC so it is
+     * DST-proof (Pattern 11): a Y-m-d in, Y-m-d out.
+     *
+     *   inventory_due    = T + 8   (Wed, following week)
+     *   ship_date        = T + 10  (Fri)
+     *   expected_arrival = T + 13  (Mon after the Fri ship — confirmed 2026-08-14)
+     *   next_order_date  = T + 28  (Tue, four weeks on)
+     *
+     * is_off_cycle is true when T is not a Tuesday; the offsets are still taken
+     * from the actual date (never snapped) so an off-cycle order is shown, not
+     * blocked (directive item 3).
+     *
+     * @return array{order_date:string,inventory_due:string,ship_date:string,expected_arrival:string,next_order_date:string,is_off_cycle:bool}|null
+     *         null when $order_date is not a valid Y-m-d.
+     */
+    public static function po_schedule_from_order_date(string $order_date): ?array {
+        $base   = DateTimeImmutable::createFromFormat('!Y-m-d', $order_date, new DateTimeZone('UTC'));
+        $errors = DateTimeImmutable::getLastErrors();
+        if ($base === false || ($errors && ($errors['warning_count'] || $errors['error_count']))) {
+            return null;
+        }
+        $add = static function (int $days) use ($base): string {
+            return $base->modify('+' . $days . ' days')->format('Y-m-d');
+        };
+        return [
+            'order_date'       => $base->format('Y-m-d'),
+            'inventory_due'    => $add(8),
+            'ship_date'        => $add(10),
+            'expected_arrival' => $add(13),
+            'next_order_date'  => $add(28),
+            // Tuesday === ISO-8601 weekday 2.
+            'is_off_cycle'     => $base->format('N') !== '2',
+        ];
+    }
+
     // -----------------------------------------------------------------
     // Draft workflow (spec 2026-07-10) — creation + reads
     // -----------------------------------------------------------------
@@ -432,6 +470,7 @@ class MealsDB_Purchase_Orders {
         switch ($status) {
             case self::STATUS_PLANNED:    return __('Draft', 'meals-db');
             case self::STATUS_PLACED:     return __('Approved', 'meals-db');
+            case self::STATUS_ACCEPTED:   return __('Accepted', 'meals-db');
             case self::STATUS_ARRIVED:    return __('Received', 'meals-db');
             case self::STATUS_RECONCILED: return __('Reconciled', 'meals-db');
             case self::STATUS_CANCELLED:  return __('Cancelled', 'meals-db');
@@ -528,6 +567,17 @@ class MealsDB_Purchase_Orders {
         // approve dialog) rides the same guarded transition and becomes the
         // confirm-arrival task's due date. Malformed → null (bridge falls back).
         $expected_arrival = self::normalize_date($expected_arrival);
+
+        // When the caller passes no date, derive the cadence's expected arrival
+        // (T + 13) from today's order date, keeping expected_arrival meaningful
+        // rather than NULL (directive item 3). placed_date is set to this same
+        // gmdate() below, so T is consistent.
+        if ($expected_arrival === null) {
+            $schedule = self::po_schedule_from_order_date(gmdate('Y-m-d'));
+            if ($schedule !== null) {
+                $expected_arrival = $schedule['expected_arrival'];
+            }
+        }
 
         $items = [];
         foreach ($po['payload']['current'] as $row) {
@@ -641,10 +691,88 @@ class MealsDB_Purchase_Orders {
     }
 
     /**
-     * Approved → Received. The guarded transition runs FIRST so a double-click
-     * can't apply the inventory bump twice (the loser's UPDATE matches 0
-     * rows and returns before any stock write). The bump itself is this class's
-     * own `apply_inventory_bump` (one inventory-bump implementation in the plugin).
+     * Approved → Accepted. THE inventory commit point (directive 2a): the
+     * vendor has confirmed the order, so stock is committed now — before
+     * physical delivery. The guarded transition runs FIRST so a double-click
+     * can't bump twice (the loser's UPDATE matches 0 rows and returns before
+     * any stock write). Do NOT reorder.
+     *
+     * @return true|WP_Error
+     */
+    public function mark_accepted(int $po_id) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        $po = $this->require_workflow_po($po_id, self::STATUS_PLACED,
+            __('Only approved purchase orders can be marked accepted.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_ACCEPTED, [
+            'accepted_by' => get_current_user_id() ?: null,
+            'accepted_at' => gmdate('Y-m-d H:i:s'),
+        ]);
+        if (!$ok) {
+            return new WP_Error('race', __('Could not mark accepted (a concurrent change happened) — reload.', 'meals-db'));
+        }
+
+        self::apply_inventory_bump((array) $po['items']);
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_accepted', $po_id, 'status', self::STATUS_PLACED, self::STATUS_ACCEPTED);
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_accepted', $po_id);
+        }
+        return true;
+    }
+
+    /**
+     * Accepted → Approved, reason required and audited (mirrors unapprove).
+     * Because Accept committed stock, this REVERSES it: the exact quantities
+     * from the stored PO items are decremented — never a recomputation, so the
+     * reversal mirrors the accept bump 1:1 even if live stock drifted between
+     * (directive 2c). Transition FIRST, stock write SECOND — the accept guard.
+     *
+     * @return true|WP_Error
+     */
+    public function unaccept(int $po_id, string $reason) {
+        if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
+            return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
+        }
+        $reason = trim($reason);
+        if ($reason === '') {
+            return new WP_Error('reason_required', __('A reason is required to un-accept (it is audited).', 'meals-db'));
+        }
+        $po = $this->require_workflow_po($po_id, self::STATUS_ACCEPTED,
+            __('Only accepted (not yet received) purchase orders can be un-accepted.', 'meals-db'));
+        if (is_wp_error($po)) {
+            return $po;
+        }
+
+        $ok = $this->transition($po_id, self::STATUS_ACCEPTED, self::STATUS_PLACED, [
+            'accepted_by' => null,
+            'accepted_at' => null,
+        ]);
+        if (!$ok) {
+            return new WP_Error('race', __('Could not un-accept (a concurrent change happened) — reload.', 'meals-db'));
+        }
+
+        self::apply_inventory_bump((array) $po['items'], 'decrease');
+        if (class_exists('MealsDB_Logger')) {
+            MealsDB_Logger::log('po_unaccepted', $po_id, 'reason', null,
+                substr($reason, 0, self::MAX_NOTE_LEN));
+        }
+        if (function_exists('do_action')) {
+            do_action('mealsdb_po_unaccepted', $po_id, $reason);
+        }
+        return true;
+    }
+
+    /**
+     * Accepted → Received. A PURE state marker (directive 2b): stock was
+     * already committed at Accept, so this method must NOT touch inventory —
+     * doing so would double-count every PO. It records the ACTUAL arrival date.
      *
      * @return true|WP_Error
      */
@@ -652,8 +780,8 @@ class MealsDB_Purchase_Orders {
         if (class_exists('MealsDB_Permissions') && !MealsDB_Permissions::can_access_plugin()) {
             return new WP_Error('forbidden', __('Insufficient permissions.', 'meals-db'));
         }
-        $po = $this->require_workflow_po($po_id, self::STATUS_PLACED,
-            __('Only approved purchase orders can be marked received.', 'meals-db'));
+        $po = $this->require_workflow_po($po_id, self::STATUS_ACCEPTED,
+            __('Only accepted purchase orders can be marked received.', 'meals-db'));
         if (is_wp_error($po)) {
             return $po;
         }
@@ -662,7 +790,7 @@ class MealsDB_Purchase_Orders {
         // the PO page passes null and gets today (UTC), as before.
         $arrival_date = self::normalize_date($arrival_date) ?? gmdate('Y-m-d');
 
-        $ok = $this->transition($po_id, self::STATUS_PLACED, self::STATUS_ARRIVED, [
+        $ok = $this->transition($po_id, self::STATUS_ACCEPTED, self::STATUS_ARRIVED, [
             'received_by'  => get_current_user_id() ?: null,
             'received_at'  => gmdate('Y-m-d H:i:s'),
             'arrival_date' => $arrival_date,
@@ -671,9 +799,9 @@ class MealsDB_Purchase_Orders {
             return new WP_Error('race', __('Could not mark received (a concurrent change happened) — reload.', 'meals-db'));
         }
 
-        self::apply_inventory_bump((array) $po['items']);
+        // NO inventory bump here — stock was committed at Accept (directive 2b).
         if (class_exists('MealsDB_Logger')) {
-            MealsDB_Logger::log('po_received', $po_id, 'status', self::STATUS_PLACED, self::STATUS_ARRIVED);
+            MealsDB_Logger::log('po_received', $po_id, 'status', self::STATUS_ACCEPTED, self::STATUS_ARRIVED);
         }
         if (function_exists('do_action')) {
             do_action('mealsdb_po_received', $po_id);
@@ -922,12 +1050,18 @@ class MealsDB_Purchase_Orders {
     // -----------------------------------------------------------------
 
     /**
-     * Bump WC stock for each item by quantity_ordered (UNITS). Silently
-     * skips items with unknown SKUs, logging each miss.
+     * Adjust WC stock for each item by quantity_ordered (UNITS), in $direction.
+     * Silently skips items with unknown SKUs, logging each miss. This is the
+     * ONLY stock-write path for POs — accept increases, un-accept decreases.
      *
      * @param array<int, array<string, mixed>> $items
+     * @param string $direction 'increase' (accept) or 'decrease' (un-accept).
+     *        Un-accept reverses the SAME stored quantities that accept committed,
+     *        so this stays the single inventory-write path (directive 2c).
      */
-    public static function apply_inventory_bump(array $items): void {
+    public static function apply_inventory_bump(array $items, string $direction = 'increase'): void {
+        // Whitelist: anything but the explicit reversal is an increase.
+        $direction = ($direction === 'decrease') ? 'decrease' : 'increase';
         if (!function_exists('wc_get_product_id_by_sku') || !function_exists('wc_get_product') || !function_exists('wc_update_product_stock')) {
             error_log('[MealsDB Purchase Orders] WooCommerce not available; skipping inventory bump.');
             return;
@@ -956,7 +1090,7 @@ class MealsDB_Purchase_Orders {
             // Atomic DB-level increment (SQL `stock = stock + qty`) instead of a
             // read-modify-write set/save, which clobbers a concurrent stock
             // change (e.g. an order placed between our read and our write).
-            $new_stock = wc_update_product_stock($product, $qty, 'increase');
+            $new_stock = wc_update_product_stock($product, $qty, $direction);
             if ($new_stock === null) {
                 // Product does not manage stock — nothing changed; skip the
                 // audit line rather than log a bogus old->new pair.
@@ -966,7 +1100,7 @@ class MealsDB_Purchase_Orders {
 
             if (class_exists('MealsDB_Logger')) {
                 MealsDB_Logger::log(
-                    'po_inventory_bump',
+                    $direction === 'decrease' ? 'po_inventory_unbump' : 'po_inventory_bump',
                     (int) $product_id,
                     'stock_quantity',
                     (string) $current,

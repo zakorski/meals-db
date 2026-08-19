@@ -35,11 +35,13 @@ $mealsdb_po_render_island = static function (array $extra = []) use ($base_url):
         'floorWeeks'  => MealsDB_Purchase_Orders::COVERAGE_FLOOR_WEEKS,
         'i18n'        => [
             'confirmApprove'   => __('Approve this purchase order? Approved orders are locked (un-approve requires an audited reason).', 'meals-db'),
-            'confirmReceive'   => __('Mark this purchase order as received? Ordered quantities will be ADDED to inventory.', 'meals-db'),
+            'confirmAccept'    => __('Mark this purchase order as accepted? The vendor has confirmed it, so ordered quantities will be ADDED to inventory now.', 'meals-db'),
+            'confirmReceive'   => __('Mark this purchase order as received? Stock was already committed at Accept — this only records arrival.', 'meals-db'),
             'confirmCancel'    => __('Cancel this draft purchase order?', 'meals-db'),
             'confirmComplete'  => __('Complete reconciliation? Stock will be corrected for every adjusted row and the purchase order will be locked.', 'meals-db'),
             'promptExpectedArrival' => __('Expected arrival date (YYYY-MM-DD) — OK approves:', 'meals-db'),
             'promptUnapprove'  => __('Enter a reason for un-approving (required — it is audited):', 'meals-db'),
+            'promptUnaccept'   => __('Enter a reason for un-accepting (required — it reverses inventory and is audited):', 'meals-db'),
             'reasonRequired'   => __('A reason is required.', 'meals-db'),
             'noteRequired'     => __('A note is required for adjusted rows.', 'meals-db'),
             'requestFailed'    => __('Request failed.', 'meals-db'),
@@ -112,7 +114,9 @@ if ($po_id > 0) {
         </h2>
 
         <?php if ($is_workflow && $mode === 'locked' && $status === MealsDB_Purchase_Orders::STATUS_PLACED): ?>
-            <div class="notice notice-info"><p><?php esc_html_e('This purchase order is approved and is shown read-only. Un-approve it to make changes.', 'meals-db'); ?></p></div>
+            <div class="notice notice-info"><p><?php esc_html_e('This purchase order is approved and is shown read-only. Accept it (vendor confirmed) to commit inventory, or un-approve to make changes.', 'meals-db'); ?></p></div>
+        <?php elseif ($is_workflow && $mode === 'locked' && $status === MealsDB_Purchase_Orders::STATUS_ACCEPTED): ?>
+            <div class="notice notice-info"><p><?php esc_html_e('This purchase order is accepted and its stock is committed. Mark it received when it arrives, or un-accept to reverse the inventory commit.', 'meals-db'); ?></p></div>
         <?php elseif ($is_workflow && $mode === 'locked' && $status === MealsDB_Purchase_Orders::STATUS_ARRIVED): ?>
             <div class="notice notice-info"><p><?php esc_html_e('This purchase order has been received. Open Reconcile to record what actually arrived.', 'meals-db'); ?></p></div>
         <?php elseif ($mode === 'reconcile'): ?>
@@ -127,6 +131,8 @@ if ($po_id > 0) {
                     <td><?php echo esc_html((string) ($po['supplier'] ?? '')); ?></td></tr>
                 <tr><th><?php esc_html_e('Placed Date', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['placed_date'] ?? '—')); ?></td></tr>
+                <tr><th><?php esc_html_e('Accepted', 'meals-db'); ?></th>
+                    <td><?php echo esc_html((string) ($po['accepted_at'] ?? '—')); ?></td></tr>
                 <tr><th><?php esc_html_e('Expected Arrival', 'meals-db'); ?></th>
                     <td><?php echo esc_html((string) ($po['expected_arrival'] ?? '—')); ?></td></tr>
                 <tr><th><?php esc_html_e('Arrival', 'meals-db'); ?></th>
@@ -140,17 +146,52 @@ if ($po_id > 0) {
             </tbody>
         </table>
 
+        <?php
+        if ($is_workflow) {
+            $sched_base = !empty($po['placed_date']) ? (string) $po['placed_date'] : gmdate('Y-m-d');
+            $sched = MealsDB_Purchase_Orders::po_schedule_from_order_date($sched_base);
+            if ($sched !== null):
+                $sched_is_preview = empty($po['placed_date']);
+        ?>
+        <table class="form-table mealsdb-po-schedule" role="presentation">
+            <tbody>
+                <tr><th colspan="2"><h3 style="margin:0;">
+                    <?php echo $sched_is_preview
+                        ? esc_html__('Order schedule (preview — set at approval)', 'meals-db')
+                        : esc_html__('Order schedule', 'meals-db'); ?>
+                </h3></th></tr>
+                <tr><th><?php esc_html_e('Order date (T)', 'meals-db'); ?></th>
+                    <td><?php echo esc_html($sched['order_date']);
+                        if ($sched['is_off_cycle']): ?>
+                        <span class="mealsdb-po-flag mealsdb-po-warn" title="<?php esc_attr_e('Off-cycle: order date is not a Tuesday', 'meals-db'); ?>">!</span>
+                        <em><?php esc_html_e('off-cycle (not a Tuesday)', 'meals-db'); ?></em>
+                        <?php endif; ?></td></tr>
+                <tr><th><?php esc_html_e('Inventory in system by (T+8)', 'meals-db'); ?></th>
+                    <td><?php echo esc_html($sched['inventory_due']); ?></td></tr>
+                <tr><th><?php esc_html_e('Apetito ships (T+10)', 'meals-db'); ?></th>
+                    <td><?php echo esc_html($sched['ship_date']); ?></td></tr>
+                <tr><th><?php esc_html_e('Expected arrival (T+13)', 'meals-db'); ?></th>
+                    <td><?php echo esc_html($sched['expected_arrival']); ?></td></tr>
+                <tr><th><?php esc_html_e('Next order (T+28)', 'meals-db'); ?></th>
+                    <td><?php echo esc_html($sched['next_order_date']); ?></td></tr>
+            </tbody>
+        </table>
+        <?php endif; } ?>
+
         <?php if ($is_workflow): ?>
             <p class="mealsdb-po-detail-actions">
                 <?php if ($status === MealsDB_Purchase_Orders::STATUS_PLANNED): ?>
                     <label for="mealsdb-po-expected-arrival"><?php esc_html_e('Expected arrival:', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-po-expected-arrival"
-                        value="<?php echo esc_attr(gmdate('Y-m-d', strtotime('+7 days'))); ?>" />
+                        value="<?php echo esc_attr(gmdate('Y-m-d', strtotime('+13 days'))); ?>" />
                     <button type="button" class="button button-primary mealsdb-po-action" data-po-action="approve" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Approve', 'meals-db'); ?></button>
                     <button type="button" class="button mealsdb-po-action" data-po-action="cancel" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Cancel draft', 'meals-db'); ?></button>
                 <?php elseif ($status === MealsDB_Purchase_Orders::STATUS_PLACED): ?>
-                    <button type="button" class="button button-primary mealsdb-po-action" data-po-action="receive" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Mark received', 'meals-db'); ?></button>
+                    <button type="button" class="button button-primary mealsdb-po-action" data-po-action="accept" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Accept', 'meals-db'); ?></button>
                     <button type="button" class="button mealsdb-po-action" data-po-action="unapprove" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Un-approve', 'meals-db'); ?></button>
+                <?php elseif ($status === MealsDB_Purchase_Orders::STATUS_ACCEPTED): ?>
+                    <button type="button" class="button button-primary mealsdb-po-action" data-po-action="receive" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Mark received', 'meals-db'); ?></button>
+                    <button type="button" class="button mealsdb-po-action" data-po-action="unaccept" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Un-accept', 'meals-db'); ?></button>
                 <?php elseif ($status === MealsDB_Purchase_Orders::STATUS_ARRIVED && $mode !== 'reconcile'): ?>
                     <a class="button button-primary" href="<?php echo esc_url(add_query_arg(['po_id' => $po_id, 'action' => 'reconcile'], $base_url)); ?>"><?php esc_html_e('Reconcile', 'meals-db'); ?></a>
                 <?php elseif ($mode === 'reconcile'): ?>
@@ -428,8 +469,11 @@ $rows = $service->query($filters);
                                 <button type="button" class="button button-small mealsdb-po-action" data-po-action="approve" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Approve', 'meals-db'); ?></button>
                                 <button type="button" class="button button-small mealsdb-po-action" data-po-action="cancel" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Cancel', 'meals-db'); ?></button>
                             <?php elseif ($is_wf && $st === MealsDB_Purchase_Orders::STATUS_PLACED): ?>
-                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="receive" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Mark received', 'meals-db'); ?></button>
+                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="accept" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Accept', 'meals-db'); ?></button>
                                 <button type="button" class="button button-small mealsdb-po-action" data-po-action="unapprove" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Un-approve', 'meals-db'); ?></button>
+                            <?php elseif ($is_wf && $st === MealsDB_Purchase_Orders::STATUS_ACCEPTED): ?>
+                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="receive" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Mark received', 'meals-db'); ?></button>
+                                <button type="button" class="button button-small mealsdb-po-action" data-po-action="unaccept" data-po-id="<?php echo $rid; ?>"><?php esc_html_e('Un-accept', 'meals-db'); ?></button>
                             <?php elseif ($is_wf && $st === MealsDB_Purchase_Orders::STATUS_ARRIVED): ?>
                                 <a class="button button-small" href="<?php echo esc_url(add_query_arg(['po_id' => $rid, 'action' => 'reconcile'], $base_url)); ?>"><?php esc_html_e('Reconcile', 'meals-db'); ?></a>
                             <?php endif; ?>
