@@ -182,6 +182,10 @@ class MealsDB_Quick_Order_UI {
                                 <dd class="mealsdb-quick-order__summary-meta-value" id="mealsdb-quick-order-summary-date"><?php esc_html_e('Not set', 'meals-db'); ?></dd>
                             </div>
                             <div class="mealsdb-quick-order__summary-meta-row">
+                                <dt class="mealsdb-quick-order__summary-meta-label"><?php esc_html_e('Zone', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-meta-value" id="mealsdb-quick-order-summary-zone"><?php esc_html_e('—', 'meals-db'); ?></dd>
+                            </div>
+                            <div class="mealsdb-quick-order__summary-meta-row">
                                 <dt class="mealsdb-quick-order__summary-meta-label"><?php esc_html_e('Billing Rate', 'meals-db'); ?></dt>
                                 <dd class="mealsdb-quick-order__summary-meta-value" id="mealsdb-quick-order-summary-rate"><?php esc_html_e('Not set', 'meals-db'); ?></dd>
                             </div>
@@ -203,7 +207,7 @@ class MealsDB_Quick_Order_UI {
                                 <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Items', 'meals-db'); ?></dt>
                                 <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-items">0</dd>
                             </div>
-                            <div class="mealsdb-quick-order__summary-total-row">
+                            <div class="mealsdb-quick-order__summary-total-row" id="mealsdb-qo-subtotal-row">
                                 <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Subtotal (before tax)', 'meals-db'); ?></dt>
                                 <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-total">0</dd>
                             </div>

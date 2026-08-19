@@ -1089,6 +1089,9 @@ class MealsDB_Admin_UI {
                     'clientId' => $allocation_history_client_id,
                     'ajaxUrl'  => admin_url('admin-ajax.php'),
                     'nonce'    => wp_create_nonce('mealsdb_nonce'),
+                    // HPOS order-edit URL base (id appended client-side). NOT the
+                    // legacy post.php?post=<id> route, which returns nothing under HPOS.
+                    'adminOrderUrlBase' => admin_url('admin.php?page=wc-orders&action=edit&id='),
                     'i18n'     => [
                         'noHistory'         => __('No allocation history found.', 'meals-db'),
                         'loadFailed'        => __('Failed to load allocation history.', 'meals-db'),
