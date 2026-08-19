@@ -68,7 +68,21 @@ class MealsDB_Order_Audit {
             );
             $orders = $generator->get_orders_for_delivery_range($clients, $week_start, $week_end);
 
-            return self::build_rows_from_orders($orders, $clients);
+            // SKU is NOT in meals_clients/meals_products; resolve it from the QO
+            // product catalogue (product_id => WC SKU) and hand it to the pure
+            // builder so build_rows_from_orders stays DB-free. Added items use the
+            // same catalogue, so snapshot and added SKUs share one source.
+            $sku_by_pid = [];
+            if (class_exists('MealsDB_Quick_Order_Products')) {
+                foreach (MealsDB_Quick_Order_Products::get_all_quick_order_products() as $p) {
+                    $pid = (int) ($p['product_id'] ?? 0);
+                    if ($pid > 0) {
+                        $sku_by_pid[$pid] = (string) ($p['sku'] ?? '');
+                    }
+                }
+            }
+
+            return self::build_rows_from_orders($orders, $clients, $sku_by_pid);
         } catch (\Throwable $e) {
             self::log_error('build_week_rows', $e);
             return null;
@@ -120,9 +134,11 @@ class MealsDB_Order_Audit {
      *
      * @param array<int, array<string, mixed>> $orders  Orders from get_orders_for_delivery_range().
      * @param array<int, array<string, mixed>> $clients Clients keyed by wp_user_id.
+     * @param array<int, string>               $sku_by_pid Optional wc_product_id => SKU map, resolved
+     *        by the caller (this method stays pure / no DB). Missing pid → ''.
      * @return array<int, array<string, mixed>> Rows keyed by order_id.
      */
-    public static function build_rows_from_orders(array $orders, array $clients): array {
+    public static function build_rows_from_orders(array $orders, array $clients, array $sku_by_pid = []): array {
         // Build the excluded PID set once. get_fee_product_ids() returns a
         // named assoc ['client_contribution' => int, 'delivery_fee' => int] —
         // use array_values to get the int list, same pattern used elsewhere
@@ -174,6 +190,7 @@ class MealsDB_Order_Audit {
                 $items[] = [
                     'item_key'     => (int) ($item['order_item_id'] ?? 0),
                     'product_name' => (string) ($item['order_item_name'] ?? ''),
+                    'sku'          => (string) ($sku_by_pid[$pid] ?? ''),
                     'qty'          => $qty,
                 ];
             }
@@ -185,20 +202,22 @@ class MealsDB_Order_Audit {
                 ?? substr((string) ($order['date_created_gmt'] ?? ''), 0, 10));
 
             $rows[$oid] = [
-                'order_id'      => $oid,
-                'wp_user_id'    => $uid,
-                'client_id'     => (int) ($client['client_id'] ?? 0),
-                'client_name'   => trim((string) ($client['first_name'] ?? '') . ' ' . (string) ($client['last_name'] ?? '')),
-                'zone'          => (string) ($client['delivery_area_zone'] ?? ''),
-                'delivery_date' => $delivery_date,
-                'items'         => $items,
-                'mains_count'   => $mains,
-                'sides_count'   => $sides,
-                'audit_status'  => self::ROW_PENDING,
-                'edited_items'  => [],
-                'note'          => '',
-                'audited_by'    => 0,
-                'audited_at'    => '',
+                'order_id'         => $oid,
+                'wp_user_id'       => $uid,
+                'client_id'        => (int) ($client['client_id'] ?? 0),
+                'client_name'      => trim((string) ($client['first_name'] ?? '') . ' ' . (string) ($client['last_name'] ?? '')),
+                'client_last_name' => (string) ($client['last_name'] ?? ''),
+                'zone'             => (string) ($client['delivery_area_zone'] ?? ''),
+                'delivery_date'    => $delivery_date,
+                'items'            => $items,
+                'mains_count'      => $mains,
+                'sides_count'      => $sides,
+                'audit_status'     => self::ROW_PENDING,
+                'edited_items'     => [],
+                'added_items'      => [],
+                'note'             => '',
+                'audited_by'       => 0,
+                'audited_at'       => '',
             ];
         }
 
@@ -387,6 +406,7 @@ class MealsDB_Order_Audit {
                 // From pending OR edited: an explicit confirm supersedes.
                 $row['audit_status'] = self::ROW_CONFIRMED;
                 $row['edited_items'] = [];
+                $row['added_items']  = [];
                 $row['note']         = '';
                 $row['audited_by']   = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
                 $row['audited_at']   = gmdate('Y-m-d H:i:s');
@@ -396,21 +416,65 @@ class MealsDB_Order_Audit {
     }
 
     /**
-     * Record a discrepancy: adjusted per-item quantities + note. Quantities
-     * are a map item_key => received qty for the items being changed; items
-     * not in the map keep their snapshot qty. Edits ARE the audit's reason
-     * to exist, so each one is audit-logged with its deltas.
+     * Record a discrepancy: adjusted per-item quantities, a note, and/or items
+     * that were shipped but not on the original order ($added). Quantities are a
+     * map item_key => received qty for the items being changed; $added is the
+     * FULL desired list of extra items (replaces the row's added_items). Product
+     * name + SKU for added items are resolved server-side from the QO catalogue,
+     * never trusted from the client. Edits ARE the audit's reason to exist, so
+     * each is audit-logged with its deltas (added items as +product_id:qty).
      *
-     * @param array<int,int> $qtys item_key => received qty (>= 0)
+     * NO inventory effect (directive: the weekly audit never touches stock).
+     *
+     * @param array<int,int>                 $qtys  item_key => received qty (>= 0)
+     * @param array<int,array<string,mixed>> $added list of ['product_id'=>int,'qty'=>int]
      * @return true|WP_Error
      */
-    public static function edit_row(int $audit_id, int $order_id, array $qtys, string $note) {
+    public static function edit_row(int $audit_id, int $order_id, array $qtys, string $note, array $added = []) {
         $note = trim($note);
         if (function_exists('mb_strlen') ? mb_strlen($note) > self::MAX_NOTE_LEN : strlen($note) > self::MAX_NOTE_LEN) {
             return new WP_Error('note_too_long', __('Note is too long (500 characters max).', 'meals-db'));
         }
+
+        // Resolve + validate the added items against the QO catalogue BEFORE the
+        // mutation. product_name / sku are taken from the catalogue, never the
+        // client (same regenerate-server-side posture as Quick Order). The list
+        // REPLACES added_items wholesale, so a removed line is simply absent.
+        $catalogue = [];
+        if (class_exists('MealsDB_Quick_Order_Products')) {
+            foreach (MealsDB_Quick_Order_Products::get_all_quick_order_products() as $p) {
+                $pid = (int) ($p['product_id'] ?? 0);
+                if ($pid > 0) {
+                    $catalogue[$pid] = [
+                        'product_name' => (string) ($p['name'] ?? ''),
+                        'sku'          => (string) ($p['sku'] ?? ''),
+                    ];
+                }
+            }
+        }
+        $clean_added = [];
+        foreach ($added as $entry) {
+            if (!is_array($entry)) {
+                return new WP_Error('bad_added', __('Malformed added item.', 'meals-db'));
+            }
+            $pid = (int) ($entry['product_id'] ?? 0);
+            $qty = (int) ($entry['qty'] ?? 0);
+            if (!isset($catalogue[$pid])) {
+                return new WP_Error('unknown_product', __('Added item is not a known product.', 'meals-db'));
+            }
+            if ($qty < 1) {
+                return new WP_Error('bad_added_qty', __('Added item quantity must be at least 1.', 'meals-db'));
+            }
+            $clean_added[] = [
+                'product_id'   => $pid,
+                'sku'          => $catalogue[$pid]['sku'],
+                'product_name' => $catalogue[$pid]['product_name'],
+                'qty'          => $qty,
+            ];
+        }
+
         $deltas = [];
-        $result = self::mutate_row($audit_id, $order_id, static function (array $row) use ($qtys, $note, &$deltas) {
+        $result = self::mutate_row($audit_id, $order_id, static function (array $row) use ($qtys, $note, $clean_added, &$deltas) {
             $known = [];
             foreach ($row['items'] as $item) {
                 $known[(int) $item['item_key']] = (int) $item['qty'];
@@ -430,8 +494,12 @@ class MealsDB_Order_Audit {
                     $deltas[] = $key . ':' . $known[$key] . '→' . $qty;
                 }
             }
+            foreach ($clean_added as $a) {
+                $deltas[] = '+' . $a['product_id'] . ':' . $a['qty'];
+            }
             $row['audit_status'] = self::ROW_EDITED;
             $row['edited_items'] = $clean;
+            $row['added_items']  = $clean_added;
             $row['note']         = $note;
             $row['audited_by']   = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
             $row['audited_at']   = gmdate('Y-m-d H:i:s');
@@ -440,7 +508,7 @@ class MealsDB_Order_Audit {
         if ($result instanceof WP_Error) {
             return $result;
         }
-        // Deltas only — item keys and counts, no PII in old/new. log_lifecycle
+        // Deltas only — item keys / product ids and counts, no PII. log_lifecycle
         // isolates the write: a broken audit-log backend must not make a
         // successfully stored edit report failure (same rationale as create_for_week).
         self::log_lifecycle('order_audit_row_edited', $audit_id, 'order_' . $order_id,
@@ -453,6 +521,7 @@ class MealsDB_Order_Audit {
         $result = self::mutate_row($audit_id, $order_id, static function (array $row) {
             $row['audit_status'] = self::ROW_PENDING;
             $row['edited_items'] = [];
+            $row['added_items']  = [];
             $row['note']         = '';
             $row['audited_by']   = 0;
             $row['audited_at']   = '';

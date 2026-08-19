@@ -84,6 +84,8 @@ class MealsDB_Order_Audit_Page {
                 'promptUnfinalize' => __('Enter a reason to reopen this audit (required — it is audited):', 'meals-db'),
                 'confirmDelete'    => __('Delete this draft audit? This cannot be undone.', 'meals-db'),
                 'errorGeneric'     => __('Something went wrong. Please try again.', 'meals-db'),
+                'selectProduct'    => __('Select a product…', 'meals-db'),
+                'addedLabel'       => __('added — not on original order', 'meals-db'),
                 'ofResolved'       => __('of', 'meals-db'),
                 // Live-toggle labels: applyRowStatus reads these instead of
                 // hardcoded English so translators can reach them via .po/.mo.
@@ -218,14 +220,24 @@ class MealsDB_Order_Audit_Page {
             self::status_badge($status)
         );
 
-        // Sort rows for a stable read: delivery date, then client name.
-        usort($rows, static function ($a, $b) {
-            $da = (string) ($a['delivery_date'] ?? '');
-            $db = (string) ($b['delivery_date'] ?? '');
-            if ($da !== $db) {
-                return strcmp($da, $db);
+        // Sort alphabetically by client last name (directive item 3). Legacy
+        // snapshots lack client_last_name → fall back to the trailing word of
+        // client_name so the page still sorts. client_name then delivery_date
+        // break ties for same-surname clients.
+        $last_of = static function (array $r): string {
+            $ln = trim((string) ($r['client_last_name'] ?? ''));
+            if ($ln === '') {
+                $parts = preg_split('/\s+/', trim((string) ($r['client_name'] ?? '')));
+                $ln = $parts ? (string) end($parts) : '';
             }
-            return strcmp((string) ($a['client_name'] ?? ''), (string) ($b['client_name'] ?? ''));
+            return function_exists('mb_strtolower') ? mb_strtolower($ln) : strtolower($ln);
+        };
+        usort($rows, static function ($a, $b) use ($last_of) {
+            $c = strcmp($last_of($a), $last_of($b));
+            if ($c !== 0) { return $c; }
+            $c = strcmp((string) ($a['client_name'] ?? ''), (string) ($b['client_name'] ?? ''));
+            if ($c !== 0) { return $c; }
+            return strcmp((string) ($a['delivery_date'] ?? ''), (string) ($b['delivery_date'] ?? ''));
         });
 
         echo '<table class="widefat striped" id="oa-grid" data-audit-id="' . esc_attr((string) $audit_id) . '">';
@@ -235,6 +247,7 @@ class MealsDB_Order_Audit_Page {
         echo '<th>' . esc_html__('Client', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Delivery date', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Order #', 'meals-db') . '</th>';
+        echo '<th>' . esc_html__('SKU', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Mains', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Sides', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Status', 'meals-db') . '</th>';
@@ -243,7 +256,7 @@ class MealsDB_Order_Audit_Page {
         echo '</tr></thead><tbody>';
 
         if (empty($rows)) {
-            echo '<tr><td colspan="8"><em>'
+            echo '<tr><td colspan="9"><em>'
                 . esc_html__('No delivered orders were found for this week.', 'meals-db')
                 . '</em></td></tr>';
         }
@@ -298,6 +311,12 @@ class MealsDB_Order_Audit_Page {
         echo '<td>' . esc_html((string) ($row['client_name'] ?? '')) . '</td>';
         echo '<td>' . esc_html((string) ($row['delivery_date'] ?? '')) . '</td>';
         echo '<td>' . esc_html((string) $order_id) . '</td>';
+        $skus = [];
+        foreach ($items as $it) {
+            $s = is_array($it) ? trim((string) ($it['sku'] ?? '')) : '';
+            if ($s !== '') { $skus[] = $s; }
+        }
+        echo '<td class="oa-sku">' . esc_html(implode(', ', $skus)) . '</td>';
         // Mains/Sides: snapshot counts always. A Δ marker (via the oa-delta
         // span, toggled by JS on save) flags that per-item quantities were
         // adjusted — we cannot re-derive mains/sides without product categories.
@@ -330,7 +349,7 @@ class MealsDB_Order_Audit_Page {
 
         // Editor row — one number input per item, a note field, and controls.
         echo '<tr class="oa-editor-row" data-order-id="' . esc_attr((string) $order_id)
-            . '" style="display:none;"><td colspan="8">';
+            . '" style="display:none;"><td colspan="9">';
         echo '<div class="oa-editor-items">';
         foreach ($items as $item) {
             if (!is_array($item)) {
@@ -338,10 +357,14 @@ class MealsDB_Order_Audit_Page {
             }
             $item_key = (int) ($item['item_key'] ?? 0);
             $qty      = (int) ($item['qty'] ?? 0);
+            $isku     = (string) ($item['sku'] ?? '');
             $value    = array_key_exists($item_key, $edited) ? (int) $edited[$item_key] : $qty;
             echo '<label style="display:block;margin:4px 0;">';
-            echo esc_html((string) ($item['product_name'] ?? '')) . ' ';
-            echo '<input type="number" min="0" class="oa-qty" data-item-key="' . esc_attr((string) $item_key) . '" '
+            echo esc_html((string) ($item['product_name'] ?? ''));
+            if ($isku !== '') {
+                echo ' <span class="description oa-item-sku">' . esc_html($isku) . '</span>';
+            }
+            echo ' <input type="number" min="0" class="oa-qty" data-item-key="' . esc_attr((string) $item_key) . '" '
                 . 'value="' . esc_attr((string) $value) . '" />';
             echo ' <span class="description">' . esc_html(sprintf(
                 /* translators: %d: quantity delivered */
@@ -351,11 +374,36 @@ class MealsDB_Order_Audit_Page {
             echo '</label>';
         }
         echo '</div>';
+
+        // Added items (shipped but not on the original order). Rendered into a
+        // distinct container the JS appends new rows to; each carries product_id
+        // so save can round-trip it. Visually marked as added.
+        $added_items = (isset($row['added_items']) && is_array($row['added_items'])) ? $row['added_items'] : [];
+        echo '<div class="oa-editor-added" style="margin:4px 0;">';
+        foreach ($added_items as $ai) {
+            if (!is_array($ai)) { continue; }
+            $apid  = (int) ($ai['product_id'] ?? 0);
+            $aqty  = (int) ($ai['qty'] ?? 1);
+            $aname = (string) ($ai['product_name'] ?? '');
+            $asku  = (string) ($ai['sku'] ?? '');
+            echo '<div class="oa-added-line" data-product-id="' . esc_attr((string) $apid) . '" style="margin:3px 0;">';
+            echo '<span class="oa-added-label" style="color:#8a6d00;">'
+                . esc_html__('added — not on original order', 'meals-db') . '</span> ';
+            echo esc_html($aname);
+            if ($asku !== '') { echo ' <span class="description oa-item-sku">' . esc_html($asku) . '</span>'; }
+            echo ' <input type="number" min="1" class="oa-added-qty" value="' . esc_attr((string) $aqty) . '" style="width:70px;" />';
+            echo ' <button type="button" class="button-link oa-added-remove" aria-label="'
+                . esc_attr__('Remove added item', 'meals-db') . '">&times;</button>';
+            echo '</div>';
+        }
+        echo '</div>';
         echo '<label style="display:block;margin:6px 0;">' . esc_html__('Note', 'meals-db') . '<br />';
         echo '<textarea class="oa-note" maxlength="' . esc_attr((string) MealsDB_Order_Audit::MAX_NOTE_LEN) . '" '
             . 'rows="2" style="width:100%;max-width:480px;">' . esc_textarea($note) . '</textarea>';
         echo '</label>';
         echo '<p>';
+        echo '<button type="button" class="button oa-editor-add-item">'
+            . esc_html__('Add Item', 'meals-db') . '</button> ';
         echo '<button type="button" class="button button-primary oa-editor-save">'
             . esc_html__('Save', 'meals-db') . '</button> ';
         echo '<button type="button" class="button oa-editor-revert">'

@@ -39,6 +39,7 @@ class MealsDB_Ajax_Order_Audit {
         add_action('wp_ajax_mealsdb_order_audit_finalize',   [__CLASS__, 'finalize']);
         add_action('wp_ajax_mealsdb_order_audit_unfinalize', [__CLASS__, 'unfinalize']);
         add_action('wp_ajax_mealsdb_order_audit_delete',     [__CLASS__, 'delete_draft']);
+        add_action('wp_ajax_mealsdb_order_audit_products',   [__CLASS__, 'products']);
     }
 
     // -----------------------------------------------------------------
@@ -131,7 +132,19 @@ class MealsDB_Ajax_Order_Audit {
             foreach ((array) wp_unslash($_POST['qtys'] ?? []) as $k => $v) {
                 $qtys[absint($k)] = (int) $v;
             }
-            $result = MealsDB_Order_Audit::edit_row($audit_id, $order_id, $qtys, $note);
+            // Added items: product_id + qty only. Name/SKU are resolved
+            // server-side in edit_row from the catalogue — anything the client
+            // sends for those is ignored. qty passes through as (int) so the
+            // service's own >= 1 rejection fires (not silently clamped).
+            $added = [];
+            foreach ((array) wp_unslash($_POST['added'] ?? []) as $entry) {
+                if (!is_array($entry)) { continue; }
+                $added[] = [
+                    'product_id' => absint($entry['product_id'] ?? 0),
+                    'qty'        => (int) ($entry['qty'] ?? 0),
+                ];
+            }
+            $result = MealsDB_Order_Audit::edit_row($audit_id, $order_id, $qtys, $note, $added);
             if ($result instanceof WP_Error) {
                 wp_send_json_error(['message' => $result->get_error_message()]);
                 return;
@@ -218,6 +231,32 @@ class MealsDB_Ajax_Order_Audit {
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Order_Audit AJAX] delete failed: ' . $e->getMessage());
             wp_send_json_error(['message' => __('Unable to save. Please contact an administrator.', 'meals-db')]);
+        }
+    }
+
+    /**
+     * Product catalogue for the Add-Item dropdown: id + name + SKU only, from
+     * the shared QO product cache (no new product search). Read-only.
+     */
+    public static function products(): void {
+        if (!self::guard('order_audit_edit')) { return; }
+        try {
+            $out = [];
+            if (class_exists('MealsDB_Quick_Order_Products')) {
+                foreach (MealsDB_Quick_Order_Products::get_all_quick_order_products() as $p) {
+                    $pid = (int) ($p['product_id'] ?? 0);
+                    if ($pid <= 0) { continue; }
+                    $out[] = [
+                        'product_id' => $pid,
+                        'name'       => (string) ($p['name'] ?? ''),
+                        'sku'        => (string) ($p['sku'] ?? ''),
+                    ];
+                }
+            }
+            wp_send_json_success(['products' => $out]);
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Order_Audit AJAX] products failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to load products. Please try again.', 'meals-db')]);
         }
     }
 

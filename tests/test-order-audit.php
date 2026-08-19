@@ -21,6 +21,19 @@ if (!function_exists('get_option'))    { function get_option($k, $d = false) { r
 if (!function_exists('has_term')) {
     function has_term($term, $tax, $pid) { return (int) $pid === 100; }
 }
+// Fake QO product catalogue for add-item validation (pid => name/sku). The
+// `false` suppresses autoloading so this stub shadows the real class (which
+// needs get_transient/WooCommerce) rather than the autoloader winning the name.
+if (!class_exists('MealsDB_Quick_Order_Products', false)) {
+    class MealsDB_Quick_Order_Products {
+        public static function get_all_quick_order_products(): array {
+            return [
+                ['product_id' => 100, 'name' => 'Catalog Beef', 'sku' => 'BEEF-100'],
+                ['product_id' => 200, 'name' => 'Catalog Side', 'sku' => 'SIDE-200'],
+            ];
+        }
+    }
+}
 if (!class_exists('WP_Error')) {
     class WP_Error {
         private $m;
@@ -181,6 +194,19 @@ oa_chk(count($rows[501]['items']) === 2, '3.1: fee line (5675) excluded from ite
 oa_chk($rows[501]['audit_status'] === 'pending', '3.1: rows start pending');
 oa_chk($rows[501]['note'] === '' && $rows[501]['edited_items'] === [], '3.1: empty note/edits');
 
+// 3.1c: SKU resolves from the pid→sku map; client_last_name captured; added_items init [].
+oa_reset();
+$sku_map = [100 => 'BEEF-100', 200 => 'SIDE-200'];
+$rows = MealsDB_Order_Audit::build_rows_from_orders(oa_orders(), oa_clients(), $sku_map);
+oa_chk(($rows[501]['items'][0]['sku'] ?? null) === 'BEEF-100', '3.1c: item sku from map');
+oa_chk(($rows[501]['items'][1]['sku'] ?? null) === 'SIDE-200', '3.1c: second item sku from map');
+oa_chk(($rows[502]['items'][0]['sku'] ?? null) === 'BEEF-100', '3.1c: sku resolved across orders');
+oa_chk(($rows[501]['client_last_name'] ?? null) === 'Doe', '3.1c: client_last_name captured');
+oa_chk(($rows[501]['added_items'] ?? null) === [], '3.1c: added_items initialised empty');
+// A pid absent from the map yields an empty sku, not an error.
+$rows_no_map = MealsDB_Order_Audit::build_rows_from_orders(oa_orders(), oa_clients());
+oa_chk(($rows_no_map[501]['items'][0]['sku'] ?? 'x') === '', '3.1c: missing map → empty sku');
+
 // Edge fixture A: order whose wp_user_id has no matching client row.
 // build_rows_from_orders() must still emit a row; client_id defaults to 0
 // and client_name to '' (the trim(' ') → '' path in the builder).
@@ -297,6 +323,50 @@ oa_chk($a['payload']['current'][501]['audit_status'] === 'pending'
     && $a['payload']['current'][501]['edited_items'] === []
     && $a['payload']['current'][501]['note'] === '', '4.5: row back to pristine pending');
 oa_chk((int) $GLOBALS['wpdb']->rows[$id]['edited_count'] === 0, '4.5: edited_count restored');
+
+// 4.7: confirm and revert both clear added_items (no orphan added lines).
+[$wpdb, $id] = oa_make_audit();
+MealsDB_Order_Audit::edit_row($id, 501, [1 => 5, 2 => 3], 'extra sent', [['product_id' => 200, 'qty' => 2]]);
+$a = MealsDB_Order_Audit::get($id);
+oa_chk(count($a['payload']['current'][501]['added_items']) === 1, '4.7: added item persisted pre-confirm');
+MealsDB_Order_Audit::confirm_row($id, 501);
+$a = MealsDB_Order_Audit::get($id);
+oa_chk(($a['payload']['current'][501]['added_items'] ?? 'x') === [], '4.7: confirm clears added_items');
+MealsDB_Order_Audit::edit_row($id, 501, [1 => 5], '', [['product_id' => 200, 'qty' => 1]]);
+MealsDB_Order_Audit::revert_row($id, 501);
+$a = MealsDB_Order_Audit::get($id);
+oa_chk(($a['payload']['current'][501]['added_items'] ?? 'x') === [], '4.7: revert clears added_items');
+
+// 4.8: add_item validation + persistence + audit-log token.
+[$wpdb, $id] = oa_make_audit();
+$before = count($wpdb->audit_log);
+$res = MealsDB_Order_Audit::edit_row($id, 501, [], 'boxed two extra salads', [['product_id' => 200, 'qty' => 2]]);
+oa_chk($res === true, '4.8: edit_row accepts a valid added item');
+$a = MealsDB_Order_Audit::get($id);
+$added = $a['payload']['current'][501]['added_items'];
+oa_chk(count($added) === 1 && (int) $added[0]['product_id'] === 200, '4.8: added item stored');
+oa_chk((int) $added[0]['qty'] === 2, '4.8: added qty stored');
+oa_chk($added[0]['sku'] === 'SIDE-200', '4.8: sku resolved server-side from catalogue');
+oa_chk($added[0]['product_name'] === 'Catalog Side', '4.8: product_name resolved server-side (not client-supplied)');
+oa_chk($a['payload']['current'][501]['audit_status'] === 'edited', '4.8: row marked edited by an add');
+oa_chk(count($wpdb->audit_log) === $before + 1, '4.8: one audit-log row for the edit');
+oa_chk(strpos((string) $wpdb->audit_log[$before], '+200:2') !== false, '4.8: audit log carries +pid:qty, no PII');
+
+oa_chk(MealsDB_Order_Audit::edit_row($id, 501, [], '', [['product_id' => 999999, 'qty' => 1]]) instanceof WP_Error,
+    '4.8: unknown product_id rejected');
+oa_chk(MealsDB_Order_Audit::edit_row($id, 501, [], '', [['product_id' => 200, 'qty' => 0]]) instanceof WP_Error,
+    '4.8: qty < 1 rejected');
+oa_chk(MealsDB_Order_Audit::edit_row($id, 501, [], str_repeat('x', 501), []) instanceof WP_Error,
+    '4.8: note over cap still rejected');
+
+MealsDB_Order_Audit::edit_row($id, 501, [], '', [['product_id' => 100, 'qty' => 1]]);
+$a = MealsDB_Order_Audit::get($id);
+oa_chk(count($a['payload']['current'][501]['added_items']) === 1
+    && (int) $a['payload']['current'][501]['added_items'][0]['product_id'] === 100,
+    '4.8: added_items is replaced (full set), not appended');
+MealsDB_Order_Audit::edit_row($id, 501, [], '', []);
+oa_chk(MealsDB_Order_Audit::get($id)['payload']['current'][501]['added_items'] === [],
+    '4.8: empty added list clears added_items');
 
 // ---------------------------------------------------------------------------
 // Task 5 checks: finalize / unfinalize / delete
