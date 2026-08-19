@@ -51,6 +51,20 @@
         return String(parseInt(value, 10) || 0);
     }
 
+    // Shared order-number cell (v558 ITEM 3): HPOS admin link when the order
+    // exists, plain text when deleted, empty when there is no order id. Used by
+    // BOTH the summary table (contribution_order_id) and the detail table
+    // (wc_order_id) so the two never diverge.
+    function orderCell(rawId, exists) {
+        var id = parseInt(rawId, 10) || 0;
+        if (id <= 0) { return ''; }
+        if (exists && config.adminOrderUrlBase) {
+            var href = config.adminOrderUrlBase + encodeURIComponent(id);
+            return '<a href="' + escHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escHtml(id) + '</a>';
+        }
+        return escHtml(id);
+    }
+
     $(function () {
         var nonce = config.nonce || '';
         if (!nonce) {
@@ -94,14 +108,15 @@
                     '<td>' + intText(row.used_sides) + '</td>' +
                     '<td>' + intText(row.overage_sides) + '</td>' +
                     '<td>' + escHtml(status) + '</td>' +
+                    '<td>' + orderCell(row.contribution_order_id, row.order_exists) + '</td>' +
                 '</tr>' +
                 '<tr class="mealsdb-allocation-detail-row" data-month="' + month + '" style="display: none;">' +
-                    '<td colspan="8"><em>' + escHtml(i18n.loadingDetails || '') + '</em></td>' +
+                    '<td colspan="9"><em>' + escHtml(i18n.loadingDetails || '') + '</em></td>' +
                 '</tr>';
             });
 
             if (!rows) {
-                rows = '<tr><td colspan="8">' + escHtml(i18n.noHistory || '') + '</td></tr>';
+                rows = '<tr><td colspan="9">' + escHtml(i18n.noHistory || '') + '</td></tr>';
             }
 
             $('#mealsdb-allocation-history-table tbody').html(rows);
@@ -116,7 +131,7 @@
             }
         }).fail(function () {
             $('#mealsdb-allocation-history-table tbody').html(
-                '<tr><td colspan="8">' + escHtml(i18n.loadFailed || '') + '</td></tr>'
+                '<tr><td colspan="9">' + escHtml(i18n.loadFailed || '') + '</td></tr>'
             );
         });
 
@@ -159,20 +174,13 @@
                     '<th>' + escHtml(i18n.colSides || '') + '</th>' +
                 '</tr></thead><tbody>';
             $.each(details, function (i, d) {
-                var orderId = parseInt(d.wc_order_id, 10) || 0;
-                var orderCell;
-                if (orderId > 0 && d.order_exists && config.adminOrderUrlBase) {
-                    // Open in a new tab so the operator doesn't lose the client
-                    // record. A deleted order (order_exists false) stays plain text.
-                    var href = config.adminOrderUrlBase + encodeURIComponent(orderId);
-                    orderCell = '<a href="' + escHtml(href) + '" target="_blank" rel="noopener noreferrer">'
-                        + escHtml(orderId) + '</a>';
-                } else {
-                    orderCell = intText(d.wc_order_id);
-                }
+                // Shared helper (reconciled with the summary table). A detail row
+                // always has a delivery order, so fall back to plain text (never
+                // blank) when it is missing/deleted.
+                var orderTd = orderCell(d.wc_order_id, d.order_exists) || intText(d.wc_order_id);
                 html += '<tr>' +
                     '<td>' + escHtml(d.delivery_date || '') + '</td>' +
-                    '<td>' + orderCell + '</td>' +
+                    '<td>' + orderTd + '</td>' +
                     '<td>' + intText(d.mains_count) + '</td>' +
                     '<td>' + intText(d.sides_count) + '</td>' +
                 '</tr>';

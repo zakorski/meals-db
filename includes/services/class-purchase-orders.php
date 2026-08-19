@@ -717,6 +717,31 @@ class MealsDB_Purchase_Orders {
             return new WP_Error('race', __('Could not mark accepted (a concurrent change happened) — reload.', 'meals-db'));
         }
 
+        // Post-write assertion (v558 ITEM 1): a non-strict MySQL connection
+        // silently coerces an out-of-range ENUM write to '' and STILL reports 1
+        // row changed, so transition() returns true even though the column did
+        // not store 'accepted'. Re-read BEFORE the stock bump — a coerced status
+        // must abort before inventory is committed (the exact failure that
+        // stranded three POs with phantom stock in the v558 run).
+        $po_table = MealsDB_DB::get_table_name(MealsDB_Tables::PURCHASE_ORDERS);
+        $written  = $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT status FROM `{$po_table}` WHERE po_id = %d",
+            $po_id
+        ));
+        if ((string) $written !== self::STATUS_ACCEPTED) {
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error(sprintf(
+                    '[MealsDB Purchase Orders] mark_accepted: status stored as "%s" not "accepted" (po_id=%d) — probable schema drift (the accepted ENUM value never migrated). Inventory NOT committed.',
+                    (string) $written,
+                    $po_id
+                ));
+            }
+            return new WP_Error(
+                'schema_drift',
+                __('Could not mark accepted: the purchase-order status column has not been migrated to allow "accepted". Apply the schema update and retry — inventory was not changed.', 'meals-db')
+            );
+        }
+
         self::apply_inventory_bump((array) $po['items']);
         if (class_exists('MealsDB_Logger')) {
             MealsDB_Logger::log('po_accepted', $po_id, 'status', self::STATUS_PLACED, self::STATUS_ACCEPTED);
