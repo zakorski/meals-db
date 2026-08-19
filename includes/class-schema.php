@@ -487,7 +487,7 @@ class MealsDB_Schema {
                     'placed_date'      => 'DATE NULL',
                     'expected_arrival' => 'DATE NULL',
                     'arrival_date'     => 'DATE NULL',
-                    'status'           => "ENUM('planned','placed','accepted','arrived','counted','reconciled','cancelled') NOT NULL DEFAULT 'planned'",
+                    'status'           => "ENUM('planned','placed','arrived','counted','reconciled','cancelled','accepted') NOT NULL DEFAULT 'planned'",
                     'items'            => 'JSON NULL',
                     'notes'            => 'TEXT NULL',
                     'reconciled_at'    => 'DATETIME NULL',
