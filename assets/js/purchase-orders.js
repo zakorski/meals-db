@@ -118,13 +118,31 @@
         }
     }
 
+    var savePending = {};    // sku -> $row: the latest debounced row awaiting save
+    var saveInFlight = false;
+
     function queueSave($row) {
         var sku = String($row.data('sku'));
         if (saveTimers[sku]) { window.clearTimeout(saveTimers[sku]); }
         saveTimers[sku] = window.setTimeout(function () {
             delete saveTimers[sku];
-            saveRow($row);
+            savePending[sku] = $row; // keep only the latest value for this sku
+            flushSaves();
         }, 600);
+    }
+
+    // Serialize saves: only one is in flight at a time so edits to DIFFERENT rows
+    // of the same PO can't race on the shared payload (last-write-wins would drop
+    // an edit — v560 ITEM 5). Each queued save reads the payload only AFTER the
+    // prior write has committed.
+    function flushSaves() {
+        if (saveInFlight) { return; }
+        var skus = Object.keys(savePending);
+        if (!skus.length) { return; }
+        var sku = skus[0];
+        var $row = savePending[sku];
+        delete savePending[sku];
+        saveRow($row);
     }
 
     function saveRow($row) {
@@ -139,9 +157,9 @@
             data.received_cases = cases;
             data.note           = String($row.find('.mealsdb-po-note').val() || '');
         }
+        saveInFlight = true;
         $row.addClass('mealsdb-po-saving');
         $.post(cfg.ajaxUrl, data, function (res) {
-            $row.removeClass('mealsdb-po-saving');
             if (!res || !res.success) {
                 msg((res && res.data && res.data.message) || t('requestFailed', 'Request failed.'), true);
                 return;
@@ -156,8 +174,11 @@
                 $row.find('.mealsdb-po-coverage').removeClass('mealsdb-po-recomputed');
             }, 600);
         }).fail(function () {
-            $row.removeClass('mealsdb-po-saving');
             msg(t('requestFailed', 'Request failed.'), true);
+        }).always(function () {
+            $row.removeClass('mealsdb-po-saving');
+            saveInFlight = false;
+            flushSaves(); // run the next queued save, if any
         });
     }
 
@@ -200,22 +221,38 @@
                 if (!window.confirm(map.confirm)) { return; }
                 data.expected_arrival = String($arrival.val() || '');
             } else {
-                // List page: one prefilled prompt doubles as the confirm —
-                // Cancel aborts the approval entirely.
-                var dflt = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-                var picked = window.prompt(t('promptExpectedArrival', 'Expected arrival date (YYYY-MM-DD) — OK approves:'), dflt);
-                if (picked === null) { return; }
-                data.expected_arrival = picked;
+                // List page: prompt doubles as confirm. Validate before submitting
+                // so a typo can't masquerade as an accepted date (v560 ITEM 4).
+                // Blank → the server's computed default; the prompt says so.
+                var isValidYmd = function (s) {
+                    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) { return false; }
+                    var d = new Date(s + 'T00:00:00Z');
+                    return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+                };
+                while (true) {
+                    var picked = window.prompt(t('promptExpectedArrival', 'Expected arrival date (YYYY-MM-DD), or leave blank for the computed default — OK approves:'), '');
+                    if (picked === null) { return; } // cancel aborts the approval
+                    picked = picked.replace(/^\s+|\s+$/g, '');
+                    if (picked === '') { data.expected_arrival = ''; break; } // → server default
+                    if (isValidYmd(picked)) { data.expected_arrival = picked; break; }
+                    msg(t('invalidDate', 'Enter a date as YYYY-MM-DD, or leave blank for the default.'), true);
+                }
             }
         } else if (kind === 'unapprove' || kind === 'unaccept') {
             var promptTxt = (kind === 'unaccept')
                 ? t('promptUnaccept', 'Enter a reason for un-accepting (required):')
                 : t('promptUnapprove', 'Enter a reason for un-approving (required):');
             var reason = window.prompt(promptTxt);
-            if (reason === null) { return; }
-            if (!reason.replace(/\s/g, '').length) {
+            if (reason === null) { return; } // cancel = no action (not the same as empty)
+            reason = reason.replace(/^\s+|\s+$/g, '');
+            // Empty is NOT silent: surface the message AND re-prompt until a reason
+            // is given or the operator cancels (v560 ITEM 3 — the reason refusal
+            // was invisible because msg() renders at the top of the list view).
+            while (reason === '') {
                 msg(t('reasonRequired', 'A reason is required.'), true);
-                return;
+                var again = window.prompt(t('reasonRequired', 'A reason is required.') + ' ' + promptTxt);
+                if (again === null) { return; }
+                reason = again.replace(/^\s+|\s+$/g, '');
             }
             data.reason = reason;
         } else if (!window.confirm(map.confirm)) {
