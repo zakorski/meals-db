@@ -146,6 +146,22 @@
                 applyRowStatus($row, 'edited');
                 $row.find('.oa-delta').show();
                 applyNoteIcon($row, note);
+                // Refresh the SKU column's added-item badges live so a DRAFT shows
+                // them without a reload (finalize only worked because it reloads).
+                // Markup mirrors render_row()'s .oa-sku-added exactly (v560 ITEM 2).
+                var $skuCell = $row.find('td.oa-sku');
+                if ($skuCell.length) {
+                    $skuCell.find('.oa-sku-added').remove();
+                    $editor.find('.oa-added-line').each(function () {
+                        var pid = parseInt($(this).attr('data-product-id'), 10) || 0;
+                        if (pid <= 0) { return; }
+                        var label = $(this).find('.oa-added-select option:selected').text()
+                                 || String($(this).find('.oa-added-select').val() || '');
+                        $skuCell.append(' <span class="oa-sku-added" style="color:#8a6d00;" title="'
+                            + esc(i18n.addedLabel || 'added — not on original order')
+                            + '">✚ ' + esc(label) + '</span>');
+                    });
+                }
                 $editor.hide();
                 updateProgress(d);
             });
@@ -186,21 +202,28 @@
                 var $rm = $('<button type="button" class="button-link oa-added-remove">&times;</button>');
                 $line.append('<span class="oa-added-label" style="color:#8a6d00;">'
                     + esc(i18n.addedLabel || 'added — not on original order') + '</span> ');
+                $sel.css('width', '100%');
                 $line.append($sel).append(' ').append($qty).append(' ').append($rm);
                 $added.append($line);
-                // Searchable picker (v558 ITEM 4): selectWoo matches the option
-                // text ("Name (SKU)") on substring, case-insensitively — so typing
-                // "pot pie" or "12135" both find the product. Falls back to the
-                // plain <select> if selectWoo isn't available. The existing
-                // change handler still fires under selectWoo, so data-product-id
-                // keeps updating.
+                // Searchable picker (v560 ITEM 1). Init DEFERRED one tick so the
+                // just-appended element is laid out before select2 measures it —
+                // measuring a not-yet-laid-out element yields a collapsed 103×15
+                // container (the #526 bug). width:'100%' fills the field; no
+                // dropdownParent (it positions against body correctly); guarded so
+                // a second open can't stack widgets. Substring match on the option
+                // text ("Name (SKU)") covers name AND SKU. Falls back to the plain
+                // <select> if selectWoo is unavailable; its change handler still
+                // fires under selectWoo, so data-product-id keeps updating.
                 if ($.fn.selectWoo) {
-                    $sel.selectWoo({
-                        width: '260px',
-                        placeholder: i18n.selectProduct || 'Select a product…',
-                        dropdownParent: $line
-                    });
-                    $sel.trigger('focus');
+                    window.setTimeout(function () {
+                        if (!$sel.data('select2')) {
+                            $sel.selectWoo({
+                                width: '100%',
+                                placeholder: i18n.selectProduct || 'Select a product…'
+                            });
+                        }
+                        $sel.trigger('focus');
+                    }, 0);
                 }
             });
         });

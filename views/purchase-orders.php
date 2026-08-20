@@ -39,7 +39,8 @@ $mealsdb_po_render_island = static function (array $extra = []) use ($base_url):
             'confirmReceive'   => __('Mark this purchase order as received? Stock was already committed at Accept — this only records arrival.', 'meals-db'),
             'confirmCancel'    => __('Cancel this draft purchase order?', 'meals-db'),
             'confirmComplete'  => __('Complete reconciliation? Stock will be corrected for every adjusted row and the purchase order will be locked.', 'meals-db'),
-            'promptExpectedArrival' => __('Expected arrival date (YYYY-MM-DD) — OK approves:', 'meals-db'),
+            'promptExpectedArrival' => __('Expected arrival date (YYYY-MM-DD), or leave blank for the computed default — OK approves:', 'meals-db'),
+            'invalidDate'      => __('Enter a date as YYYY-MM-DD, or leave blank for the default.', 'meals-db'),
             'promptUnapprove'  => __('Enter a reason for un-approving (required — it is audited):', 'meals-db'),
             'promptUnaccept'   => __('Enter a reason for un-accepting (required — it reverses inventory and is audited):', 'meals-db'),
             'reasonRequired'   => __('A reason is required.', 'meals-db'),
@@ -240,6 +241,12 @@ if ($po_id > 0) {
                     <th><?php esc_html_e('SKU', 'meals-db'); ?></th>
                     <th><?php esc_html_e('Product', 'meals-db'); ?></th>
                     <th class="num"><?php esc_html_e('Adj/Wk', 'meals-db'); ?></th>
+                    <?php // Reconcile's Stock column intentionally shows the PO's
+                          // GENERATION-TIME snapshot (current_stock from the draft),
+                          // NOT live inventory. Reconcile confirms what the vendor
+                          // shipped against what was ordered/accepted, so it must
+                          // show the PO's own quantities. Do NOT switch this to a
+                          // live stock read (v560 — confirmed correct by the operator). ?>
                     <th class="num"><?php esc_html_e('Stock', 'meals-db'); ?></th>
                     <th class="num"><?php esc_html_e('Case size', 'meals-db'); ?></th>
                     <th class="num"><?php echo $mode === 'reconcile' ? esc_html__('Ordered', 'meals-db') : esc_html__('Cases', 'meals-db'); ?></th>

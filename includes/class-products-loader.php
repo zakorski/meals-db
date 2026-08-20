@@ -237,7 +237,13 @@ class MealsDB_Products_Loader {
 
             $categories[] = [
                 'id'   => (int) $term->term_id,
-                'name' => $term->name,
+                // Category names are consumed as TEXT only (the QO tab strip uses
+                // jQuery `text:`), so decoding here is safe — this is the loader
+                // that populates the cache the tabs read (the v553 fix only covered
+                // MealsDB_Quick_Order_Products::get_product_categories()). If a
+                // category name is ever moved into an .html()/concatenated HTML
+                // context, it MUST be escaped at that point.
+                'name' => html_entity_decode((string) $term->name, ENT_QUOTES, 'UTF-8'),
                 'slug' => $term->slug,
             ];
         }
