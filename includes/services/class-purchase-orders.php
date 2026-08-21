@@ -301,6 +301,26 @@ class MealsDB_Purchase_Orders {
      * @return array{order_date:string,inventory_due:string,ship_date:string,expected_arrival:string,next_order_date:string,is_off_cycle:bool}|null
      *         null when $order_date is not a valid Y-m-d.
      */
+    /**
+     * A supplied expected-arrival date is valid only if it is a real calendar
+     * date in YYYY-MM-DD within about a year (a PO arrives soon). Format alone
+     * isn't enough — the browser's date input can emit a 6-digit year
+     * ('152026-09-09') that passes a naive regex, and normalize_date() accepts
+     * impossible dates like 2026-13-40. Reject those rather than silently
+     * substituting the computed default (v561 ITEM 2).
+     */
+    private static function is_valid_arrival(string $ymd): bool {
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $ymd, $m)) {
+            return false;
+        }
+        if (!checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+            return false;
+        }
+        $year = (int) $m[1];
+        $now  = (int) gmdate('Y');
+        return $year >= $now - 1 && $year <= $now + 1;
+    }
+
     public static function po_schedule_from_order_date(string $order_date): ?array {
         $base   = DateTimeImmutable::createFromFormat('!Y-m-d', $order_date, new DateTimeZone('UTC'));
         $errors = DateTimeImmutable::getLastErrors();
@@ -566,17 +586,24 @@ class MealsDB_Purchase_Orders {
         // Task-integration: an optional expected-arrival date (captured in the
         // approve dialog) rides the same guarded transition and becomes the
         // confirm-arrival task's due date. Malformed → null (bridge falls back).
-        $expected_arrival = self::normalize_date($expected_arrival);
-
-        // When the caller passes no date, derive the cadence's expected arrival
-        // (T + 13) from today's order date, keeping expected_arrival meaningful
-        // rather than NULL (directive item 3). placed_date is set to this same
-        // gmdate() below, so T is consistent.
-        if ($expected_arrival === null) {
-            $schedule = self::po_schedule_from_order_date(gmdate('Y-m-d'));
-            if ($schedule !== null) {
-                $expected_arrival = $schedule['expected_arrival'];
+        // v561 ITEM 2: distinguish BLANK (→ computed default, correct) from
+        // PROVIDED-but-invalid (→ reject). Silently substituting a different
+        // date than the operator supplied is the defect (a browser date input
+        // can emit a 6-digit year like '152026-09-09', and normalize_date accepts
+        // impossible dates like 2026-13-40). Blank still derives the cadence
+        // default (T+13); placed_date below uses the same gmdate() so T is
+        // consistent.
+        if ($expected_arrival !== null && trim($expected_arrival) !== '') {
+            $expected_arrival = trim($expected_arrival);
+            if (!self::is_valid_arrival($expected_arrival)) {
+                return new WP_Error(
+                    'bad_date',
+                    __('Expected arrival must be a valid date (YYYY-MM-DD) within about a year, or blank for the default.', 'meals-db')
+                );
             }
+        } else {
+            $schedule = self::po_schedule_from_order_date(gmdate('Y-m-d'));
+            $expected_arrival = ($schedule !== null) ? $schedule['expected_arrival'] : null;
         }
 
         $items = [];

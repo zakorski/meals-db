@@ -37,37 +37,46 @@ jQuery(document).ready(function($) {
             const isActive = parseInt($button.data('active'), 10) === 1;
             const action = isActive ? 'mealsdb_deactivate_client' : 'mealsdb_activate_client';
 
-            setBusyState($button, true);
+            // v561 ITEM 4a: deactivating a client with recent non-cancelled
+            // orders returns needs_confirm; we ask the operator and retry with
+            // confirm=1. `confirmed` carries that flag on the retry.
+            function doToggle(confirmed) {
+                setBusyState($button, true);
+                const data = { action: action, nonce: mealsdb.nonce, client_id: clientId };
+                if (confirmed) { data.confirm = '1'; }
+                $.post(ajaxEndpoint, data, function (response) {
+                    if (response && response.success) {
+                        const newStatusRaw = response.data && response.data.active;
+                        const newStatus = parseInt(newStatusRaw, 10) === 1 ? 1 : 0;
+                        const label = newStatus === 1
+                            ? ($button.data('labelDeactivate') || clientMessages.deactivateLabel || $button.text())
+                            : ($button.data('labelActivate') || clientMessages.activateLabel || $button.text());
 
-            $.post(ajaxEndpoint, {
-                action: action,
-                nonce: mealsdb.nonce,
-                client_id: clientId
-            }, function (response) {
-                if (response && response.success) {
-                    const newStatusRaw = response.data && response.data.active;
-                    const newStatus = parseInt(newStatusRaw, 10) === 1 ? 1 : 0;
-                    const label = newStatus === 1
-                        ? ($button.data('labelDeactivate') || clientMessages.deactivateLabel || $button.text())
-                        : ($button.data('labelActivate') || clientMessages.activateLabel || $button.text());
+                        $button.data('active', newStatus);
+                        if (label) {
+                            $button.text(label);
+                        }
 
-                    $button.data('active', newStatus);
-                    if (label) {
-                        $button.text(label);
+                        $button.closest('tr').toggleClass('mealsdb-client-row-inactive', newStatus === 0);
+                        return;
                     }
+                    const d = response && response.data;
+                    if (d && d.needs_confirm && !confirmed) {
+                        setBusyState($button, false);
+                        if (window.confirm(d.message || '')) {
+                            doToggle(true); // operator acknowledged → retry
+                        }
+                        return;
+                    }
+                    MealsDBNotice('error', (d && d.message) ? d.message : toggleErrorMessage);
+                }).fail(function () {
+                    MealsDBNotice('error', toggleErrorMessage);
+                }).always(function () {
+                    setBusyState($button, false);
+                });
+            }
 
-                    $button.closest('tr').toggleClass('mealsdb-client-row-inactive', newStatus === 0);
-                } else {
-                    const errorMessage = response && response.data && response.data.message
-                        ? response.data.message
-                        : toggleErrorMessage;
-                    MealsDBNotice('error', errorMessage);
-                }
-            }).fail(function () {
-                MealsDBNotice('error', toggleErrorMessage);
-            }).always(function () {
-                setBusyState($button, false);
-            });
+            doToggle(false);
         });
     }
 

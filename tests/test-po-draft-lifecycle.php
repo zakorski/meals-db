@@ -469,13 +469,17 @@ chk($po['expected_arrival'], null, 'T-11: expected_arrival cleared on unapprove'
 $f = fired('mealsdb_po_unapproved');
 chk($f[0]['args'], [$id, 'window moved'], 'T-11: unapproved hook args');
 
-// malformed (or absent) expected_arrival → falls back to the derived cadence
-// arrival (T+13 from today's order date), NOT null — directive item 3.
-$derived_arrival = MealsDB_Purchase_Orders::po_schedule_from_order_date(gmdate('Y-m-d'))['expected_arrival'];
-chk($svc->approve($id, 'not-a-date'), true, 'T-11: approve tolerates malformed date');
-chk($svc->get_with_payload($id)['expected_arrival'], $derived_arrival, 'T-11: malformed date → derived T+13 arrival');
+// v561 ITEM 2: a PROVIDED-but-invalid expected_arrival is REJECTED (not
+// silently replaced with the default). Blank/null still → computed default.
+chk_true(is_wp_error($svc->approve($id, 'not-a-date')), 'T-11: malformed date rejected');
+chk($svc->get_with_payload($id)['status'], 'planned', 'T-11: PO not approved on a bad date');
+chk_true(is_wp_error($svc->approve($id, '2026-13-40')), 'T-11: impossible calendar date rejected');
+chk_true(is_wp_error($svc->approve($id, '9999-09-09')), 'T-11: out-of-range year rejected');
+$next_year = (int) gmdate('Y') + 1;
+chk($svc->approve($id, $next_year . '-09-15'), true, 'T-11: valid in-range date approves');
+chk($svc->get_with_payload($id)['expected_arrival'], $next_year . '-09-15', 'T-11: valid date stored exactly');
 $f = fired('mealsdb_po_approved');
-chk($f[1]['args'], [$id, $derived_arrival], 'T-11: hook gets derived arrival for malformed date');
+chk($f[count($f) - 1]['args'], [$id, $next_year . '-09-15'], 'T-11: hook gets the exact stored date');
 
 // mark_accepted commits stock, then mark_received with an explicit arrival date.
 chk($svc->mark_accepted($id), true, 'T-11: mark_accepted before receive');
