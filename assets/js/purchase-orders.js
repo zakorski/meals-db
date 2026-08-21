@@ -31,9 +31,15 @@
         return d.innerHTML;
     }
     function msg(text, isError) {
-        $('#mealsdb-po-action-msg')
+        var $el = $('#mealsdb-po-action-msg')
             .text(text || '')
             .css('color', isError ? '#b32d2e' : '#2271b1');
+        // v561 ITEM 3a: a single action-message element sits at the top of the
+        // list view, far from a row-level action, so errors read as "nothing
+        // happened". Bring it into view on error (only scrolls if off-screen).
+        if (isError && text && $el.length && $el[0].scrollIntoView) {
+            $el[0].scrollIntoView({ block: 'nearest' });
+        }
     }
 
     // ------------------------------------------------------------------
@@ -143,6 +149,28 @@
         var $row = savePending[sku];
         delete savePending[sku];
         saveRow($row);
+    }
+
+    // v561 ITEM 3b: run `cb` only after every pending/in-flight row save has
+    // committed. complete_reconcile validates the SERVER-stored note, so a note
+    // still sitting in a debounce timer would be seen as missing (the first
+    // Complete click was a no-op). Fire pending debounces now, then wait.
+    function drainSavesThen(cb) {
+        Object.keys(saveTimers).forEach(function (sku) {
+            window.clearTimeout(saveTimers[sku]);
+            delete saveTimers[sku];
+            savePending[sku] = $('#mealsdb-po-grid tbody tr').filter(function () {
+                return String($(this).data('sku')) === sku;
+            });
+        });
+        flushSaves();
+        var waited = 0;
+        (function wait() {
+            if (!saveInFlight && !Object.keys(savePending).length) { cb(); return; }
+            if (waited > 8000) { cb(); return; } // safety valve — don't hang forever
+            waited += 60;
+            window.setTimeout(wait, 60);
+        })();
     }
 
     function saveRow($row) {
@@ -297,26 +325,30 @@
 
         $btn.prop('disabled', true);
         msg(t('saving', 'Saving…'), false);
-        $.post(cfg.ajaxUrl, {
-            nonce: cfg.nonce, po_id: cfg.poId, action: 'mealsdb_po_complete_reconcile'
-        }, function (res) {
-            if (res && res.success) {
-                window.location.href = cfg.baseUrl + '&po_id=' + cfg.poId;
-                return;
-            }
-            $btn.prop('disabled', false);
-            // Highlight server-reported offenders (authoritative).
-            if (res && res.data && res.data.data && res.data.data.skus) {
-                $.each(res.data.data.skus, function (_, sku) {
-                    $('#mealsdb-po-grid tbody tr').filter(function () {
-                        return String($(this).data('sku')) === String(sku);
-                    }).addClass('mealsdb-po-note-missing');
-                });
-            }
-            msg((res && res.data && res.data.message) || t('requestFailed', 'Request failed.'), true);
-        }).fail(function () {
-            $btn.prop('disabled', false);
-            msg(t('requestFailed', 'Request failed.'), true);
+        // Flush any debounced note/count saves BEFORE completing, so the server
+        // validates the notes the operator actually typed (v561 ITEM 3b).
+        drainSavesThen(function () {
+            $.post(cfg.ajaxUrl, {
+                nonce: cfg.nonce, po_id: cfg.poId, action: 'mealsdb_po_complete_reconcile'
+            }, function (res) {
+                if (res && res.success) {
+                    window.location.href = cfg.baseUrl + '&po_id=' + cfg.poId;
+                    return;
+                }
+                $btn.prop('disabled', false);
+                // Highlight server-reported offenders (authoritative).
+                if (res && res.data && res.data.data && res.data.data.skus) {
+                    $.each(res.data.data.skus, function (_, sku) {
+                        $('#mealsdb-po-grid tbody tr').filter(function () {
+                            return String($(this).data('sku')) === String(sku);
+                        }).addClass('mealsdb-po-note-missing');
+                    });
+                }
+                msg((res && res.data && res.data.message) || t('requestFailed', 'Request failed.'), true);
+            }).fail(function () {
+                $btn.prop('disabled', false);
+                msg(t('requestFailed', 'Request failed.'), true);
+            });
         });
     });
     // ------------------------------------------------------------------

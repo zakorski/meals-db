@@ -72,8 +72,20 @@ class MealsDB_Order_Audit_Page {
             true
         );
         // selectWoo (WooCommerce's select2 fork) powers the searchable Add-Item
-        // product picker (v558 ITEM 4). Registered by WC in admin; style handle
-        // is 'select2'. Enqueue defensively so a missing handle can't fatal.
+        // product picker. The SCRIPT is registered globally in admin, but the
+        // STYLE ('select2') is only registered on WooCommerce's own screens
+        // (WC_Admin_Assets::admin_styles early-returns elsewhere) — so on this
+        // page the handle isn't registered and the container renders as an
+        // unstyled ~103×15 stub (v561 ITEM 1). Register it ourselves from WC's
+        // bundled asset, then enqueue. Missing WC → plain-<select> fallback.
+        if (!wp_style_is('select2', 'registered') && function_exists('WC')) {
+            wp_register_style(
+                'select2',
+                WC()->plugin_url() . '/assets/css/select2.css',
+                [],
+                defined('WC_VERSION') ? WC_VERSION : false
+            );
+        }
         if (wp_style_is('select2', 'registered')) {
             wp_enqueue_style('select2');
         }

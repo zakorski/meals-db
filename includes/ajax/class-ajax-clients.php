@@ -333,6 +333,28 @@ class MealsDB_Ajax_Clients {
 
         $client_id = self::get_requested_client_id();
 
+        // v561 ITEM 4a: warn before deactivating a client who still has recent
+        // non-cancelled orders — "inactive" must not silently hide someone who
+        // is still ordering. The JS re-posts with confirm=1 after the operator
+        // acknowledges. This is a warning, not a hard block.
+        $confirmed = isset($_POST['confirm']) && $_POST['confirm'] === '1';
+        if (!$confirmed) {
+            $recent = MealsDB_Clients::recent_order_summary($client_id);
+            if ((int) ($recent['count'] ?? 0) > 0) {
+                wp_send_json_error([
+                    'needs_confirm' => true,
+                    'count'         => (int) $recent['count'],
+                    'last_date'     => (string) $recent['last_date'],
+                    'message'       => sprintf(
+                        /* translators: 1: order count, 2: latest order date */
+                        __('This client has %1$d recent order(s), most recently %2$s. Deactivate anyway?', 'meals-db'),
+                        (int) $recent['count'],
+                        (string) $recent['last_date']
+                    ),
+                ]);
+            }
+        }
+
         if (!MealsDB_Clients::deactivate_client($client_id)) {
             wp_send_json_error(['message' => __('Unable to deactivate the client.', 'meals-db')]);
         }

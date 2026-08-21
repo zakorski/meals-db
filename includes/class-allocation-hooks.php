@@ -107,6 +107,23 @@ class MealsDB_Allocation_Hooks {
             // a too-narrow gate here is both redundant and harmful. Let any
             // shop_order through and resolve downstream.
 
+            // v561 ITEM 4b: an order reactivates a dormant client. ORDER MATTERS
+            // — do this FIRST so fees + the allocation recalc (which can filter
+            // active_only) see an active client; a just-reactivated client must
+            // not be skipped and end up billing zero. Do not move this below the
+            // engine call. All guards (non-cancelled, current/prev month,
+            // currently inactive) live in maybe_reactivate_on_order.
+            $reactivate_customer = (int) $order->get_customer_id();
+            $reactivate_date     = $order->get_date_created();
+            if ($reactivate_customer > 0 && $reactivate_date && class_exists('MealsDB_Clients')) {
+                MealsDB_Clients::maybe_reactivate_on_order(
+                    $reactivate_customer,
+                    $reactivate_date->date('Y-m-d'),
+                    (string) $order->get_status(),
+                    $order_id
+                );
+            }
+
             // Apply program fees (delivery fee + monthly contribution) for
             // qualifying government clients. Idempotent and source-agnostic:
             // runs for QO and normal orders alike. Must run before
