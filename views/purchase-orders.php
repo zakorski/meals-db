@@ -182,14 +182,25 @@ if ($po_id > 0) {
         <?php if ($is_workflow): ?>
             <p class="mealsdb-po-detail-actions">
                 <?php if ($status === MealsDB_Purchase_Orders::STATUS_PLANNED): ?>
+                    <?php
+                    // Source the default/bounds from the SAME schedule the panel
+                    // above renders ($sched / $sched_base, computed at ~line 152)
+                    // so the hint can never state a different date than the
+                    // Expected arrival (T+13) the operator is looking at. The
+                    // directive asked for this explicitly; recomputing '+13 days'
+                    // here drifts on any PO whose order date isn't today.
+                    $arr_min     = ($sched_base !== '') ? $sched_base : gmdate('Y-m-d');
+                    $arr_default = ($sched !== null) ? (string) $sched['expected_arrival'] : gmdate('Y-m-d', strtotime($arr_min . ' +13 days'));
+                    $arr_max     = gmdate('Y-m-d', strtotime($arr_min . ' +1 year'));
+                    ?>
                     <label for="mealsdb-po-expected-arrival"><?php esc_html_e('Expected arrival:', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-po-expected-arrival"
-                        min="<?php echo esc_attr(gmdate('Y-m-d')); ?>"
-                        max="<?php echo esc_attr(gmdate('Y-m-d', strtotime('+1 year'))); ?>"
-                        value="<?php echo esc_attr(gmdate('Y-m-d', strtotime('+13 days'))); ?>" />
+                        min="<?php echo esc_attr($arr_min); ?>"
+                        max="<?php echo esc_attr($arr_max); ?>"
+                        value="<?php echo esc_attr($arr_default); ?>" />
                     <span class="description" id="mealsdb-po-arrival-hint"><?php
                         /* translators: %s: the computed default arrival date (T+13). */
-                        echo esc_html(sprintf(__('Leave blank to use the computed default (%s).', 'meals-db'), gmdate('Y-m-d', strtotime('+13 days'))));
+                        echo esc_html(sprintf(__('Leave blank to use the computed default (%s).', 'meals-db'), $arr_default));
                     ?></span>
                     <button type="button" class="button button-primary mealsdb-po-action" data-po-action="approve" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Approve', 'meals-db'); ?></button>
                     <button type="button" class="button mealsdb-po-action" data-po-action="cancel" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Cancel draft', 'meals-db'); ?></button>
