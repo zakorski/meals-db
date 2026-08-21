@@ -341,6 +341,7 @@ class MealsDB_Ajax_Clients {
         if (!$confirmed) {
             $recent = MealsDB_Clients::recent_order_summary($client_id);
             if ((int) ($recent['count'] ?? 0) > 0) {
+                // Recent-orders warning (v561 ITEM 4a) — unchanged wording.
                 wp_send_json_error([
                     'needs_confirm' => true,
                     'count'         => (int) $recent['count'],
@@ -353,6 +354,21 @@ class MealsDB_Ajax_Clients {
                     ),
                 ]);
             }
+            // v562 ITEM 3: baseline confirm even with NO recent orders —
+            // deactivation silently removes the client from Quick Order search
+            // (search_clients filters active = 1), so it must never be a single
+            // unconfirmed click. Server-driven so exactly ONE dialog shows and it
+            // can't stack with the order-count warning above.
+            $name = MealsDB_Clients::display_name($client_id);
+            wp_send_json_error([
+                'needs_confirm' => true,
+                'count'         => 0,
+                'message'       => sprintf(
+                    /* translators: %s: client name */
+                    __('Deactivate %s? They will no longer appear in Quick Order search.', 'meals-db'),
+                    $name !== '' ? $name : __('this client', 'meals-db')
+                ),
+            ]);
         }
 
         if (!MealsDB_Clients::deactivate_client($client_id)) {

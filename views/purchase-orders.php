@@ -184,7 +184,13 @@ if ($po_id > 0) {
                 <?php if ($status === MealsDB_Purchase_Orders::STATUS_PLANNED): ?>
                     <label for="mealsdb-po-expected-arrival"><?php esc_html_e('Expected arrival:', 'meals-db'); ?></label>
                     <input type="date" id="mealsdb-po-expected-arrival"
+                        min="<?php echo esc_attr(gmdate('Y-m-d')); ?>"
+                        max="<?php echo esc_attr(gmdate('Y-m-d', strtotime('+1 year'))); ?>"
                         value="<?php echo esc_attr(gmdate('Y-m-d', strtotime('+13 days'))); ?>" />
+                    <span class="description" id="mealsdb-po-arrival-hint"><?php
+                        /* translators: %s: the computed default arrival date (T+13). */
+                        echo esc_html(sprintf(__('Leave blank to use the computed default (%s).', 'meals-db'), gmdate('Y-m-d', strtotime('+13 days'))));
+                    ?></span>
                     <button type="button" class="button button-primary mealsdb-po-action" data-po-action="approve" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Approve', 'meals-db'); ?></button>
                     <button type="button" class="button mealsdb-po-action" data-po-action="cancel" data-po-id="<?php echo (int) $po_id; ?>"><?php esc_html_e('Cancel draft', 'meals-db'); ?></button>
                 <?php elseif ($status === MealsDB_Purchase_Orders::STATUS_PLACED): ?>

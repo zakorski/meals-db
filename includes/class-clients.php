@@ -135,6 +135,20 @@ class MealsDB_Clients {
         return true;
     }
 
+    /** "First Last" for a client id, or '' if unknown. Used in confirm dialogs. */
+    public static function display_name(int $client_id): string {
+        global $wpdb;
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT first_name, last_name FROM `{$table}` WHERE client_id = %d LIMIT 1",
+            $client_id
+        ), ARRAY_A);
+        if (!$row) {
+            return '';
+        }
+        return trim((string) ($row['first_name'] ?? '') . ' ' . (string) ($row['last_name'] ?? ''));
+    }
+
     /**
      * Non-cancelled orders for a client in the current or previous billing month
      * (v561 ITEM 4a). Used to warn before deactivating someone still ordering.
