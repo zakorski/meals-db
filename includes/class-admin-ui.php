@@ -2465,27 +2465,15 @@ class MealsDB_Admin_UI {
      */
     private function resolve_quick_order_tax_rate(): float
     {
-        if (!class_exists('WC_Tax')) {
-            return 0.0;
-        }
-
-        try {
-            $rates = \WC_Tax::get_rates('');
-            if (!is_array($rates) || empty($rates)) {
-                return 0.0;
-            }
-
-            $first_rate = reset($rates);
-            if (!is_array($first_rate) || !isset($first_rate['rate'])) {
-                return 0.0;
-            }
-
-            $rate = (float) $first_rate['rate'];
-            return $rate > 0 ? $rate / 100 : 0.0;
-        } catch (Throwable $e) {
-            error_log('[MealsDB Admin UI] Failed reading WC tax rate: ' . $e->getMessage());
-            return 0.0;
-        }
+        // DIRECTIVE hst-rate-source ITEM 1 (third site): the private-pay QO
+        // preview is a single flat rate feeding the on-screen summary. Show the
+        // NB HST rate rather than WC_Tax::get_rates('') (which resolved to the
+        // store base, CA:NS). For local NB clients — virtually all private-pay
+        // — this matches the real order, whose tax is resolved from the client's
+        // address (see MealsDB_Quick_Order_Ajax::create_wc_order), and it no
+        // longer depends on the store base, so a corrected NS-standard row
+        // can't make the preview disagree with the order.
+        return MealsDB_Tax::resolve_nb_hst_rate();
     }
 
     /**

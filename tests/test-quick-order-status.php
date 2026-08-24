@@ -72,6 +72,17 @@ class QosFakeOrder extends WC_Order {
     }
     public function set_date_created($date): void {}
     public function delete($force = false): void { $this->deleted = true; }
+    // Absorb set_billing_*/set_shipping_* calls from apply_client_address_to_order().
+    public function __call(string $name, array $args): void {}
+}
+
+// MealsDB_Clients_Repository needs $wpdb which is absent in the test harness.
+// Return a null client row; apply_client_address_to_order() handles null cleanly.
+// Second arg false: don't trigger the autoloader — we're the stub.
+if (!class_exists('MealsDB_Clients_Repository', false)) {
+    class MealsDB_Clients_Repository {
+        public function get_client_by_id(int $id): ?array { return null; }
+    }
 }
 class WC_Product {
     public function get_status(): string { return 'publish'; }

@@ -23,7 +23,9 @@ if (!defined('ABSPATH')) {
     define('ABSPATH', dirname(__DIR__) . '/');
 }
 
-// Mock WooCommerce's tax API. resolve_hst_rate() calls WC_Tax::get_rates('').
+// Mock WooCommerce's tax API. resolve_hst_rate() now delegates to
+// MealsDB_Tax::resolve_nb_hst_rate(), which calls WC_Tax::find_rates() for the
+// CA/NB row in the 'hst' class (get_rates() is retained for other callers).
 // $GLOBALS['__wc_hst_percent'] controls the returned rate: a number → that
 // percent; null → no rate configured (the no-fallback 0% case).
 $GLOBALS['__wc_hst_percent'] = 15.0;
@@ -32,6 +34,16 @@ if (!class_exists('WC_Tax')) {
         public static function get_rates($tax_class = '') {
             $p = $GLOBALS['__wc_hst_percent'] ?? null;
             return $p === null ? [] : [['rate' => $p]];
+        }
+        // resolve_hst_rate() now delegates to MealsDB_Tax::resolve_nb_hst_rate(),
+        // which calls find_rates() for the CA/NB row in the 'hst' class.
+        public static function find_rates($args = []) {
+            $p = $GLOBALS['__wc_hst_percent'] ?? null;
+            if ($p === null) { return []; }
+            $match = ($args['country'] ?? '') === 'CA'
+                && ($args['state'] ?? '') === 'NB'
+                && ($args['tax_class'] ?? '') === 'hst';
+            return $match ? [1 => ['rate' => $p, 'label' => 'HST', 'shipping' => 'yes', 'compound' => 'no']] : [];
         }
     }
 }
