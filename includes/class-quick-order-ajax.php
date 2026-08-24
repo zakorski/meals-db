@@ -981,6 +981,29 @@ class MealsDB_Quick_Order_Ajax {
             $order->set_customer_id($wp_user_id);
         }
 
+        // DIRECTIVE hst-rate-source ITEM 2: WooCommerce does NOT copy a linked
+        // customer's address onto the order. Without an address, WC resolves tax
+        // at the store base (CA:NS) and a Moncton NB client is billed NS HST.
+        // Copy the client's address BEFORE line items and calculate_totals(),
+        // which is when WC fixes the tax location.
+        $client_row   = $client_id > 0 ? (new MealsDB_Clients_Repository())->get_client_by_id($client_id) : null;
+        $tax_province = self::apply_client_address_to_order($order, $client_row);
+        if ($tax_province === '') {
+            // Do NOT silently fall back to the store base. Record the order and
+            // client so an unknown tax region is visible, not quietly mis-priced.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'warning',
+                    'category'  => 'billing',
+                    'subsystem' => 'quick_order_ajax',
+                    'event'     => 'order.address_missing_province',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'   => 'Quick Order created with no resolvable province; tax region may be wrong.',
+                    'context'   => ['order_id' => $order->get_id(), 'client_id' => $client_id, 'wp_user_id' => $wp_user_id],
+                ]);
+            }
+        }
+
         $added_count   = 0;
         $dropped_items = [];
 
@@ -1097,6 +1120,63 @@ class MealsDB_Quick_Order_Ajax {
         $order->set_status('processing', __('Created via Meals DB Quick Order.', 'meals-db'));
 
         return $order;
+    }
+
+    /**
+     * Copy the client's address onto a freshly-created order so WooCommerce
+     * resolves tax at the correct province (DIRECTIVE hst-rate-source ITEM 2).
+     *
+     * MUST run BEFORE calculate_totals() — WC fixes the tax location at
+     * calculation time, so an address set afterwards is ignored.
+     *
+     * The client record is the operator-maintained source of truth. Billing is
+     * taken from the mailing address, shipping from the delivery address
+     * (falling back to billing). Returns the billing province that will drive
+     * tax (woocommerce_tax_based_on = billing), or '' if none could be
+     * resolved — the caller logs that case rather than silently billing the
+     * store base.
+     *
+     * @param WC_Order   $order
+     * @param array|null $client DB-side client row (get_client_by_id), or null.
+     * @return string Billing province set on the order ('' if unknown).
+     */
+    private static function apply_client_address_to_order(WC_Order $order, ?array $client): string {
+        if (!is_array($client)) {
+            return '';
+        }
+
+        $bill_province = trim((string) ($client['province'] ?? ''));
+        $bill_country  = $bill_province !== '' ? 'CA' : '';
+
+        $order->set_billing_first_name((string) ($client['first_name'] ?? ''));
+        $order->set_billing_last_name((string) ($client['last_name'] ?? ''));
+        if (!empty($client['client_email'])) {
+            $order->set_billing_email((string) $client['client_email']);
+        }
+        $order->set_billing_address_1((string) ($client['street_name'] ?? ''));
+        $order->set_billing_city((string) ($client['city'] ?? ''));
+        $order->set_billing_state($bill_province);
+        $order->set_billing_postcode((string) ($client['postal_code'] ?? ''));
+        if ($bill_country !== '') {
+            $order->set_billing_country($bill_country);
+        }
+
+        // Shipping from the delivery address, falling back to billing.
+        $ship_province = trim((string) ($client['delivery_province'] ?? ''));
+        if ($ship_province === '') { $ship_province = $bill_province; }
+        $ship_country  = $ship_province !== '' ? 'CA' : '';
+
+        $order->set_shipping_first_name((string) ($client['first_name'] ?? ''));
+        $order->set_shipping_last_name((string) ($client['last_name'] ?? ''));
+        $order->set_shipping_address_1((string) ($client['delivery_street_name'] ?? $client['street_name'] ?? ''));
+        $order->set_shipping_city((string) ($client['delivery_city'] ?? $client['city'] ?? ''));
+        $order->set_shipping_state($ship_province);
+        $order->set_shipping_postcode((string) ($client['delivery_postal_code'] ?? $client['postal_code'] ?? ''));
+        if ($ship_country !== '') {
+            $order->set_shipping_country($ship_country);
+        }
+
+        return $bill_province;
     }
 
     /**
