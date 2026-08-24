@@ -281,6 +281,16 @@ class MealsDB_Invoice_Draft_Page {
             return;
         }
 
+        // DIRECTIVE hst-rate-source ITEM 1c: show the HST rate actually used and
+        // where it came from, so the operator signing off (Janet) sees the rate
+        // behind the totals rather than inferring it. Read-only, no side effects.
+        if (class_exists('MealsDB_Tax')) {
+            echo '<p class="description mealsdb-draft-hst-source" style="margin:6px 0;">'
+                . esc_html__('HST rate applied: ', 'meals-db')
+                . esc_html(MealsDB_Tax::describe_nb_hst_source())
+                . '</p>';
+        }
+
         // Curated per-pipeline columns (Part 1) when a map exists and the
         // operator hasn't toggled "Show all fields"; otherwise the raw
         // array_keys grid (debug parity + pipelines without a map yet).
