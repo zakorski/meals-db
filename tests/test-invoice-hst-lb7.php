@@ -33,6 +33,16 @@ if (!class_exists('WC_Tax')) {
             $p = $GLOBALS['__wc_hst_percent'] ?? null;
             return $p === null ? [] : [['rate' => $p]];
         }
+        // resolve_hst_rate() now delegates to MealsDB_Tax::resolve_nb_hst_rate(),
+        // which calls find_rates() for the CA/NB row in the 'hst' class.
+        public static function find_rates($args = []) {
+            $p = $GLOBALS['__wc_hst_percent'] ?? null;
+            if ($p === null) { return []; }
+            $match = ($args['country'] ?? '') === 'CA'
+                && ($args['state'] ?? '') === 'NB'
+                && ($args['tax_class'] ?? '') === 'hst';
+            return $match ? [1 => ['rate' => $p, 'label' => 'HST', 'shipping' => 'yes', 'compound' => 'no']] : [];
+        }
     }
 }
 
