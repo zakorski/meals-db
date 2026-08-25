@@ -108,18 +108,23 @@ $clients = [
     2 => ['client_id' => 2, 'wp_user_id' => 2, 'delivery_day' => 'Thursday', 'delivery_frequency' => 2],
 ];
 
-// O101 created 05-25 -> occ 05-28 (IN),  no override.
-// O102 created 06-01 -> occ 06-04 (IN),  no override.
-// O103 created 05-21 -> occ 05-21 (OUT), no override.
-// O104 created 05-15 -> biweekly occ 05-28 (IN), no override.
-// O105 created 05-04 -> occ 05-07 (OUT) AND created before the widened
-//      candidate window (05-14 for range start 05-28, max_freq 2) —
-//      override 05-29 pulls it IN. Reaches selection only via the meta
+// DIRECTIVE delivery-date-next-week-rule: occurrence = client's delivery weekday
+// in the calendar week FOLLOWING the order date (frequency ignored).
+// Following-Mon: order_date + (8 - ISO_dow); Thursday = Mon + 3.
+// Range [05-28, 06-04]; candidate window: 05-28 - 14 days = 05-14.
+//
+// O101 created 05-25 Mon (ISO=1) -> next Mon 06-01 -> Thu 06-04 (IN range), no override.
+// O102 created 06-01 Mon (ISO=1) -> next Mon 06-08 -> Thu 06-11 (OUT — after range end), no override.
+// O103 created 05-21 Thu (ISO=4) -> next Mon 05-25 -> Thu 05-28 (IN range), no override.
+// O104 created 05-15 Fri (ISO=5, biweekly — frequency IGNORED) -> next Mon 05-18
+//      -> Thu 05-21 (OUT — before range start), no override.
+// O105 created 05-04 Mon (ISO=1) -> next Mon 05-11 -> Thu 05-14 (OUT) AND created
+//      before the candidate window (05-14) — override 05-29 pulls it IN via meta
 //      query (rule 10).
-// O106 created 05-25 -> occ 05-28 (IN) but override 06-10 pushes it OUT
+// O106 created 05-25 Mon -> occ 06-04 (IN range) but override 06-10 pushes it OUT
 //      (rule 9 exclusion).
-// O107 created 06-01 -> occ 06-04 (IN) but override 05-30 (a SATURDAY)
-//      moves it within the range to a different day.
+// O107 created 06-01 Mon -> occ 06-11 (OUT) but override 05-30 (a SATURDAY)
+//      moves it into the range.
 $rows = [
     ['order_id' => 101, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-25 09:00:00', 'items' => []],
     ['order_id' => 102, 'wp_user_id' => 1, 'date_created_gmt' => '2026-06-01 09:00:00', 'items' => []],
@@ -141,14 +146,17 @@ $fake->overrides = $overrides;
 $gen = new MealsDB_Delivery_Slip_Generator($fake);
 
 // -----------------------------------------------------------------------
-// T-1 (rules 9+10): range [05-28, 06-04] = the three untouched in-range
-// orders + the two overridden-IN orders; overridden-OUT O106 absent.
+// T-1 (rules 9+10): range [05-28, 06-04].
+//   IN via occurrence:  O101 (occ 06-04), O103 (occ 05-28).
+//   IN via override:    O105 (override 05-29), O107 (override 05-30).
+//   OUT:                O102 (occ 06-11 > range end), O104 (occ 05-21 < range start),
+//                       O106 (override 06-10 > range end, rule 9 exclusion).
 // -----------------------------------------------------------------------
 $in_range = $gen->get_orders_for_delivery_range($clients, '2026-05-28', '2026-06-04');
 pdf_slip_assert_equal(
-    [101, 102, 104, 105, 107],
+    [101, 103, 105, 107],
     $order_ids($in_range),
-    'T-1: overrides pull O105 in (from outside the creation window) and push O106 out'
+    'T-1: overrides pull O105 in (from outside the creation window) and push O106 out; O101@06-04, O103@05-28 in via occurrence'
 );
 
 // The selection basis carried on each order matches the override where
@@ -159,16 +167,21 @@ foreach ($in_range as $o) {
 }
 pdf_slip_assert_equal('2026-05-29', $occ_by_id[105], 'T-1: O105 selection basis = its override');
 pdf_slip_assert_equal('2026-05-30', $occ_by_id[107], 'T-1: O107 selection basis = its override');
-pdf_slip_assert_equal('2026-05-28', $occ_by_id[101], 'T-1: non-overridden O101 keeps computed occurrence');
+pdf_slip_assert_equal('2026-06-04', $occ_by_id[101], 'T-1: non-overridden O101 keeps computed occurrence (06-04 under the following-week rule)');
+pdf_slip_assert_equal('2026-05-28', $occ_by_id[103], 'T-1: non-overridden O103 keeps computed occurrence (05-28 under the following-week rule)');
 
 // -----------------------------------------------------------------------
 // T-2 (rule 9, exactly-one-slip): each overridden order appears on its
 // override date's slip and ONLY there.
+// Single-date window = D - 14 days..D; occurrence filter == D.
+//
+// 05-28 slip (window 05-14..05-28): O103 occ=05-28 IN via occurrence;
+//   O101 occ=06-04 OUT; O104 occ=05-21 OUT; O106 override=06-10 OUT (rule 9).
 // -----------------------------------------------------------------------
 pdf_slip_assert_equal(
-    [101, 104],
+    [103],
     $order_ids($gen->get_orders_for_delivery_date($clients, '2026-05-28')),
-    'T-2: 05-28 slip = untouched occurrence orders only (O106 overridden off it, O107 not yet on it)'
+    'T-2: 05-28 slip = O103 (occ 05-28); O101 moved to 06-04, O104 to 05-21, O106 overridden off it'
 );
 pdf_slip_assert_equal(
     [105],
@@ -180,10 +193,12 @@ pdf_slip_assert_equal(
     $order_ids($gen->get_orders_for_delivery_date($clients, '2026-05-30')),
     'T-2: Saturday 05-30 slip = O107 via override'
 );
+// 06-04 slip (window 05-21..06-04): O101 created 05-25, occ 06-04 IN.
+// O107 override=05-30 OUT (rule 9 — moved to 05-30 slip).
 pdf_slip_assert_equal(
-    [102],
+    [101],
     $order_ids($gen->get_orders_for_delivery_date($clients, '2026-06-04')),
-    'T-2: 06-04 slip no longer contains O107 (it moved to 05-30)'
+    'T-2: 06-04 slip = O101 (occ 06-04); O107 already moved to 05-30 via override'
 );
 // O106 didn't vanish — it moved: a slip FOR its override date 06-10
 // contains exactly O106 (and nothing else; no occurrence lands there).
@@ -195,21 +210,23 @@ pdf_slip_assert_equal(
 
 // -----------------------------------------------------------------------
 // T-3 (regression, case e): with no overrides at all, selection is
-// byte-identical to the pre-change occurrence behaviour.
+// pure occurrence-only (no override machinery). O101..O104:
+//   O101 occ=06-04 (IN), O102 occ=06-11 (OUT), O103 occ=05-28 (IN),
+//   O104 occ=05-21 (OUT). Range [05-28, 06-04] -> [101, 103].
 // -----------------------------------------------------------------------
 $fake_clean = new FakeOrderQueryWithOverrides();
 $fake_clean->rows = array_slice($rows, 0, 4); // O101..O104, the original scenario
 $fake_clean->overrides = [];
 $gen_clean = new MealsDB_Delivery_Slip_Generator($fake_clean);
 pdf_slip_assert_equal(
-    [101, 102, 104],
+    [101, 103],
     $order_ids($gen_clean->get_orders_for_delivery_range($clients, '2026-05-28', '2026-06-04')),
-    'T-3: no overrides -> identical to the occurrence-only result'
+    'T-3: no overrides -> occurrence-only: O101@06-04, O103@05-28 IN; O102@06-11, O104@05-21 OUT'
 );
 pdf_slip_assert_equal(
-    [101, 104],
+    [103],
     $order_ids($gen_clean->get_orders_for_delivery_date($clients, '2026-05-28')),
-    'T-3: single-date path unchanged without overrides'
+    'T-3: single-date 05-28 without overrides -> only O103 (occ 05-28)'
 );
 
 // -----------------------------------------------------------------------
