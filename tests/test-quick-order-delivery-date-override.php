@@ -42,11 +42,38 @@ if (!method_exists('MealsDB_Quick_Order_Ajax', 'apply_delivery_date_override')) 
     exit(1);
 }
 
-// Valid date -> exactly one meta write, key _delivery_date, value returned.
+// Valid date, default src ('manual') -> two meta writes: _delivery_date + _delivery_date_src='manual'.
 $order = new QoddFakeOrder();
 $applied = MealsDB_Quick_Order_Ajax::apply_delivery_date_override($order, '2026-07-25');
 qodd_check('valid: returns sanitized date', $applied, '2026-07-25');
-qodd_check('valid: exactly one meta write', $order->meta_writes, [['_delivery_date', '2026-07-25']]);
+qodd_check('valid: exactly two meta writes (date + src)', $order->meta_writes, [
+    ['_delivery_date',     '2026-07-25'],
+    ['_delivery_date_src', 'manual'],
+]);
+
+// Explicit src='manual' -> same result as default.
+$order = new QoddFakeOrder();
+MealsDB_Quick_Order_Ajax::apply_delivery_date_override($order, '2026-07-25', 'manual');
+qodd_check('explicit manual: writes _delivery_date_src=manual', $order->meta_writes, [
+    ['_delivery_date',     '2026-07-25'],
+    ['_delivery_date_src', 'manual'],
+]);
+
+// src='auto' -> _delivery_date_src written as 'auto'.
+$order = new QoddFakeOrder();
+MealsDB_Quick_Order_Ajax::apply_delivery_date_override($order, '2026-07-25', 'auto');
+qodd_check('auto: writes _delivery_date_src=auto', $order->meta_writes, [
+    ['_delivery_date',     '2026-07-25'],
+    ['_delivery_date_src', 'auto'],
+]);
+
+// Unknown/garbage src values coerce to 'manual' (not 'auto').
+$order = new QoddFakeOrder();
+MealsDB_Quick_Order_Ajax::apply_delivery_date_override($order, '2026-07-25', 'system');
+qodd_check('unknown src coerces to manual', $order->meta_writes, [
+    ['_delivery_date',     '2026-07-25'],
+    ['_delivery_date_src', 'manual'],
+]);
 
 // Blank -> no write, no override (order rides the computed occurrence).
 $order = new QoddFakeOrder();
@@ -62,7 +89,12 @@ foreach (['not-a-date', '25/07/2026', '2026-02-30', '2026-07-25 10:00:00', null,
 
 // Whitespace tolerance (a pasted value with stray spaces still applies).
 $order = new QoddFakeOrder();
-qodd_check('trims whitespace', MealsDB_Quick_Order_Ajax::apply_delivery_date_override($order, '  2026-07-25  '), '2026-07-25');
+$ws_result = MealsDB_Quick_Order_Ajax::apply_delivery_date_override($order, '  2026-07-25  ');
+qodd_check('trims whitespace: returns date', $ws_result, '2026-07-25');
+qodd_check('trims whitespace: writes both keys', $order->meta_writes, [
+    ['_delivery_date',     '2026-07-25'],
+    ['_delivery_date_src', 'manual'],
+]);
 
 // One-time-only semantics, structurally: persist_next_dates() must not
 // have grown a delivery-override parameter. Its contract stays

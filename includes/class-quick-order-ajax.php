@@ -363,10 +363,43 @@ class MealsDB_Quick_Order_Ajax {
             // is deliberately NOT fed to persist_next_dates() below:
             // the override is one-time-only and must not re-anchor the
             // client's recurring cadence.
-            $delivery_override = self::apply_delivery_date_override(
-                $order,
-                isset($_POST['delivery_date']) ? wp_unslash((string) $_POST['delivery_date']) : ''
+            $posted_delivery = isset($_POST['delivery_date']) ? wp_unslash((string) $_POST['delivery_date']) : '';
+            // DIRECTIVE delivery-date-next-week-rule Item 2: provenance.
+            // Tag 'auto' when the operator submitted exactly the system
+            // default (a future backfill may re-correct it); tag 'manual'
+            // when they changed it (backfill must preserve). Blank
+            // $posted_delivery writes nothing either way.
+            //
+            // delivery_day for provenance: fetch the client row
+            // (lightweight; $client_id is resolved above). create_wc_order()
+            // also fetches the client row internally for address/tax, but
+            // that is a separate call and the row is not in scope here.
+            // When $client_id is 0 (no active meals_clients record for this
+            // WP user) the provenance falls through to 'manual', which is
+            // the safe conservative direction — the backfill will not touch it.
+            $delivery_day_for_provenance = '';
+            if ($client_id > 0) {
+                $provenance_client = (new MealsDB_Clients_Repository())->get_client_by_id($client_id);
+                $delivery_day_for_provenance = (string) ($provenance_client['delivery_day'] ?? '');
+                // Zone fallback for parity with resolve_delivery_prefill: a zoned
+                // client with a blank delivery_day still prefills a zone-derived
+                // date, so provenance must resolve the same day — otherwise the
+                // accepted prefill would mis-tag 'manual' and the backfill would
+                // never re-correct it. Row already loaded; no extra query.
+                if ($delivery_day_for_provenance === '') {
+                    $delivery_day_for_provenance = (string) (MealsDB_Zone_Day::day_for_zone(
+                        isset($provenance_client['delivery_area_name'])
+                            ? (string) $provenance_client['delivery_area_name'] : null
+                    ) ?? '');
+                }
+            }
+            $computed_occurrence = MealsDB_Delivery_Slip_Generator::delivery_occurrence_for_order(
+                $order_date->format('Y-m-d'),
+                ['delivery_day' => $delivery_day_for_provenance]
             );
+            $delivery_src = ($posted_delivery !== '' && $posted_delivery === (string) $computed_occurrence)
+                ? 'auto' : 'manual';
+            $delivery_override = self::apply_delivery_date_override($order, $posted_delivery, $delivery_src);
 
             $order->save();
 
@@ -482,15 +515,32 @@ class MealsDB_Quick_Order_Ajax {
      * was written. Public+static so the contract is unit-testable
      * without the full AJAX stack.
      *
+     * Also writes _delivery_date_src = 'auto' | 'manual' alongside any
+     * successful date write (DIRECTIVE delivery-date-next-week-rule,
+     * Item 2). The repeatable backfill uses this marker to distinguish
+     * system-derived dates (safe to re-correct) from human-chosen dates
+     * (must be preserved). Default is 'manual' so any existing caller
+     * that omits $src is treated as a human override — the conservative
+     * direction.
+     *
      * @param object $order Order-like object exposing update_meta_data().
      * @param mixed  $raw   Raw posted delivery_date value.
+     * @param string $src   Provenance: 'auto' (system-derived, backfill
+     *                      may re-correct) or 'manual' (human-set,
+     *                      backfill must preserve). Anything that is not
+     *                      exactly 'auto' is stored as 'manual'.
      */
-    public static function apply_delivery_date_override($order, $raw): string {
+    public static function apply_delivery_date_override($order, $raw, string $src = 'manual'): string {
         $ymd = MealsDB_Delivery_Date_Advisor::sanitize_ymd($raw);
         if ($ymd === '' || !is_object($order) || !method_exists($order, 'update_meta_data')) {
             return '';
         }
         $order->update_meta_data('_delivery_date', $ymd);
+        // DIRECTIVE delivery-date-next-week-rule: provenance marker so the
+        // repeatable backfill can overwrite system-derived dates ('auto') but
+        // never a human-set one ('manual'). 'auto' is written only when the
+        // submitted value equals the computed following-week occurrence.
+        $order->update_meta_data('_delivery_date_src', $src === 'auto' ? 'auto' : 'manual');
         return $ymd;
     }
 
