@@ -1419,42 +1419,44 @@ class MealsDB_Quick_Order_Ajax {
      * applies internally, so QO and the WC order-edit warning agree even
      * on a stale stored day. Do not flip to zone-first.
      *
-     * next_delivery_date: stored column first; when blank, computed with
-     * the SLIP occurrence semantics (delivery_occurrence_for_order:
-     * same-week snap, roll a cycle only once the weekday has passed) —
-     * NOT Date_Calculator::next_date(), which always projects a full
-     * cycle and would prefill one week late whenever the delivery day is
-     * still upcoming. The prefill is written as the _delivery_date
-     * override on create, so a late prefill would actively delay real
-     * deliveries; parity with the slip's no-override fallback is the
-     * correctness bar.
+     * next_delivery_date: ALWAYS computed via the shared
+     * delivery_occurrence_for_order() resolver (DIRECTIVE
+     * delivery-date-next-week-rule). The stored next_delivery_date column
+     * is intentionally ignored — it is NULL for all zoned clients and is a
+     * live trap. delivery_frequency is likewise not read: the following-week
+     * rule never uses frequency (a parameter that no longer affects the
+     * result is how the next reader reintroduces the old snap-within-week +
+     * roll-by-frequency bug). A blank/unresolvable delivery_day yields a
+     * null prefill. A manual _delivery_date set on the create call still
+     * wins over this prefill at order-creation time.
      *
      * @param array<string, mixed> $client         Row with delivery_day,
-     *                                             delivery_area_name,
-     *                                             next_delivery_date,
-     *                                             delivery_frequency.
+     *                                             delivery_area_name.
+     *                                             next_delivery_date and
+     *                                             delivery_frequency are
+     *                                             NOT read.
      * @param string               $order_date_ymd Anchor date (site-TZ Y-m-d).
      * @return array{delivery_day: ?string, next_delivery_date: ?string}
      */
     public static function resolve_delivery_prefill(array $client, string $order_date_ymd): array {
         $delivery_day = strtolower(trim((string) ($client['delivery_day'] ?? '')));
         if ($delivery_day === '') {
+            // Zone fallback: zones map to weekdays with zero exceptions.
             $delivery_day = (string) (MealsDB_Zone_Day::day_for_zone(
                 isset($client['delivery_area_name']) ? (string) $client['delivery_area_name'] : null
             ) ?? '');
         }
 
-        $next_delivery = trim((string) ($client['next_delivery_date'] ?? ''));
-        if ($next_delivery === '' && $delivery_day !== '') {
-            // delivery_occurrence_for_order defaults a missing/zero
-            // frequency to 1 (weekly) — deliberate parity with the slip
-            // pipeline, not a bug.
+        // DIRECTIVE delivery-date-next-week-rule: the stored next_delivery_date
+        // preference is dropped — the column is NULL for all zoned clients and
+        // is a live trap. Always compute from the shared resolver so the QO
+        // prefill, the slip, and (via the _delivery_date write on create)
+        // billing all agree. Frequency is not used. Blank day -> null prefill.
+        $next_delivery = '';
+        if ($delivery_day !== '') {
             $next_delivery = (string) MealsDB_Delivery_Slip_Generator::delivery_occurrence_for_order(
                 $order_date_ymd,
-                [
-                    'delivery_day'       => $delivery_day,
-                    'delivery_frequency' => (int) ($client['delivery_frequency'] ?? 0),
-                ]
+                ['delivery_day' => $delivery_day]
             );
         }
 
