@@ -218,6 +218,66 @@ class MealsDB_Migration_Page {
                 </p>
                 <div id="cons-results" style="display:none;"></div>
             </div>
+
+            <!--
+                Delivery-date backfill (ITEM 2).
+
+                DELIBERATE, standalone operations — NOT part of the automatic
+                1-8 consolidated chain above. Phases 9 and 10 are dispatched by
+                the same mealsdb_consolidated_phase AJAX action but are never
+                walked by consRunChunk; each button here runs exactly one phase
+                to completion and stops (see ddbRunPhase in admin-migration.js).
+            -->
+            <div class="mealsdb-mig-card mealsdb-mig-section" id="mealsdb-ddbackfill">
+                <h2><?php esc_html_e( 'Delivery-date backfill (ITEM 2)', 'meals-db' ); ?></h2>
+                <p class="description">
+                    <?php esc_html_e( 'Recompute stored delivery dates under the "following-week" rule and re-attribute billing months. Run phase 9 first (writes each order\'s delivery date, skipping human-set ones), then phase 10 (full-range allocation rebuild). Dry run is on by default — run it first and read the counts. Requires the delivery_day data cleanup done first; nothing here touches a finalized month.', 'meals-db' ); ?>
+                </p>
+
+                <p>
+                    <label><?php esc_html_e( 'Month range:', 'meals-db' ); ?>
+                        <input type="text" id="ddb-start-month" pattern="\d{4}-\d{2}" placeholder="YYYY-MM" style="width:8em;">
+                    </label>
+                    <?php esc_html_e( 'to', 'meals-db' ); ?>
+                    <label>
+                        <input type="text" id="ddb-end-month" pattern="\d{4}-\d{2}" placeholder="YYYY-MM" style="width:8em;">
+                    </label>
+                    &nbsp;
+                    <span class="description"><?php esc_html_e( '(leave blank for the default 24-month window)', 'meals-db' ); ?></span>
+                </p>
+                <p>
+                    <label><input type="checkbox" id="ddb-dry-run" checked> <?php esc_html_e( 'Dry run (no writes)', 'meals-db' ); ?></label>
+                </p>
+                <p>
+                    <button type="button" class="button button-primary" id="ddb-run-9">
+                        <?php esc_html_e( 'Run Phase 9 — Backfill Delivery Dates', 'meals-db' ); ?>
+                    </button>
+                    <button type="button" class="button button-primary" id="ddb-run-10">
+                        <?php esc_html_e( 'Run Phase 10 — Rebuild Allocations (full range)', 'meals-db' ); ?>
+                    </button>
+                </p>
+                <div id="ddb-progress" class="mealsdb-mig-stats"></div>
+
+                <h3><?php esc_html_e( 'Ground-truth scorecard', 'meals-db' ); ?></h3>
+                <p class="description">
+                    <?php
+                    printf(
+                        /* translators: %s: the expected CSV column format order_number,delivery_date */
+                        esc_html__( 'Paste CSV rows of %s (from the July packer PDFs). Reports the match rate of each order\'s stored delivery date against the truth. A header row is tolerated.', 'meals-db' ),
+                        '<code>order_number,delivery_date</code>'
+                    );
+                    ?>
+                </p>
+                <p>
+                    <textarea id="ddb-scorecard-csv" rows="6" style="width:100%;max-width:32em;" placeholder="27454,2026-07-01"></textarea>
+                </p>
+                <p>
+                    <button type="button" class="button" id="ddb-scorecard-run">
+                        <?php esc_html_e( 'Score', 'meals-db' ); ?>
+                    </button>
+                </p>
+                <div id="ddb-scorecard-result"></div>
+            </div>
         </div>
         <?php
     }

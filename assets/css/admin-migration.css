@@ -87,3 +87,16 @@
     white-space: pre-wrap;
     word-break: break-all;
 }
+
+/* Delivery-date backfill (ITEM 2) panel */
+#mealsdb-ddbackfill #ddb-progress:empty {
+    display: none;
+}
+
+#mealsdb-ddbackfill #ddb-scorecard-result {
+    margin-top: 12px;
+}
+
+#mealsdb-ddbackfill #ddb-scorecard-result table {
+    margin-top: 8px;
+}

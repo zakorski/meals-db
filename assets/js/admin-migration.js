@@ -208,4 +208,150 @@
         consRunPhase();
     });
 
+    // =================================================================
+    //  Delivery-date backfill (ITEM 2) — phases 9 & 10 + scorecard.
+    //
+    //  DELIBERATE, STANDALONE operations, NOT part of the 1-8 chain
+    //  above. ddbRunPhase drives a SINGLE phase to completion and STOPS
+    //  — it has no advance step (contrast consAdvance), so a phase 9 run
+    //  never rolls into phase 10 (or anything else). Each phase must be
+    //  launched by the operator with its own button. Reuses the shared
+    //  escHtml() helper defined at the top of this IIFE so all
+    //  server-supplied values are escaped before .html() insertion.
+    // =================================================================
+
+    var ddbRunning = false;
+
+    function ddbSetButtons(disabled) {
+        $('#ddb-run-9, #ddb-run-10').prop('disabled', disabled);
+    }
+
+    // Render "key: n" pairs, escaping both key and value (defense in depth;
+    // the JS layer is audited XSS-clean — keep it so).
+    function ddbStatsHtml(stats) {
+        if (!stats) return '';
+        return Object.keys(stats).map(function (k) {
+            return escHtml(k) + ': ' + escHtml(stats[k]);
+        }).join(', ');
+    }
+
+    // Single-phase walker. Chunks through ONE phase via
+    // mealsdb_consolidated_phase and stops when complete — never advances
+    // to another phase.
+    function ddbRunPhase(phase, opts) {
+        var offset = 0;
+        var acc = {};        // accumulated numeric stats across chunks
+        var lastMonth = '';  // latest string stat (e.g. the month being built)
+
+        function chunk() {
+            $.post(mealsdbMigration.ajaxUrl, {
+                action: 'mealsdb_consolidated_phase',
+                nonce: mealsdbMigration.nonce,
+                phase: phase,
+                offset: offset,
+                dry_run: opts.dryRun ? 1 : 0,
+                start_month: opts.startMonth || '',
+                end_month: opts.endMonth || ''
+            }).done(function (res) {
+                if (!res || !res.success) {
+                    opts.$progress.text((res && res.data && res.data.message) || 'Error');
+                    ddbRunning = false;
+                    ddbSetButtons(false);
+                    return;
+                }
+                var d = res.data; // {stats, offset, total, complete, phase}
+                Object.keys(d.stats || {}).forEach(function (k) {
+                    var v = d.stats[k];
+                    if (typeof v === 'number') {
+                        acc[k] = (acc[k] || 0) + v;
+                    } else if (k === 'month') {
+                        lastMonth = v;
+                    }
+                });
+                var pct = d.total ? Math.min(100, Math.round((d.offset / d.total) * 100)) : 100;
+                opts.$progress.html(
+                    '<strong>' + escHtml(opts.label) + (opts.dryRun ? ' (dry run)' : '') + ':</strong> ' +
+                    pct + '% — ' + ddbStatsHtml(acc) +
+                    (lastMonth ? ' [month ' + escHtml(lastMonth) + ']' : '')
+                );
+                if (d.complete) {
+                    opts.$progress.append(' — <em>done</em>');
+                    ddbRunning = false;
+                    ddbSetButtons(false);
+                } else {
+                    offset = d.offset;
+                    chunk();
+                }
+            }).fail(function () {
+                opts.$progress.text('Request failed.');
+                ddbRunning = false;
+                ddbSetButtons(false);
+            });
+        }
+
+        opts.$progress.text('Starting…');
+        chunk();
+    }
+
+    function ddbStart(phase, label) {
+        if (ddbRunning) return;
+        var dryRun = $('#ddb-dry-run').is(':checked');
+        // A real (non-dry) run writes billing data — confirm first.
+        if (!dryRun && !confirm('Run "' + label + '" for REAL? This writes delivery dates / allocation billing data.')) {
+            return;
+        }
+        ddbRunning = true;
+        ddbSetButtons(true);
+        ddbRunPhase(phase, {
+            dryRun: dryRun,
+            startMonth: $('#ddb-start-month').val() || '',
+            endMonth: $('#ddb-end-month').val() || '',
+            label: label,
+            $progress: $('#ddb-progress')
+        });
+    }
+
+    $('#ddb-run-9').on('click', function () {
+        ddbStart(9, 'Backfill Delivery Dates');
+    });
+    $('#ddb-run-10').on('click', function () {
+        ddbStart(10, 'Rebuild Allocations');
+    });
+
+    $('#ddb-scorecard-run').on('click', function () {
+        var csv = $('#ddb-scorecard-csv').val() || '';
+        var $out = $('#ddb-scorecard-result');
+        $out.text('Scoring…');
+        $.post(mealsdbMigration.ajaxUrl, {
+            action: 'mealsdb_delivery_scorecard',
+            nonce: mealsdbMigration.nonce,
+            csv: csv
+        }).done(function (res) {
+            if (!res || !res.success) {
+                $out.text((res && res.data && res.data.message) || 'Error');
+                return;
+            }
+            var d = res.data;
+            var rate = (d.match_rate * 100).toFixed(1);
+            var html = '<p><strong>' + escHtml(d.matched) + ' / ' + escHtml(d.total) +
+                       ' matched (' + escHtml(rate) + '%)</strong>' +
+                       (d.unresolved ? ' — ' + escHtml(d.unresolved) + ' order#s did not resolve' : '') + '</p>';
+            if (d.misses && d.misses.length) {
+                html += '<table class="widefat striped"><thead><tr><th>Order</th><th>Stored</th><th>Actual</th></tr></thead><tbody>';
+                d.misses.forEach(function (m) {
+                    html += '<tr><td>' + escHtml(m.order) + '</td><td>' + escHtml(m.stored) +
+                            '</td><td>' + escHtml(m.actual) + '</td></tr>';
+                });
+                html += '</tbody></table>';
+                if (d.misses_total > d.misses_shown) {
+                    html += '<p>Showing first ' + escHtml(d.misses_shown) + ' of ' +
+                            escHtml(d.misses_total) + ' misses.</p>';
+                }
+            }
+            $out.html(html);
+        }).fail(function () {
+            $out.text('Request failed.');
+        });
+    });
+
 })(jQuery);
