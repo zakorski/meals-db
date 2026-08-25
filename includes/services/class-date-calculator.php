@@ -9,6 +9,14 @@
  *   - the order-placement lifecycle hook                     (next_order_date)
  *   - the client_delivery task on_complete                   (next_delivery_date)
  *
+ * NOTE (delivery-date-next-week-rule): the CADENCE MODEL and
+ * SNAP-TO-DELIVERY-DAY sections below describe ONLY the legacy
+ * next_date()/snap_to_delivery_day() methods, which are still used for
+ * ordering cadence. The delivery-date DEFAULT for an order is now computed by
+ * next_week_delivery_date() (the client's delivery weekday in the calendar
+ * week FOLLOWING the order date; frequency is not used) — see its own docblock
+ * below. Don't conflate the two.
+ *
  * CADENCE MODEL
  * -------------
  * ordering_frequency / delivery_frequency are stored as a WEEK MULTIPLIER,
