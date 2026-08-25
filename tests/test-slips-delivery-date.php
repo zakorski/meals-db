@@ -118,6 +118,9 @@ pdf_slip_assert_equal(1, count($on_next_thursday), 'T-1: order appears on next-w
 $on_monday = $slip_gen->get_orders_for_delivery_date($clients, '2026-05-25');
 pdf_slip_assert_equal(0, count($on_monday), 'T-1: order does NOT appear on creation-day (Monday) slip');
 
+$on_same_week_thursday = $slip_gen->get_orders_for_delivery_date($clients, '2026-05-28');
+pdf_slip_assert_equal(0, count($on_same_week_thursday), 'T-1: order is ABSENT from same-week Thursday (2026-05-28) slip — occurrence is 2026-06-04, not 2026-05-28');
+
 // -----------------------------------------------------------------------
 // T-2: order created ON the delivery day maps to NEXT week's Thursday.
 // 2026-05-28 Thu (ISO N=4): next Monday = 2026-06-01; +3 = 2026-06-04 Thu.

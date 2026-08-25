@@ -53,9 +53,11 @@ class MealsDB_Delivery_Slip_Generator {
         $day_lower = strtolower(date('l', $ts));
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        // delivery_day + delivery_frequency are needed by the delivery-basis
-        // order filter (delivery_occurrence_for_order, MAJ-6) to map each
-        // candidate order to its intended delivery occurrence.
+        // delivery_day is needed by delivery_occurrence_for_order (MAJ-6) to
+        // map each candidate order to its intended delivery occurrence.
+        // delivery_frequency is still carried on the row for backward
+        // compatibility but no longer affects the occurrence calculation under
+        // the following-week rule.
         //
         // Override owners (Section D rule 11): a client whose order was
         // manually overridden onto this date must be selected even when the
@@ -113,8 +115,10 @@ class MealsDB_Delivery_Slip_Generator {
         $day_lower = strtolower(date('l', $ts));
 
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        // delivery_day + delivery_frequency drive the delivery-basis order
-        // filter (delivery_occurrence_for_order, MAJ-6).
+        // delivery_day is read by delivery_occurrence_for_order (MAJ-6) to
+        // compute each order's intended occurrence. delivery_frequency is still
+        // selected for backward compatibility but no longer drives the result
+        // under the following-week rule.
         // delivery_postal_code / client_phone_2 / alternate_contact_name /
         // alternate_contact_phone_1 / alternate_contact_phone_2 feed
         // MealsDB_Slip_PDF_Generator::build_driver_block (the Midland doc-4
@@ -209,10 +213,12 @@ class MealsDB_Delivery_Slip_Generator {
         $table        = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $placeholders = implode(',', array_fill(0, count($zone_names), '%s'));
 
-        // delivery_day + delivery_frequency are required so the zone/range
-        // slip can map each order to its delivery occurrence (GUI-SLIP-RANGE);
-        // omitting them would leave the occurrence filter with a blank cadence
-        // and silently drop every order.
+        // delivery_day is required so the zone/range slip can map each order
+        // to its delivery occurrence via delivery_occurrence_for_order
+        // (GUI-SLIP-RANGE); omitting it would leave the occurrence filter with
+        // no weekday and silently drop every order. delivery_frequency is still
+        // carried on the row for backward compatibility but no longer affects
+        // the occurrence calculation under the following-week rule.
         $sql = $wpdb->prepare(
             "SELECT client_id, wp_user_id, delivery_initials, delivery_area_zone,
                     delivery_area_name, delivery_city, delivery_street_name,
@@ -253,8 +259,10 @@ class MealsDB_Delivery_Slip_Generator {
         $table        = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $placeholders = implode(',', array_fill(0, count($zone_names), '%s'));
 
-        // delivery_day + delivery_frequency drive the delivery-occurrence
-        // filter for the zone/range slip (GUI-SLIP-RANGE).
+        // delivery_day drives the delivery-occurrence filter for the zone/range
+        // slip (GUI-SLIP-RANGE). delivery_frequency is still selected for
+        // backward compatibility but no longer affects the result under the
+        // following-week rule.
         // delivery_postal_code / client_phone_2 / alternate_contact_name /
         // alternate_contact_phone_1 / alternate_contact_phone_2 feed
         // MealsDB_Slip_PDF_Generator::build_driver_block (the Midland doc-4
@@ -315,8 +323,9 @@ class MealsDB_Delivery_Slip_Generator {
      * candidate window, then re-buckets in PHP.
      *
      * @param array<int, array<string, mixed>> $clients       Clients keyed by wp_user_id
-     *                                                         (must carry delivery_day +
-     *                                                         delivery_frequency).
+     *                                                         (must carry delivery_day;
+     *                                                         delivery_frequency is carried
+     *                                                         but no longer affects occurrence).
      * @param string                           $delivery_date Y-m-d slip date.
      * @return array<int, array<string, mixed>> Orders (with items) due on $delivery_date.
      */
@@ -348,8 +357,9 @@ class MealsDB_Delivery_Slip_Generator {
      * test the single-date path uses.
      *
      * @param array<int, array<string, mixed>> $clients    Clients keyed by wp_user_id
-     *                                                      (must carry delivery_day +
-     *                                                      delivery_frequency).
+     *                                                      (must carry delivery_day;
+     *                                                      delivery_frequency is carried
+     *                                                      but no longer affects occurrence).
      * @param string                           $start_date Y-m-d range start (inclusive).
      * @param string                           $end_date   Y-m-d range end (inclusive).
      * @return array<int, array<string, mixed>> Orders (with items) delivered in the range.
