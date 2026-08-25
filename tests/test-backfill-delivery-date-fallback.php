@@ -52,7 +52,9 @@ $GLOBALS['bdf_schedule'] = [
     'Zone 5' => ['day' => 'Friday',   'label' => 'Friday - Dieppe / Riverview'],
 ];
 
-// Weekday facts: 2026-08-03 Mon, 2026-08-06 Thu, 2026-08-07 Fri, 2026-08-13 Thu.
+// Weekday facts: 2026-08-03 Mon, 2026-08-07 Fri, 2026-08-10 Mon, 2026-08-13 Thu.
+// Under the next-week rule: following Monday from 2026-08-03 (Mon) is 2026-08-10 (+7);
+// following Monday from 2026-08-07 (Fri) is also 2026-08-10 (+3). Thursday = Mon +3.
 
 // 1. last_delivery_date present -> historic next_date projection wins,
 //    independent of the zone/prefill path.
@@ -66,26 +68,32 @@ bdf_check(
     '2026-08-13'
 );
 
-// 2. THE FIX: no last_delivery, blank stored day, zone gives Thursday, the
-//    delivery day is still upcoming this week -> same-week occurrence
-//    (parity with get_next_dates / the slip pipeline).
+// 2. THE FIX: no last_delivery, blank stored day, zone gives Thursday.
+//    DIRECTIVE delivery-date-next-week-rule: occurrence is always the client's
+//    delivery weekday in the calendar week FOLLOWING the anchor date —
+//    next Monday from 2026-08-03 (Mon) is 2026-08-10, Thursday (+3) = 2026-08-13.
+//    (The old rule snapped to the same-week Thursday 2026-08-06; that was wrong.)
 bdf_check(
-    'no history falls back to zone + slip occurrence (this week)',
+    'no history falls back to zone + slip occurrence (following week)',
     MealsDB_Migration_Consolidated::resolve_backfill_delivery_date(
         ['delivery_day' => '', 'delivery_area_name' => 'Zone 1', 'delivery_frequency' => 1, 'next_delivery_date' => ''],
         null,           // no last_delivery usermeta
         '2026-08-03'    // Monday anchor
     ),
-    '2026-08-06'
+    '2026-08-13'
 );
 
-// 3. No history, delivery day already passed this week -> rolls one cycle.
+// 3. No history, anchor on a Friday — Thursday client.
+//    Next Monday from 2026-08-07 (Fri, ISO=5) = +3 days = 2026-08-10;
+//    Thursday (+3) = 2026-08-13. Same result as case 2 because the new rule
+//    always targets the FOLLOWING week regardless of whether the delivery day
+//    has "passed" the anchor within the current week.
 bdf_check(
-    'no history, passed weekday rolls a cycle',
+    'no history, Friday anchor, Thursday client -> following week Thursday',
     MealsDB_Migration_Consolidated::resolve_backfill_delivery_date(
         ['delivery_day' => 'thursday', 'delivery_area_name' => null, 'delivery_frequency' => 1, 'next_delivery_date' => ''],
         null,
-        '2026-08-07'    // Friday — Thursday passed
+        '2026-08-07'    // Friday anchor
     ),
     '2026-08-13'
 );

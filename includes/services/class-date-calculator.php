@@ -9,6 +9,14 @@
  *   - the order-placement lifecycle hook                     (next_order_date)
  *   - the client_delivery task on_complete                   (next_delivery_date)
  *
+ * NOTE (delivery-date-next-week-rule): the CADENCE MODEL and
+ * SNAP-TO-DELIVERY-DAY sections below describe ONLY the legacy
+ * next_date()/snap_to_delivery_day() methods, which are still used for
+ * ordering cadence. The delivery-date DEFAULT for an order is now computed by
+ * next_week_delivery_date() (the client's delivery weekday in the calendar
+ * week FOLLOWING the order date; frequency is not used) — see its own docblock
+ * below. Don't conflate the two.
+ *
  * CADENCE MODEL
  * -------------
  * ordering_frequency / delivery_frequency are stored as a WEEK MULTIPLIER,
@@ -125,6 +133,47 @@ class MealsDB_Date_Calculator {
         $week_sunday = $base->modify('-' . $dow . ' days');
 
         return $week_sunday->modify('+' . $offset . ' days')->format('Y-m-d');
+    }
+
+    /**
+     * The client's delivery weekday in the calendar week FOLLOWING $date.
+     *
+     * DIRECTIVE delivery-date-next-week-rule: replaces the old
+     * snap-within-week + roll-by-frequency derivation, which landed non-weekly
+     * clients a fortnight/month out and (for early-week days like Tuesday)
+     * almost always mis-fired. This is a pure function of (order date,
+     * delivery weekday) — no frequency, no anchor, no history. Validated at
+     * 96.4% against Enzebra July ground truth.
+     *
+     * Monday-based week: from $date, step to the following week's Monday
+     * (PHP 'N': Mon=1..Sun=7, so days-to-next-Monday = 8 - N), then advance to
+     * the delivery weekday measured from Monday.
+     *
+     * @param string      $date         Y-m-d (order date).
+     * @param string|null $delivery_day Weekday name (any case) or null/blank.
+     * @return string|null Y-m-d, or null when the date or weekday is invalid —
+     *                     the null preserves the "blank means blank" contract.
+     */
+    public static function next_week_delivery_date(string $date, ?string $delivery_day): ?string {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            return null;
+        }
+        $offset_sun0 = self::day_offset($delivery_day); // Sun=0..Sat=6, null if unknown/blank.
+        if ($offset_sun0 === null) {
+            return null;
+        }
+        try {
+            $base = new DateTimeImmutable($date, new DateTimeZone('UTC'));
+        } catch (\Throwable $e) {
+            return null;
+        }
+        // Monday of the FOLLOWING calendar week.
+        $iso                 = (int) $base->format('N'); // Mon=1..Sun=7
+        $days_to_next_monday = 8 - $iso;                 // Mon->7, Sun->1
+        $monday_next         = $base->modify('+' . $days_to_next_monday . ' days');
+        // Delivery weekday as an offset from Monday (Mon=0..Sun=6).
+        $offset_mon0 = ($offset_sun0 + 6) % 7;           // Sun(0)->6, Mon(1)->0, Wed(3)->2 ...
+        return $monday_next->modify('+' . $offset_mon0 . ' days')->format('Y-m-d');
     }
 
     /**

@@ -19,6 +19,7 @@ class MealsDB_Ajax_Migration {
         add_action( 'wp_ajax_mealsdb_backfill_addresses',   [ self::class, 'backfill_addresses' ] );
         add_action( 'wp_ajax_mealsdb_backfill_allocation_engine', [ self::class, 'backfill_allocation_engine' ] );
         add_action( 'wp_ajax_mealsdb_consolidated_phase', [ self::class, 'run_consolidated_phase' ] );
+        add_action( 'wp_ajax_mealsdb_delivery_scorecard', [ self::class, 'delivery_scorecard' ] );
     }
 
     public static function run_phase(): void {
@@ -333,6 +334,63 @@ class MealsDB_Ajax_Migration {
 
         $result['phase'] = $phase;
         wp_send_json_success( $result );
+    }
+
+    /**
+     * Delivery-date ground-truth scorecard (DIRECTIVE
+     * delivery-date-next-week-rule ITEM 2).
+     *
+     * The operator pastes or POSTs the operator CSV (lines:
+     * `order_number,delivery_date`) extracted from the legacy July packer
+     * PDFs. This endpoint resolves each order via wc_get_order(), reads its
+     * stored `_delivery_date`, and returns match_rate + the nameable misses
+     * so the residual can be classified (retroactive entry vs route shuffle).
+     *
+     * READ-ONLY — no writes to any table. Still gated behind verify()
+     * (manage_options + nonce) because it reads order PII-adjacent meta and
+     * runs a bulk WC order query.
+     *
+     * The CSV text is passed raw (wp_unslash only — sanitize_text_field would
+     * strip newlines). Line-by-line validation happens inside parse_csv().
+     *
+     * Response keys:
+     *   total       — count of orders in the ground-truth CSV that resolved
+     *   matched     — exact date matches
+     *   match_rate  — matched / total (0.0 when total = 0)
+     *   misses_total — full count of mismatches
+     *   misses_shown — count returned in this response (capped at 500)
+     *   misses      — [{order, stored, actual}, …]  (first 500)
+     *   unresolved  — orders in the CSV that wc_get_order() could not find
+     *
+     * Cap rationale: a full July run is ~1,600 orders; in the worst-case (the
+     * backfill hasn't run) all of them miss. Returning 1,600 rows over AJAX is
+     * fine for download but noisy for a UI table. 500 rows is enough to
+     * diagnose any systematic pattern; the counts are always exact.
+     */
+    public static function delivery_scorecard(): void {
+        self::verify(); // nonce (mealsdb_migration_nonce) + manage_options
+
+        // Read the raw CSV without sanitize_text_field — that function collapses
+        // newlines, which would reduce the entire CSV to a single unparseable line.
+        $csv = isset( $_POST['csv'] ) ? wp_unslash( (string) $_POST['csv'] ) : '';
+
+        $ground_truth = MealsDB_Delivery_Date_Scorecard::parse_csv( $csv );
+
+        if ( empty( $ground_truth ) ) {
+            wp_send_json_error( [ 'message' => __( 'No valid order,date rows found.', 'meals-db' ) ] );
+            return;
+        }
+
+        $res = MealsDB_Delivery_Date_Scorecard::score( $ground_truth );
+
+        // Cap the misses array at 500 for the response; keep all counts exact.
+        $all_misses        = $res['misses'];
+        $misses_total      = count( $all_misses );
+        $res['misses']     = array_slice( $all_misses, 0, 500 );
+        $res['misses_shown'] = count( $res['misses'] );
+        $res['misses_total'] = $misses_total;
+
+        wp_send_json_success( $res );
     }
 
     /**
