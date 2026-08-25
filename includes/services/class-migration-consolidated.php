@@ -131,6 +131,7 @@ class MealsDB_Migration_Consolidated {
             6 => ['method' => 'run_phase_private_clients','label' => 'Promote Private Clients'],
             7 => ['method' => 'run_phase_allocations',    'label' => 'Backfill Allocations'],
             8 => ['method' => 'run_phase_delivery_day',   'label' => 'Backfill Delivery Day'],
+            9 => ['method' => 'run_phase_delivery_dates', 'label' => 'Backfill Delivery Dates'],
         ];
     }
 
@@ -1608,6 +1609,31 @@ class MealsDB_Migration_Consolidated {
      * @param array<string,mixed> $args Unused.
      * @return array<string,mixed>
      */
+    /**
+     * Per-order backfill decision (pure; unit-tested). No DB access.
+     *
+     * @return array{0:string,1:?string} action in {'write','skip_human','blank'}
+     *   and the value: Y-m-d for 'write', the preserved date for 'skip_human',
+     *   null for 'blank'.
+     */
+    public static function decide_backfill_write(
+        string $order_date_ymd,
+        string $delivery_day,
+        string $existing_delivery_date,
+        string $src_marker
+    ): array {
+        // Human-set: has a _delivery_date the system did not write ('auto').
+        $has_existing = preg_match('/^\d{4}-\d{2}-\d{2}$/', $existing_delivery_date) === 1;
+        if ($has_existing && $src_marker !== 'auto') {
+            return ['skip_human', $existing_delivery_date];
+        }
+        $computed = MealsDB_Date_Calculator::next_week_delivery_date($order_date_ymd, $delivery_day);
+        if ($computed === null) {
+            return ['blank', null]; // blank means blank
+        }
+        return ['write', $computed];
+    }
+
     public static function run_phase_delivery_day(int $offset = 0, bool $dry_run = true, array $args = []): array {
         if (($blocked = self::guard_phase()) !== null) { return $blocked; }
         global $wpdb;
@@ -1664,6 +1690,253 @@ class MealsDB_Migration_Consolidated {
             'offset'   => 1,
             'total'    => 1,
             'complete' => true,
+        ];
+    }
+
+    /**
+     * PHASE 9 — Backfill Delivery Dates (repeatable).
+     *
+     * DIRECTIVE delivery-date-next-week-rule ITEM 2. Recompute every linked
+     * order's delivery date under the following-week rule
+     * (MealsDB_Date_Calculator::next_week_delivery_date), write it to the
+     * order's `_delivery_date` meta tagged `_delivery_date_src='auto'`, and
+     * mark the affected client-months dirty so a later allocation rebuild
+     * propagates the billing-month change.
+     *
+     * PROPAGATION — must be a FULL-RANGE rebuild, not dirty-only. This phase
+     * marks the NEW month dirty (always) and the OLD month dirty only when the
+     * order already carried a stored `_delivery_date`. A LEGACY order with no
+     * stored date has its current billing month derived downstream by
+     * calculate_delivery_schedule() — a schedule-derived month this phase does
+     * not know and cannot dirty. A dirty-ONLY pass (rebuild_all_dirty over just
+     * these marks) would therefore leave that stale legacy month behind and
+     * risk double-counting. Propagation MUST run the full-range allocation
+     * rebuild over the affected window (every non-finalized client-month), which
+     * re-sums each month from the now-authoritative `_delivery_date` override
+     * and so corrects the untracked legacy month too. See the delivery-date
+     * backfill runbook / the ITEM 2 rebuild step.
+     *
+     * PROVENANCE, NOT DESTRUCTION. A human-set date — a `_delivery_date` with
+     * NO `auto` marker (either an explicit 'manual' marker or a legacy date
+     * written before markers existed) — is SKIPPED and preserved. Only dates
+     * the system itself wrote ('auto'), and orders with no date at all, are
+     * (re)written. That is why this phase is safe to re-run: it converges
+     * every auto date onto the current rule and never clobbers an operator
+     * override. The pure decision lives in decide_backfill_write() (unit-
+     * tested); this method only does the I/O around it.
+     *
+     * FINALIZED-MONTH GUARD. Changing a delivery date can move an order's
+     * meals from one billing month to another. If EITHER the old month (from
+     * the order's current stored date) or the new month (from the computed
+     * date) is a finalized client-month, the date is NOT changed — a finalized
+     * month is a submitted invoice and must stay byte-identical (Pattern LB-3).
+     * Such orders are counted in `finalized_conflicts` and logged degraded.
+     *
+     * DIRTY-MARKING. We mark BOTH the old and the new client-month dirty
+     * explicitly via MealsDB_Allocation_Rebuilder::mark_dirty($client_id, $ym).
+     * mark_order_months_dirty() is NOT used: it derives its months from
+     * existing delivery_allocations rows for the order, which are keyed on the
+     * OLD delivery date's billing month — so it would cover the old month at
+     * best and never the NEW month this phase creates. The explicit two-call
+     * approach covers both boundaries deterministically. mark_dirty() is
+     * idempotent (unique key + ON DUPLICATE KEY UPDATE), so re-runs are cheap.
+     *
+     * ENUMERATION / CHUNKING. All non-trash orders linked to a meals_client
+     * via the wp_user_id <-> wc_orders.customer_id join, ordered by order id
+     * (deterministic), paged by LIMIT/OFFSET at BATCH_SIZE * 2 rows/chunk.
+     * The join covers legacy orders too (mealsdb_client_id meta only exists on
+     * QO orders); customer_id is HPOS-native. If a customer_id maps to MULTIPLE
+     * active clients (a known rare-but-legitimate case — e.g. an SDNB recipient
+     * who is also a Veteran), the join yields one row per client, so the order
+     * is processed once per client. That is conservative: each client-month is
+     * marked dirty and the same `_delivery_date` (a per-order value) is written
+     * idempotently. The delivery_day may differ per client; the LAST-processed
+     * client for that order wins the written date — deterministic under the
+     * `ORDER BY o.id, c.client_id` sort. This is noted as a known data risk;
+     * the per-order date meta cannot itself distinguish two clients.
+     *
+     * DRY RUN. Computes decisions and accumulates stats but writes nothing and
+     * marks nothing dirty, so the operator previews counts before committing.
+     *
+     * @param array<string,mixed> $args Unused.
+     * @return array<string,mixed>
+     */
+    public static function run_phase_delivery_dates(int $offset = 0, bool $dry_run = true, array $args = []): array {
+        if (($blocked = self::guard_phase()) !== null) { return $blocked; }
+        global $wpdb;
+
+        $stats = [
+            'orders_scanned'      => 0,
+            'written'             => 0,
+            'unchanged'           => 0,
+            'skipped_human'       => 0,
+            'left_blank'          => 0,
+            'finalized_conflicts' => 0,
+            'errors'              => 0,
+        ];
+
+        $clients_table     = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
+        $allocations_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_ALLOCATIONS);
+        $orders_table      = $wpdb->prefix . 'wc_orders';
+
+        // Deterministic set: every non-trash order linked to a meals_client via
+        // customer_id <-> wp_user_id. One row per (order, client) so the rare
+        // multi-client-per-user case is handled explicitly (see docblock).
+        $join = "FROM `{$orders_table}` o
+                 INNER JOIN `{$clients_table}` c ON c.wp_user_id = o.customer_id
+                 WHERE o.customer_id > 0 AND o.status != 'trash'";
+
+        $total = (int) $wpdb->get_var("SELECT COUNT(*) {$join}");
+
+        if ($total === 0 || $offset >= $total) {
+            return [
+                'stats'    => $stats,
+                'offset'   => $offset,
+                'total'    => $total,
+                'complete' => true,
+            ];
+        }
+
+        $limit = self::BATCH_SIZE * 2; // 200 rows/chunk.
+        $rows  = $wpdb->get_results($wpdb->prepare(
+            "SELECT o.id AS order_id, o.date_created_gmt AS order_date,
+                    c.client_id, c.delivery_day, c.delivery_area_name
+             {$join}
+             ORDER BY o.id ASC, c.client_id ASC
+             LIMIT %d OFFSET %d",
+            $limit,
+            $offset
+        ), ARRAY_A);
+
+        $rows        = is_array($rows) ? $rows : [];
+        $page_count  = count($rows);
+
+        // Finalized (client_id:YYYY-MM) set — reused across the whole chunk.
+        $finalized_set = self::get_finalized_months($wpdb, $allocations_table);
+
+        // The rebuilder marks dirty; only instantiate it on a live run.
+        $rebuilder = $dry_run ? null : new MealsDB_Allocation_Rebuilder();
+
+        foreach ($rows as $row) {
+            $stats['orders_scanned']++;
+            try {
+                $order_id  = (int) $row['order_id'];
+                $client_id = (int) $row['client_id'];
+
+                // Order date -> Y-m-d (date_created_gmt is 'Y-m-d H:i:s' UTC).
+                $order_date_ymd = substr((string) $row['order_date'], 0, 10);
+
+                // Effective delivery day: client's own (already lowercase) else
+                // the zone fallback. Null/blank -> decide_backfill_write() blanks.
+                $delivery_day = trim((string) ($row['delivery_day'] ?? ''));
+                if ($delivery_day === '') {
+                    $zone_day     = MealsDB_Zone_Day::day_for_zone((string) ($row['delivery_area_name'] ?? ''));
+                    $delivery_day = is_string($zone_day) ? $zone_day : '';
+                }
+
+                // Read current meta HPOS-correctly.
+                $wc_order = function_exists('wc_get_order') ? wc_get_order($order_id) : null;
+                if (!$wc_order) {
+                    // Linked in wc_orders but not loadable as a WC order — count
+                    // as an error and move on rather than aborting the chunk.
+                    $stats['errors']++;
+                    continue;
+                }
+                $existing = (string) $wc_order->get_meta('_delivery_date', true);
+                $src      = (string) $wc_order->get_meta('_delivery_date_src', true);
+
+                $decision = self::decide_backfill_write($order_date_ymd, $delivery_day, $existing, $src);
+                [$action, $value] = $decision;
+
+                if ($action === 'skip_human') {
+                    $stats['skipped_human']++;
+                    continue;
+                }
+                if ($action === 'blank') {
+                    $stats['left_blank']++;
+                    continue;
+                }
+
+                // action === 'write'.
+                $existing_valid = preg_match('/^\d{4}-\d{2}-\d{2}$/', $existing) === 1;
+                if ($existing_valid && $existing === $value) {
+                    // Already correct — nothing changes. Still an 'auto' date
+                    // (or would become one), but no billing month moves, so we
+                    // do NOT mark dirty. Counted separately from real writes.
+                    $stats['unchanged']++;
+                    continue;
+                }
+
+                // Old/new billing months (YYYY-MM). Old is null when there is no
+                // valid stored date yet (a fresh write moves no existing meals).
+                $old_month = $existing_valid ? substr($existing, 0, 7) : null;
+                $new_month = substr((string) $value, 0, 7);
+
+                // Finalized guard: never move meals into or out of a submitted
+                // (finalized) client-month.
+                $old_finalized = ($old_month !== null) && isset($finalized_set[$client_id . ':' . $old_month]);
+                $new_finalized = isset($finalized_set[$client_id . ':' . $new_month]);
+                if ($old_finalized || $new_finalized) {
+                    $stats['finalized_conflicts']++;
+                    if (class_exists('MealsDB_Event_Log')) {
+                        MealsDB_Event_Log::record([
+                            'severity'  => 'warning',
+                            'category'  => 'migration',
+                            'subsystem' => 'delivery_date_backfill',
+                            'event'     => 'delivery_date.finalized_conflict',
+                            'outcome'   => 'degraded',
+                            'message'   => sprintf(
+                                'Skipped delivery-date backfill for order %d (client %d): finalized month blocks the change (old=%s new=%s).',
+                                $order_id,
+                                $client_id,
+                                $old_month ?? '-',
+                                $new_month
+                            ),
+                            'context'   => [
+                                'order_id'      => $order_id,
+                                'client_id'     => $client_id,
+                                'old_month'     => $old_month,
+                                'new_month'     => $new_month,
+                                'old_finalized' => $old_finalized,
+                                'new_finalized' => $new_finalized,
+                            ],
+                        ]);
+                    }
+                    continue;
+                }
+
+                if ($dry_run) {
+                    // Would write; count it but touch nothing.
+                    $stats['written']++;
+                    continue;
+                }
+
+                // Live write: set the date + provenance marker, then mark both
+                // affected client-months dirty for the rebuilder.
+                $wc_order->update_meta_data('_delivery_date', $value);
+                $wc_order->update_meta_data('_delivery_date_src', 'auto');
+                $wc_order->save();
+
+                if ($old_month !== null && $old_month !== $new_month) {
+                    $rebuilder->mark_dirty($client_id, $old_month);
+                }
+                $rebuilder->mark_dirty($client_id, $new_month);
+
+                $stats['written']++;
+            } catch (\Throwable $e) {
+                // One bad order must never abort the chunk (Pattern 7).
+                $stats['errors']++;
+                if (class_exists('MealsDB_Logger')) {
+                    MealsDB_Logger::error('[MealsDB Delivery-Date Backfill] order failed: ' . $e->getMessage());
+                }
+            }
+        }
+
+        return [
+            'stats'    => $stats,
+            'offset'   => $offset + $page_count,
+            'total'    => $total,
+            'complete' => ($offset + $page_count) >= $total,
         ];
     }
 
