@@ -62,6 +62,7 @@ $workers = [
     'run_phase_create_clients', 'run_phase_create_rates', 'run_phase_allowances',
     'run_phase_addresses', 'run_phase_next_dates', 'run_phase_private_clients',
     'run_phase_allocations', 'run_phase_delivery_day', 'run_phase_delivery_dates',
+    'run_phase_rebuild_allocations_range',
 ];
 foreach ($workers as $w) {
     $res = $M::$w(0, true, []);
