@@ -26,11 +26,21 @@ class MealsDB_Schema {
                     'last_name'                    => 'VARCHAR(100) NOT NULL',
                     'client_email'                 => 'VARCHAR(255) NULL',
                     'active'                       => 'TINYINT(1) NOT NULL DEFAULT 1',
-                    'client_phone_1'               => 'VARCHAR(20) NULL',
-                    'client_phone_2'               => 'VARCHAR(20) NULL',
+                    // Widened 20 -> 100 (DIRECTIVE phone-columns-and-insert-logging).
+                    // The source billing_phone usermeta holds free text, not bare
+                    // numbers ("506-204-7747 or 1-506-345-0237 (sister Diane)", 45
+                    // chars). At VARCHAR(20) the migration INSERT failed with
+                    // "value may be too long" and phase 1 created zero clients. All
+                    // four widened together — the same free-text pattern lives in the
+                    // alternate-contact meta, so widening only the two that fail today
+                    // guarantees a repeat. Pure widening = SAFE drift (auto-applies via
+                    // online DDL); do NOT bundle a NULL/default/rename change here or it
+                    // reclassifies RISKY and is silently withheld (cf. the v558 blocker).
+                    'client_phone_1'               => 'VARCHAR(100) NULL',
+                    'client_phone_2'               => 'VARCHAR(100) NULL',
                     'alternate_contact_name'       => 'VARCHAR(255) NULL',
-                    'alternate_contact_phone_1'    => 'VARCHAR(20) NULL',
-                    'alternate_contact_phone_2'    => 'VARCHAR(20) NULL',
+                    'alternate_contact_phone_1'    => 'VARCHAR(100) NULL',
+                    'alternate_contact_phone_2'    => 'VARCHAR(100) NULL',
                     'alternate_contact_email'      => 'VARCHAR(255) NULL',
                     'do_not_call_client_phone'     => 'BOOLEAN NOT NULL DEFAULT 0',
                     'payment_method'               => 'VARCHAR(50) NULL',

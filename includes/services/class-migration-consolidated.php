@@ -249,6 +249,9 @@ class MealsDB_Migration_Consolidated {
 
             if (!$user) {
                 $stats['errors']++;
+                // Equally invisible today: a candidate whose WP user row is gone
+                // (deleted account) counted as an error with no explanation. Name it.
+                self::log(sprintf('Skipped user %d: no WP user row (deleted?).', $uid));
                 continue;
             }
 
@@ -396,6 +399,11 @@ class MealsDB_Migration_Consolidated {
             }
 
             if ($dry_run) {
+                // NOTE: a dry run counts every candidate it *reaches* as "created"
+                // without attempting an insert, so dry-run `created` and live-run
+                // `created` are NOT comparable — a dry run can report created=N while
+                // a live run reports created=0/errors=N because the insert fails
+                // downstream. This mismatch caused real confusion during diagnosis.
                 $stats['created']++;
                 continue;
             }
@@ -575,6 +583,13 @@ class MealsDB_Migration_Consolidated {
                 $stats['created']++;
             } else {
                 $stats['errors']++;
+                // An error counter that increments without saying why cost an
+                // entire debugging session: $wpdb->insert() returned false and
+                // $wpdb->last_error held "value ... too long" for client_phone_1,
+                // but the reason was discarded here so no log named it. Surface it
+                // the same way phase 2 (create_rates) already does, so it lands in
+                // mealsdb_migration_log with every other phase result.
+                self::log(sprintf('Insert failed for user %d: %s', $uid, $wpdb->last_error ?: 'unknown'));
             }
         }
 
