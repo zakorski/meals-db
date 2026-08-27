@@ -438,11 +438,28 @@ class MealsDB_Delivery_Slip_Generator {
             }
         }
 
+        // DIRECTIVE slips-exclude-non-delivery-orders: resolve the
+        // non-deliverable product id set ONCE, before the per-order loop.
+        $non_deliverable = $this->non_deliverable_product_ids();
+
         $matched = [];
         foreach ($by_id as $oid => $order) {
             $uid    = (int) ($order['wp_user_id'] ?? 0);
             $client = $clients[$uid] ?? null;
             if ($client === null) {
+                continue;
+            }
+
+            // DIRECTIVE slips-exclude-non-delivery-orders: drop orders that
+            // carry NOTHING deliverable — the monthly contribution-reset
+            // orders ($0.00, one contribution line item, no meals) were being
+            // rendered as full packer/driver slips (~60-100 phantom slips a
+            // month). This runs BEFORE the override branch below so an
+            // operator-set _delivery_date on a reset order cannot force it
+            // onto a slip either. The test is on line-item CONTENT, never on
+            // order total or status — a legitimate delivery fully covered by
+            // allowance + contribution totals $0.00 and must still print.
+            if (!$this->order_has_deliverable_item($order, $non_deliverable)) {
                 continue;
             }
 
@@ -480,6 +497,78 @@ class MealsDB_Delivery_Slip_Generator {
         }
 
         return $matched;
+    }
+
+    /**
+     * The product ids that do NOT represent a deliverable item — fees,
+     * client-contribution, and overage products. An order whose line items
+     * are drawn ENTIRELY from this set carries nothing the packer or driver
+     * needs to handle, so it must not appear on a slip
+     * (DIRECTIVE slips-exclude-non-delivery-orders).
+     *
+     * Resolves through the CONFIGURED ids
+     * (MealsDB_Invoice_Generator::get_fee_product_ids() +
+     * MealsDB_Operational_Constants::overage_product_ids()), never the seed
+     * constants, so a re-pointed SKU is still recognised. This mirrors the
+     * resolution MealsDB_Slip_PDF_Generator already uses to strip fee/overage
+     * lines from the rendered slip — same authority, one exclusion vocabulary.
+     * IDs are NOT hard-coded here by design.
+     *
+     * @return array<int, true> Excluded product ids, keyed for O(1) lookup.
+     */
+    private function non_deliverable_product_ids(): array {
+        $excluded = [];
+
+        $fee_ids = (class_exists('MealsDB_Invoice_Generator')
+            && method_exists('MealsDB_Invoice_Generator', 'get_fee_product_ids'))
+            ? MealsDB_Invoice_Generator::get_fee_product_ids()
+            : MealsDB_Operational_Constants::default_fee_product_ids();
+        foreach ((array) $fee_ids as $id) {
+            $id = (int) $id;
+            if ($id > 0) {
+                $excluded[$id] = true;
+            }
+        }
+
+        foreach (MealsDB_Operational_Constants::overage_product_ids() as $id) {
+            $id = (int) $id;
+            if ($id > 0) {
+                $excluded[$id] = true;
+            }
+        }
+
+        return $excluded;
+    }
+
+    /**
+     * True when an order carries at least one DELIVERABLE line item — a line
+     * item whose product is NOT in the fee/contribution/overage exclusion set
+     * (DIRECTIVE slips-exclude-non-delivery-orders, DENYLIST rule).
+     *
+     * The denylist is deliberate: we do NOT allowlist product_type='meal'/
+     * 'side'. An allowlist would DROP an order whose product isn't classified
+     * in meals_products (a one-off SKU, a mis-seeded product) — i.e. it could
+     * hide a real delivery. The denylist only ever removes an order whose line
+     * items are ENTIRELY fees/overage, which is exactly the contribution-reset
+     * signature. "When unsure, keep it on the slip" is the safe error for a
+     * packer. An order with no line items at all is not deliverable (nothing
+     * to pack).
+     *
+     * @param array<string, mixed> $order    Order row carrying an 'items' array.
+     * @param array<int, true>     $excluded Non-deliverable product id set.
+     */
+    private function order_has_deliverable_item(array $order, array $excluded): bool {
+        $items = $order['items'] ?? [];
+        if (!is_array($items) || empty($items)) {
+            return false;
+        }
+        foreach ($items as $item) {
+            $pid = (int) ($item['wc_product_id'] ?? 0);
+            if ($pid > 0 && !isset($excluded[$pid])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

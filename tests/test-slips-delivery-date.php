@@ -105,7 +105,12 @@ $order_row = [
     'order_id'         => 999,
     'wp_user_id'       => 1,
     'date_created_gmt' => '2026-05-25 09:00:00', // Monday
-    'items'            => [],
+    // A deliverable line item (non-fee/overage product) is required after
+    // DIRECTIVE slips-exclude-non-delivery-orders — an order with no
+    // deliverable content is now dropped from every slip. Product 100 is a
+    // plain (non-excluded) product; this fixture is about occurrence, not
+    // content, so any deliverable id will do.
+    'items'            => [['wc_product_id' => 100, 'quantity' => 1]],
 ];
 
 $fake_oq   = new FakeOrderQueryForDelivery();
