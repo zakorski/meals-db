@@ -125,14 +125,20 @@ $clients = [
 //      (rule 9 exclusion).
 // O107 created 06-01 Mon -> occ 06-11 (OUT) but override 05-30 (a SATURDAY)
 //      moves it into the range.
+// Each order carries a deliverable line item (product 100, a non-fee/overage
+// product). Required after DIRECTIVE slips-exclude-non-delivery-orders: an
+// order with no deliverable content is dropped before the override/occurrence
+// branches run. This scenario pins OVERRIDE selection, not content, so a
+// single plain item per order keeps every candidate eligible.
+$deliverable = [['wc_product_id' => 100, 'quantity' => 1]];
 $rows = [
-    ['order_id' => 101, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-25 09:00:00', 'items' => []],
-    ['order_id' => 102, 'wp_user_id' => 1, 'date_created_gmt' => '2026-06-01 09:00:00', 'items' => []],
-    ['order_id' => 103, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-21 09:00:00', 'items' => []],
-    ['order_id' => 104, 'wp_user_id' => 2, 'date_created_gmt' => '2026-05-15 09:00:00', 'items' => []],
-    ['order_id' => 105, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-04 09:00:00', 'items' => []],
-    ['order_id' => 106, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-25 10:00:00', 'items' => []],
-    ['order_id' => 107, 'wp_user_id' => 1, 'date_created_gmt' => '2026-06-01 10:00:00', 'items' => []],
+    ['order_id' => 101, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-25 09:00:00', 'items' => $deliverable],
+    ['order_id' => 102, 'wp_user_id' => 1, 'date_created_gmt' => '2026-06-01 09:00:00', 'items' => $deliverable],
+    ['order_id' => 103, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-21 09:00:00', 'items' => $deliverable],
+    ['order_id' => 104, 'wp_user_id' => 2, 'date_created_gmt' => '2026-05-15 09:00:00', 'items' => $deliverable],
+    ['order_id' => 105, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-04 09:00:00', 'items' => $deliverable],
+    ['order_id' => 106, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-25 10:00:00', 'items' => $deliverable],
+    ['order_id' => 107, 'wp_user_id' => 1, 'date_created_gmt' => '2026-06-01 10:00:00', 'items' => $deliverable],
 ];
 $overrides = [
     105 => '2026-05-29',

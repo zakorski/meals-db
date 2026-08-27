@@ -98,11 +98,17 @@ $clients = [
 //     frequency so O4 lands on 05-21 and falls out of the range.
 // Candidate window: start_date - 14 days = 05-28 - 14 = 05-14.
 //     All four orders are in [05-14, 06-04]; the occurrence filter below narrows them.
+// Each order carries a deliverable line item (product 100, a non-fee/overage
+// product). Required after DIRECTIVE slips-exclude-non-delivery-orders: an
+// order with no deliverable content is now dropped before the occurrence
+// filter runs. This scenario is about OCCURRENCE, not content, so a single
+// plain item per order keeps every candidate eligible.
+$deliverable = [['wc_product_id' => 100, 'quantity' => 1]];
 $rows = [
-    ['order_id' => 101, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-25 09:00:00', 'items' => []],
-    ['order_id' => 102, 'wp_user_id' => 1, 'date_created_gmt' => '2026-06-01 09:00:00', 'items' => []],
-    ['order_id' => 103, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-21 09:00:00', 'items' => []],
-    ['order_id' => 104, 'wp_user_id' => 2, 'date_created_gmt' => '2026-05-15 09:00:00', 'items' => []],
+    ['order_id' => 101, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-25 09:00:00', 'items' => $deliverable],
+    ['order_id' => 102, 'wp_user_id' => 1, 'date_created_gmt' => '2026-06-01 09:00:00', 'items' => $deliverable],
+    ['order_id' => 103, 'wp_user_id' => 1, 'date_created_gmt' => '2026-05-21 09:00:00', 'items' => $deliverable],
+    ['order_id' => 104, 'wp_user_id' => 2, 'date_created_gmt' => '2026-05-15 09:00:00', 'items' => $deliverable],
 ];
 
 $fake = new FakeOrderQueryForRange();
