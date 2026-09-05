@@ -1,26 +1,24 @@
 <?php
 /**
- * Tests for MealsDB_Invoice_Generator::compute_vac_row_derived() — the shared
- * VAC per-row derived-money function (directive INVOICE-DRAFT-SPREADSHEET 3a).
+ * DIRECTIVE 5 — MealsDB_Invoice_Generator::compute_vac_row_derived().
  *
- * This is the SINGLE source of truth the VAC serializer (finalize) AND the
- * draft grid (render + live recompute) both call. It takes a stored VAC
- * `current` row and returns the derived figures in integer cents / counts:
- *   vet_mains_cost_cents      = bill_mains × bill_rate
- *   vac_total_cents           = vet_mains_cost + fold_amount + fold_hst
- *   remaining_sides           = max(0, sides_allowance − allocated_tax_sides)
- *   allowance_remaining_cents = max(0, monthly_allowance − vet_mains_cost)
+ * VAC is now billed mains + sides with a computed HST and a DVA-coverage dollar
+ * ceiling; the old fold_amount/fold_hst inputs are GONE.
  *
- * fold_amount / fold_hst are INPUTS (hand-entered, operator decision
- * 2026-06-29) — the fn READS them, it never derives them. Sides are NOT
- * billed: they appear only in the informational remaining_sides figure.
+ *   mains_value   = bill_mains × bill_rate
+ *   sides_value   = (tax + nontax sides) × side rate
+ *   hst           = taxable sides × side rate × hst rate   (mains never taxed)
+ *   vac_total     = mains_value + sides_value + hst
+ *   ceiling       = permitted_mains × DVA coverage rate ($11.14)
+ *   over_ceiling  = vac_total > ceiling
+ *
+ * Fixtures are the directive's real August-2026 figures at $9.50 / $4.25 / 15%
+ * HST with the $11.14 coverage ceiling.
  *
  * Run: php tests/test-vac-compute-derived.php
  */
-
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 if (!function_exists('__')) { function __($t, $d = null) { return $t; } }
-
 require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 
@@ -31,43 +29,60 @@ function chk($got, $exp, string $label) {
     $failures[] = sprintf("FAIL: %s\n  expected: %s\n  actual:   %s", $label, var_export($exp, true), var_export($got, true));
 }
 
-/** A VAC row in the shape build_vac_draft_rows produces. */
+/** A VAC row carrying the frozen Directive-5 rates ($9.50 / $4.25 / 15% / $11.14). */
 function vac_row(array $over = []): array {
     return array_merge([
-        'allocated_mains' => 12, 'allocated_tax_sides' => 5, 'allocated_nontax_sides' => 2,
-        'bill_mains' => 12, 'bill_rate' => 9.05, 'fold_amount' => 0.0, 'fold_hst' => 0.0,
-        'info_mains_allowance' => 31, 'info_sides_allowance' => 31,
-        'info_monthly_allowance_cents' => 33000, 'info_sides_cost_cents' => 2870,
+        'bill_mains' => 0, 'bill_rate' => 9.50,
+        'allocated_tax_sides' => 0, 'allocated_nontax_sides' => 0,
+        'info_mains_allowance' => 31, 'info_sides_allowance' => 0,
+        'vac_side_rate' => 4.25, 'vac_coverage_rate' => 11.14, 'vac_hst_rate' => 0.15,
     ], $over);
 }
 
-// --- Clean veteran: mains-only, no fold. -----------------------------------
-$d = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row());
-chk($d['vet_mains_cost_cents'],      10860, 'clean: vet_mains_cost = 12 × 9.05');
-chk($d['vac_total_cents'],           10860, 'clean: vac_total = mains-only (fold 0)');
-chk($d['remaining_sides'],              26, 'clean: remaining_sides = 31 − 5 tax sides');
-chk($d['allowance_remaining_cents'], 22140, 'clean: allowance_remaining = 33000 − 10860');
+// --- Julien Robichaud: 22 mains + 10 taxable sides, permitted 22 → OVER. ----
+$r = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row([
+    'bill_mains' => 22, 'allocated_tax_sides' => 10, 'info_mains_allowance' => 22,
+]));
+chk($r['vet_mains_cost_cents'], 20900, 'Robichaud: mains 22 × 9.50 = 209.00');
+chk($r['sides_value_cents'],     4250, 'Robichaud: sides 10 × 4.25 = 42.50');
+chk($r['hst_cents'],              638, 'Robichaud: HST 10 × 4.25 × 15% = 6.38');
+chk($r['vac_total_cents'],      25788, 'Robichaud: total = 257.88');
+chk($r['ceiling_cents'],        24508, 'Robichaud: ceiling 22 × 11.14 = 245.08');
+chk($r['over_ceiling'],          true, 'Robichaud: OVER the ceiling');
+chk($r['total_items'],             32, 'Robichaud: total items = 22 + 10');
 
-// --- Folded veteran: fold_amount + fold_hst flow into the total. -----------
-$f = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row(['fold_amount' => 28.70, 'fold_hst' => 3.08]));
-chk($f['vet_mains_cost_cents'], 10860, 'folded: mains cost unchanged by fold');
-chk($f['vac_total_cents'],      14038, 'folded: vac_total = 10860 + 2870 + 308');
+// --- David Lavender: 31 mains + 10 taxable sides, permitted 31 → the sentinel,
+//     clears by $1.96 at the $4.25 side rate. -------------------------------
+$l = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row([
+    'bill_mains' => 31, 'allocated_tax_sides' => 10, 'info_mains_allowance' => 31,
+]));
+chk($l['vac_total_cents'], 34338, 'Lavender: total = 343.38');
+chk($l['ceiling_cents'],   34534, 'Lavender: ceiling 31 × 11.14 = 345.34');
+chk($l['over_ceiling'],    false, 'Lavender: UNDER by $1.96');
 
-// --- allowance_remaining clamps at 0 when mains cost exceeds the allowance. -
-$c = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row(['info_monthly_allowance_cents' => 5000]));
-chk($c['allowance_remaining_cents'], 0, 'clamp: allowance_remaining never negative');
+// --- Janet's worked example: 7 mains + 2 NON-taxable sides = $75.00 under
+//     a 7 × $11.14 = $77.98 ceiling; HST = 0. ---------------------------------
+$j = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row([
+    'bill_mains' => 7, 'allocated_nontax_sides' => 2, 'info_mains_allowance' => 7,
+]));
+chk($j['hst_cents'],         0, "Janet: non-taxable sides → HST 0");
+chk($j['vac_total_cents'], 7500, 'Janet: 66.50 + 8.50 = 75.00');
+chk($j['ceiling_cents'],   7798, 'Janet: ceiling 7 × 11.14 = 77.98');
+chk($j['over_ceiling'],   false, 'Janet: under, no flag');
 
-// --- remaining_sides clamps at 0 when tax sides exceed the allowance. ------
-$s = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row(['allocated_tax_sides' => 40]));
-chk($s['remaining_sides'], 0, 'clamp: remaining_sides never negative');
+// --- ITEM 2: leftover fold_* keys are ignored (never summed). ---------------
+$noFold = MealsDB_Invoice_Generator::compute_vac_row_derived(vac_row([
+    'bill_mains' => 7, 'fold_amount' => 99.99, 'fold_hst' => 12.34,
+]));
+chk($noFold['vac_total_cents'], 6650, 'fold_* ignored: total = mains only (7 × 9.50)');
 
-// --- Fallback: a bare phase-2 row (no bill_*) falls back to allocated_*. ----
+// --- Fallback: bill_* absent → allocated_mains / resolved_rate. -------------
 $b = MealsDB_Invoice_Generator::compute_vac_row_derived([
-    'allocated_mains' => 10, 'resolved_rate' => 11.40,
-    'allocated_tax_sides' => 0, 'allocated_nontax_sides' => 0,
-    'info_sides_allowance' => 0, 'info_monthly_allowance_cents' => 0,
+    'allocated_mains' => 10, 'resolved_rate' => 9.50,
+    'vac_side_rate' => 4.25, 'vac_coverage_rate' => 11.14, 'vac_hst_rate' => 0.15,
+    'info_mains_allowance' => 10,
 ]);
-chk($b['vet_mains_cost_cents'], 11400, 'fallback: bill_mains→allocated_mains, bill_rate→resolved_rate');
+chk($b['vet_mains_cost_cents'], 9500, 'fallback: allocated_mains × resolved_rate');
 
 echo "Ran " . ($passed + count($failures)) . " checks: $passed passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }

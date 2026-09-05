@@ -26,6 +26,9 @@ class MealsDB_Quick_Order_UI {
         }
 
         $clone_order_id = self::get_requested_clone_order_id();
+        // Directive 1 (ITEM 2): reopening a parked draft loads it into the form
+        // like a clone, but completing it UPDATES that order in place.
+        $reopen_order_id = self::get_requested_reopen_order_id();
         $products_array   = [];
         $categories_array = [];
 
@@ -53,6 +56,10 @@ class MealsDB_Quick_Order_UI {
             $attributes['data-clone-order-id'] = (string) $clone_order_id;
         }
 
+        if ($reopen_order_id > 0) {
+            $attributes['data-reopen-order-id'] = (string) $reopen_order_id;
+        }
+
         $attribute_string = '';
         foreach ($attributes as $name => $value) {
             $attribute_string .= sprintf(' %s="%s"', esc_attr($name), esc_attr($value));
@@ -65,8 +72,8 @@ class MealsDB_Quick_Order_UI {
                 <div
                     id="qo-clone-banner"
                     style="
-    background: #eaf4ff; 
-    padding: 10px; 
+    background: #eaf4ff;
+    padding: 10px;
     border-left: 4px solid #2271b1;
     margin-bottom: 15px;
 "
@@ -76,6 +83,20 @@ class MealsDB_Quick_Order_UI {
                         /* translators: %s: WooCommerce order ID. */
                         esc_html__('Loaded from Order #%s — review and submit.', 'meals-db'),
                         esc_html($clone_order_id)
+                    );
+                    ?>
+                </div>
+            <?php endif; ?>
+            <?php if ($reopen_order_id > 0) : ?>
+                <div
+                    id="qo-reopen-banner"
+                    style="background:#fcf9e8; padding:10px; border-left:4px solid #dba617; margin-bottom:15px;"
+                >
+                    <?php
+                    printf(
+                        /* translators: %s: WooCommerce order ID. */
+                        esc_html__('Reopening draft Order #%s — completing it will place this order (same order number).', 'meals-db'),
+                        esc_html($reopen_order_id)
                     );
                     ?>
                 </div>
@@ -194,6 +215,12 @@ class MealsDB_Quick_Order_UI {
 
                     <div id="mealsdb-qo-allocation" class="mealsdb-quick-order__allocation" style="display: none;"></div>
 
+                    <?php // Directive 2 (ITEM 7): the client-context panel — notes,
+                          // dietary needs and contacts the current POS shows, so the
+                          // order-taker does not need both systems open. Populated by
+                          // fetchClientAllocation()'s client_context payload. ?>
+                    <div id="mealsdb-qo-client-context" class="mealsdb-quick-order__client-context" style="display: none;"></div>
+
                     <div class="mealsdb-quick-order__summary-body">
                         <div class="mealsdb-quick-order__summary-empty" id="mealsdb-quick-order-summary-empty">
                             <p><?php esc_html_e('Summary details will appear here.', 'meals-db'); ?></p>
@@ -211,11 +238,35 @@ class MealsDB_Quick_Order_UI {
                                 <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Subtotal (before tax)', 'meals-db'); ?></dt>
                                 <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-total">0</dd>
                             </div>
+                            <?php // Directive 2 (ITEM 4): tax + after-tax total so a private
+                                  // client can be quoted a final price on the phone. Display
+                                  // only — the stored order still computes tax authoritatively
+                                  // in WooCommerce. Suppressed for government clients. ?>
+                            <div class="mealsdb-quick-order__summary-total-row" id="mealsdb-qo-tax-row">
+                                <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Tax (HST)', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-tax">0</dd>
+                            </div>
+                            <div class="mealsdb-quick-order__summary-total-row" id="mealsdb-qo-aftertax-row">
+                                <dt class="mealsdb-quick-order__summary-total-label"><strong><?php esc_html_e('Total (after tax)', 'meals-db'); ?></strong></dt>
+                                <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-aftertax"><strong>0</strong></dd>
+                            </div>
                         </dl>
 
-                        <button id="qo-create-order" class="button button-primary button-large">
-                            Create Order
-                        </button>
+                        <div class="mealsdb-quick-order__actions" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                            <button id="qo-create-order" class="button button-primary button-large">
+                                <?php esc_html_e('Create Order', 'meals-db'); ?>
+                            </button>
+                            <?php // Directive 1 (ITEM 1): park the order as a draft — no fee,
+                                  // contribution, allocation, stock, slip or invoice effect. ?>
+                            <button id="qo-save-draft" class="button button-large" type="button">
+                                <?php esc_html_e('Save as Draft', 'meals-db'); ?>
+                            </button>
+                            <?php // Directive 1 (ITEM 3): empty the basket in place, keeping the
+                                  // selected client. No page reload. ?>
+                            <button id="qo-clear-order" class="button button-large" type="button">
+                                <?php esc_html_e('Clear Order', 'meals-db'); ?>
+                            </button>
+                        </div>
                     </footer>
                 </aside>
             </div>
@@ -240,5 +291,18 @@ class MealsDB_Quick_Order_UI {
         }
 
         return absint($clone_order);
+    }
+
+    /**
+     * Retrieve the requested draft order ID to reopen from the current request
+     * (Directive 1, ITEM 2). Distinct from the clone id: a reopened draft is
+     * completed in place rather than cloned into a new order.
+     */
+    public static function get_requested_reopen_order_id(): int {
+        if (!isset($_GET['reopen_order'])) {
+            return 0;
+        }
+
+        return absint(wp_unslash($_GET['reopen_order']));
     }
 }

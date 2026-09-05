@@ -67,6 +67,37 @@
                 });
         });
 
+        // --- Directive 4: Generate Weekend Orders ---
+        // Creates the weekend follow-up batch for this original batch. On success
+        // the page reloads to show the three button pairs. When no weekend orders
+        // qualify, the button STAYS enabled and shows an in-place message (no
+        // empty PDF, no batch row created).
+        $('#mealsdb-slip-table').on('click', '.mealsdb-slip-weekend-btn', function () {
+            var $btn = $(this);
+            var $row = $btn.closest('tr');
+            $btn.prop('disabled', true);
+            rowMsg($row, i18n.working || 'Working…');
+
+            post('mealsdb_slip_generate_weekend', { batch_id: $row.data('batch-id') })
+                .done(function (resp) {
+                    if (resp && resp.success) {
+                        if (resp.data && resp.data.no_weekend) {
+                            rowMsg($row, (resp.data && resp.data.message) || 'No weekend orders for this week');
+                            $btn.prop('disabled', false);
+                            return;
+                        }
+                        window.location.reload();
+                    } else {
+                        rowMsg($row, (resp && resp.data && resp.data.message) || i18n.genericErr);
+                        $btn.prop('disabled', false);
+                    }
+                })
+                .fail(function () {
+                    rowMsg($row, i18n.genericErr);
+                    $btn.prop('disabled', false);
+                });
+        });
+
         // --- Cancel: confirm popup -> hard delete -> drop the row ---
         $('#mealsdb-slip-table').on('click', '.mealsdb-slip-cancel-btn', function () {
             if (!window.confirm(i18n.confirmCancel || 'Cancel this batch? This cannot be undone.')) {

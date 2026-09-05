@@ -252,7 +252,10 @@ class MealsDB_Allocation_Rebuilder {
             $deliveries,
             $billing_month,
             $finalized,                          // LB-3: months in here are never deleted or written
-            [$prior_prior_month => true]         // BC-1: consume-only — placed but never deleted/written
+            [$prior_prior_month => true],        // BC-1: consume-only — placed but never deleted/written
+            // Directive 5 (ITEM 4): record VAC sides in full (dollar-ceiling
+            // governed, no side-count cap) so the invoice can bill them.
+            $client_type === 'Veteran'
         );
 
         // Refresh summaries for the affected months — but skip any finalized
@@ -365,7 +368,7 @@ class MealsDB_Allocation_Rebuilder {
      *        delivery whose overflow cannot be placed within $caps.
      * @return array{mains_unplaced:int, sides_unplaced:int}
      */
-    private function fill_months(int $client_id, array $caps, array $deliveries, ?string $error_month = null, array $finalized = [], array $consume_only = []): array {
+    private function fill_months(int $client_id, array $caps, array $deliveries, ?string $error_month = null, array $finalized = [], array $consume_only = [], bool $uncap_sides = false): array {
         $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
         $months      = array_keys($caps);
 
@@ -390,11 +393,19 @@ class MealsDB_Allocation_Rebuilder {
         }
 
         // Independent running headroom per month.
+        //
+        // Directive 5 (ITEM 4): VAC sides are governed by a DOLLAR ceiling at
+        // invoice time, not by a per-month side COUNT allowance — a Veteran has
+        // no permitted_sides. Capping sides at permitted_sides (0) is exactly why
+        // used_sides has always been 0 for VAC: every ordered side was clamped
+        // away here. When $uncap_sides is set, sides get unlimited headroom so
+        // ALL ordered sides are recorded in their delivery month (no count cap,
+        // no side spillover). Mains keep their permitted_mains cap + spill.
         $headroom = [];
         foreach ($caps as $m => $cap) {
             $headroom[$m] = [
                 'mains' => (int) ($cap['permitted_mains'] ?? 0),
-                'sides' => (int) ($cap['permitted_sides'] ?? 0),
+                'sides' => $uncap_sides ? PHP_INT_MAX : (int) ($cap['permitted_sides'] ?? 0),
             ];
         }
 

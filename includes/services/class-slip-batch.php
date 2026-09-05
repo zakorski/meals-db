@@ -41,12 +41,21 @@ class MealsDB_Slip_Batch {
      * @param array<int,array>   $doc4_payloads ordered list of driver blocks
      * @return int batch_id, or 0 on failure.
      */
-    public static function create(string $zone_name, string $delivery_date, array $doc4_payloads): int {
+    public static function create(
+        string $zone_name,
+        string $delivery_date,
+        array $doc4_payloads,
+        string $batch_type = 'full',
+        int $parent_batch_id = 0
+    ): int {
         try {
             $zone_name = trim($zone_name);
             if ($zone_name === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery_date)) {
                 return 0;
             }
+            // Directive 4: only 'full' and 'weekend' are valid; anything else
+            // falls back to 'full' rather than persisting a bad discriminator.
+            $batch_type = in_array($batch_type, ['full', 'weekend'], true) ? $batch_type : 'full';
 
             // Re-index to a clean 0..N-1 list so the positional pairing with
             // doc 2 (element N ↔ order N+1) is unambiguous downstream.
@@ -79,15 +88,17 @@ class MealsDB_Slip_Batch {
             $now   = gmdate('Y-m-d H:i:s');
 
             $ok = $wpdb->insert($table, [
-                'zone_name'     => $zone_name,
-                'delivery_date' => $delivery_date,
-                'order_count'   => count($orders),
-                'doc4_payload'  => $encoded,
-                'status'        => self::STATUS_GENERATED,
-                'created_by'    => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
-                'created_at'    => $now,
-                'updated_at'    => $now,
-            ], ['%s', '%s', '%d', '%s', '%s', '%d', '%s', '%s']);
+                'zone_name'       => $zone_name,
+                'delivery_date'   => $delivery_date,
+                'order_count'     => count($orders),
+                'doc4_payload'    => $encoded,
+                'status'          => self::STATUS_GENERATED,
+                'batch_type'      => $batch_type,
+                'parent_batch_id' => $parent_batch_id > 0 ? $parent_batch_id : null,
+                'created_by'      => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
+                'created_at'      => $now,
+                'updated_at'      => $now,
+            ], ['%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s']);
 
             if ($ok === false) {
                 return 0;
@@ -117,7 +128,7 @@ class MealsDB_Slip_Batch {
 
             $row = $wpdb->get_row($wpdb->prepare(
                 "SELECT batch_id, zone_name, delivery_date, order_count, doc4_payload,
-                        status, created_by, created_at, updated_at
+                        status, batch_type, parent_batch_id, created_by, created_at, updated_at
                  FROM `{$table}` WHERE batch_id = %d",
                 $batch_id
             ), ARRAY_A);
@@ -176,7 +187,7 @@ class MealsDB_Slip_Batch {
 
             // doc4_payload is deliberately NOT selected — list view needs no PII.
             $sql = "SELECT batch_id, zone_name, delivery_date, order_count,
-                           status, created_by, created_at, updated_at
+                           status, batch_type, parent_batch_id, created_by, created_at, updated_at
                     FROM `{$table}`";
             if (!empty($where)) {
                 $sql .= ' WHERE ' . implode(' AND ', $where);
@@ -193,6 +204,34 @@ class MealsDB_Slip_Batch {
         } catch (\Throwable $e) {
             self::log_error('list_batches', $e);
             return [];
+        }
+    }
+
+    /**
+     * Directive 4: the weekend batch that follows a given original ('full')
+     * batch, if one has been generated. Meta only (no PII). Returns null when
+     * none exists. Newest first in the unlikely event of more than one.
+     */
+    public static function find_weekend_child(int $parent_batch_id): ?array {
+        try {
+            if ($parent_batch_id <= 0) {
+                return null;
+            }
+            global $wpdb;
+            $table = MealsDB_DB::get_table_name(MealsDB_Tables::SLIP_BATCHES);
+            $row = $wpdb->get_row($wpdb->prepare(
+                "SELECT batch_id, zone_name, delivery_date, order_count,
+                        status, batch_type, parent_batch_id, created_by, created_at, updated_at
+                 FROM `{$table}`
+                 WHERE parent_batch_id = %d AND batch_type = 'weekend'
+                 ORDER BY created_at DESC, batch_id DESC
+                 LIMIT 1",
+                $parent_batch_id
+            ), ARRAY_A);
+            return is_array($row) && !empty($row) ? $row : null;
+        } catch (\Throwable $e) {
+            self::log_error('find_weekend_child', $e);
+            return null;
         }
     }
 

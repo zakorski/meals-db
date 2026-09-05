@@ -136,7 +136,7 @@ class MealsDB_Slip_PDF_Generator {
     // Pipeline
     // -----------------------------------------------------------------
 
-    private function fetch_orders_for_clients(array $clients, string $start_date, string $end_date): array {
+    private function fetch_orders_for_clients(array $clients, string $start_date, string $end_date, string $created_start = '', string $created_end = ''): array {
         if (empty($clients)) {
             return [];
         }
@@ -150,7 +150,34 @@ class MealsDB_Slip_PDF_Generator {
         // delivery dates — only MAJ-6's single-date path had the fix. A slip
         // is about what ships on a day, so an order-ahead order must land on
         // the slip for the day it is DELIVERED.
-        return $this->client_query->get_orders_for_delivery_range($clients, $start_date, $end_date);
+        $orders = $this->client_query->get_orders_for_delivery_range($clients, $start_date, $end_date);
+
+        // Directive 4 (weekend slips): optionally narrow to orders CREATED within
+        // a window, on top of the delivery-occurrence selection above. This is
+        // how the weekend subset (created after the original batch, up to Sunday)
+        // and the combined "All" set (created up to Sunday) are carved out of the
+        // same live query without a second code path. Bounds are UTC datetime
+        // strings compared lexically against date_created_gmt; either bound may
+        // be empty (open-ended). created_start is EXCLUSIVE (the original batch's
+        // own created_at belongs to the original run, not the weekend one);
+        // created_end is INCLUSIVE (… up to 23:59:59 Sunday).
+        if ($created_start !== '' || $created_end !== '') {
+            $orders = array_values(array_filter($orders, static function ($order) use ($created_start, $created_end) {
+                $created = (string) ($order['date_created_gmt'] ?? '');
+                if ($created === '') {
+                    return false;
+                }
+                if ($created_start !== '' && !($created > $created_start)) {
+                    return false;
+                }
+                if ($created_end !== '' && !($created <= $created_end)) {
+                    return false;
+                }
+                return true;
+            }));
+        }
+
+        return $orders;
     }
 
     /**
@@ -909,9 +936,9 @@ CSS;
      *
      * @return array{order_count:int, doc4_orders:array<int,array>}
      */
-    public function build_batch_data(array $zone_names, string $start_date, string $end_date): array {
+    public function build_batch_data(array $zone_names, string $start_date, string $end_date, string $created_start = '', string $created_end = ''): array {
         $clients = $this->client_query->get_clients_for_zones_driver($zone_names);
-        $orders  = $this->fetch_orders_for_clients($clients, $start_date, $end_date);
+        $orders  = $this->fetch_orders_for_clients($clients, $start_date, $end_date, $created_start, $created_end);
         $slips   = $this->build_slips($orders, $clients, true);
 
         $doc4_orders = [];
@@ -1241,9 +1268,9 @@ HTML;
      *
      * @param array $batch decoded batch: ['orders'=>array, 'created_at'=>UTC, ...]
      */
-    public function generate_packing_slips_combined(string $zone_name, string $delivery_date, array $batch): string {
+    public function generate_packing_slips_combined(string $zone_name, string $delivery_date, array $batch, string $created_start = '', string $created_end = ''): string {
         $clients = $this->client_query->get_clients_for_zones([$zone_name]);
-        $orders  = $this->fetch_orders_for_clients($clients, $delivery_date, $delivery_date);
+        $orders  = $this->fetch_orders_for_clients($clients, $delivery_date, $delivery_date, $created_start, $created_end);
         $slips   = $this->build_slips($orders, $clients, false);
         $html    = $this->render_packing_slips_combined_html($zone_name, $delivery_date, $batch, $slips);
         return $this->render_with_dompdf($html);
@@ -1338,9 +1365,9 @@ HTML;
      *
      * @return array<int,int>
      */
-    public function doc2_page_counts(string $zone_name, string $delivery_date): array {
+    public function doc2_page_counts(string $zone_name, string $delivery_date, string $created_start = '', string $created_end = ''): array {
         $clients = $this->client_query->get_clients_for_zones([$zone_name]);
-        $orders  = $this->fetch_orders_for_clients($clients, $delivery_date, $delivery_date);
+        $orders  = $this->fetch_orders_for_clients($clients, $delivery_date, $delivery_date, $created_start, $created_end);
         $slips   = $this->build_slips($orders, $clients, false);
         return self::doc2_counts_for_slips($slips);
     }

@@ -421,6 +421,29 @@ class MealsDB_Ajax_Invoice_Draft {
                 return;
             }
 
+            // Directive 5 (ITEM 3): block finalization when a VAC client exceeds
+            // the DVA coverage ceiling, with a specific message naming who and by
+            // how much (the finalize() method also enforces this as a fail-safe).
+            $blockers = MealsDB_Invoice_Draft::finalize_blockers($draft_id);
+            if (!empty($blockers)) {
+                $parts = array_map(static function ($b) {
+                    return sprintf(
+                        '%s (%s over %s)',
+                        (string) $b['name'],
+                        MealsDB_Money::format((int) $b['total_cents']),
+                        MealsDB_Money::format((int) $b['ceiling_cents'])
+                    );
+                }, $blockers);
+                wp_send_json_error([
+                    'message' => sprintf(
+                        /* translators: %s: comma-separated list of over-ceiling clients. */
+                        __('Cannot finalize — over the DVA coverage ceiling: %s. Bring these clients under the ceiling first.', 'meals-db'),
+                        implode('; ', $parts)
+                    ),
+                ]);
+                return;
+            }
+
             // finalize() returns the structured output map on success, or null
             // on refusal / lost-race / serialization failure.
             $result = MealsDB_Invoice_Draft::finalize($draft_id);
@@ -632,9 +655,10 @@ class MealsDB_Ajax_Invoice_Draft {
         if (preg_match('/(mains|sides|count|weeks|quantity|_qty)/', $f)) {
             return 'count';
         }
-        // 'hst' is listed explicitly so VAC's fold_hst (the "(includes HST)"
-        // figure, INV-DRAFT-3) classifies as money — it has no 'tax' substring.
-        if (preg_match('/(cents|rate|contribution|delivery_fee|fee|cost|basic|tax|hst|amount|price|total|subtotal|allowance|fold)/', $f)) {
+        // 'hst' is listed explicitly so a *_hst money field classifies as money —
+        // it has no 'tax' substring. ('fold' dropped — Directive 5 removed the
+        // fold_amount/fold_hst fields.)
+        if (preg_match('/(cents|rate|contribution|delivery_fee|fee|cost|basic|tax|hst|amount|price|total|subtotal|allowance)/', $f)) {
             return 'money';
         }
         return 'text';

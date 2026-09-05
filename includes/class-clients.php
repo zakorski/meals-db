@@ -138,6 +138,11 @@ class MealsDB_Clients {
     /** "First Last" for a client id, or '' if unknown. Used in confirm dialogs. */
     public static function display_name(int $client_id): string {
         global $wpdb;
+        // Degrade gracefully when there is no DB handle (e.g. a warning built in
+        // a context without $wpdb): a name lookup must never fatal a caller.
+        if ($client_id <= 0 || !is_object($wpdb) || !method_exists($wpdb, 'get_row')) {
+            return '';
+        }
         $table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $row = $wpdb->get_row($wpdb->prepare(
             "SELECT first_name, last_name FROM `{$table}` WHERE client_id = %d LIMIT 1",
@@ -147,6 +152,19 @@ class MealsDB_Clients {
             return '';
         }
         return trim((string) ($row['first_name'] ?? '') . ' ' . (string) ($row['last_name'] ?? ''));
+    }
+
+    /**
+     * Directive 6 (ITEM 3): "#352 (Patricia LeBlanc)" for a client id — the id
+     * with the name in parentheses, so a warning or log line is legible without
+     * a follow-up lookup. When the name is blank (several active clients have no
+     * name on record) the bare "#352" is returned, never "#352 ()".
+     *
+     * Plain text (no escaping) — callers escape at the output point.
+     */
+    public static function format_id_with_name(int $client_id): string {
+        $name = self::display_name($client_id);
+        return $name !== '' ? sprintf('#%d (%s)', $client_id, $name) : sprintf('#%d', $client_id);
     }
 
     /**

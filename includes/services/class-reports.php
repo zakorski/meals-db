@@ -155,7 +155,12 @@ class MealsDB_Reports {
         $orders_table   = $this->wpdb->prefix . 'wc_orders';
         $items_table    = $this->wpdb->prefix . 'woocommerce_order_items';
         $itemmeta_table = $this->wpdb->prefix . 'woocommerce_order_itemmeta';
-        $status_filter  = "('wc-cancelled','wc-on-hold','wc-draft','draft','wc-trash','trash')";
+        // Directive 1: a parked draft (wc-checkout-draft) is not a placed order
+        // and must not inflate PO demand. The historical list named the legacy
+        // 'wc-draft'/'draft' statuses but missed the HPOS 'wc-checkout-draft' —
+        // fold in the single-source draft list so the denylist stays complete.
+        $draft_quoted   = "'" . implode("','", MealsDB_WC_Order_Query::DRAFT_STATUSES) . "'";
+        $status_filter  = "('wc-cancelled','wc-on-hold','wc-draft','draft','wc-trash','trash',{$draft_quoted})";
 
         $today = gmdate('Y-m-d');
 
@@ -1212,11 +1217,18 @@ class MealsDB_Reports {
         $start_dt = gmdate('Y-m-d 00:00:00', strtotime($start_date));
         $end_dt   = gmdate('Y-m-d 00:00:00', strtotime($end_date . ' +1 day'));
 
+        // Directive 1: the audit intentionally keeps a broad denylist (it WANTS
+        // to surface anomalous pending/on-hold/failed orders), so we exclude
+        // only the never-real statuses here — trash plus the parked drafts.
+        // Before this, the filter was `NOT IN ('wc-trash','trash')` alone, which
+        // admitted a Save-as-Draft order as if it were live and flagged it as an
+        // audit anomaly.
+        $draft_quoted = "'" . implode("','", MealsDB_WC_Order_Query::DRAFT_STATUSES) . "'";
         $order_rows = $this->wpdb->get_results($this->wpdb->prepare(
             "SELECT id, customer_id, date_created_gmt, status
              FROM {$orders_table}
              WHERE date_created_gmt >= %s AND date_created_gmt < %s
-               AND status NOT IN ('wc-trash', 'trash')
+               AND status NOT IN ('wc-trash', 'trash', {$draft_quoted})
                AND type = 'shop_order'
              ORDER BY date_created_gmt ASC",
             $start_dt, $end_dt

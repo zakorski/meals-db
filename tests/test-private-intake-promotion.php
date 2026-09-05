@@ -50,8 +50,13 @@ if (!class_exists('wpdb')) {
         public function get_results($query, $output = OBJECT) { return []; }
         public function query($query) { return 0; }
         public function insert($table, $data) {
-            $this->insert_calls++;
-            $this->last_insert_data = $data;
+            // Count only client-table inserts. Directive 7 promotion now also
+            // writes meals_event_log rows (fallback / gov-enrichment events); those
+            // are not the client INSERT this test is asserting on.
+            if (strpos((string) $table, 'meals_clients') !== false) {
+                $this->insert_calls++;
+                $this->last_insert_data = $data;
+            }
             $this->insert_id = 4242;
             return 1;
         }
@@ -78,10 +83,16 @@ if (!function_exists('get_userdata')) {
 // when not set. Lets each promotion call exercise a different
 // nickname value without redefining get_user_meta.
 $GLOBALS['nickname_override'] = [];
+// Directive 7 (ITEM 1): per-uid customer_group override so a promotion can be
+// exercised as SDNB / Veteran / Private without redefining get_user_meta.
+$GLOBALS['customer_group_override'] = [];
 if (!function_exists('get_user_meta')) {
     function get_user_meta($uid, $key, $single = true) {
         if ($key === 'nickname' && isset($GLOBALS['nickname_override'][$uid])) {
             return $GLOBALS['nickname_override'][$uid];
+        }
+        if ($key === 'customer_group' && isset($GLOBALS['customer_group_override'][$uid])) {
+            return $GLOBALS['customer_group_override'][$uid];
         }
         $fixtures = [
             'billing_first_name'      => 'Billing',
@@ -266,17 +277,20 @@ assert_equal(7, $nodata['ordering_frequency'] ?? null, 'ordering_frequency userm
 assert_true(isset($nodata['customer_comments']) && $nodata['customer_comments'] !== '', 'customer_comments still flows without order');
 
 // ---------------------------------------------------------------------------
-// Nickname → delivery_initials format validation. Only exact 3-letter
-// values land in the column; anything else is treated as unfilled.
+// Nickname → delivery_initials. A valid 3-letter nickname is used (uppercased);
+// Directive 7 (ITEM 2): an INVALID/absent nickname no longer leaves the code
+// BLANK — it is GENERATED from the name (valid 3 uppercase letters) with its
+// index, so a promoted client never prints a blank "Name:" line. The raw
+// invalid value is never used as-is.
 // ---------------------------------------------------------------------------
 $cases = [
-    ['nickname' => 'AB',    'expected_present' => false, 'label' => 'too-short nickname dropped'],
-    ['nickname' => 'ABCD',  'expected_present' => false, 'label' => 'too-long nickname dropped'],
-    ['nickname' => 'A1B',   'expected_present' => false, 'label' => 'non-letter nickname dropped'],
-    ['nickname' => 'a b',   'expected_present' => false, 'label' => 'space inside nickname dropped'],
-    ['nickname' => 'Bob',   'expected' => 'BOB',         'label' => 'mixed-case 3-letter nickname uppercased'],
-    ['nickname' => '  jdoe ',  'expected_present' => false, 'label' => 'trim-then-too-long nickname dropped'],
-    ['nickname' => '  abc  ', 'expected' => 'ABC',       'label' => 'trim-then-3-letter nickname accepted'],
+    ['nickname' => 'AB',    'generated' => true, 'label' => 'too-short nickname → generated'],
+    ['nickname' => 'ABCD',  'generated' => true, 'label' => 'too-long nickname → generated'],
+    ['nickname' => 'A1B',   'generated' => true, 'label' => 'non-letter nickname → generated'],
+    ['nickname' => 'a b',   'generated' => true, 'label' => 'space-in nickname → generated'],
+    ['nickname' => 'Bob',   'expected' => 'BOB', 'label' => 'mixed-case 3-letter nickname uppercased'],
+    ['nickname' => '  jdoe ', 'generated' => true, 'label' => 'trim-then-too-long nickname → generated'],
+    ['nickname' => '  abc  ', 'expected' => 'ABC', 'label' => 'trim-then-3-letter nickname accepted'],
 ];
 $next_uid = 4040;
 foreach ($cases as $case) {
@@ -286,12 +300,56 @@ foreach ($cases as $case) {
     $wpdb->last_insert_data = [];
     MealsDB_Private_Intake::maybe_promote($uid, null);
     $row = $wpdb->last_insert_data;
+    $val = $row['delivery_initials'] ?? null;
     if (array_key_exists('expected', $case)) {
-        assert_equal($case['expected'], $row['delivery_initials'] ?? null, $case['label']);
+        assert_equal($case['expected'], $val, $case['label']);
+        // A valid, used code also carries its index (Directive 7 ITEM 2).
+        assert_true(!empty($row['delivery_initials_index'] ?? ''), $case['label'] . ' → index set');
     } else {
-        assert_true(!array_key_exists('delivery_initials', $row), $case['label']);
+        // Generated: valid 3 uppercase letters, never the raw invalid value, and
+        // the index is populated.
+        assert_true(is_string($val) && (bool) preg_match('/^[A-Z]{3}$/', $val), $case['label']);
+        assert_true($val !== strtoupper(trim($case['nickname'])), $case['label'] . ' → not the raw value');
+        assert_true(!empty($row['delivery_initials_index'] ?? ''), $case['label'] . ' → index set');
     }
 }
+
+// ---------------------------------------------------------------------------
+// Directive 7 (ITEM 1) — client_type resolved from customer_group via the
+// shared mapper, no longer hard-coded 'Private'. Government groups map to
+// SDNB/Veteran; 'private'/blank/unknown default to Private.
+// ---------------------------------------------------------------------------
+$type_cases = [
+    ['group' => 'sdnb',        'expected' => 'SDNB',    'label' => 'customer_group sdnb → SDNB'],
+    ['group' => 'SDNB Rural',  'expected' => 'SDNB',    'label' => 'customer_group "SDNB Rural" → SDNB (normalised)'],
+    ['group' => 'extra mural', 'expected' => 'SDNB',    'label' => 'customer_group extra mural → SDNB'],
+    ['group' => 'veterans',    'expected' => 'Veteran', 'label' => 'customer_group veterans → Veteran'],
+    ['group' => 'private',     'expected' => 'Private', 'label' => 'customer_group private → Private'],
+    ['group' => '',            'expected' => 'Private', 'label' => 'blank customer_group → Private (fallback)'],
+    ['group' => 'gibberish',   'expected' => 'Private', 'label' => 'unknown customer_group → Private (fallback)'],
+];
+$tc_uid = 5050;
+foreach ($type_cases as $tc) {
+    $uid = $tc_uid++;
+    $GLOBALS['customer_group_override'][$uid] = $tc['group'];
+    $wpdb->insert_calls = 0;
+    $wpdb->last_insert_data = [];
+    MealsDB_Private_Intake::maybe_promote($uid, null);
+    $row = $wpdb->last_insert_data;
+    assert_equal($tc['expected'], $row['client_type'] ?? null, $tc['label']);
+    // ITEM 2: every promoted client gets a valid generated code + its index.
+    assert_true(is_string($row['delivery_initials'] ?? null)
+        && (bool) preg_match('/^[A-Z]{3}$/', (string) ($row['delivery_initials'] ?? '')),
+        $tc['label'] . ' → has valid delivery_initials');
+    assert_true(!empty($row['delivery_initials_index'] ?? ''), $tc['label'] . ' → has delivery_initials_index');
+}
+
+// The shared mapper itself (single source of truth for both paths).
+assert_equal('SDNB',    MealsDB_Migration_Consolidated::customer_group_to_client_type('sdnb'),        'mapper: sdnb → SDNB');
+assert_equal('SDNB',    MealsDB_Migration_Consolidated::customer_group_to_client_type('  SDNB Rural '), 'mapper: normalises case/space');
+assert_equal('Veteran', MealsDB_Migration_Consolidated::customer_group_to_client_type('veterans'),    'mapper: veterans → Veteran');
+assert_true(null === MealsDB_Migration_Consolidated::customer_group_to_client_type('private'),         'mapper: private → null (caller defaults)');
+assert_true(null === MealsDB_Migration_Consolidated::customer_group_to_client_type(''),                'mapper: blank → null');
 
 if (!empty($failures)) {
     fwrite(STDERR, "\n" . implode("\n", $failures) . "\n\n");

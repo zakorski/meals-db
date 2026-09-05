@@ -107,6 +107,27 @@ class MealsDB_Migration_Consolidated {
     ];
 
     /**
+     * Directive 7 (ITEM 1): the SINGLE customer_group → client_type mapping.
+     * Both the phase-1 migration AND the private-intake promotion path resolve a
+     * government client type through THIS method — two copies drift, and that
+     * drift (promotion hard-coding 'Private') is exactly the defect this fixes.
+     *
+     * Returns the mapped government type ('SDNB' / 'Veteran') for a recognised
+     * group, or null for anything else (blank, 'private', or an unknown value).
+     * Comparison is strtolower(trim()), matching the historical phase-1 read.
+     * Callers decide what a null means: phase 1 SKIPS (a gov migration only
+     * creates gov clients); promotion DEFAULTS to Private (the client is placing
+     * an order and needs a record).
+     *
+     * @param string|null $customer_group Raw usermeta value.
+     * @return string|null 'SDNB' | 'Veteran', or null when not a gov mapping.
+     */
+    public static function customer_group_to_client_type(?string $customer_group): ?string {
+        $group = strtolower(trim((string) $customer_group));
+        return self::$type_map[$group] ?? null;
+    }
+
+    /**
      * Ordered phase registry. The key is the integer phase number the UI /
      * AJAX layer passes; 'method' is the handler; 'label' is shown in the
      * progress list. Order encodes the dependency chain:
@@ -265,8 +286,9 @@ class MealsDB_Migration_Consolidated {
                 continue;
             }
 
-            $group = strtolower(trim($meta['customer_group'] ?? ''));
-            if (!isset(self::$type_map[$group])) {
+            // Directive 7: resolve through the shared mapper (single source).
+            $client_type = self::customer_group_to_client_type($meta['customer_group'] ?? '');
+            if ($client_type === null) {
                 error_log(sprintf(
                     '[MealsDB Consolidated] Skipped user %d: unrecognized customer_group "%s".',
                     $uid,
@@ -275,7 +297,6 @@ class MealsDB_Migration_Consolidated {
                 $stats['errors']++;
                 continue;
             }
-            $client_type = self::$type_map[$group];
 
             // WP persists first_name usermeta as an empty string for users who
             // never set one (the KEY exists), so the old `?? $display_name`

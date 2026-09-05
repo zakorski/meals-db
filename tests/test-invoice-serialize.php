@@ -153,7 +153,9 @@ function vac_vet(array $over = []): array {
         'client_phone_1' => '5065550000', 'requisition_period' => 'week',
         'individual_id' => 'V-1', 'individual_id_index' => 'vidx1',
         'allocated_mains' => 12, 'allocated_tax_sides' => 5, 'allocated_nontax_sides' => 2,
-        'bill_mains' => 12, 'bill_rate' => 9.05, 'fold_amount' => 0.0, 'fold_hst' => 0.0,
+        'bill_mains' => 12, 'bill_rate' => 9.05,
+        // Directive 5: rates frozen onto the row (side / coverage / HST).
+        'vac_side_rate' => 4.25, 'vac_coverage_rate' => 11.14, 'vac_hst_rate' => 0.15,
         'info_mains_allowance' => 31, 'info_sides_allowance' => 31,
         'info_monthly_allowance_cents' => 33000, 'info_sides_cost_cents' => 2870,
         'new_user_flag' => 'No',
@@ -161,7 +163,9 @@ function vac_vet(array $over = []): array {
 }
 
 // ===========================================================================
-// T-A3 / T-B1 — VAC clean veteran: mains-only, sides NOT in the total.
+// T-A3 / T-B1 — VAC veteran: Directive 5 bills mains + sides + computed HST.
+// 12 mains × 9.05 = 108.60; sides 7 × 4.25 = 29.75; HST 5 tax × 4.25 × 15% =
+// 3.19; total 141.54.
 // ===========================================================================
 $vac_csv = MealsDB_Invoice_Generator::serialize_vac_csv([700 => vac_vet()]);
 $vrow    = csv_row_with($vac_csv, 'K123');
@@ -169,30 +173,28 @@ chk_true($vrow !== null, 'T-A3: VAC veteran row present');
 chk($vrow[8]  ?? null, '9.05',   'T-A3: Rate = bill_rate');
 chk($vrow[11] ?? null, '12',     'T-A3: Bill Mains');
 chk($vrow[29] ?? null, '108.60', 'T-A3: Vet Mains Cost = 12 × 9.05');
-chk($vrow[32] ?? null, '0.00',   'T-A3: Bill HST = fold_hst = 0');
-chk($vrow[33] ?? null, '108.60', 'T-A3: New Total = mains-only (fold 0)');
-chk($vrow[36] ?? null, '0.00',   'T-A3: Fold Amount = 0');
-// T-B1: the OLD model would have added sides_cost + sides_HST = 140.38.
-chk_true(($vrow[33] ?? '') !== '140.38', 'T-B1: sides are NOT summed into the VAC total (≠ old 140.38)');
-// The allocated side COUNTS still appear for reference (info), just not billed.
-chk($vrow[13] ?? null, '7', 'T-B1: Sides Ordered still shown (informational)');
+chk($vrow[32] ?? null, '3.19',   'T-A3: Bill HST = 5 taxable × 4.25 × 15%');
+chk($vrow[33] ?? null, '141.54', 'T-A3: New Total = mains + sides + HST');
+chk($vrow[36] ?? null, '29.75',  'T-A3: Bill Sides Value = 7 × 4.25');
+// T-B1: sides ARE now billed (Directive 5) — contrast with the retired
+// mains-only behaviour. The allocated side counts still appear for reference.
+chk($vrow[13] ?? null, '7', 'T-B1: Sides Ordered shown (informational)');
 
 // ===========================================================================
-// T-B2 — fold flows into the total + the HST cell; PDF maps them positionally.
+// T-B2 — leftover fold_* keys on a row are IGNORED; the PDF stamps the
+// computed meals/HST/total positionally.
 // ===========================================================================
 $folded_csv = MealsDB_Invoice_Generator::serialize_vac_csv([
     700 => vac_vet(['fold_amount' => 28.70, 'fold_hst' => 3.08]),
 ]);
 $frow = csv_row_with($folded_csv, 'K123');
-chk($frow[32] ?? null, '3.08',   'T-B2: Bill HST cell = fold_hst');
-chk($frow[33] ?? null, '140.38', 'T-B2: New Total = mains + fold_amount + fold_hst');
-chk($frow[36] ?? null, '28.70',  'T-B2: Fold Amount column');
-// The PDF stamps col 11 (meals), col 32 (HST), col 33 (total) — verify the
-// positional mapping survives into the rendered HTML.
+chk($frow[32] ?? null, '3.19',   'T-B2: Bill HST = computed (fold_hst ignored)');
+chk($frow[33] ?? null, '141.54', 'T-B2: New Total = mains + sides + HST (fold ignored)');
+chk($frow[36] ?? null, '29.75',  'T-B2: Bill Sides Value (fold_amount ignored)');
 $pdf_html = MealsDB_Invoice_Generator::build_vac_pdf_html([$frow], '31/05/26', 'file:///x.jpg');
 chk_true(strpos($pdf_html, '>12<') !== false, 'T-B2: PDF stamps the meal count (12)');
-chk_true(strpos($pdf_html, '3.08') !== false, 'T-B2: PDF "(includes HST)" cell = fold_hst');
-chk_true(strpos($pdf_html, '$140.38') !== false, 'T-B2: PDF total = vac_total');
+chk_true(strpos($pdf_html, '3.19') !== false, 'T-B2: PDF "(includes HST)" cell = computed HST');
+chk_true(strpos($pdf_html, '$141.54') !== false, 'T-B2: PDF total = vac_total');
 
 // ===========================================================================
 // T-B4 — rates from Definitions.
@@ -226,31 +228,29 @@ $cov_csv = MealsDB_Invoice_Generator::serialize_vac_csv([700 => vac_vet(['info_m
 chk((csv_row_with($cov_csv, 'K123'))[28] ?? null, '345.34', 'T-B4: VAC Monthly Allowance column carries the Definitions-derived figure');
 
 // ===========================================================================
-// T-B5 — reference characterization: a clean + a folded veteran in one run.
+// T-B5 — reference characterization: two veterans, sides billed both ways.
+// A (with sides): 31 × 9.05 + 7 × 4.25 + (5 × 4.25 × 15%) = 280.55 + 29.75 +
+// 3.19 = 313.49, HST 3.19. B (mains-only, no sides): 10 × 9.05 = 90.50, HST 0.
 // ===========================================================================
 $ref_csv = MealsDB_Invoice_Generator::serialize_vac_csv([
-    700 => vac_vet(['vet_health_card' => 'K-CLEAN', 'last_name' => 'Clean', 'bill_mains' => 31, 'bill_rate' => 9.05]),
-    701 => vac_vet(['client_id' => 701, 'vet_health_card' => 'K-FOLD', 'last_name' => 'Folded',
-                    'bill_mains' => 31, 'bill_rate' => 9.05, 'fold_amount' => 12.40, 'fold_hst' => 1.86]),
+    700 => vac_vet(['vet_health_card' => 'K-SIDES', 'last_name' => 'Sides', 'bill_mains' => 31]),
+    701 => vac_vet(['client_id' => 701, 'vet_health_card' => 'K-MAINS', 'last_name' => 'Mainsonly',
+                    'bill_mains' => 10, 'allocated_tax_sides' => 0, 'allocated_nontax_sides' => 0]),
 ]);
-$clean = csv_row_with($ref_csv, 'K-CLEAN');
-$fold  = csv_row_with($ref_csv, 'K-FOLD');
-// Clean: total = 31 × 9.05 = 280.55, HST 0.00.
-chk($clean[33] ?? null, '280.55', 'T-B5: clean veteran total = mains × rate');
-chk($clean[32] ?? null, '0.00',   'T-B5: clean veteran HST 0.00');
-// Folded: 280.55 + 12.40 + 1.86 = 294.81, HST 1.86.
-chk($fold[33] ?? null, '294.81', 'T-B5: folded veteran bumped total');
-chk($fold[32] ?? null, '1.86',   'T-B5: folded veteran (includes HST) = fold_hst');
+$withSides = csv_row_with($ref_csv, 'K-SIDES');
+$mainsOnly = csv_row_with($ref_csv, 'K-MAINS');
+chk($withSides[33] ?? null, '313.49', 'T-B5: veteran with sides = mains + sides + HST');
+chk($withSides[32] ?? null, '3.19',   'T-B5: veteran with sides HST = 3.19');
+chk($mainsOnly[33] ?? null, '90.50',  'T-B5: mains-only veteran total = mains × rate');
+chk($mainsOnly[32] ?? null, '0.00',   'T-B5: mains-only veteran HST 0.00');
 
 // ===========================================================================
-// T-B3 — the new editable fields classify correctly for the edit+audit path.
-// fold_hst must be MONEY (it has no 'tax' substring — the classify_field 'hst'
-// fix); fold_amount money; bill_rate money; bill_mains a count.
+// T-B3 — the editable VAC fields classify correctly for the edit+audit path.
+// (Directive 5 removed fold_amount/fold_hst; only bill_mains + bill_rate are
+// editable now — sides/HST/ceiling are derived and never edited.)
 // ===========================================================================
 $classify = new ReflectionMethod('MealsDB_Ajax_Invoice_Draft', 'classify_field');
 $classify->setAccessible(true);
-chk($classify->invoke(null, 'fold_hst'),    'money', 'T-B3: fold_hst classifies as money (not text)');
-chk($classify->invoke(null, 'fold_amount'), 'money', 'T-B3: fold_amount classifies as money');
 chk($classify->invoke(null, 'bill_rate'),   'money', 'T-B3: bill_rate classifies as money');
 chk($classify->invoke(null, 'bill_mains'),  'count', 'T-B3: bill_mains classifies as a count');
 

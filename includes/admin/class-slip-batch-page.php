@@ -178,6 +178,11 @@ class MealsDB_Slip_Batch_Page {
                 . esc_html__('No batches yet.', 'meals-db') . '</em></td></tr>';
         }
         foreach ($rows as $row) {
+            // Directive 4: weekend batches are shown WITHIN their original batch's
+            // action cell (as the "Weekend" button pair), not as standalone rows.
+            if ((string) ($row['batch_type'] ?? 'full') === 'weekend') {
+                continue;
+            }
             self::render_row($row);
         }
 
@@ -235,9 +240,44 @@ class MealsDB_Slip_Batch_Page {
 
         echo '<td class="mealsdb-slip-actions">';
 
-        // Combined cover + packer slips, then the driver sheets (manual overlay).
-        echo '<a class="button" href="' . esc_url($dl('packing_slips')) . '">' . esc_html__('Packing Slips', 'meals-db') . '</a> ';
-        echo '<a class="button" href="' . esc_url($dl('doc4')) . '">' . esc_html__('Doc 4 (driver)', 'meals-db') . '</a> ';
+        // Directive 4: a weekend follow-up batch, if one has been generated for
+        // this original batch. Its presence turns the single button pair into
+        // three pairs (original · weekend · all).
+        $weekend = class_exists('MealsDB_Slip_Batch') ? MealsDB_Slip_Batch::find_weekend_child($id) : null;
+        $weekend_id = $weekend ? (int) ($weekend['batch_id'] ?? 0) : 0;
+        $wk = static function (string $which) use ($weekend_id): string {
+            return ($weekend_id > 0 && class_exists('MealsDB_Ajax_Slip_Batch'))
+                ? MealsDB_Ajax_Slip_Batch::download_url($weekend_id, $which)
+                : '#';
+        };
+
+        // Row 1 — the original Friday set. Directive 6 (ITEM 5): buttons are
+        // labelled by RECIPIENT (Midland = packer, Jim = driver). Buttons only —
+        // the PDFs and their filenames are unchanged.
+        echo '<div class="mealsdb-slip-row mealsdb-slip-row--original" style="margin-bottom:4px;">';
+        echo '<a class="button" href="' . esc_url($dl('packing_slips')) . '">' . esc_html__('Midland Slips', 'meals-db') . '</a> ';
+        echo '<a class="button" href="' . esc_url($dl('doc4')) . '">' . esc_html__('Jim Slips', 'meals-db') . '</a>';
+        echo '</div>';
+
+        if ($weekend_id > 0) {
+            // Row 2 — weekend orders only.
+            echo '<div class="mealsdb-slip-row mealsdb-slip-row--weekend" style="margin-bottom:4px;">';
+            echo '<a class="button" href="' . esc_url($wk('packing_slips')) . '">' . esc_html__('Weekend Midland Slips', 'meals-db') . '</a> ';
+            echo '<a class="button" href="' . esc_url($wk('doc4')) . '">' . esc_html__('Weekend Jim Slips', 'meals-db') . '</a>';
+            echo '</div>';
+            // Row 3 — both, fresh render.
+            echo '<div class="mealsdb-slip-row mealsdb-slip-row--all" style="margin-bottom:4px;">';
+            echo '<a class="button" href="' . esc_url($dl('all_packing_slips')) . '">' . esc_html__('All Midland Slips', 'meals-db') . '</a> ';
+            echo '<a class="button" href="' . esc_url($dl('all_doc4')) . '">' . esc_html__('All Jim Slips', 'meals-db') . '</a>';
+            echo '</div>';
+        } else {
+            // No weekend batch yet — offer to generate it. Stays enabled even
+            // when there are no weekend orders (JS shows an in-place message).
+            echo '<div class="mealsdb-slip-row mealsdb-slip-row--weekend-gen" style="margin-bottom:4px;">';
+            echo '<button type="button" class="button mealsdb-slip-weekend-btn">'
+                . esc_html__('Generate Weekend Orders', 'meals-db') . '</button>';
+            echo '</div>';
+        }
 
         // Cancel (confirm popup in JS).
         echo '<button type="button" class="button mealsdb-slip-cancel-btn">' . esc_html__('Cancel', 'meals-db') . '</button>';
