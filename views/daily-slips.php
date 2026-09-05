@@ -78,11 +78,14 @@ $zone_schedule = get_option('mealsdb_zone_delivery_schedule', []);
             <input type="date" id="mealsdb-ondemand-date" value="<?php echo esc_attr(wp_date('Y-m-d')); ?>" />
         </div>
 
+        <?php // Directive 6 (ITEM 5): buttons labelled by recipient (Midland =
+              // packer, Jim = driver). The generated PDFs and filenames are
+              // unchanged — this is a label change only. ?>
         <button type="button" class="button button-primary" id="mealsdb-gen-packer-pdf">
-            <?php echo esc_html__('Generate Packer Slips PDF', 'meals-db'); ?>
+            <?php echo esc_html__('Generate Midland Slips PDF', 'meals-db'); ?>
         </button>
         <button type="button" class="button button-primary" id="mealsdb-gen-driver-pdf">
-            <?php echo esc_html__('Generate Driver Slips PDF', 'meals-db'); ?>
+            <?php echo esc_html__('Generate Jim Slips PDF', 'meals-db'); ?>
         </button>
     </div>
 

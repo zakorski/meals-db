@@ -95,14 +95,20 @@ class MealsDB_Invoice_Coverage {
 
         foreach ($expected as $cid => $key) {
             $cid = (int) $cid;
+            // Directive 6 (ITEM 3): name the client beside the id so the warning
+            // reads "Client #352 (Patricia LeBlanc) …" — no follow-up lookup to
+            // find out who #352 is. Blank name falls back to the bare id.
+            $who = class_exists('MealsDB_Clients')
+                ? MealsDB_Clients::format_id_with_name($cid)
+                : ('#' . $cid);
             if ($key === null) {
                 $warnings[] = [
                     'type'      => 'unroutable',
                     'client_id' => $cid,
                     'message'   => sprintf(
-                        /* translators: %d: client id */
-                        __('Client #%d is on legacy billing but their delivery zone is not M or S — they will appear on NO legacy invoice.', 'meals-db'),
-                        $cid
+                        /* translators: %s: client id and name, e.g. "#352 (Patricia LeBlanc)" */
+                        __('Client %s is on legacy billing but their delivery zone is not M or S — they will appear on NO legacy invoice.', 'meals-db'),
+                        $who
                     ),
                 ];
                 continue;
@@ -113,9 +119,9 @@ class MealsDB_Invoice_Coverage {
                     'type'      => 'overlap',
                     'client_id' => $cid,
                     'message'   => sprintf(
-                        /* translators: 1: client id, 2: comma-separated pipeline list */
-                        __('Client #%1$d appears in more than one SDNB draft for this month (%2$s) — they would be billed twice.', 'meals-db'),
-                        $cid,
+                        /* translators: 1: client id and name, 2: comma-separated pipeline list */
+                        __('Client %1$s appears in more than one SDNB draft for this month (%2$s) — they would be billed twice.', 'meals-db'),
+                        $who,
                         implode(', ', $in)
                     ),
                 ];
@@ -124,9 +130,9 @@ class MealsDB_Invoice_Coverage {
                     'type'      => 'drift',
                     'client_id' => $cid,
                     'message'   => sprintf(
-                        /* translators: 1: client id, 2: draft pipeline, 3: expected pipeline */
-                        __('Client #%1$d sits in the %2$s draft but now routes to %3$s — regenerate or fix the client before finalizing.', 'meals-db'),
-                        $cid,
+                        /* translators: 1: client id and name, 2: draft pipeline, 3: expected pipeline */
+                        __('Client %1$s sits in the %2$s draft but now routes to %3$s — regenerate or fix the client before finalizing.', 'meals-db'),
+                        $who,
                         $in[0],
                         $key
                     ),
@@ -136,9 +142,9 @@ class MealsDB_Invoice_Coverage {
                     'type'      => 'missing',
                     'client_id' => $cid,
                     'message'   => sprintf(
-                        /* translators: 1: client id, 2: pipeline */
-                        __('Client #%1$d has billable meals this month but is missing from the %2$s draft — it may predate their allocation; regenerate it.', 'meals-db'),
-                        $cid,
+                        /* translators: 1: client id and name, 2: pipeline */
+                        __('Client %1$s has billable meals this month but is missing from the %2$s draft — it may predate their allocation; regenerate it.', 'meals-db'),
+                        $who,
                         $key
                     ),
                 ];

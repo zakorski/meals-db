@@ -232,6 +232,15 @@ class MealsDB_Admin_UI {
         // process hook fires for HPOS order saves with (order_id, order).
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_delivery_date_field']);
         add_action('woocommerce_process_shop_order_meta', [$this, 'save_delivery_date_field'], 10, 2);
+
+        // Directive 6 (ITEM 4): a Delivery Date column on the HPOS orders list,
+        // with the existing Date column relabelled "Order Date" so the two are
+        // not confused, and the new column sortable. The single order-edit screen
+        // already shows the delivery date via render_delivery_date_field() above.
+        add_filter('manage_woocommerce_page_wc-orders_columns', [$this, 'add_delivery_date_order_column'], 20);
+        add_action('woocommerce_shop_order_list_table_custom_column', [$this, 'render_delivery_date_order_column'], 10, 2);
+        add_filter('manage_woocommerce_page_wc-orders_sortable_columns', [$this, 'register_delivery_date_sortable_column']);
+        add_filter('woocommerce_order_list_table_prepare_items_query_args', [$this, 'sort_orders_by_delivery_date']);
     }
 
     /**
@@ -702,6 +711,98 @@ class MealsDB_Admin_UI {
                 ]);
             }
         }
+    }
+
+    /**
+     * Directive 6 (ITEM 4): add the Delivery Date column and relabel the native
+     * Date column to "Order Date". Inserted immediately after the Date column so
+     * the two dates sit together. HPOS-only (the site is HPOS-exclusive).
+     *
+     * @param array<string,string> $columns
+     * @return array<string,string>
+     */
+    public function add_delivery_date_order_column(array $columns): array
+    {
+        $out = [];
+        foreach ($columns as $key => $label) {
+            if ($key === 'order_date' || $key === 'date') {
+                $out[$key] = __('Order Date', 'meals-db');
+                $out['mealsdb_delivery_date'] = __('Delivery Date', 'meals-db');
+                continue;
+            }
+            $out[$key] = $label;
+        }
+        // If WC ever renames the date column, still surface Delivery Date.
+        if (!isset($out['mealsdb_delivery_date'])) {
+            $out['mealsdb_delivery_date'] = __('Delivery Date', 'meals-db');
+        }
+        return $out;
+    }
+
+    /**
+     * Render the Delivery Date cell — the order's _delivery_date meta, or an
+     * explicit blank (never a fallback to the order date; a missing delivery
+     * date should read as missing).
+     *
+     * @param string $column
+     * @param mixed  $order   WC_Order (HPOS passes the order object).
+     */
+    public function render_delivery_date_order_column(string $column, $order): void
+    {
+        if ($column !== 'mealsdb_delivery_date') {
+            return;
+        }
+        $value = '';
+        if (is_object($order) && method_exists($order, 'get_meta')) {
+            $value = (string) $order->get_meta('_delivery_date');
+        }
+        echo $value !== '' ? esc_html($value) : '<span aria-hidden="true">—</span>';
+    }
+
+    /**
+     * Mark the Delivery Date column sortable.
+     *
+     * @param array<string,string> $columns
+     * @return array<string,string>
+     */
+    public function register_delivery_date_sortable_column(array $columns): array
+    {
+        $columns['mealsdb_delivery_date'] = 'mealsdb_delivery_date';
+        return $columns;
+    }
+
+    /**
+     * Sort the HPOS orders list by the _delivery_date meta when the operator
+     * clicks the Delivery Date column.
+     *
+     * Directive 6 (ITEM 4) — HPOS, 21k+ orders: sort via the indexed
+     * wc_orders_meta (meta_key is indexed), NOT a per-row lookup. This uses the
+     * OrdersTableQuery meta_key/meta_value orderby form; if a given WC version
+     * does not honour it the list simply falls back to its default order (no rows
+     * are dropped and nothing degrades). CONFIRM the sort + list timing on
+     * staging before relying on it (the directive's explicit pre-ship check).
+     *
+     * @param array<string,mixed> $query_args
+     * @return array<string,mixed>
+     */
+    public function sort_orders_by_delivery_date(array $query_args): array
+    {
+        $orderby = isset($_GET['orderby']) ? sanitize_key(wp_unslash((string) $_GET['orderby'])) : '';
+        if ($orderby !== 'mealsdb_delivery_date') {
+            return $query_args;
+        }
+        $order = 'DESC';
+        if (isset($_GET['order'])) {
+            $requested = strtoupper(sanitize_key(wp_unslash((string) $_GET['order'])));
+            $order = $requested === 'ASC' ? 'ASC' : 'DESC';
+        }
+        // meta_key + orderby=meta_value keeps orders WITHOUT a delivery date in
+        // the list (they sort as empty) — deliberately NOT an EXISTS meta_query,
+        // which would inner-join and hide those orders.
+        $query_args['meta_key'] = '_delivery_date';
+        $query_args['orderby']  = 'meta_value';
+        $query_args['order']    = $order;
+        return $query_args;
     }
 
     /**
@@ -2218,11 +2319,13 @@ class MealsDB_Admin_UI {
                 <?php
             },
             static function (array $client) {
+                // Directive 6 (ITEM 2): the Vendor # field is hidden and no longer
+                // required. The stored value is preserved as a hidden input so a
+                // normal save round-trips it untouched (the save path writes the
+                // posted columns; omitting it entirely would not delete the DB
+                // value, but keeping it avoids any handler that rebuilds the row).
                 ?>
-                <tr>
-                    <th><label for="vendor_number"><?php esc_html_e('Vendor #', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="vendor_number" id="vendor_number" class="regular-text" value="<?php echo esc_attr($client['vendor_number'] ?? ''); ?>" /></td>
-                </tr>
+                <input type="hidden" name="vendor_number" value="<?php echo esc_attr($client['vendor_number'] ?? ''); ?>" />
                 <?php
             },
             static function (array $client) {

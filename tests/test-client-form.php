@@ -340,6 +340,36 @@ check($deletedByOwner === true, 'F: the owner can delete the draft');
 check($wpdb->deleteAttempted === true, 'F: the owner path actually runs the scoped DELETE');
 
 // ---------------------------------------------------------------------------
+// G: Directive 6 (ITEM 1) — required fields apply on CREATE, not on EDIT.
+// A payload missing a required field (payment_method) fails as a CREATE but
+// validates as an EDIT (a positive $ignore_client_id), so an existing record
+// with an unrelated empty field can still be corrected. Format/uniqueness
+// checks still run on edit — only the required-field gate is create-only.
+// ---------------------------------------------------------------------------
+$wpdb = fresh_wpdb();
+$missing = valid_private_payload();
+unset($missing['payment_method']); // a required field for Private
+
+$resG_create = MealsDB_Client_Form::validate($missing);           // create (no id)
+check($resG_create['valid'] === false, 'G: create rejects a missing required field');
+check(has_error_matching($resG_create, 'payment method')
+   || has_error_matching($resG_create, 'payment_method')
+   || has_error_matching($resG_create, 'required'),
+   'G: create names the missing required field');
+
+$wpdb = fresh_wpdb();
+$resG_edit = MealsDB_Client_Form::validate($missing, 4242);       // edit (positive id)
+check($resG_edit['valid'] === true, 'G: edit does NOT block on the missing required field');
+
+// ---------------------------------------------------------------------------
+// H: Directive 6 (ITEM 2) — vendor_number is no longer required for SDNB.
+// ---------------------------------------------------------------------------
+$rm_req = new ReflectionMethod('MealsDB_Client_Form', 'get_required_fields_for_type');
+$rm_req->setAccessible(true);
+$sdnb_required = $rm_req->invoke(null, 'SDNB');
+check(!in_array('vendor_number', $sdnb_required, true), 'H: vendor_number removed from SDNB required fields');
+
+// ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
 if (!empty($failures)) {

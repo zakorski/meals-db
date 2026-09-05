@@ -251,11 +251,12 @@ class MealsDB_Slip_Batch_Page {
                 : '#';
         };
 
-        // Row 1 — the original Friday set (unchanged). Labels are relabelled to
-        // Midland/Jim by Directive 6; kept here as-is until then.
+        // Row 1 — the original Friday set. Directive 6 (ITEM 5): buttons are
+        // labelled by RECIPIENT (Midland = packer, Jim = driver). Buttons only —
+        // the PDFs and their filenames are unchanged.
         echo '<div class="mealsdb-slip-row mealsdb-slip-row--original" style="margin-bottom:4px;">';
-        echo '<a class="button" href="' . esc_url($dl('packing_slips')) . '">' . esc_html__('Packing Slips', 'meals-db') . '</a> ';
-        echo '<a class="button" href="' . esc_url($dl('doc4')) . '">' . esc_html__('Doc 4 (driver)', 'meals-db') . '</a>';
+        echo '<a class="button" href="' . esc_url($dl('packing_slips')) . '">' . esc_html__('Midland Slips', 'meals-db') . '</a> ';
+        echo '<a class="button" href="' . esc_url($dl('doc4')) . '">' . esc_html__('Jim Slips', 'meals-db') . '</a>';
         echo '</div>';
 
         if ($weekend_id > 0) {

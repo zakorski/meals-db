@@ -378,7 +378,19 @@ class MealsDB_Client_Form {
             $record_format_error('client_type', __('Staff clients are managed via the Staff Directory.', 'meals-db'));
         }
 
-        $required_fields = self::get_required_fields_for_type($client_type);
+        // Directive 6 (ITEM 1): required-field validation applies when CREATING a
+        // client, not when EDITING one. A positive $ignore_client_id means this is
+        // an update (it is the id whose own rows uniqueness checks must ignore), so
+        // the required-field loop below is skipped — otherwise a long-standing
+        // record with an unrelated empty field (e.g. an allowance that was never
+        // set) could not have its phone number corrected. Format and uniqueness
+        // checks (initials, wp_user_id, units, dates) still run on edit; only the
+        // "this field must be present" gate is create-only. This was the likely
+        // cause of the 2026-08-31 silent rejection where a delivery-initials edit
+        // reported success but did not persist.
+        $required_fields = ($ignore_client_id === null)
+            ? self::get_required_fields_for_type($client_type)
+            : [];
 
         $initials_value = strtoupper(trim((string) ($sanitized['delivery_initials'] ?? '')));
 
@@ -649,7 +661,8 @@ class MealsDB_Client_Form {
                 'first_name',
                 'last_name',
                 'phone_primary',
-                'vendor_number',
+                // Directive 6 (ITEM 2): vendor_number is no longer required (and
+                // its form input is hidden). The DB column + stored data are kept.
                 'service_center_charged',
                 'service_id',
                 'requisition_period',
