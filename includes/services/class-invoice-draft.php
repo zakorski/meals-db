@@ -568,6 +568,57 @@ class MealsDB_Invoice_Draft {
         return $updated !== false && (int) $updated > 0;
     }
 
+    /**
+     * Directive 5 (ITEM 3): the VAC clients in a draft whose whole invoice
+     * (mains value + sides value + HST) exceeds their DVA coverage ceiling
+     * (permitted_mains × coverage rate). Pure — takes `current` rows, returns a
+     * list of blockers so BOTH the pre-finalize UI message and the finalize
+     * guard share one definition. Empty for non-VAC pipelines / no violations.
+     *
+     * @param array<int|string, array<string, mixed>> $current
+     * @return array<int, array{client_id:int, name:string, total_cents:int, ceiling_cents:int}>
+     */
+    public static function vac_ceiling_blockers(array $current): array {
+        $blockers = [];
+        foreach ($current as $cid => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $derived = MealsDB_Invoice_Generator::compute_vac_row_derived($row);
+            if (!empty($derived['over_ceiling'])) {
+                $name = trim((string) ($row['first_name'] ?? '') . ' ' . (string) ($row['last_name'] ?? ''));
+                $blockers[] = [
+                    'client_id'    => (int) $cid,
+                    'name'         => $name !== '' ? $name : ('#' . (int) $cid),
+                    'total_cents'  => (int) $derived['vac_total_cents'],
+                    'ceiling_cents' => (int) $derived['ceiling_cents'],
+                ];
+            }
+        }
+        return $blockers;
+    }
+
+    /**
+     * Directive 5 (ITEM 3): finalize blockers for a draft, loaded by id. Used by
+     * the AJAX layer to surface a specific message before attempting finalize.
+     *
+     * @return array<int, array<string, mixed>> empty when finalization is allowed
+     */
+    public static function finalize_blockers(int $draft_id): array {
+        try {
+            $draft = self::get($draft_id);
+            if ($draft === null || (string) ($draft['pipeline'] ?? '') !== self::PIPELINE_VAC) {
+                return [];
+            }
+            $payload = $draft['payload'];
+            $current = (isset($payload['current']) && is_array($payload['current'])) ? $payload['current'] : [];
+            return self::vac_ceiling_blockers($current);
+        } catch (\Throwable $e) {
+            self::log_error('finalize_blockers', $e);
+            return [];
+        }
+    }
+
     public static function finalize(int $draft_id) {
         try {
             $draft = self::get($draft_id);
@@ -584,6 +635,32 @@ class MealsDB_Invoice_Draft {
                 ? $payload['current'] : [];
             $billing_month = (string) ($draft['billing_month'] ?? '');
             $pipeline      = (string) ($draft['pipeline'] ?? '');
+
+            // Directive 5 (ITEM 3): a VAC client over the DVA coverage ceiling
+            // blocks finalization — the operator must bring them under first (bill
+            // the full amount, but do not lock a submitted invoice that exceeds
+            // coverage). Checked BEFORE any serialize/freeze so a blocked draft
+            // stays fully editable. Defense-in-depth: the AJAX layer also
+            // pre-checks for a friendlier message, but a non-AJAX caller cannot
+            // bypass this.
+            if ($pipeline === self::PIPELINE_VAC) {
+                $blockers = self::vac_ceiling_blockers($current);
+                if (!empty($blockers)) {
+                    if (class_exists('MealsDB_Event_Log')) {
+                        $names = implode(', ', array_map(static fn($b) => (string) $b['name'], $blockers));
+                        MealsDB_Event_Log::record([
+                            'severity'  => 'warning',
+                            'category'  => 'billing',
+                            'subsystem' => 'invoice_draft',
+                            'event'     => 'finalize.vac_over_ceiling',
+                            'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                            'message'   => 'VAC finalization blocked — client(s) over DVA coverage ceiling: ' . $names,
+                            'context'   => ['draft_id' => $draft_id, 'blockers' => $blockers],
+                        ]);
+                    }
+                    return null;
+                }
+            }
 
             // ORDER MATTERS (PR #393 review): serialize + encrypt BEFORE
             // freezing the months. finalize_month is a one-way lock — once a

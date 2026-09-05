@@ -896,14 +896,22 @@ class MealsDB_Invoice_Draft_Page {
     public static function column_map(string $pipeline): ?array {
         if ($pipeline === MealsDB_Invoice_Draft::PIPELINE_VAC) {
             return [
+                // Directive 5: fold_amount / fold_hst are removed. Sides, sides
+                // value, the computed HST, the DVA ceiling and the VAC total are
+                // all derived (read-only) — only Meals (bill_mains) and Rate stay
+                // editable, as before. The ceiling column lets the operator see at
+                // a glance whether a client is over (finalization is blocked when
+                // VAC Total exceeds Ceiling).
                 ['field' => 'client',         'label' => __('Client', 'meals-db'),         'type' => 'identity-name'],
                 ['field' => 'street_name',    'label' => __('Address', 'meals-db'),        'type' => 'identity'],
                 ['field' => 'bill_mains',     'label' => __('Meals', 'meals-db'),          'type' => 'input-int'],
                 ['field' => 'bill_rate',      'label' => __('Rate', 'meals-db'),           'type' => 'input-money'],
-                ['field' => 'fold_amount',    'label' => __('Fold Amount', 'meals-db'),    'type' => 'input-money'],
-                ['field' => 'fold_hst',       'label' => __('Fold HST', 'meals-db'),       'type' => 'input-money'],
-                ['field' => 'vet_mains_cost', 'label' => __('Vet Mains Cost', 'meals-db'), 'type' => 'derived-money', 'derived_key' => 'vet_mains_cost_cents'],
+                ['field' => 'billed_sides',   'label' => __('Sides', 'meals-db'),          'type' => 'derived-int',   'derived_key' => 'billed_sides'],
+                ['field' => 'sides_value',    'label' => __('Sides Value', 'meals-db'),    'type' => 'derived-money', 'derived_key' => 'sides_value_cents'],
+                ['field' => 'hst',            'label' => __('HST', 'meals-db'),            'type' => 'derived-money', 'derived_key' => 'hst_cents'],
+                ['field' => 'vet_mains_cost', 'label' => __('Mains Value', 'meals-db'),    'type' => 'derived-money', 'derived_key' => 'vet_mains_cost_cents'],
                 ['field' => 'vac_total',      'label' => __('VAC Total', 'meals-db'),      'type' => 'derived-money', 'derived_key' => 'vac_total_cents'],
+                ['field' => 'ceiling',        'label' => __('Ceiling', 'meals-db'),        'type' => 'derived-money', 'derived_key' => 'ceiling_cents'],
                 ['field' => 'remaining_sides','label' => __('Sides Left', 'meals-db'),     'type' => 'derived-int',   'derived_key' => 'remaining_sides'],
             ];
         }

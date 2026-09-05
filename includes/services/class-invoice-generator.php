@@ -848,6 +848,9 @@ class MealsDB_Invoice_Generator {
         $vac_side_rate = is_float($vac_side_rate) ? $vac_side_rate : 0.0;
         $coverage      = MealsDB_Rate_Definitions::get('vac_per_main_coverage');
         $coverage      = is_float($coverage) ? $coverage : 0.0;
+        // Directive 5: HST for VAC sides is WC-sourced, same as SDNB (LB-7). A 0
+        // here means 0% HST — keep the WC standard rate configured at 15%.
+        $vac_hst_rate  = self::resolve_hst_rate();
 
         foreach ($rows as $cid => &$row) {
             $cid_int = (int) $cid;
@@ -881,19 +884,20 @@ class MealsDB_Invoice_Generator {
             //   $row['bill_rate'] = $coverage;
             // That is a seed change, not a re-architecture.
             $row['bill_rate'] = (float) ($row['resolved_rate'] ?? 0);
-            // fold_amount: dollar value of sides folded into the per-main gap.
-            // SEEDS TO 0 — Janet enters it per veteran on the grid (her
-            // hand-work, now captured + audited). Stored as a dollar float so
-            // the edit layer (classify_field → money) round-trips it as
-            // dollars.
-            $row['fold_amount'] = 0.0;
-            // fold_hst: HST on the folded TAXABLE sides — the "(includes HST)"
-            // figure on the Blue Cross form. SEEDS TO 0 (Decision-gate
-            // default). If the operator later asks to auto-seed it, compute
-            // the taxable portion of the fold × resolve_hst_rate() HERE — a
-            // one-line seed change. HST stays WC-sourced (LB-7); do NOT
-            // reintroduce a VAC HST constant.
-            $row['fold_hst'] = 0.0;
+
+            // Directive 5 (ITEM 2): fold_amount / fold_hst are GONE. They existed
+            // only because sides were unbilled; sides are now billed directly and
+            // HST is computed, so keeping them would be a second path to the same
+            // money (double-count risk). Their draft-grid inputs are removed too.
+            //
+            // Directive 5 (ITEM 1): freeze the rates onto the row so
+            // compute_vac_row_derived stays a pure rows→figures function and the
+            // draft is a stable point-in-time snapshot. Side rate + DVA coverage
+            // come from Rate Definitions (read the rate, never hard-code); HST is
+            // WC-sourced.
+            $row['vac_side_rate']     = $vac_side_rate;
+            $row['vac_coverage_rate'] = $coverage;
+            $row['vac_hst_rate']      = $vac_hst_rate;
 
             // --- Informational context (NEVER summed into the VAC total) ---
             // Permitted figures for the operator's reference while deciding
@@ -1303,24 +1307,58 @@ class MealsDB_Invoice_Generator {
      *               remaining_sides:int, allowance_remaining_cents:int}
      */
     public static function compute_vac_row_derived(array $row): array {
-        $bill_rate           = (float) ($row['bill_rate'] ?? ($row['resolved_rate'] ?? 0));
-        $bill_mains          = (int) ($row['bill_mains'] ?? ($row['allocated_mains'] ?? 0));
-        $allocated_tax_sides = (int) ($row['allocated_tax_sides'] ?? 0);
+        // Directive 5: VAC is now billed mains + sides, with a computed HST and a
+        // DVA-coverage dollar ceiling. The old fold_amount/fold_hst hand-entered
+        // fields are GONE — sides are billed directly (they existed only because
+        // sides were previously unbilled).
+        $bill_rate    = (float) ($row['bill_rate'] ?? ($row['resolved_rate'] ?? 0));
+        $bill_mains   = (int) ($row['bill_mains'] ?? ($row['allocated_mains'] ?? 0));
+        $tax_sides    = (int) ($row['allocated_tax_sides'] ?? 0);
+        $nontax_sides = (int) ($row['allocated_nontax_sides'] ?? 0);
+        $total_sides  = $tax_sides + $nontax_sides;
 
-        $fold_amount_cents    = MealsDB_Money::to_cents($row['fold_amount'] ?? 0);
-        $fold_hst_cents       = MealsDB_Money::to_cents($row['fold_hst'] ?? 0);
-        $vet_mains_cost_cents = MealsDB_Money::multiply($bill_mains, $bill_rate);
-        $vac_total_cents      = $vet_mains_cost_cents + $fold_amount_cents + $fold_hst_cents;
+        // Rates are frozen onto the row at draft-build time (build_vac_draft_rows)
+        // so this stays a pure rows→figures function: the side rate and DVA
+        // coverage come from Rate Definitions; the HST rate is WC-sourced
+        // (resolve_hst_rate), consistent with SDNB and the LB-7 decision.
+        $side_rate       = (float) ($row['vac_side_rate'] ?? 0);
+        $coverage_rate   = (float) ($row['vac_coverage_rate'] ?? 0);
+        $hst_rate        = (float) ($row['vac_hst_rate'] ?? 0);
+        $permitted_mains = (int) ($row['info_mains_allowance'] ?? 0);
 
-        // Informational — reference only, NEVER summed into the billed total.
-        $sides_allowance         = (int) ($row['info_sides_allowance'] ?? 0);
-        $monthly_allowance_cents = (int) ($row['info_monthly_allowance_cents'] ?? 0);
+        // Total value = (mains × main rate) + (sides × side rate). Two rates,
+        // applied separately — never a blended rate.
+        $mains_value_cents = MealsDB_Money::multiply($bill_mains, $bill_rate);
+        $sides_value_cents = MealsDB_Money::multiply($total_sides, $side_rate);
+
+        // HST = taxable sides × side rate × HST rate. Non-taxable sides and
+        // mains are never taxed.
+        $tax_sides_value_cents = MealsDB_Money::multiply($tax_sides, $side_rate);
+        $hst_cents             = MealsDB_Money::percent_of($tax_sides_value_cents, $hst_rate);
+
+        $vac_total_cents = $mains_value_cents + $sides_value_cents + $hst_cents;
+
+        // Dollar ceiling = permitted_mains × DVA coverage rate ($11.14) — the
+        // COVERAGE rate, not the $9.50 billing rate. The whole invoice (mains
+        // value + sides value + HST) must not exceed it; when it does the client
+        // is flagged and finalization is blocked (enforced in the finalize path).
+        $ceiling_cents = MealsDB_Money::multiply($permitted_mains, $coverage_rate);
+        $over_ceiling  = ($ceiling_cents > 0 && $vac_total_cents > $ceiling_cents);
 
         return [
-            'vet_mains_cost_cents'      => $vet_mains_cost_cents,
+            // Kept keys (grid + serializer already read these).
+            'vet_mains_cost_cents'      => $mains_value_cents,
             'vac_total_cents'           => $vac_total_cents,
-            'remaining_sides'           => max(0, $sides_allowance - $allocated_tax_sides),
-            'allowance_remaining_cents' => max(0, $monthly_allowance_cents - $vet_mains_cost_cents),
+            'remaining_sides'           => max(0, (int) ($row['info_sides_allowance'] ?? 0) - $total_sides),
+            'allowance_remaining_cents' => max(0, $ceiling_cents - $vac_total_cents),
+            // New Directive 5 figures.
+            'sides_value_cents'         => $sides_value_cents,
+            'hst_cents'                 => $hst_cents,
+            'total_items'               => $bill_mains + $total_sides,
+            'billed_sides'              => $total_sides,
+            'taxable_sides'             => $tax_sides,
+            'ceiling_cents'             => $ceiling_cents,
+            'over_ceiling'              => $over_ceiling,
         ];
     }
 
@@ -1347,8 +1385,12 @@ class MealsDB_Invoice_Generator {
 
         $csv = [];
 
-        // Header — 36 legacy columns + appended "Fold Amount" (37th).
-        $csv[] = 'K#,Client Last Name,Client First Name,Billing Address 1,Billing City,Billing Postcode,Billing Phone,Unit Type,Rate,Mains Ordered,Mains Allowance,Bill Mains,BNM Mains,Sides Ordered,Sides Allowance,Desserts,Muffin,Total Tax Sides Ordered,Bill Tax Sides,Overage Tax Sides,Remaining Sides,Cereal,Soup,Total Non-Tax Sides Ordered,Bill Non-Taxable Sides,Overage Non Taxable Sides,Bill Sides,Service,Monthly Allowance,Vet Mains Cost,Allowance Remaining,Sides Cost (Info Only),Bill HST,New Total,Errors,New User flag,Fold Amount';
+        // Header — 36 legacy columns + appended "Bill Sides Value" (37th).
+        // Directive 5: column 32 "Bill HST" now carries the COMPUTED HST (was the
+        // hand-entered fold_hst); the 37th column carries the billed sides value
+        // (was "Fold Amount"). Column COUNT is unchanged so the PDF renderer's
+        // positional parsing is unaffected.
+        $csv[] = 'K#,Client Last Name,Client First Name,Billing Address 1,Billing City,Billing Postcode,Billing Phone,Unit Type,Rate,Mains Ordered,Mains Allowance,Bill Mains,BNM Mains,Sides Ordered,Sides Allowance,Desserts,Muffin,Total Tax Sides Ordered,Bill Tax Sides,Overage Tax Sides,Remaining Sides,Cereal,Soup,Total Non-Tax Sides Ordered,Bill Non-Taxable Sides,Overage Non Taxable Sides,Bill Sides,Service,Monthly Allowance,Vet Mains Cost,Allowance Remaining,Sides Cost (Info Only),Bill HST,New Total,Errors,New User flag,Bill Sides Value';
 
         foreach ($list as $vet) {
             if (!is_array($vet)) {
@@ -1372,21 +1414,16 @@ class MealsDB_Invoice_Generator {
             $allocated_nontax_sides = (int) ($vet['allocated_nontax_sides'] ?? 0);
             $allocated_sides        = $allocated_tax_sides + $allocated_nontax_sides;
 
-            // fold_amount / fold_hst are stored as DOLLAR floats (the edit
-            // layer round-trips them as dollars) and are emitted directly in
-            // the Fold Amount / Bill HST columns below.
-            $fold_amount_cents = MealsDB_Money::to_cents($vet['fold_amount'] ?? 0);
-            $fold_hst_cents    = MealsDB_Money::to_cents($vet['fold_hst'] ?? 0);
-
             // Derived money — the SINGLE source of truth shared with the draft
-            // grid (directive INVOICE-DRAFT-SPREADSHEET 3a). vac_total is
-            // mains-only plus the hand-entered fold and its HST; sides are NOT
-            // billed (they surface only as the informational remaining_sides).
+            // grid. Directive 5: vac_total is now mains value + sides value +
+            // computed HST; the old fold fields are gone.
             $derived                   = self::compute_vac_row_derived($vet);
             $vet_mains_cost_cents      = $derived['vet_mains_cost_cents'];
             $vac_total_cents           = $derived['vac_total_cents'];
             $remaining_sides           = $derived['remaining_sides'];
             $allowance_remaining_cents = $derived['allowance_remaining_cents'];
+            $hst_cents                 = $derived['hst_cents'];
+            $sides_value_cents         = $derived['sides_value_cents'];
 
             // Informational figures — reference only, NEVER summed into the total.
             $mains_allowance         = (int) ($vet['info_mains_allowance'] ?? 0);
@@ -1429,12 +1466,12 @@ class MealsDB_Invoice_Generator {
                 MealsDB_Money::format($monthly_allowance_cents),   // 28 Monthly Allowance (info, Definitions coverage)
                 MealsDB_Money::format($vet_mains_cost_cents),       // 29 Vet Mains Cost = bill_mains × bill_rate
                 MealsDB_Money::format($allowance_remaining_cents),  // 30 Allowance Remaining (info)
-                MealsDB_Money::format($info_sides_cost_cents),      // 31 Sides Cost (INFO ONLY — NOT summed)
-                MealsDB_Money::format($fold_hst_cents),             // 32 Bill HST = fold_hst  ← PDF: "(includes HST)"
-                MealsDB_Money::format($vac_total_cents),            // 33 New Total = vac_total ← PDF: total
+                MealsDB_Money::format($info_sides_cost_cents),      // 31 Sides Cost (INFO — allocated sides × side rate)
+                MealsDB_Money::format($hst_cents),                  // 32 Bill HST = computed HST ← PDF: "(includes HST)"
+                MealsDB_Money::format($vac_total_cents),            // 33 New Total = mains + sides + HST ← PDF: total
                 $errors,                                           // 34 Errors
                 $new_user_flag,                                    // 35 New User flag
-                MealsDB_Money::format($fold_amount_cents),          // 36 Fold Amount (appended — auditable)
+                MealsDB_Money::format($sides_value_cents),          // 36 Bill Sides Value (appended — auditable)
             ]);
         }
 

@@ -46,8 +46,14 @@ foreach ($vac as $entry) { $by_field[$entry['field']] = $entry; }
 // Editable inputs present, correctly typed.
 chk($by_field['bill_mains']['type']  ?? null, 'input-int',   'bill_mains is input-int');
 chk($by_field['bill_rate']['type']   ?? null, 'input-money', 'bill_rate is input-money (editable — operator decision)');
-chk($by_field['fold_amount']['type'] ?? null, 'input-money', 'fold_amount is input-money (hand-entered)');
-chk($by_field['fold_hst']['type']    ?? null, 'input-money', 'fold_hst is input-money (hand-entered)');
+
+// Directive 5: fold_amount / fold_hst are GONE; sides / HST / ceiling are
+// derived (read-only). Sides are billed directly, so no hand-entered fold.
+chk($by_field['fold_amount'] ?? null, null, 'fold_amount removed');
+chk($by_field['fold_hst']    ?? null, null, 'fold_hst removed');
+chk($by_field['sides_value']['type'] ?? null, 'derived-money', 'sides_value is derived-money');
+chk($by_field['hst']['type']         ?? null, 'derived-money', 'hst is derived-money');
+chk($by_field['ceiling']['type']     ?? null, 'derived-money', 'ceiling is derived-money');
 
 // Derived columns present, read-only, keyed into compute_vac_row_derived.
 chk($by_field['vet_mains_cost']['type'] ?? null, 'derived-money', 'vet_mains_cost is derived-money');
