@@ -108,11 +108,107 @@ class MealsDB_Private_Intake {
         // doesn't track creation timestamps (see class-schema.php).
         // The audit log entry below carries the timestamp instead.
 
+        // Directive 7 (ITEM 1): resolve client_type from the user's customer_group
+        // through the SAME shared mapper phase 1 uses — promotion no longer
+        // hard-codes 'Private'. A recognised government group maps to SDNB /
+        // Veteran; anything else defaults to Private (the client is placing an
+        // order and needs a record — promotion cannot skip the way phase 1 does).
+        // A NON-'private' fallback (blank or unrecognised group) is recorded so a
+        // client that lands as Private by default is visible, not silently
+        // mistyped. This is the defect that put 13 SDNB clients on no invoice.
+        $group_raw = function_exists('get_user_meta')
+            ? (string) get_user_meta($wp_user_id, 'customer_group', true)
+            : '';
+        $mapped_type = class_exists('MealsDB_Migration_Consolidated')
+            ? MealsDB_Migration_Consolidated::customer_group_to_client_type($group_raw)
+            : null;
+        $client_type = $mapped_type ?? 'Private';
+
+        if ($mapped_type === null
+            && strtolower(trim($group_raw)) !== 'private'
+            && class_exists('MealsDB_Event_Log')
+        ) {
+            MealsDB_Event_Log::record([
+                'severity'  => 'warning',
+                'category'  => 'sync',
+                'subsystem' => 'private_intake',
+                'event'     => 'promote.customer_group_fallback',
+                'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message'   => sprintf(
+                    'Promotion defaulted user %d to Private — customer_group "%s" is blank or unrecognised.',
+                    $wp_user_id,
+                    $group_raw
+                ),
+                'context'   => ['wp_user_id' => $wp_user_id, 'customer_group' => $group_raw],
+            ]);
+        }
+
+        // Directive 7 (ITEM 3) — divergence audit between the two creation paths.
+        // Phase 1 (run_phase_create_clients) sources the full government field set
+        // from legacy usermeta; the promotion payload (build_field_payload) was
+        // written for PRIVATE clients and deliberately does NOT set the
+        // government-only fields. Now that promotion can create SDNB/Veteran
+        // records, those omissions matter. Fields phase 1 sets that promotion
+        // does NOT: allowance_mains, allowance_sides, delivery_area_zone (M/S
+        // service centre), service_center_charged, service_id, requisition_id(+
+        // index), requisition_period, units, client_contribution, vet_health_card
+        // (+index), service_name_zone, service_commence_date,
+        // expected_termination_date, open_date, individual_id(+index).
+        // client_type (fixed here) and delivery_initials(+index) (generated below)
+        // were the two the directive named; the rest are left to the existing
+        // enrichment pipeline (phase 6 / backfill-enrich) rather than duplicating
+        // phase 1's extraction here — a deliberate, DOCUMENTED difference. A
+        // government promotion emits an event so the enrichment need is visible.
+        if ($mapped_type !== null && class_exists('MealsDB_Event_Log')) {
+            MealsDB_Event_Log::record([
+                'severity'  => 'info',
+                'category'  => 'sync',
+                'subsystem' => 'private_intake',
+                'event'     => 'promote.government_needs_enrichment',
+                'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message'   => sprintf(
+                    'Promoted user %d as %s — allowances/zone/billing identifiers are not set by promotion; run enrichment.',
+                    $wp_user_id,
+                    $client_type
+                ),
+                'context'   => ['wp_user_id' => $wp_user_id, 'client_type' => $client_type],
+            ]);
+        }
+
+        // client_type is authoritative — it overrides any value from $payload.
         $data = array_merge([
-            'client_type' => 'Private',
             'active'      => 1,
             'wp_user_id'  => $wp_user_id,
-        ], $payload);
+        ], $payload, [
+            'client_type' => $client_type,
+        ]);
+
+        // Directive 7 (ITEM 2): generate delivery_initials + its index the way
+        // phase 1 does. A promoted client with a blank code prints a blank
+        // "Name:" line on the packer slip (how this defect was first spotted).
+        // Use the SHARED generator (name-based patterns → unique random, with the
+        // app-level uniqueness check) rather than a second routine; only generate
+        // when the payload did not already carry a valid 3-letter code. NB: the
+        // schema index on delivery_initials is a plain INDEX, not a DB UNIQUE
+        // constraint — uniqueness is enforced by the validator, so writing the
+        // index here cannot raise a duplicate-key error.
+        $initials = strtoupper(trim((string) ($data['delivery_initials'] ?? '')));
+        if ($initials === '' || !preg_match('/^[A-Z]{3}$/', $initials)) {
+            $generated = class_exists('MealsDB_Initials_Validator')
+                ? MealsDB_Initials_Validator::generate(
+                    (string) ($data['first_name'] ?? ''),
+                    (string) ($data['last_name'] ?? ''),
+                    []
+                )
+                : false;
+            $initials = ($generated === false || $generated === null) ? '' : (string) $generated;
+        }
+        if ($initials !== '') {
+            $data['delivery_initials'] = $initials;
+            $data['delivery_initials_index'] = class_exists('MealsDB_Encryption')
+                ? MealsDB_Encryption::create_index($initials)
+                : null;
+        }
 
         $client_id = MealsDB_Clients_Repository::create($data);
         if ($client_id <= 0) {
@@ -120,10 +216,13 @@ class MealsDB_Private_Intake {
         }
 
         $payload = [
-            'wp_user_id' => $wp_user_id,
-            'client_id'  => $client_id,
-            'trigger'    => $order ? 'first_order' : 'manual',
-            'order_id'   => $order ? (int) $order->get_id() : null,
+            'wp_user_id'  => $wp_user_id,
+            'client_id'   => $client_id,
+            // Directive 7: record the RESOLVED type (may be SDNB/Veteran now, not
+            // just Private) so the audit trail shows what a promotion produced.
+            'client_type' => $client_type,
+            'trigger'     => $order ? 'first_order' : 'manual',
+            'order_id'    => $order ? (int) $order->get_id() : null,
         ];
         $encoded = function_exists('wp_json_encode')
             ? wp_json_encode($payload)
