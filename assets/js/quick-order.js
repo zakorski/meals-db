@@ -26,6 +26,11 @@
                 isCloning: false,
                 nextDatesSeq: 0,
                 cloneOrderId: null,
+                // Directive 1 (ITEM 2): the parked draft being completed in place.
+                // 0 = normal (new order) mode. Distinct from cloneOrderId, which
+                // builds a NEW order and is cleared after the read completes.
+                reopenOrderId: 0,
+                hasLoadedReopen: false,
                 currentClientId: null,
                 currentClientType: '',
                 currentClientAllergens: [],
@@ -48,6 +53,7 @@
             this.renderSummary();
             this.initialiseCategories();
             this.renderProducts(QO_PRODUCTS);
+            this.maybeLoadReopenOrder();
             this.maybeLoadClonedOrder();
         },
 
@@ -182,7 +188,29 @@
                     event.preventDefault();
                     this.showCreateOrderSpinner();
                     qoShowToast('Submitting order...', 'info');
-                    this.handleCreateOrder(this.$createOrder);
+                    this.handleCreateOrder(this.$createOrder, { saveAsDraft: false });
+                });
+            }
+
+            // Directive 1 (ITEM 1): Save as Draft parks the order (server assigns
+            // wc-checkout-draft; no fee/allocation/stock/slip/invoice effect).
+            const $saveDraft = $('#qo-save-draft');
+            if ($saveDraft.length) {
+                $saveDraft.on('click', (event) => {
+                    event.preventDefault();
+                    qoShowToast('Saving draft...', 'info');
+                    this.handleCreateOrder($saveDraft, { saveAsDraft: true });
+                });
+            }
+
+            // Directive 1 (ITEM 3): Clear Order empties the basket but keeps the
+            // client selected.
+            const $clearOrder = $('#qo-clear-order');
+            if ($clearOrder.length) {
+                $clearOrder.on('click', (event) => {
+                    event.preventDefault();
+                    this.clearCart();
+                    qoShowToast('Order cleared.', 'info');
                 });
             }
 
@@ -352,6 +380,91 @@
             }).always(() => {
                 this.setCategoriesLoadingState(false);
             });
+        },
+
+        // Directive 1 (ITEM 2): reopen a parked draft into the form. Reading the
+        // draft reuses the clone read path (same client/items/date payload); the
+        // ONLY difference is that reopenOrderId is remembered so Create completes
+        // that order in place instead of creating a new one. loadClonedOrder()
+        // clears cloneOrderId on completion but leaves reopenOrderId intact.
+        maybeLoadReopenOrder() {
+            const reopenOrderId = this.getReopenOrderId();
+            if (!Number.isInteger(reopenOrderId) || reopenOrderId <= 0) {
+                return;
+            }
+
+            if (this.state.hasLoadedReopen || this.state.isCloning) {
+                return;
+            }
+
+            this.state.hasLoadedReopen = true;
+            this.state.reopenOrderId = reopenOrderId;
+
+            // Relabel the primary action so the operator knows this completes an
+            // existing order rather than creating a new one.
+            if (this.$createOrder && this.$createOrder.length) {
+                this.$createOrder.text(this.translate('Complete Order'));
+            }
+
+            this.loadClonedOrder(reopenOrderId);
+        },
+
+        getReopenOrderId() {
+            const params =
+                (typeof window !== 'undefined' && window.location && window.location.search)
+                    ? new URLSearchParams(window.location.search)
+                    : null;
+            if (params) {
+                const parsed = parseInt(params.get('reopen_order'), 10);
+                if (Number.isInteger(parsed) && parsed > 0) {
+                    return parsed;
+                }
+            }
+
+            if (Number.isInteger(this.state.reopenOrderId) && this.state.reopenOrderId > 0) {
+                return this.state.reopenOrderId;
+            }
+
+            if (window.mealsdbQuickOrder && typeof window.mealsdbQuickOrder.reopenOrderId !== 'undefined') {
+                const fromConfig = parseInt(window.mealsdbQuickOrder.reopenOrderId, 10);
+                if (Number.isInteger(fromConfig) && fromConfig > 0) {
+                    return fromConfig;
+                }
+            }
+
+            if (this.$root && this.$root.length) {
+                const fromAttr = parseInt(this.$root.attr('data-reopen-order-id'), 10);
+                if (Number.isInteger(fromAttr) && fromAttr > 0) {
+                    return fromAttr;
+                }
+            }
+
+            return 0;
+        },
+
+        // Directive 1 (ITEMS 3 & 4): empty the basket in place — remove every
+        // line, reset the tiles/inputs, and recalculate the summary. The
+        // selected client is deliberately preserved (Clear Order does not
+        // deselect; changing client is what deselects). No page reload.
+        clearCart() {
+            this.state.cart = {};
+
+            if (this.$products && this.$products.length) {
+                this.$products
+                    .find('.mealsdb-quick-order__qty-input')
+                    .val(0);
+                this.$products
+                    .find('.mealsdb-quick-order__product.selected')
+                    .removeClass('selected');
+            }
+            // Tile-variant rendering uses different hooks; reset those too so
+            // both product layouts clear consistently.
+            $('.mealsdb-qo-tile.selected').removeClass('selected');
+            $('.mealsdb-qo-qty').text('0');
+
+            this.renderSummary();
+            this.updateSummaryPanel();
+            this.updateAllocationWithCart();
         },
 
         maybeLoadClonedOrder() {
@@ -1462,10 +1575,16 @@
             });
         },
 
-        handleCreateOrder(createButton = null) {
+        handleCreateOrder(createButton = null, options = {}) {
             if (!this.$createOrder || !this.$createOrder.length) {
                 return;
             }
+
+            const saveAsDraft = !!(options && options.saveAsDraft);
+            const reopenOrderId =
+                Number.isInteger(this.state.reopenOrderId) && this.state.reopenOrderId > 0
+                    ? this.state.reopenOrderId
+                    : 0;
 
             this.clearNotices();
             this.hideOrderSuccess();
@@ -1473,6 +1592,7 @@
             const clientIdRaw = this.$clientSelect && this.$clientSelect.length ? this.$clientSelect.val() : '';
             const clientId = parseInt(clientIdRaw, 10);
             const orderDate = this.$orderDate && this.$orderDate.length ? this.$orderDate.val() : '';
+            const deliveryDate = $('#mealsdb-qo-delivery-date').val() || '';
             const items = Object.values(this.state.cart || {}).filter((entry) => entry && entry.quantity > 0);
             const rateId = this.$rateSelect && this.$rateSelect.length ? parseInt(this.$rateSelect.val(), 10) || 0 : 0;
 
@@ -1482,19 +1602,30 @@
                 return;
             }
 
-            // Never silently no-op on a missing Order Date. It's the required
-            // creation field but easy to miss, so surface a PERSISTENT inline
-            // notice (not just a transient toast) and focus the field. This is
-            // the safety net for the client-select prefill above — if that ever
-            // regresses, the failure stays legible instead of a dead button.
-            if (!orderDate) {
-                this.addNotice('Please set an Order Date.', 'error');
-                qoShowToast('Please set an Order Date.', 'error');
-                if (this.$orderDate && this.$orderDate.length) {
-                    this.$orderDate.trigger('focus');
+            // Directive 1 (ITEM 5): sanity-check the dates — WARN, do not block.
+            // Retroactive entry (a past order/delivery date) is a legitimate
+            // workflow, so an empty or past date is a confirmable warning naming
+            // the field, never a hard stop. The Create button stays enabled; the
+            // operator proceeds by confirming. Skipped for a draft (a parked
+            // order is explicitly incomplete). The separate weekday-mismatch
+            // advisory (refreshDeliveryDateWarning) is unaffected and still
+            // never blocks.
+            if (!saveAsDraft) {
+                const dateWarnings = this.dateSanityWarnings(orderDate, deliveryDate);
+                if (dateWarnings.length) {
+                    const proceed = window.confirm(
+                        dateWarnings.join('\n') + '\n\n' + this.translate('Create this order anyway?')
+                    );
+                    if (!proceed) {
+                        // On cancel, focus the first offending field so it's easy
+                        // to fix — the empty Order Date is the usual culprit.
+                        if (!orderDate && this.$orderDate && this.$orderDate.length) {
+                            this.$orderDate.trigger('focus');
+                        }
+                        this.clearCreateOrderLoading(createButton);
+                        return;
+                    }
                 }
-                this.clearCreateOrderLoading(createButton);
-                return;
             }
 
             const payloadItems = items.map((entry) => ({
@@ -1515,11 +1646,17 @@
                     date: orderDate,
                     items: payloadItems,
                     rate_id: rateId,
+                    // Directive 1 (ITEM 1): park as draft — server assigns
+                    // wc-checkout-draft and fires none of the placement effects.
+                    save_as_draft: saveAsDraft ? 1 : 0,
+                    // Directive 1 (ITEM 2): complete a reopened draft in place
+                    // (same order id → processing) rather than create a new order.
+                    reopen_order_id: reopenOrderId,
                     next_order_date: $('#mealsdb-qo-next-order-date').val() || '',
                     next_delivery_date: $('#mealsdb-qo-next-delivery-date').val() || '',
                     // One-time delivery-date override for THIS order only
                     // ('' = none; server writes _delivery_date when valid).
-                    delivery_date: $('#mealsdb-qo-delivery-date').val() || '',
+                    delivery_date: deliveryDate,
                 },
             }).done((response) => {
                 if (!this.isSuccessfulResponse(response)) {
@@ -1539,7 +1676,24 @@
                     response.order_link ||
                     response.orderLink ||
                     '';
-                const successMessage = this.getResponseMessage(response, 'Order created successfully!');
+                // Directive 1 (ITEMS 1/2): tailor the confirmation to what
+                // actually happened — a parked draft, a completed reopen, or a
+                // fresh order. The server echoes is_draft.
+                const isDraftResp = !!(payload && payload.is_draft);
+                let successMessage;
+                if (isDraftResp) {
+                    successMessage = this.translate('Draft saved — not placed. No allocation, stock or slip effect.');
+                } else if (reopenOrderId) {
+                    successMessage = this.translate('Draft completed — order placed.');
+                    // The draft is now a placed order; a second Create must not
+                    // try to reopen it. Drop reopen mode and restore the label.
+                    this.state.reopenOrderId = 0;
+                    if (this.$createOrder && this.$createOrder.length) {
+                        this.$createOrder.text(this.translate('Create Order'));
+                    }
+                } else {
+                    successMessage = this.getResponseMessage(response, 'Order created successfully!');
+                }
 
                 // U07-quick-order-4: the server saves the order even when it is
                 // SHORT of what was entered — lines whose product no longer
@@ -1789,6 +1943,22 @@
                 }
             }
 
+            // Directive 1 (ITEM 4): switching to a DIFFERENT client empties the
+            // basket automatically — no confirmation prompt (Zak, 2026-09-04) —
+            // so one client's items can never be ordered against another. Guarded
+            // so it does NOT fire while a clone/reopen is populating the form
+            // (that path sets the client then adds items right after), nor on the
+            // first selection, nor on a re-fire of the same client.
+            const previousClientId = this.state.currentClientId;
+            if (
+                !this.state.isCloning
+                && previousClientId
+                && clientId
+                && previousClientId !== clientId
+            ) {
+                this.clearCart();
+            }
+
             this.state.currentClientId = clientId;
             this.state.currentClientType = this.normaliseClientType(clientType);
             this.state.currentClientAllergens = this.normaliseAllergenList(clientAllergens);
@@ -1940,6 +2110,54 @@
                 parts.push(`${ymd} is a ${weekday} — no delivery runs that day.`);
             }
             return parts.length ? `Heads up: ${parts.join(' ')} Saving anyway is allowed.` : '';
+        },
+
+        // Directive 1 (ITEM 5): build the empty/past date warnings shown on
+        // Create. Empty OR in-the-past, for either field, names the field and
+        // why. Returns [] when both dates are set and today-or-future (→ no
+        // confirm, Create proceeds straight through). Date-only comparison in
+        // the site/browser local zone; a delivery date equal to today is fine.
+        dateSanityWarnings(orderDate, deliveryDate) {
+            const warnings = [];
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            const parseYmd = (value) => {
+                if (!value) {
+                    return null;
+                }
+                const parts = String(value).split('-');
+                if (parts.length !== 3) {
+                    return null;
+                }
+                const d = new Date(
+                    parseInt(parts[0], 10),
+                    parseInt(parts[1], 10) - 1,
+                    parseInt(parts[2], 10)
+                );
+                d.setHours(0, 0, 0, 0);
+                return Number.isNaN(d.getTime()) ? null : d;
+            };
+
+            if (!orderDate) {
+                warnings.push(this.translate('Order Date is not set.'));
+            } else {
+                const od = parseYmd(orderDate);
+                if (od && od < today) {
+                    warnings.push(this.translate('Order Date is in the past (%s).').replace('%s', orderDate));
+                }
+            }
+
+            if (!deliveryDate) {
+                warnings.push(this.translate('Delivery Date is not set — this order will use the computed delivery date.'));
+            } else {
+                const dd = parseYmd(deliveryDate);
+                if (dd && dd < today) {
+                    warnings.push(this.translate('Delivery Date is in the past (%s).').replace('%s', deliveryDate));
+                }
+            }
+
+            return warnings;
         },
 
         refreshDeliveryDateWarning() {

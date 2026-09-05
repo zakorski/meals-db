@@ -29,6 +29,23 @@ class MealsDB_WC_Order_Query {
     ];
 
     /**
+     * The parked-draft statuses (Directive 1: Save as Draft). A draft is NOT a
+     * placed order — it must never appear on slips, invoices, the allocation
+     * ledger, the order audit, or the PO forecast. `wc-checkout-draft` is the
+     * status the Quick Order "Save as Draft" button assigns; the bare
+     * `checkout-draft` form is included so a NOT IN denylist matches whichever
+     * form a given query/store surfaces.
+     *
+     * Public single source so denylist-style filters that live OUTSIDE this
+     * class (the inline SQL in class-reports.php) can exclude drafts without
+     * re-hardcoding the list — the class that already excludes drafts from
+     * every projection owns the canonical spelling.
+     *
+     * @var string[]
+     */
+    public const DRAFT_STATUSES = ['wc-checkout-draft', 'checkout-draft'];
+
+    /**
      * @var wpdb
      */
     private $wpdb;

@@ -26,6 +26,9 @@ class MealsDB_Quick_Order_UI {
         }
 
         $clone_order_id = self::get_requested_clone_order_id();
+        // Directive 1 (ITEM 2): reopening a parked draft loads it into the form
+        // like a clone, but completing it UPDATES that order in place.
+        $reopen_order_id = self::get_requested_reopen_order_id();
         $products_array   = [];
         $categories_array = [];
 
@@ -53,6 +56,10 @@ class MealsDB_Quick_Order_UI {
             $attributes['data-clone-order-id'] = (string) $clone_order_id;
         }
 
+        if ($reopen_order_id > 0) {
+            $attributes['data-reopen-order-id'] = (string) $reopen_order_id;
+        }
+
         $attribute_string = '';
         foreach ($attributes as $name => $value) {
             $attribute_string .= sprintf(' %s="%s"', esc_attr($name), esc_attr($value));
@@ -65,8 +72,8 @@ class MealsDB_Quick_Order_UI {
                 <div
                     id="qo-clone-banner"
                     style="
-    background: #eaf4ff; 
-    padding: 10px; 
+    background: #eaf4ff;
+    padding: 10px;
     border-left: 4px solid #2271b1;
     margin-bottom: 15px;
 "
@@ -76,6 +83,20 @@ class MealsDB_Quick_Order_UI {
                         /* translators: %s: WooCommerce order ID. */
                         esc_html__('Loaded from Order #%s — review and submit.', 'meals-db'),
                         esc_html($clone_order_id)
+                    );
+                    ?>
+                </div>
+            <?php endif; ?>
+            <?php if ($reopen_order_id > 0) : ?>
+                <div
+                    id="qo-reopen-banner"
+                    style="background:#fcf9e8; padding:10px; border-left:4px solid #dba617; margin-bottom:15px;"
+                >
+                    <?php
+                    printf(
+                        /* translators: %s: WooCommerce order ID. */
+                        esc_html__('Reopening draft Order #%s — completing it will place this order (same order number).', 'meals-db'),
+                        esc_html($reopen_order_id)
                     );
                     ?>
                 </div>
@@ -213,9 +234,21 @@ class MealsDB_Quick_Order_UI {
                             </div>
                         </dl>
 
-                        <button id="qo-create-order" class="button button-primary button-large">
-                            Create Order
-                        </button>
+                        <div class="mealsdb-quick-order__actions" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                            <button id="qo-create-order" class="button button-primary button-large">
+                                <?php esc_html_e('Create Order', 'meals-db'); ?>
+                            </button>
+                            <?php // Directive 1 (ITEM 1): park the order as a draft — no fee,
+                                  // contribution, allocation, stock, slip or invoice effect. ?>
+                            <button id="qo-save-draft" class="button button-large" type="button">
+                                <?php esc_html_e('Save as Draft', 'meals-db'); ?>
+                            </button>
+                            <?php // Directive 1 (ITEM 3): empty the basket in place, keeping the
+                                  // selected client. No page reload. ?>
+                            <button id="qo-clear-order" class="button button-large" type="button">
+                                <?php esc_html_e('Clear Order', 'meals-db'); ?>
+                            </button>
+                        </div>
                     </footer>
                 </aside>
             </div>
@@ -240,5 +273,18 @@ class MealsDB_Quick_Order_UI {
         }
 
         return absint($clone_order);
+    }
+
+    /**
+     * Retrieve the requested draft order ID to reopen from the current request
+     * (Directive 1, ITEM 2). Distinct from the clone id: a reopened draft is
+     * completed in place rather than cloned into a new order.
+     */
+    public static function get_requested_reopen_order_id(): int {
+        if (!isset($_GET['reopen_order'])) {
+            return 0;
+        }
+
+        return absint(wp_unslash($_GET['reopen_order']));
     }
 }

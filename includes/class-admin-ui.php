@@ -489,6 +489,16 @@ class MealsDB_Admin_UI {
             'action' => 'mealsdb-clone-quick-order',
         ];
 
+        // Directive 1 (ITEM 2): a parked draft also gets "Open in Quick Order",
+        // labelled distinctly from clone so the two are not confused.
+        if ($this->is_reopenable_draft($order)) {
+            $actions['mealsdb_reopen_quick_order'] = [
+                'url'    => $this->build_quick_order_reopen_url($order_id),
+                'name'   => __('Open in Quick Order', 'meals-db'),
+                'action' => 'mealsdb-reopen-quick-order',
+            ];
+        }
+
         return $actions;
     }
 
@@ -513,6 +523,15 @@ class MealsDB_Admin_UI {
             'class' => 'mealsdb-clone-quick-order',
         ];
 
+        // Directive 1 (ITEM 2): reopen action for a parked draft.
+        if ($this->is_reopenable_draft($order)) {
+            $actions['mealsdb_reopen_quick_order'] = [
+                'title' => __('Open in Quick Order', 'meals-db'),
+                'url'   => $this->build_quick_order_reopen_url($order_id),
+                'class' => 'mealsdb-reopen-quick-order',
+            ];
+        }
+
         return $actions;
     }
 
@@ -535,6 +554,15 @@ class MealsDB_Admin_UI {
             esc_url($url),
             esc_html__('Clone to Quick Order', 'meals-db')
         );
+
+        // Directive 1 (ITEM 2): reopen button for a parked draft.
+        if ($this->is_reopenable_draft($order)) {
+            printf(
+                '<p class="mealsdb-reopen-quick-order"><a class="button button-primary" href="%s">%s</a></p>',
+                esc_url($this->build_quick_order_reopen_url($order_id)),
+                esc_html__('Open in Quick Order', 'meals-db')
+            );
+        }
     }
 
     /**
@@ -691,6 +719,35 @@ class MealsDB_Admin_UI {
     }
 
     /**
+     * Build a Quick Order REOPEN URL for a parked draft (Directive 1, ITEM 2).
+     *
+     * Distinct from the clone URL on purpose: clone reads a source order and
+     * builds a NEW one; reopen loads the SAME draft and completes it in place.
+     * The `reopen_order` arg is what the create_order handler validates as a
+     * checkout-draft before completing it.
+     */
+    private function build_quick_order_reopen_url(int $order_id): string
+    {
+        return add_query_arg(
+            [
+                'page'         => 'mealsdb_quick_order',
+                'reopen_order' => $order_id,
+            ],
+            admin_url('admin.php')
+        );
+    }
+
+    /**
+     * Whether an order is a parked Quick Order draft that can be reopened.
+     */
+    private function is_reopenable_draft($order): bool
+    {
+        return is_object($order)
+            && is_a($order, 'WC_Order')
+            && $order->get_status() === 'checkout-draft';
+    }
+
+    /**
      * Validate and sanitise a WooCommerce order ID from multiple sources.
      *
      * @param mixed $order The order object or numeric ID.
@@ -813,9 +870,10 @@ class MealsDB_Admin_UI {
                 true
             );
 
-            $clone_order_id = MealsDB_Quick_Order_UI::get_requested_clone_order_id();
-            $tax_settings   = $this->get_quick_order_tax_settings();
-            $client_type    = $this->get_quick_order_client_type();
+            $clone_order_id  = MealsDB_Quick_Order_UI::get_requested_clone_order_id();
+            $reopen_order_id = MealsDB_Quick_Order_UI::get_requested_reopen_order_id();
+            $tax_settings    = $this->get_quick_order_tax_settings();
+            $client_type     = $this->get_quick_order_client_type();
 
             // Use wp_add_inline_script + wp_json_encode instead of wp_localize_script:
             // wp_localize_script coerces booleans, integers, and floats into
@@ -826,6 +884,7 @@ class MealsDB_Admin_UI {
             $quick_order_data = [
                 'ajaxUrl'       => admin_url('admin-ajax.php'),
                 'cloneOrderId'  => $clone_order_id,
+                'reopenOrderId' => $reopen_order_id,
                 'nonce'         => wp_create_nonce('mealsdb_nonce'),
                 'nonces'        => [
                     'createOrder'    => wp_create_nonce('mealsdb_quick_order_create_order'),

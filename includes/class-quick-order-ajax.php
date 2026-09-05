@@ -286,6 +286,24 @@ class MealsDB_Quick_Order_Ajax {
         $rate_id   = isset($_POST['rate_id']) ? intval($_POST['rate_id']) : 0;
         $order_date = self::parse_order_date($date);
 
+        // Directive 1 (ITEM 1): "Save as Draft" parks the order for later. It is
+        // NOT a placed order — it must fire none of the downstream effects (fee,
+        // contribution, allocation, stock, slips, invoice). We achieve that by
+        // assigning wc-checkout-draft instead of wc-processing below: the
+        // allocation/fee hook (on_order_status_changed) only acts on transitions
+        // INTO an active status, and checkout-draft is not one, so the whole
+        // side-effect chain is skipped without any special-casing in the hook.
+        // The cadence writes (persist_next_dates, last_call_date) are likewise
+        // suppressed — a parked order must not re-anchor the client's schedule.
+        $save_as_draft = !empty($_POST['save_as_draft']);
+
+        // Directive 1 (ITEM 2): "Open in Quick Order" reopens a parked draft.
+        // Completing it must UPDATE that order in place (same id → processing),
+        // not create a second order. A reopen id is only honoured when it points
+        // at a genuine parked draft (checkout-draft shop_order); anything else is
+        // refused below so this path can never mutate a live/placed order.
+        $reopen_order_id = isset($_POST['reopen_order_id']) ? intval($_POST['reopen_order_id']) : 0;
+
         if (
             $wp_user_id <= 0
             || !$order_date instanceof DateTimeImmutable
@@ -335,12 +353,31 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         try {
+            // Directive 1 (ITEM 2): resolve and validate a reopened draft before
+            // touching it. Only a checkout-draft shop_order may be completed in
+            // place; a reopen id that resolves to a live order, a non-draft, or
+            // nothing is refused so this path cannot overwrite a placed order.
+            $existing_draft = null;
+            if ($reopen_order_id > 0) {
+                $existing_draft = wc_get_order($reopen_order_id);
+                if (
+                    !$existing_draft instanceof WC_Order
+                    || $existing_draft->get_type() !== 'shop_order'
+                    || $existing_draft->get_status() !== 'checkout-draft'
+                ) {
+                    wp_send_json([
+                        'success' => false,
+                        'message' => __('That draft can no longer be completed. Refresh and try again.', 'meals-db'),
+                    ]);
+                }
+            }
+
             // U07-quick-order-4: create_wc_order() drops any line whose product
             // no longer resolves (e.g. trashed while sitting in the 30-min QO
             // transient cache) rather than failing the whole order. Capture the
             // dropped lines so a short order isn't reported as a plain success.
             $dropped_items = [];
-            $order = self::create_wc_order($items, $order_date, $wp_user_id, $client_id, $dropped_items);
+            $order = self::create_wc_order($items, $order_date, $wp_user_id, $client_id, $dropped_items, $existing_draft);
             if (is_wp_error($order)) {
                 throw new Exception($order->get_error_message());
             }
@@ -401,23 +438,43 @@ class MealsDB_Quick_Order_Ajax {
                 ? 'auto' : 'manual';
             $delivery_override = self::apply_delivery_date_override($order, $posted_delivery, $delivery_src);
 
+            // Directive 1 (ITEM 1): override the 'processing' status set inside
+            // create_wc_order() with the parked-draft status. No save() runs
+            // between there and here, so only this final status is persisted and
+            // only its transition hook fires. pending->checkout-draft matches no
+            // active branch in on_order_status_changed → no fee/allocation/stock.
+            if ($save_as_draft) {
+                $order->set_status(
+                    'checkout-draft',
+                    __('Saved as draft via Meals DB Quick Order.', 'meals-db')
+                );
+            }
+
             $order->save();
 
-            // Update operational wp_usermeta fields (matches old admin-pos-order behavior).
-            // These are read by the call-log-manager to schedule follow-up calls.
-            // Use the actual order timestamp so back-dated orders don't
-            // overwrite real "last order" tracking with `now`.
-            // last_call_date stays here; last_order_date is written by the
-            // allocation hook (MealsDB_Client_Dates::advance_on_order) as
-            // Y-m-d, which is the format the next-dates reader expects.
-            $order_timestamp = $order_date->format('Y-m-d H:i:s');
-            update_user_meta($wp_user_id, 'last_call_date', $order_timestamp);
+            // Directive 1 (ITEM 1): a parked draft must not touch the client's
+            // operational cadence. Both writes below advance recurring-schedule
+            // state (call-log follow-up anchor; next order/delivery anchor), so
+            // they are suppressed for a draft and run only when the order is
+            // actually placed — including later, when the draft is completed
+            // through the normal processing transition (ITEM 2 reopen path).
+            if (!$save_as_draft) {
+                // Update operational wp_usermeta fields (matches old admin-pos-order behavior).
+                // These are read by the call-log-manager to schedule follow-up calls.
+                // Use the actual order timestamp so back-dated orders don't
+                // overwrite real "last order" tracking with `now`.
+                // last_call_date stays here; last_order_date is written by the
+                // allocation hook (MealsDB_Client_Dates::advance_on_order) as
+                // Y-m-d, which is the format the next-dates reader expects.
+                $order_timestamp = $order_date->format('Y-m-d H:i:s');
+                update_user_meta($wp_user_id, 'last_call_date', $order_timestamp);
 
-            // R2: persist the next-order / next-delivery dates the operator
-            // confirmed on the form. These become the anchor for the
-            // following cycle — see phase-R2-task-workflows Part A
-            // ("rule resumes from new anchor").
-            self::persist_next_dates($client_id, $wp_user_id, $order_date);
+                // R2: persist the next-order / next-delivery dates the operator
+                // confirmed on the form. These become the anchor for the
+                // following cycle — see phase-R2-task-workflows Part A
+                // ("rule resumes from new anchor").
+                self::persist_next_dates($client_id, $wp_user_id, $order_date);
+            }
 
             $order_id = $order->get_id();
 
@@ -429,14 +486,26 @@ class MealsDB_Quick_Order_Ajax {
             // meals_clients PK if any, the date the operator picked,
             // and the rate applied.
             if (class_exists('MealsDB_Logger')) {
+                // Directive 1 (ITEMS 1/2): distinguish parked draft, completed
+                // draft, and fresh order in the audit trail — they have very
+                // different downstream meaning (a draft billed nobody / moved no
+                // stock; a completion places an existing id).
+                if ($save_as_draft) {
+                    $audit_action = 'quick_order_draft_saved';
+                } elseif ($existing_draft instanceof WC_Order) {
+                    $audit_action = 'quick_order_draft_completed';
+                } else {
+                    $audit_action = 'quick_order_created';
+                }
                 MealsDB_Logger::log(
-                    'quick_order_created',
+                    $audit_action,
                     $order_id,
                     'wc_order',
                     null,
                     wp_json_encode([
                         'wp_user_id'    => $wp_user_id,
                         'client_id'     => $client_id,
+                        'is_draft'      => $save_as_draft,
                         'order_date'    => $order_date->format('Y-m-d'),
                         'delivery_date' => $delivery_override !== '' ? $delivery_override : null,
                         'rate_id'       => $rate_id > 0 ? $rate_id : null,
@@ -481,6 +550,10 @@ class MealsDB_Quick_Order_Ajax {
             wp_send_json([
                 'success' => true,
                 'order_id' => $order_id,
+                // Directive 1 (ITEM 1): the JS uses this to show the right
+                // confirmation ("saved as draft" vs "order created") and to
+                // decide whether allocation/fees should be expected.
+                'is_draft' => $save_as_draft,
                 // U07-quick-order-5: the site is HPOS-exclusive, so orders are
                 // not real posts. get_edit_post_link() resolves against the
                 // 'shop_order_placehold' stub and only yields a working URL via
@@ -1017,14 +1090,27 @@ class MealsDB_Quick_Order_Ajax {
      *
      * @return WC_Order|WP_Error
      */
-    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $wp_user_id = 0, int $client_id = 0, array &$dropped_items = []) {
+    private static function create_wc_order(array $items, ?DateTimeImmutable $order_date, int $wp_user_id = 0, int $client_id = 0, array &$dropped_items = [], ?WC_Order $existing = null) {
         if (!function_exists('wc_create_order') || !class_exists('WC_Order')) {
             return new WP_Error('mealsdb_missing_woocommerce', __('WooCommerce is required to create orders.', 'meals-db'));
         }
 
-        $order = wc_create_order();
-        if (is_wp_error($order)) {
-            return $order;
+        // Directive 1 (ITEM 2): when completing a reopened draft, operate on the
+        // SAME order rather than creating a second one. The form is the source
+        // of truth, so the draft's existing line items are cleared and rebuilt
+        // from the submitted items below. All other assembly (address, totals,
+        // date, status) is identical to a fresh order — the only difference is
+        // the order object we start from.
+        if ($existing instanceof WC_Order) {
+            $order = $existing;
+            foreach ($order->get_items() as $item_id => $line_item) {
+                $order->remove_item($item_id);
+            }
+        } else {
+            $order = wc_create_order();
+            if (is_wp_error($order)) {
+                return $order;
+            }
         }
 
         if ($wp_user_id > 0) {
@@ -1116,7 +1202,12 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         if ($added_count === 0) {
-            $order->delete(true);
+            // Only delete a throwaway order we just created. A reopened draft
+            // (ITEM 2) must survive a failed completion so the operator can fix
+            // it — never destroy an existing order here.
+            if (!$existing instanceof WC_Order) {
+                $order->delete(true);
+            }
             return new WP_Error('mealsdb_no_valid_products', __('No valid products could be added to the order.', 'meals-db'));
         }
 
@@ -1141,7 +1232,9 @@ class MealsDB_Quick_Order_Ajax {
                 $wp_user_id,
                 $client_id
             ));
-            $order->delete(true);
+            if (!$existing instanceof WC_Order) {
+                $order->delete(true);
+            }
             return new WP_Error('mealsdb_invalid_total', __('Order total calculation failed. Please try again.', 'meals-db'));
         }
 
