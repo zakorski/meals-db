@@ -46,12 +46,14 @@ class MealsDB_Invoice_Generator {
 
     // INV-DRAFT-3 Step 4c: the old VAC billing-constant tables ($vac_allowances
     // and $vac_billing — per_main_allowance / sides_conversion_rate /
-    // sides_cost_rate / sides_hst_rate) are RETIRED. The corrected VAC model
-    // (build_vac_draft_rows + serialize_vac_csv) bills mains-only and reads its
-    // rates LIVE from MealsDB_Rate_Definitions ('vac_per_main_coverage',
-    // 'vac_side'); the dead VAC_SIDES_CONVERSION_RATE is no longer referenced;
-    // and HST stays WC-sourced (LB-7). Sides are folded by hand on the draft
-    // grid (fold_amount / fold_hst), not priced from a constant here.
+    // sides_cost_rate / sides_hst_rate) are RETIRED. The VAC model
+    // (build_vac_draft_rows + serialize_vac_csv) reads its rates LIVE from
+    // MealsDB_Rate_Definitions ('vac_per_main_coverage', 'vac_side'), and HST
+    // stays WC-sourced (LB-7). Directive 5 (2026-09-04) then made VAC bill
+    // mains + sides at those two separate rates, with a computed HST on the
+    // taxable sides and a DVA-coverage dollar ceiling; the earlier hand-entered
+    // fold_amount / fold_hst fields were removed at the same time (they existed
+    // only while sides were unbilled).
 
     /**
      * Resolve the HST rate (as a decimal fraction, e.g. 0.15) from the
@@ -71,11 +73,10 @@ class MealsDB_Invoice_Generator {
      * LOGGED (logging does not change the returned value — it is not a
      * fallback) so the condition is at least traceable after the fact.
      *
-     * NOTE: under the corrected VAC model (INV-DRAFT-3) the VAC serializer
-     * does NOT compute HST at all — VAC is billed mains-only and the HST on
-     * folded sides (fold_hst) is hand-entered on the draft grid. If the
-     * operator later asks the system to auto-seed fold_hst, that seed would
-     * use THIS WC-sourced rate (LB-7) — there is no VAC HST constant.
+     * The VAC path uses THIS same WC-sourced rate: Directive 5 computes VAC HST
+     * as taxable_sides × side_rate × this rate (mirroring SDNB, per LB-7 — there
+     * is no VAC HST constant). A 0 here means 0% HST on the VAC invoice too, so
+     * keep the WC standard rate configured at 15%.
      */
     private static function resolve_hst_rate(): float {
         // DIRECTIVE hst-rate-source ITEM 1: NB HST is resolved from the WC
@@ -111,9 +112,9 @@ class MealsDB_Invoice_Generator {
      *
      * Tax follows the allocated taxable-side count: HST = taxable sides ×
      * the (rurality-resolved) pre-tax side rate × the WC-sourced HST rate
-     * (see resolve_hst_rate). Mains are never taxed. The VAC path does NOT use
-     * this tax figure — under the corrected mains-only model (INV-DRAFT-3) VAC
-     * sides are folded by hand on the draft grid (fold_hst), not taxed here.
+     * (see resolve_hst_rate). Mains are never taxed. This SDNB tax figure is not
+     * consumed by the VAC path — VAC computes its own HST in
+     * compute_vac_row_derived() from the VAC side rate (Directive 5).
      *
      * @param array<int, array<string, mixed>> $client_rows  Rows from meals_clients
      *                                                       (must include client_id, wp_user_id,
@@ -804,10 +805,10 @@ class MealsDB_Invoice_Generator {
     //
     // NOTE (half-done state, per the directive's allowance): pipeline-specific
     // finalize SERIALIZATION over these rows lands in INV-DRAFT-3 (VAC first).
-    // VAC-specific editable extras (the fold/HST hand-work, vet_health_card
-    // decryption for display) are also INV-DRAFT-3 — the payload row is an
-    // open associative array, so those keys can be added without a schema or
-    // shape change here.
+    // VAC-specific extras (vet_health_card decryption for display, and — since
+    // Directive 5 — the frozen side/coverage/HST rates) are added onto the
+    // payload row, which is an open associative array, so those keys need no
+    // schema or shape change here.
     // ------------------------------------------------------------------
 
     /**
@@ -828,16 +829,20 @@ class MealsDB_Invoice_Generator {
         $billing_month = substr($start_date, 0, 7);
         $rows = self::get_phase2_billing_data($client_rows, $billing_month);
 
-        // INV-DRAFT-3 Step 4a — the CORRECTED VAC billing row.
+        // Directive 5 (2026-09-04) — the VAC billing row.
         //
-        // VAC is invoiced MAINS-ONLY: a single "Food and Delivery / of N
-        // Meals" line and a total whose "(includes HST)" figure is the HST on
-        // sides FOLDED into the per-main gap — never a separate side line
-        // (verified against the 27 Jan-2025 reimbursement PDFs). The fold is
-        // Janet's hand-work and is NOT a formula, so we do NOT reproduce it
-        // here: we produce a correct mains-only starting point and expose the
-        // fold as explicit, editable, audited draft fields she fills on the
-        // grid (the entire reason the draft layer exists).
+        // VAC is billed mains + sides at two SEPARATE rates, with a computed HST
+        // on the taxable sides and a DVA-coverage dollar ceiling (see
+        // compute_vac_row_derived, the single source of truth for the figures).
+        // Only bill_mains and bill_rate are operator-editable on the grid; sides,
+        // sides value, HST, VAC total and the ceiling are all derived. The rates
+        // (side, coverage, HST) are frozen onto each row below so the compute
+        // function stays a pure rows→figures transform.
+        //
+        // HISTORY: before Directive 5, VAC was billed MAINS-ONLY and the HST on
+        // sides was hand-entered as fold_amount / fold_hst. Those fields were
+        // removed — sides are now billed directly, so a hand-entered fold would
+        // be a second path to the same money. Their absence is intentional.
         //
         // The serializer (serialize_vac_csv) reads ONLY these row fields and
         // never re-queries, so the draft's edited values flow straight to the
@@ -865,8 +870,8 @@ class MealsDB_Invoice_Generator {
             // U04-billing-9: get_phase2_billing_data() computes tax_cents from the
             // SDNB side rate for ANY row with taxable sides, but collect_vac_client_rows()
             // never selects delivery_area_zone — so a veteran's tax_cents is an
-            // urban-SDNB-rate figure with no meaning under the corrected VAC model
-            // (VAC is billed mains-only; HST rides on the hand-entered fold_hst).
+            // urban-SDNB-rate figure with no meaning for VAC (VAC computes its own
+            // HST from the VAC side rate in compute_vac_row_derived, Directive 5).
             // serialize_vac_csv() and compute_vac_row_derived() ignore tax_cents,
             // and the VAC draft grid omits it, so zeroing it changes NO output — it
             // just stops a bogus SDNB-derived value from riding on the encrypted VAC
@@ -899,10 +904,10 @@ class MealsDB_Invoice_Generator {
             $row['vac_coverage_rate'] = $coverage;
             $row['vac_hst_rate']      = $vac_hst_rate;
 
-            // --- Informational context (NEVER summed into the VAC total) ---
-            // Permitted figures for the operator's reference while deciding
-            // the fold. Computed here (build time) so the serializer never
-            // re-queries.
+            // --- Informational context (reference only) ---
+            // Permitted figures for the operator's reference (permitted_mains
+            // also drives the DVA ceiling in compute_vac_row_derived). Computed
+            // here (build time) so the serializer never re-queries.
             if ($engine !== null) {
                 $permitted = $engine->calculate_permitted_for_month($cid_int, $billing_month);
                 $row['info_mains_allowance'] = (int) ($permitted['permitted_mains'] ?? 0);
@@ -1264,25 +1269,24 @@ class MealsDB_Invoice_Generator {
      * Takes VAC draft rows (from build_vac_draft_rows OR a draft's edited
      * `current`) → 37-column CSV string. NO DB access, NO finalize, NO
      * re-derivation: it serializes EXACTLY the fields on the rows, so Janet's
-     * grid edits (bill_rate, fold_amount, fold_hst) flow straight to output.
+     * grid edits (bill_mains, bill_rate) flow straight to output.
      *
-     * THE CORRECTED VAC MODEL (Step 4b): VAC is billed MAINS-ONLY. The total is
-     *     vac_total = bill_mains × bill_rate + fold_amount + fold_hst
-     * NOT the old `mains_cost + sides_cost + sides_HST`. Sides are NOT a billed
-     * line — they are folded by hand into the per-main gap (fold_amount), and
-     * the HST on the taxable portion of that fold is the "(includes HST)"
-     * figure (fold_hst). Both seed to 0 (Decision-gate default) and are
-     * hand-entered on the grid.
+     * THE VAC MODEL (Directive 5): VAC is billed mains + sides at two separate
+     * rates, with a computed HST and a DVA-coverage dollar ceiling:
+     *     vac_total = (bill_mains × bill_rate) + (sides × side_rate)
+     *                 + (taxable_sides × side_rate × hst_rate)
+     * (see compute_vac_row_derived — the single source for the figures). Before
+     * Directive 5 VAC was mains-only and the side HST was hand-entered as
+     * fold_amount / fold_hst; those fields were removed.
      *
      * COLUMN LAYOUT: positions 0-35 are the legacy 36-column Blue Cross layout
      * and are LOAD-BEARING — the VAC PDF renderer (serialize_vac_pdf_from_csv →
      * build_vac_pdf_html) maps positionally onto indices
-     * 0-6 (identity), 11 (Bill Mains = meal count), 32 (Bill HST = fold_hst),
+     * 0-6 (identity), 11 (Bill Mains = meal count), 32 (Bill HST = computed HST),
      * 33 (New Total = vac_total). DO NOT reorder or remove a column before
-     * index 33 or the PDF stamps the wrong cells. "Fold Amount" is APPENDED at
-     * index 36 so the hand-entered fold is visible/auditable in the data file
-     * without disturbing the PDF contract. "Sides Cost" (31) is relabelled
-     * Info Only — it is reference-only and is NEVER summed into New Total.
+     * index 33 or the PDF stamps the wrong cells. The appended index 36 carries
+     * the billed sides value (was "Fold Amount"), keeping the column COUNT — and
+     * thus the PDF contract — unchanged.
      *
      * @param array<int|string,array> $rows VAC draft rows keyed by client_id.
      */
@@ -1295,12 +1299,13 @@ class MealsDB_Invoice_Generator {
      * function, so what Janet sees on the grid is byte-for-byte what finalize
      * emits. Never reimplement this math in JavaScript.
      *
-     * VAC is billed MAINS-ONLY. fold_amount / fold_hst are INPUTS — Janet
-     * hand-enters them per veteran (operator decision 2026-06-29); this fn
-     * READS them, it does not derive them. Sides are NOT billed; they surface
-     * only in the informational remaining_sides figure. bill_mains / bill_rate
-     * fall back to allocated_mains / resolved_rate so a bare phase-2 row (no
-     * bill_* yet) still derives correctly.
+     * VAC is billed mains + sides at two separate rates (Directive 5), with a
+     * computed HST on the taxable sides and a DVA-coverage dollar ceiling. The
+     * side rate, coverage rate and HST rate are read from the row (frozen there
+     * at build time). bill_mains / bill_rate fall back to allocated_mains /
+     * resolved_rate so a bare phase-2 row (no bill_* yet) still derives
+     * correctly. (The old hand-entered fold_amount / fold_hst inputs were
+     * removed by Directive 5 — sides are billed directly now.)
      *
      * @param array $row A VAC `current` row (build_vac_draft_rows shape).
      * @return array{vet_mains_cost_cents:int, vac_total_cents:int,
@@ -1406,7 +1411,8 @@ class MealsDB_Invoice_Generator {
             $billing_phone    = $vet['client_phone_1'] ?? '';
             $service          = strtolower((string) ($vet['requisition_period'] ?? '') ?: 'week');
 
-            // Corrected mains-only billing fields (editable on the grid).
+            // The two operator-editable billing fields on the grid (Directive 5:
+            // sides/HST/ceiling are derived, not edited).
             $bill_rate              = (float) ($vet['bill_rate'] ?? ($vet['resolved_rate'] ?? 0));
             $bill_mains             = (int) ($vet['bill_mains'] ?? ($vet['allocated_mains'] ?? 0));
             $allocated_mains        = (int) ($vet['allocated_mains'] ?? 0);
