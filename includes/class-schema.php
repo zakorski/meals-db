@@ -811,6 +811,17 @@ class MealsDB_Schema {
                     // was narrowed to one value keep the old 3-value ENUM with
                     // the dead values unused — harmless.
                     'status'          => "ENUM('generated') NOT NULL DEFAULT 'generated'",
+                    // Directive 4: a batch is either the original Friday run
+                    // ('full') or a follow-up weekend run ('weekend'). VARCHAR
+                    // rather than ENUM so Schema_Sync (additive-only) can add it
+                    // and a future type needs no risky ENUM ALTER.
+                    'batch_type'      => "VARCHAR(20) NOT NULL DEFAULT 'full'",
+                    // For a weekend batch, the original ('full') batch it follows.
+                    // The weekend window always anchors to the ORIGINAL batch's
+                    // created_at, so the relationship is stored explicitly rather
+                    // than inferred from timestamps (directive ITEM 4). NULL for a
+                    // full batch.
+                    'parent_batch_id' => 'BIGINT UNSIGNED NULL',
                     'created_by'      => 'BIGINT UNSIGNED NULL',
                     'created_at'      => 'DATETIME NOT NULL',
                     'updated_at'      => 'DATETIME NOT NULL',
