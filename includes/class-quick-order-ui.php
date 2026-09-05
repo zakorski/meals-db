@@ -215,6 +215,12 @@ class MealsDB_Quick_Order_UI {
 
                     <div id="mealsdb-qo-allocation" class="mealsdb-quick-order__allocation" style="display: none;"></div>
 
+                    <?php // Directive 2 (ITEM 7): the client-context panel — notes,
+                          // dietary needs and contacts the current POS shows, so the
+                          // order-taker does not need both systems open. Populated by
+                          // fetchClientAllocation()'s client_context payload. ?>
+                    <div id="mealsdb-qo-client-context" class="mealsdb-quick-order__client-context" style="display: none;"></div>
+
                     <div class="mealsdb-quick-order__summary-body">
                         <div class="mealsdb-quick-order__summary-empty" id="mealsdb-quick-order-summary-empty">
                             <p><?php esc_html_e('Summary details will appear here.', 'meals-db'); ?></p>
@@ -231,6 +237,18 @@ class MealsDB_Quick_Order_UI {
                             <div class="mealsdb-quick-order__summary-total-row" id="mealsdb-qo-subtotal-row">
                                 <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Subtotal (before tax)', 'meals-db'); ?></dt>
                                 <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-total">0</dd>
+                            </div>
+                            <?php // Directive 2 (ITEM 4): tax + after-tax total so a private
+                                  // client can be quoted a final price on the phone. Display
+                                  // only — the stored order still computes tax authoritatively
+                                  // in WooCommerce. Suppressed for government clients. ?>
+                            <div class="mealsdb-quick-order__summary-total-row" id="mealsdb-qo-tax-row">
+                                <dt class="mealsdb-quick-order__summary-total-label"><?php esc_html_e('Tax (HST)', 'meals-db'); ?></dt>
+                                <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-tax">0</dd>
+                            </div>
+                            <div class="mealsdb-quick-order__summary-total-row" id="mealsdb-qo-aftertax-row">
+                                <dt class="mealsdb-quick-order__summary-total-label"><strong><?php esc_html_e('Total (after tax)', 'meals-db'); ?></strong></dt>
+                                <dd class="mealsdb-quick-order__summary-total-value" id="mealsdb-quick-order-summary-aftertax"><strong>0</strong></dd>
                             </div>
                         </dl>
 

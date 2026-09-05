@@ -1630,8 +1630,15 @@ class MealsDB_Quick_Order_Ajax {
         global $wpdb;
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $client = $wpdb->get_row($wpdb->prepare(
-            "SELECT client_id, client_type, delivery_frequency,
-                    delivery_fee, client_contribution, delivery_area_zone
+            "SELECT client_id, client_type, delivery_frequency, ordering_frequency,
+                    delivery_fee, client_contribution,
+                    delivery_area_zone, delivery_area_name,
+                    customer_comments, notes_to_service_provider, diet_concerns,
+                    client_phone_1, client_phone_2,
+                    alternate_contact_phone_1, alternate_contact_phone_2,
+                    do_not_call_client_phone, payment_method, province,
+                    allowance_mains, allowance_sides,
+                    service_commence_date, expected_termination_date, last_delivery_date
              FROM {$clients_table}
              WHERE wp_user_id = %d AND active = 1
              LIMIT 1",
@@ -1649,6 +1656,45 @@ class MealsDB_Quick_Order_Ajax {
         // SDNB/Veteran — so private clients (the bulk of zoned clients) get it too.
         $delivery_area_zone = isset($client['delivery_area_zone']) && $client['delivery_area_zone'] !== ''
             ? (string) $client['delivery_area_zone'] : null;
+
+        // Directive 2 (ITEM 5): the OPERATIONAL delivery zone (Zone 1–6) lives in
+        // delivery_area_name — it is what maps to a delivery DAY and validates
+        // against the zone schedule. delivery_area_zone above is the M/S service
+        // CENTRE (a billing construct). The summary must show the zone, not M/S.
+        $delivery_area_name = isset($client['delivery_area_name']) && $client['delivery_area_name'] !== ''
+            ? (string) $client['delivery_area_name'] : null;
+
+        // Directive 2 (ITEM 7): the client-context panel — the fields the current
+        // POS shows so the order-taker does not need both systems open. Sent at
+        // the top level (all client types). customer_comments and diet_concerns
+        // are encrypted at rest; safe_decrypt reads legacy plaintext unchanged.
+        $decrypt = static function ($value): string {
+            if ($value === null || $value === '') {
+                return '';
+            }
+            return class_exists('MealsDB_Encryption')
+                ? (string) MealsDB_Encryption::safe_decrypt($value)
+                : (string) $value;
+        };
+        $client_context = [
+            'notes'             => $decrypt($client['customer_comments'] ?? ''),
+            'notes_to_provider' => (string) ($client['notes_to_service_provider'] ?? ''),
+            'dietary'           => $decrypt($client['diet_concerns'] ?? ''),
+            'phone_1'           => (string) ($client['client_phone_1'] ?? ''),
+            'phone_2'           => (string) ($client['client_phone_2'] ?? ''),
+            'alt_phone_1'       => (string) ($client['alternate_contact_phone_1'] ?? ''),
+            'alt_phone_2'       => (string) ($client['alternate_contact_phone_2'] ?? ''),
+            'do_not_call'       => !empty($client['do_not_call_client_phone']),
+            'payment_method'    => (string) ($client['payment_method'] ?? ''),
+            'province'          => (string) ($client['province'] ?? ''),
+            'allowance_mains'   => isset($client['allowance_mains']) && $client['allowance_mains'] !== null ? (int) $client['allowance_mains'] : null,
+            'allowance_sides'   => isset($client['allowance_sides']) && $client['allowance_sides'] !== null ? (int) $client['allowance_sides'] : null,
+            'service_commence_date' => (string) ($client['service_commence_date'] ?? ''),
+            'service_term_date'     => (string) ($client['expected_termination_date'] ?? ''),
+            'last_delivery_date'    => (string) ($client['last_delivery_date'] ?? ''),
+            'ordering_frequency'    => isset($client['ordering_frequency']) && $client['ordering_frequency'] !== null ? (int) $client['ordering_frequency'] : null,
+            'delivery_frequency'    => isset($client['delivery_frequency']) && $client['delivery_frequency'] !== null ? (int) $client['delivery_frequency'] : null,
+        ];
         // U07-quick-order-8: orders are dated in the SITE timezone
         // (parse_order_date() uses wp_timezone()), so the allocation summary is
         // keyed on the site-local month. Deriving the preview month with UTC
@@ -1658,7 +1704,14 @@ class MealsDB_Quick_Order_Ajax {
         $billing_month = current_time('Y-m');
 
         if (!in_array($client_type, ['SDNB', 'Veteran'], true)) {
-            wp_send_json(['success' => true, 'allocation' => null, 'client_type' => $client_type, 'delivery_area_zone' => $delivery_area_zone]);
+            wp_send_json([
+                'success'            => true,
+                'allocation'         => null,
+                'client_type'        => $client_type,
+                'delivery_area_zone' => $delivery_area_zone,
+                'delivery_area_name' => $delivery_area_name,
+                'client_context'     => $client_context,
+            ]);
         }
 
         $engine  = new MealsDB_Allocation_Engine();
@@ -1713,6 +1766,8 @@ class MealsDB_Quick_Order_Ajax {
             'success'            => true,
             'client_type'        => $client_type,
             'delivery_area_zone' => $delivery_area_zone,
+            'delivery_area_name' => $delivery_area_name,
+            'client_context'     => $client_context,
             'allocation'         => $summary ? [
                 'billing_month'   => $summary['billing_month'],
                 'permitted_mains' => (int) $summary['permitted_mains'],

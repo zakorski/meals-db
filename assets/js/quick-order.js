@@ -183,6 +183,54 @@
                 this.setProductQuantity(productId, quantity);
             });
 
+            // Directive 2 (ITEM 6): per-line +/- and remove in the order summary.
+            // Delegated because the summary list is re-rendered on every change.
+            $(document).on('click', '.mealsdb-qo-line-inc, .mealsdb-qo-line-dec, .mealsdb-qo-line-remove', (event) => {
+                event.preventDefault();
+                const $btn = $(event.currentTarget);
+                const productId = parseInt($btn.closest('[data-product-id]').data('productId'), 10);
+                if (!Number.isInteger(productId) || productId <= 0) {
+                    return;
+                }
+                if ($btn.hasClass('mealsdb-qo-line-inc')) {
+                    this.incrementProduct(productId);
+                } else if ($btn.hasClass('mealsdb-qo-line-dec')) {
+                    this.decrementProduct(productId);
+                } else {
+                    this.setProductQuantity(productId, 0);
+                }
+            });
+
+            // Directive 2 (ITEM 3): quantities are typed ONLY. Block the two
+            // accidental-change vectors on every qty field (picker AND summary):
+            // arrow keys and the mouse wheel. The explicit +/- steppers are
+            // deliberate clicks and stay. In a phone-order workflow a silent
+            // wheel/arrow change is not noticed until the packer sees it.
+            $(document).on('keydown', '.mealsdb-quick-order__qty-input', (event) => {
+                if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                    event.preventDefault();
+                }
+            });
+            // Wheel must be a non-passive native listener or preventDefault is
+            // ignored (delegated wheel handlers default to passive). Only block
+            // when the field is focused — an unfocused number input ignores the
+            // wheel anyway, so the page still scrolls normally over the grid.
+            document.addEventListener(
+                'wheel',
+                (event) => {
+                    const target = event.target;
+                    if (
+                        target &&
+                        target.classList &&
+                        target.classList.contains('mealsdb-quick-order__qty-input') &&
+                        document.activeElement === target
+                    ) {
+                        event.preventDefault();
+                    }
+                },
+                { passive: false }
+            );
+
             if (this.$createOrder && this.$createOrder.length) {
                 this.$createOrder.on('click', (event) => {
                     event.preventDefault();
@@ -1236,8 +1284,20 @@
                 ? `<div class="mealsdb-qo-restriction" role="status">${this.escapeHtml(restrictionTitle)}</div>`
                 : '';
 
+            // Directive 2 (ITEMS 1 & 2): stock lines + out-of-stock (available <= 0)
+            // red state. The colour keys on AVAILABLE, not current — a product with
+            // stock but everything committed is effectively out. Tiles stay
+            // selectable regardless (a warning, not a block).
+            const stockHtml = this.buildProductStock(product);
+            const available = (product && product.available_stock !== null && typeof product.available_stock !== 'undefined')
+                ? parseInt(product.available_stock, 10)
+                : null;
+            const outOfStockClass = (available !== null && !Number.isNaN(available) && available <= 0)
+                ? ' mealsdb-qo-tile--out-of-stock'
+                : '';
+
             return `
-                <div class="mealsdb-qo-tile qo-product${selectedClass}${restrictionClass}" tabindex="0" data-cat="${dataCategories}">
+                <div class="mealsdb-qo-tile qo-product${selectedClass}${restrictionClass}${outOfStockClass}" tabindex="0" data-cat="${dataCategories}">
                     <div class="mealsdb-quick-order__product${selectedClass}" data-product-id="${this.escapeAttribute(
                         productId
                     )}">
@@ -1245,6 +1305,7 @@
                         <div class="mealsdb-quick-order__product-content">
                             <h3 class="mealsdb-quick-order__product-title qo-product-name">${safeName}</h3>
                             <div class="mealsdb-quick-order__product-price">${safePrice}</div>
+                            ${stockHtml}
                             ${metaHtml}
                             <div class="mealsdb-quick-order__product-actions mealsdb-qo-qty-controls">
                                 <button type="button" class="button mealsdb-quick-order__qty-decrease mealsdb-qo-btn" aria-label="Decrease quantity">-</button>
@@ -1257,6 +1318,35 @@
                         </div>
                     </div>
                 </div>`;
+        },
+
+        // Directive 2 (ITEM 1): two clearly-labelled figures per product —
+        // "Available" (current minus everything committed on unfulfilled orders,
+        // the number that answers "can I promise this today") and the raw
+        // in-stock count for reference. A product that does not manage stock
+        // shows an explicit "not tracked" rather than a misleading 0.
+        buildProductStock(product) {
+            const hasCurrent =
+                product && product.current_stock !== null && typeof product.current_stock !== 'undefined';
+            if (!hasCurrent) {
+                return `<div class="mealsdb-qo-stock mealsdb-qo-stock--untracked">${this.escapeHtml(
+                    this.translate('Stock: not tracked')
+                )}</div>`;
+            }
+
+            const current = parseInt(product.current_stock, 10) || 0;
+            const available =
+                product.available_stock !== null && typeof product.available_stock !== 'undefined'
+                    ? parseInt(product.available_stock, 10)
+                    : current;
+            const outClass = available <= 0 ? ' mealsdb-qo-stock--out' : '';
+
+            return (
+                `<div class="mealsdb-qo-stock${outClass}">` +
+                `<span class="mealsdb-qo-stock__avail">${this.escapeHtml(this.translate('Available'))}: ${available}</span> ` +
+                `<span class="mealsdb-qo-stock__current">${this.escapeHtml(this.translate('in stock'))}: ${current}</span>` +
+                `</div>`
+            );
         },
 
         buildProductMeta(product) {
@@ -1531,9 +1621,30 @@
                 totalQuantity += quantity;
                 totalPrice += quantity * price;
 
-                const $item = $('<li class="mealsdb-quick-order__summary-item" />');
+                const lineProductId = parseInt(entry.product.product_id, 10) || 0;
+                const $item = $('<li class="mealsdb-quick-order__summary-item" />')
+                    .attr('data-product-id', lineProductId);
                 $item.append($('<span class="mealsdb-quick-order__summary-item-name" />').text(entry.product.name || 'Product'));
-                $item.append($('<span class="mealsdb-quick-order__summary-item-qty" />').text(`× ${quantity}`));
+
+                // Directive 2 (ITEM 6): per-line +/- and remove, editable in place.
+                // These mutate client-side cart state synchronously via
+                // setProductQuantity (which re-renders the summary and totals), so
+                // there is no debounced/shared-payload race — five fast + clicks
+                // land as five increments. (Contrast the PO screen's debounced
+                // stepper defect this deliberately avoids.)
+                const $controls = $('<span class="mealsdb-quick-order__summary-item-controls" />');
+                $controls.append(
+                    $('<button type="button" class="button mealsdb-qo-line-btn mealsdb-qo-line-dec" aria-label="Decrease quantity" />').text('-')
+                );
+                $controls.append($('<span class="mealsdb-quick-order__summary-item-qty" />').text(quantity));
+                $controls.append(
+                    $('<button type="button" class="button mealsdb-qo-line-btn mealsdb-qo-line-inc" aria-label="Increase quantity" />').text('+')
+                );
+                $controls.append(
+                    $('<button type="button" class="button-link mealsdb-qo-line-remove" aria-label="Remove line" />').text('×')
+                );
+                $item.append($controls);
+
                 if (!govInvoiced) {
                     const lineTotal = this.formatPrice(quantity * price);
                     $item.append($('<span class="mealsdb-quick-order__summary-item-total" />').text(lineTotal));
@@ -2354,6 +2465,7 @@
             const items = Object.values(this.state.cart || {});
             let totalItems = 0;
             let subtotal = 0;
+            let taxableBase = 0;
             const govInvoiced = this.isGovernmentInvoiced();
 
             items.forEach((entry) => {
@@ -2369,32 +2481,52 @@
                 }
 
                 totalItems += quantity;
-                subtotal += quantity * price;
+                const lineValue = quantity * price;
+                subtotal += lineValue;
+                // Directive 2 (ITEM 4): only TAXABLE lines feed the tax base. This
+                // is the fix for the old flat-rate estimate that taxed every line
+                // regardless of taxability (staging #28530). The per-product
+                // `taxable` flag now travels in the payload, so the estimate can
+                // respect it. Still display-only — WooCommerce remains the
+                // authority for the stored order's tax.
+                if (Number(entry.product.taxable) === 1) {
+                    taxableBase += lineValue;
+                }
             });
 
             const precision = this.getCurrencyPrecision();
             const factor = Math.pow(10, precision);
-            // The summary figure is a PRE-TAX subtotal. It deliberately does NOT
-            // estimate tax: the flat-rate estimate this replaced applied the full
-            // rate to every line regardless of the product's taxability, overstating
-            // private-pay orders by the full rate (staging #28530: showed 655.50 for
-            // a 570.00 order). WooCommerce computes the authoritative tax per product
-            // tax class at creation — do not duplicate that math here. See
-            // DIRECTIVE-qo-pretax-relabel-and-clone-contract.md ITEM 1.
-            const displayTotal = Math.round((subtotal + Number.EPSILON) * factor) / factor;
+            const round = (n) => Math.round((n + Number.EPSILON) * factor) / factor;
+
+            const subtotalDisplay = round(subtotal);
+            const taxRate = govInvoiced ? 0 : this.getApplicableTaxRate();
+            const taxDisplay = round(taxableBase * taxRate);
+            const afterTaxDisplay = round(subtotalDisplay + taxDisplay);
 
             if (this.$qoItemsCount && this.$qoItemsCount.length) {
                 this.$qoItemsCount.text(totalItems);
             }
 
             if (this.$qoTotal && this.$qoTotal.length) {
-                this.$qoTotal.text(govInvoiced ? '' : this.formatPrice(displayTotal));
+                this.$qoTotal.text(govInvoiced ? '' : this.formatPrice(subtotalDisplay));
                 this.$qoTotal.toggle(!govInvoiced);
             }
-            // Hide the whole Subtotal row for government clients so the
-            // `Subtotal (before tax)` label doesn't strand beside an empty
-            // figure (v552/v553: suppression now applies to manual selection too).
+
+            const $tax = $('#mealsdb-quick-order-summary-tax');
+            if ($tax.length) {
+                $tax.text(govInvoiced ? '' : this.formatPrice(taxDisplay));
+            }
+            const $afterTax = $('#mealsdb-quick-order-summary-aftertax');
+            if ($afterTax.length) {
+                $afterTax.html(govInvoiced ? '' : `<strong>${this.escapeHtml(this.formatPrice(afterTaxDisplay))}</strong>`);
+            }
+
+            // Directive 2 (ITEM 4) + government suppression: hide the whole money
+            // block for SDNB/Veteran so no price is reintroduced and no label is
+            // left stranded beside an empty figure.
             $('#mealsdb-qo-subtotal-row').toggle(!govInvoiced);
+            $('#mealsdb-qo-tax-row').toggle(!govInvoiced);
+            $('#mealsdb-qo-aftertax-row').toggle(!govInvoiced);
         },
 
         refreshProductPriceDisplay() {
@@ -2440,13 +2572,20 @@
                     this.state.clientFees = response.fees || null;
                     this.state.nextDelivery = response.next_delivery || null;
                     this.state.straddlesMonth = response.straddles_month || false;
+                    // Directive 2 (ITEM 5): show the operational delivery ZONE
+                    // (delivery_area_name = "Zone 1..6", which decides the delivery
+                    // day), NOT the M/S service centre (delivery_area_zone, a
+                    // billing construct). Explicit "No zone" when blank — a zoneless
+                    // client gets no delivery date and no packing slip, and that
+                    // should be visible while the order is taken.
                     const $zone = $('#mealsdb-quick-order-summary-zone');
                     if ($zone.length) {
-                        const zoneVal = response.delivery_area_zone;
+                        const zoneVal = response.delivery_area_name;
                         $zone.text((zoneVal === null || zoneVal === undefined || zoneVal === '')
                             ? this.translate('No zone')
-                            : this.translate('Zone %s').replace('%s', String(zoneVal)));
+                            : String(zoneVal));
                     }
+                    this.renderClientContext(response.client_context || null);
                     this.renderAllocationPanel();
 
                     if (['SDNB', 'Veteran'].includes(response.client_type)) {
@@ -2456,6 +2595,82 @@
                     }
                 }
             });
+        },
+
+        // Directive 2 (ITEM 7): render the client-context panel — the reference
+        // fields the current POS shows (notes, dietary, contacts, plus payment /
+        // service-term / frequency), so the order-taker doesn't need both systems
+        // open. All values are escaped before insertion. do_not_call is honoured
+        // visually: the client's OWN numbers are flagged rather than shown as
+        // ordinary contacts. Empty client → explicit empty state, no layout break.
+        renderClientContext(context) {
+            const $panel = $('#mealsdb-qo-client-context');
+            if (!$panel.length) {
+                return;
+            }
+            if (!context || typeof context !== 'object') {
+                $panel.hide().empty();
+                return;
+            }
+
+            const esc = this.escapeHtml.bind(this);
+            const t = this.translate.bind(this);
+            const rows = [];
+            const addRow = (label, value) => {
+                let v = (value === null || typeof value === 'undefined') ? '' : String(value).trim();
+                if (v === '' || v === '0000-00-00') {
+                    return;
+                }
+                rows.push(
+                    `<div class="mealsdb-qo-context__row">` +
+                    `<span class="mealsdb-qo-context__label">${esc(label)}</span> ` +
+                    `<span class="mealsdb-qo-context__value">${esc(v)}</span>` +
+                    `</div>`
+                );
+            };
+
+            // Contacts. do_not_call flags the client's OWN numbers only.
+            const dnc = !!context.do_not_call;
+            const ownLabel = (base) => (dnc ? `${base} — ${t('DO NOT CALL')}` : base);
+            addRow(ownLabel(t('Phone 1')), context.phone_1);
+            addRow(ownLabel(t('Phone 2')), context.phone_2);
+            addRow(t('Alt contact 1'), context.alt_phone_1);
+            addRow(t('Alt contact 2'), context.alt_phone_2);
+
+            // The operational must-sees.
+            addRow(t('Dietary needs'), context.dietary);
+            addRow(t('Notes'), context.notes);
+            addRow(t('Notes to provider'), context.notes_to_provider);
+
+            // POS reference fields.
+            addRow(t('Payment method'), context.payment_method);
+            addRow(t('Province'), context.province);
+            if (context.allowance_mains !== null && typeof context.allowance_mains !== 'undefined') {
+                addRow(t('Mains allowance'), context.allowance_mains);
+            }
+            if (context.allowance_sides !== null && typeof context.allowance_sides !== 'undefined') {
+                addRow(t('Sides allowance'), context.allowance_sides);
+            }
+            addRow(t('Service start'), context.service_commence_date);
+            addRow(t('Service term date'), context.service_term_date);
+            addRow(t('Last delivery'), context.last_delivery_date);
+            if (context.ordering_frequency) {
+                addRow(t('Order frequency (days)'), context.ordering_frequency);
+            }
+            if (context.delivery_frequency) {
+                addRow(t('Delivery frequency (days)'), context.delivery_frequency);
+            }
+
+            const dncBanner = dnc
+                ? `<div class="mealsdb-qo-context__dnc">${esc(t("DO NOT CALL this client's own number"))}</div>`
+                : '';
+            const body = rows.length
+                ? rows.join('')
+                : `<div class="mealsdb-qo-context__empty">${esc(t('No client details on file.'))}</div>`;
+
+            $panel
+                .html(`<h3 class="mealsdb-qo-context__title">${esc(t('Client details'))}</h3>${dncBanner}${body}`)
+                .show();
         },
 
         renderAllocationPanel() {
@@ -2524,6 +2739,12 @@
             const $panel = $('#mealsdb-qo-allocation');
             if ($panel.length) {
                 $panel.empty().hide();
+            }
+            // Directive 2 (ITEM 7): the context panel is client-scoped — clear it
+            // alongside the allocation when there is no client.
+            const $context = $('#mealsdb-qo-client-context');
+            if ($context.length) {
+                $context.empty().hide();
             }
             this.state.allocation = null;
             this.state.clientFees = null;

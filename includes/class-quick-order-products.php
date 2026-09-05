@@ -259,7 +259,156 @@ class MealsDB_Quick_Order_Products {
             return [];
         }
 
-        return self::format_for_quick_order($products);
+        return self::inject_stock_figures(self::format_for_quick_order($products));
+    }
+
+    /**
+     * Directive 2 (ITEMS 1 & 2): attach current + available stock to each
+     * product payload.
+     *
+     *   current_stock   = the WooCommerce _stock figure (null when the product
+     *                     does not manage stock).
+     *   available_stock = current_stock minus everything committed on
+     *                     UNFULFILLED orders (wc-processing / wc-paid). Excludes
+     *                     wc-completed (already delivered) and drafts (nothing is
+     *                     committed until an order is placed).
+     *
+     * Computed FRESH on every load — deliberately NOT folded into the 30-minute
+     * product cache: "available" answers "can I promise this today", so a stale
+     * figure would mislead. Two batched queries total (stock map + committed
+     * map), regardless of catalogue size.
+     *
+     * @param array<int, array<string, mixed>> $products Formatted QO payloads.
+     * @return array<int, array<string, mixed>>
+     */
+    private static function inject_stock_figures(array $products): array {
+        if (empty($products)) {
+            return $products;
+        }
+
+        $product_ids = [];
+        foreach ($products as $product) {
+            $pid = isset($product['product_id']) ? (int) $product['product_id'] : 0;
+            if ($pid > 0) {
+                $product_ids[] = $pid;
+            }
+        }
+        $product_ids = array_values(array_unique($product_ids));
+        if (empty($product_ids)) {
+            return $products;
+        }
+
+        $stock_map     = self::get_current_stock_map($product_ids);
+        $committed_map = self::get_committed_quantities($product_ids);
+
+        foreach ($products as &$product) {
+            $pid = isset($product['product_id']) ? (int) $product['product_id'] : 0;
+
+            // Null current stock = product does not manage stock; leave both
+            // null so the UI can render "—" and skip the out-of-stock colour.
+            if ($pid <= 0 || !array_key_exists($pid, $stock_map) || $stock_map[$pid] === null) {
+                $product['current_stock']   = null;
+                $product['available_stock'] = null;
+                continue;
+            }
+
+            $current   = (int) $stock_map[$pid];
+            $committed = isset($committed_map[$pid]) ? (int) $committed_map[$pid] : 0;
+
+            $product['current_stock']   = $current;
+            $product['available_stock'] = $current - $committed;
+        }
+        unset($product);
+
+        return $products;
+    }
+
+    /**
+     * Batch-fetch the WooCommerce _stock value for the given product IDs.
+     * Products remain in wp_posts/wp_postmeta under HPOS (HPOS moves ORDERS,
+     * not products), so _stock lives in postmeta. A product with stock
+     * management off (_manage_stock != 'yes', or no _stock row) maps to null.
+     *
+     * @param int[] $product_ids
+     * @return array<int, int|null> product_id => current stock (or null)
+     */
+    private static function get_current_stock_map(array $product_ids): array {
+        global $wpdb;
+        $map = [];
+        if (empty($product_ids) || !isset($wpdb)) {
+            return $map;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+        $sql = $wpdb->prepare(
+            "SELECT sm.post_id AS product_id, sm.meta_value AS stock
+             FROM {$wpdb->postmeta} sm
+             INNER JOIN {$wpdb->postmeta} mm
+                     ON mm.post_id = sm.post_id AND mm.meta_key = '_manage_stock'
+             WHERE sm.meta_key = '_stock'
+               AND mm.meta_value = 'yes'
+               AND sm.post_id IN ({$placeholders})",
+            $product_ids
+        );
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $pid = (int) $row['product_id'];
+                // _stock can be '' for a manage-stock product mid-configuration;
+                // treat empty as null (untracked) rather than 0-in-stock.
+                $map[$pid] = ($row['stock'] === null || $row['stock'] === '')
+                    ? null
+                    : (int) $row['stock'];
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Batch-sum quantities committed on UNFULFILLED orders per product.
+     * Unfulfilled = wc-processing / wc-paid (placed, not yet delivered). Excludes
+     * wc-completed and every draft/cancelled status. Models the PO-forecast
+     * quantity roll-up in class-reports.php.
+     *
+     * @param int[] $product_ids
+     * @return array<int, int> product_id => committed quantity
+     */
+    private static function get_committed_quantities(array $product_ids): array {
+        global $wpdb;
+        $map = [];
+        if (empty($product_ids) || !isset($wpdb)) {
+            return $map;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+        $sql = $wpdb->prepare(
+            "SELECT CAST(pm.meta_value AS UNSIGNED) AS product_id,
+                    SUM(CAST(qm.meta_value AS DECIMAL(10,2))) AS committed_qty
+             FROM {$wpdb->prefix}woocommerce_order_items oi
+             INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta pm
+                     ON pm.order_item_id = oi.order_item_id AND pm.meta_key = '_product_id'
+             INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta qm
+                     ON qm.order_item_id = oi.order_item_id AND qm.meta_key = '_qty'
+             INNER JOIN {$wpdb->prefix}wc_orders o
+                     ON o.id = oi.order_id
+                    AND o.type = 'shop_order'
+                    AND o.status IN ('wc-processing', 'wc-paid')
+             WHERE oi.order_item_type = 'line_item'
+               AND CAST(pm.meta_value AS UNSIGNED) IN ({$placeholders})
+             GROUP BY product_id",
+            $product_ids
+        );
+
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $map[(int) $row['product_id']] = (int) round((float) $row['committed_qty']);
+            }
+        }
+
+        return $map;
     }
 
     /**
@@ -310,7 +459,12 @@ class MealsDB_Quick_Order_Products {
 
         $matches = array_slice($matches, 0, 20);
 
-        return array_values(array_filter(array_map([self::class, 'product_cache_entry_to_quick_order'], $matches)));
+        // Directive 2 (ITEMS 1 & 2): searched tiles carry the same live stock
+        // figures as the browsed grid, so a product looked up by name shows the
+        // same current/available counts and out-of-stock colour.
+        return self::inject_stock_figures(
+            array_values(array_filter(array_map([self::class, 'product_cache_entry_to_quick_order'], $matches)))
+        );
     }
 
     /**

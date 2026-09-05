@@ -492,3 +492,57 @@
     background: #007cba;
     color: #fff;
 }
+
+/* ---------------------------------------------------------------------------
+ * Directive 2 — stock visibility, client-context panel, per-line controls
+ * ------------------------------------------------------------------------- */
+
+/* ITEM 1/2: per-product stock lines + out-of-stock red state (keys on
+ * AVAILABLE, not current). Tiles stay selectable — colour is a warning. */
+.mealsdb-qo-stock {
+    font-size: 12px;
+    color: #50575e;
+    margin: 2px 0 4px;
+}
+.mealsdb-qo-stock__avail { font-weight: 600; }
+.mealsdb-qo-stock--untracked { color: #787c82; font-style: italic; }
+.mealsdb-qo-stock--out,
+.mealsdb-qo-stock--out .mealsdb-qo-stock__avail { color: #d63638; }
+.mealsdb-qo-tile--out-of-stock {
+    border-color: #d63638;
+}
+.mealsdb-qo-tile--out-of-stock .qo-product-name,
+.mealsdb-qo-tile--out-of-stock .mealsdb-quick-order__product-title {
+    color: #d63638;
+}
+
+/* ITEM 7: client-context reference panel. Compact so it does not push the
+ * product picker or summary off screen. */
+.mealsdb-quick-order__client-context {
+    margin: 10px 0;
+    padding: 10px;
+    background: #f6f7f7;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+    font-size: 13px;
+}
+.mealsdb-qo-context__title { margin: 0 0 6px; font-size: 13px; }
+.mealsdb-qo-context__row { margin: 2px 0; }
+.mealsdb-qo-context__label { color: #50575e; font-weight: 600; }
+.mealsdb-qo-context__dnc { color: #d63638; font-weight: 700; margin-bottom: 6px; }
+.mealsdb-qo-context__empty { color: #787c82; font-style: italic; }
+
+/* ITEM 6: per-line +/- and remove in the order summary. */
+.mealsdb-quick-order__summary-item-controls {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    margin: 0 6px;
+}
+.mealsdb-qo-line-btn { min-width: 24px; padding: 0 6px; }
+.mealsdb-qo-line-remove {
+    color: #d63638;
+    text-decoration: none;
+    font-size: 16px;
+    line-height: 1;
+}
