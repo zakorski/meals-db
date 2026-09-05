@@ -28,6 +28,38 @@ class MealsDB_Quick_Order_Products {
         'soup',
         'thickened',
     ];
+
+    /**
+     * Directive 3 (ITEM 1): the category-TAB order. "Mains" and "Sides" are
+     * DERIVED tabs (from product_type) prepended in JS, so they are not listed
+     * here; the parent 'main' category is intentionally omitted because it is
+     * represented by the derived Mains tab. Categories not named here fall to
+     * the end of the tab strip. Editable without a code change via the
+     * mealsdb_qo_category_tab_order option or filter — Katie has reordered this
+     * once and will again, so a redeploy per reorder is a poor trade.
+     */
+    private const DEFAULT_CATEGORY_TAB_ORDER = [
+        'beef-main', 'chicken-turkey-main', 'fish-main', 'pork-main', 'vegetarian-main',
+        'soup', 'dessert', 'muffin', 'cereal',
+        'diabetic-main', 'low-sodium-main', 'gluten-free-main', 'low-calorie-main',
+        'low-fat-main', 'vegan-main', 'special-diet',
+        'pureed', 'minced', 'thickened',
+    ];
+
+    /**
+     * Directive 3 (ITEM 2): the product SORT order under "All" — TYPE categories
+     * only. Dietary/cross-cutting categories (Diabetic, Low Sodium, …) are NEVER
+     * sort keys; every product has a real type category underneath, so the sort
+     * always has a match. For a product carrying more than one of these, the
+     * FIRST match in this order wins (deterministic; the ambiguity is logged).
+     * Editable via the mealsdb_qo_all_sort_order option or filter.
+     */
+    private const DEFAULT_ALL_SORT_ORDER = [
+        'beef-main', 'chicken-turkey-main', 'fish-main', 'pork-main', 'vegetarian-main',
+        'soup', 'dessert', 'muffin', 'cereal',
+        'pureed', 'minced', 'thickened',
+    ];
+
     private const PRODUCTS_TRANSIENT_KEY   = 'mealsdb_qo_all_products';
     private const CATEGORIES_TRANSIENT_KEY = 'mealsdb_qo_all_categories';
 
@@ -48,6 +80,164 @@ class MealsDB_Quick_Order_Products {
      */
     public static function get_allowed_category_slugs(): array {
         return self::ALLOWED_CATEGORY_SLUGS;
+    }
+
+    /**
+     * Resolve an editable ordered slug list from an option (falling back to a
+     * default constant) with a filter override. Directive 3 — cheap editability
+     * without an admin UI: an operator/dev can set the option or hook the filter.
+     *
+     * @param string   $option  wp_option name holding an ordered slug array.
+     * @param string   $filter  filter name applied to the resolved list.
+     * @param string[] $default Default ordered slug list.
+     * @return string[]
+     */
+    private static function resolve_ordered_slugs(string $option, string $filter, array $default): array {
+        $order  = $default;
+        $stored = function_exists('get_option') ? get_option($option, null) : null;
+        if (is_array($stored) && !empty($stored)) {
+            $order = array_values(array_filter(array_map('strval', $stored)));
+        }
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters($filter, $order);
+            if (is_array($filtered) && !empty($filtered)) {
+                $order = array_values(array_filter(array_map('strval', $filtered)));
+            }
+        }
+        return $order;
+    }
+
+    /**
+     * Directive 3 (ITEM 1): the category-tab display order (slugs).
+     *
+     * @return string[]
+     */
+    public static function get_category_tab_order(): array {
+        return self::resolve_ordered_slugs(
+            'mealsdb_qo_category_tab_order',
+            'mealsdb_qo_category_tab_order',
+            self::DEFAULT_CATEGORY_TAB_ORDER
+        );
+    }
+
+    /**
+     * Directive 3 (ITEM 2): the "All"-view product sort order (type-category
+     * slugs).
+     *
+     * @return string[]
+     */
+    public static function get_all_sort_order(): array {
+        return self::resolve_ordered_slugs(
+            'mealsdb_qo_all_sort_order',
+            'mealsdb_qo_all_sort_order',
+            self::DEFAULT_ALL_SORT_ORDER
+        );
+    }
+
+    /**
+     * Directive 3 (ITEM 1): order the category list for the tab strip.
+     *
+     * Categories are sorted by their position in get_category_tab_order();
+     * anything not in that list (e.g. the parent 'main', which the derived Mains
+     * tab represents) is DROPPED from the tab strip. The relative order of the
+     * configured slugs is authoritative and explicit — not alphabetical.
+     *
+     * @param array<int, array<string, mixed>> $categories
+     * @return array<int, array<string, mixed>>
+     */
+    private static function order_categories_for_tabs(array $categories): array {
+        $order    = self::get_category_tab_order();
+        $position = array_flip($order);
+
+        $kept = [];
+        foreach ($categories as $category) {
+            $slug = isset($category['slug']) ? (string) $category['slug'] : '';
+            if ($slug !== '' && isset($position[$slug])) {
+                $kept[] = $category;
+            }
+        }
+
+        usort($kept, static function ($a, $b) use ($position) {
+            $pa = $position[(string) ($a['slug'] ?? '')] ?? PHP_INT_MAX;
+            $pb = $position[(string) ($b['slug'] ?? '')] ?? PHP_INT_MAX;
+            return $pa <=> $pb;
+        });
+
+        return $kept;
+    }
+
+    /**
+     * Directive 3 (ITEM 2): sort products for the "All" view.
+     *
+     * Sort key = (position of the product's first type-category in the configured
+     * sort order) then (product name, case-insensitive). A product carrying more
+     * than one type-category is AMBIGUOUS: the first match in the configured
+     * order is used (deterministic) and the case is logged so the DATA can be
+     * corrected rather than the sort silently hiding it. Dietary categories are
+     * not in the sort order and so never influence position.
+     *
+     * @param array<int, array<string, mixed>> $products QO payloads.
+     * @return array<int, array<string, mixed>>
+     */
+    private static function sort_products_for_all(array $products): array {
+        if (empty($products)) {
+            return $products;
+        }
+
+        $order    = self::get_all_sort_order();
+        $position = array_flip($order);
+        $ambiguous = [];
+
+        // Decorate each product with its resolved sort position (stable sort
+        // via index tiebreak is not needed — name is the final tiebreak).
+        foreach ($products as $index => $product) {
+            $slugs = isset($product['category_slugs']) && is_array($product['category_slugs'])
+                ? $product['category_slugs'] : [];
+
+            $best = PHP_INT_MAX;
+            $matched = 0;
+            foreach ($slugs as $slug) {
+                $slug = (string) $slug;
+                if (isset($position[$slug])) {
+                    $matched++;
+                    if ($position[$slug] < $best) {
+                        $best = $position[$slug];
+                    }
+                }
+            }
+            if ($matched > 1) {
+                $ambiguous[] = (int) ($product['product_id'] ?? 0);
+            }
+            $products[$index]['__sort_pos'] = $best;
+        }
+
+        usort($products, static function ($a, $b) {
+            $pa = $a['__sort_pos'] ?? PHP_INT_MAX;
+            $pb = $b['__sort_pos'] ?? PHP_INT_MAX;
+            if ($pa !== $pb) {
+                return $pa <=> $pb;
+            }
+            return strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''));
+        });
+
+        // Strip the scratch key so it never reaches JSON.
+        foreach ($products as $index => $product) {
+            unset($products[$index]['__sort_pos']);
+        }
+
+        if (!empty($ambiguous)) {
+            // Surface (don't hide) products that match two type-categories, so
+            // the data can be fixed. error_log rather than the Event Log
+            // dashboard because get_all_quick_order_products runs on every QO
+            // load/search — a dashboard row per load would be noise.
+            error_log(sprintf(
+                '[MealsDB QuickOrder] Ambiguous "All" sort: %d product(s) match >1 type-category (first-in-order used): %s',
+                count($ambiguous),
+                implode(',', $ambiguous)
+            ));
+        }
+
+        return array_values($products);
     }
 
     /**
@@ -165,7 +355,12 @@ class MealsDB_Quick_Order_Products {
 
         $products = self::get_all_products();
         if (!empty($products)) {
-            $categories = self::extract_categories_from_products($products);
+            // Directive 3 (ITEM 1): order tabs by the configured sequence and drop
+            // categories not in it (e.g. the parent 'main', covered by the derived
+            // Mains tab).
+            $categories = self::order_categories_for_tabs(
+                self::extract_categories_from_products($products)
+            );
             self::set_categories_cache($categories);
 
             return $categories;
@@ -216,6 +411,9 @@ class MealsDB_Quick_Order_Products {
             ];
         }
 
+        // Directive 3 (ITEM 1): apply the configured tab order to the term-derived
+        // list too (the no-products fallback path).
+        $categories = self::order_categories_for_tabs($categories);
         self::set_categories_cache($categories);
 
         return $categories;
@@ -259,7 +457,13 @@ class MealsDB_Quick_Order_Products {
             return [];
         }
 
-        return self::inject_stock_figures(self::format_for_quick_order($products));
+        // Directive 3 (ITEM 2): the "All" grid is sorted by type-category
+        // position then product name here, server-side, so the preloaded array
+        // (and every client-side category filter derived from it) inherits the
+        // order without duplicating the rule in JS.
+        return self::sort_products_for_all(
+            self::inject_stock_figures(self::format_for_quick_order($products))
+        );
     }
 
     /**

@@ -914,26 +914,26 @@
 
             $tabsWrap.append($allButton);
 
-            // Virtual "Sides" tab combining cereal, dessert, soup, muffin, and thickened.
-            const sidesSlugs = ['cereal', 'dessert', 'soup', 'muffin', 'thickened'];
-            const hasSidesCategories = this.state.categories.some(
-                (cat) => sidesSlugs.indexOf(this.normaliseCategorySlug(cat.slug)) !== -1
-            );
-            if (hasSidesCategories) {
-                const $sidesButton = $('<button>', {
-                    type: 'button',
-                    class: 'qo-tab',
-                    text: 'Sides',
-                }).attr({
-                    'data-cat': 'sides',
-                    'data-cat-id': 0,
-                });
-
-                if (this.state.activeCategorySlug === 'sides') {
-                    $sidesButton.addClass('active');
+            // Directive 3 (ITEM 1): "Mains" and "Sides" are DERIVED tabs, from
+            // product_type ('meal' / 'side'), not WooCommerce categories. They sit
+            // immediately after All and before the category tabs. Shown only when
+            // products of that type exist. The remaining category tabs follow in
+            // the order PHP returns them (the configured tab sequence).
+            const products = Array.isArray(QO_PRODUCTS) ? QO_PRODUCTS : [];
+            const hasType = (type) => products.some((p) => p && p.product_type === type);
+            const appendVirtualTab = (slug, label) => {
+                const $btn = $('<button>', { type: 'button', class: 'qo-tab', text: label })
+                    .attr({ 'data-cat': slug, 'data-cat-id': 0 });
+                if (this.state.activeCategorySlug === slug) {
+                    $btn.addClass('active');
                 }
-
-                $tabsWrap.append($sidesButton);
+                $tabsWrap.append($btn);
+            };
+            if (hasType('meal')) {
+                appendVirtualTab('mains', 'Mains');
+            }
+            if (hasType('side')) {
+                appendVirtualTab('sides', 'Sides');
             }
 
             this.state.categories.forEach((category) => {
@@ -1054,8 +1054,9 @@
                 return null;
             }
 
-            // Virtual categories (e.g. "sides") have no real category ID; show empty state.
-            if (slug === 'sides') {
+            // Virtual categories (derived "mains"/"sides") have no real category
+            // ID; if nothing matched, show an empty state rather than erroring.
+            if (slug === 'sides' || slug === 'mains') {
                 this.renderProducts([]);
                 if ($ && $.Deferred) {
                     return $.Deferred().resolve().promise();
@@ -1153,8 +1154,17 @@
                 return QO_PRODUCTS;
             }
 
-            const sidesSlugs = ['cereal', 'dessert', 'soup', 'muffin', 'thickened'];
-            const matchSlugs = slug === 'sides' ? sidesSlugs : [slug];
+            // Directive 3 (ITEM 1): the derived Mains/Sides tabs filter by
+            // product_type, not by category. Every other tab filters by slug.
+            if (slug === 'mains' || slug === 'sides') {
+                const wantType = slug === 'mains' ? 'meal' : 'side';
+                const typeMatches = QO_PRODUCTS.filter(
+                    (product) => product && product.product_type === wantType
+                );
+                return typeMatches.length ? typeMatches : null;
+            }
+
+            const matchSlugs = [slug];
 
             const matches = QO_PRODUCTS.filter((product) => {
                 if (!product) {
