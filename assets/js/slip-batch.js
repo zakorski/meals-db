@@ -20,8 +20,9 @@
     function notice(type, message, opts) {
         if (typeof window.MealsDBNotice === 'function') {
             window.MealsDBNotice(type, message, opts || {});
-        } else if (type === 'error') {
-            window.alert(message);
+        } else if (window.console && window.console.error) {
+            // No native alert() fallback (directive): fail closed to the console.
+            window.console.error('[MealsDB] ' + message);
         }
     }
 
@@ -98,31 +99,38 @@
                 });
         });
 
-        // --- Cancel: confirm popup -> hard delete -> drop the row ---
+        // --- Cancel: in-page confirm modal -> hard delete -> drop the row ---
         $('#mealsdb-slip-table').on('click', '.mealsdb-slip-cancel-btn', function () {
-            if (!window.confirm(i18n.confirmCancel || 'Cancel this batch? This cannot be undone.')) {
-                return;
-            }
+            // Capture the row refs before the async confirm resolves.
             var $btn = $(this);
             var $row = $btn.closest('tr');
-            $btn.prop('disabled', true);
-            rowMsg($row, i18n.working || 'Working…');
 
-            post('mealsdb_slip_cancel', { batch_id: $row.data('batch-id') })
-                .done(function (resp) {
-                    if (resp && resp.success) {
-                        $row.remove();
-                    } else {
-                        rowMsg($row, (resp && resp.data && resp.data.message) || i18n.genericErr);
+            window.MealsDBConfirm.confirm({
+                title: 'Cancel batch',
+                message: i18n.confirmCancel || 'Cancel this batch? This cannot be undone.',
+                confirmLabel: 'Cancel batch',
+                destructive: true
+            }).then(function (ok) {
+                if (!ok) { return; }
+                $btn.prop('disabled', true);
+                rowMsg($row, i18n.working || 'Working…');
+
+                post('mealsdb_slip_cancel', { batch_id: $row.data('batch-id') })
+                    .done(function (resp) {
+                        if (resp && resp.success) {
+                            $row.remove();
+                        } else {
+                            rowMsg($row, (resp && resp.data && resp.data.message) || i18n.genericErr);
+                            $btn.prop('disabled', false);
+                            notice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
+                        }
+                    })
+                    .fail(function () {
+                        rowMsg($row, i18n.genericErr);
                         $btn.prop('disabled', false);
-                        notice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
-                    }
-                })
-                .fail(function () {
-                    rowMsg($row, i18n.genericErr);
-                    $btn.prop('disabled', false);
-                    notice('error', i18n.genericErr);
-                });
+                        notice('error', i18n.genericErr);
+                    });
+            });
         });
     });
 

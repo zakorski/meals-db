@@ -51,14 +51,15 @@ class MealsDB_Migration_Page {
             MEALS_DB_VERSION
         );
 
-        // Shared on-page notice helper (directive GUI-NOTICES) — supplies
-        // window.MealsDBNotice for the migration driver's informational alerts.
-        $notice_handle = MealsDB_Admin_UI::register_notice_script();
+        // Shared on-page notice + modal helpers — supply window.MealsDBNotice and
+        // window.MealsDBConfirm (the migration driver's dry-run guards are now
+        // in-page confirms). The confirm helper pulls in the notice helper.
+        $confirm_handle = MealsDB_Admin_UI::register_confirm_script();
 
         wp_enqueue_script(
             'mealsdb-migration',
             MEALS_DB_PLUGIN_URL . 'assets/js/admin-migration.js',
-            [ 'jquery', $notice_handle ],
+            [ 'jquery', $confirm_handle ],
             MEALS_DB_VERSION,
             true
         );

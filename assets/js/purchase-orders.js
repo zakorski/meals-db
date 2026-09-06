@@ -242,64 +242,88 @@
         if (!map) { return; }
 
         var data = { nonce: cfg.nonce, po_id: parseInt($btn.data('po-id'), 10), action: map.action };
+
+        // The POST — run only after the branch's in-page dialog resolves.
+        function submit() {
+            $btn.prop('disabled', true);
+            msg(t('saving', 'Saving…'), false);
+            $.post(cfg.ajaxUrl, data, function (res) {
+                if (res && res.success) {
+                    window.location.reload();
+                    return;
+                }
+                $btn.prop('disabled', false);
+                msg((res && res.data && res.data.message) || t('requestFailed', 'Request failed.'), true);
+            }).fail(function () {
+                $btn.prop('disabled', false);
+                msg(t('requestFailed', 'Request failed.'), true);
+            });
+        }
+
         if (kind === 'approve') {
             var $arrival = $('#mealsdb-po-expected-arrival');
             if ($arrival.length) {
-                // Detail page: date input + the normal confirm dialog.
-                if (!window.confirm(map.confirm)) { return; }
-                data.expected_arrival = String($arrival.val() || '');
+                // Detail page: date input + a plain confirm.
+                window.MealsDBConfirm.confirm({
+                    title: 'Approve PO',
+                    message: map.confirm,
+                    confirmLabel: 'Approve'
+                }).then(function (ok) {
+                    if (!ok) { return; }
+                    data.expected_arrival = String($arrival.val() || '');
+                    submit();
+                });
             } else {
-                // List page: prompt doubles as confirm. Validate before submitting
-                // so a typo can't masquerade as an accepted date (v560 ITEM 4).
-                // Blank → the server's computed default; the prompt says so.
+                // List page: the prompt doubles as confirm. Blank = the server's
+                // computed default (a VALID, distinct outcome); cancel = abort.
+                // An invalid typo is rejected with a message rather than accepted
+                // (v560 ITEM 4); the operator re-clicks Approve to retry.
                 var isValidYmd = function (s) {
                     if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) { return false; }
                     var d = new Date(s + 'T00:00:00Z');
                     return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
                 };
-                while (true) {
-                    var picked = window.prompt(t('promptExpectedArrival', 'Expected arrival date (YYYY-MM-DD), or leave blank for the computed default — OK approves:'), '');
+                window.MealsDBConfirm.prompt({
+                    title: 'Approve PO',
+                    message: t('promptExpectedArrival', 'Expected arrival date (YYYY-MM-DD), or leave blank for the computed default — OK approves:'),
+                    confirmLabel: 'Approve',
+                    placeholder: 'YYYY-MM-DD'
+                }).then(function (picked) {
                     if (picked === null) { return; } // cancel aborts the approval
                     picked = picked.replace(/^\s+|\s+$/g, '');
-                    if (picked === '') { data.expected_arrival = ''; break; } // → server default
-                    if (isValidYmd(picked)) { data.expected_arrival = picked; break; }
-                    msg(t('invalidDate', 'Enter a date as YYYY-MM-DD, or leave blank for the default.'), true);
-                }
+                    if (picked !== '' && !isValidYmd(picked)) {
+                        msg(t('invalidDate', 'Enter a date as YYYY-MM-DD, or leave blank for the default.'), true);
+                        return;
+                    }
+                    data.expected_arrival = picked; // '' → server default
+                    submit();
+                });
             }
         } else if (kind === 'unapprove' || kind === 'unaccept') {
             var promptTxt = (kind === 'unaccept')
                 ? t('promptUnaccept', 'Enter a reason for un-accepting (required):')
                 : t('promptUnapprove', 'Enter a reason for un-approving (required):');
-            var reason = window.prompt(promptTxt);
-            if (reason === null) { return; } // cancel = no action (not the same as empty)
-            reason = reason.replace(/^\s+|\s+$/g, '');
-            // Empty is NOT silent: surface the message AND re-prompt until a reason
-            // is given or the operator cancels (v560 ITEM 3 — the reason refusal
-            // was invisible because msg() renders at the top of the list view).
-            while (reason === '') {
-                msg(t('reasonRequired', 'A reason is required.'), true);
-                var again = window.prompt(t('reasonRequired', 'A reason is required.') + ' ' + promptTxt);
-                if (again === null) { return; }
-                reason = again.replace(/^\s+|\s+$/g, '');
-            }
-            data.reason = reason;
-        } else if (!window.confirm(map.confirm)) {
-            return;
+            // The modal's `required` support replaces the native re-prompt loop:
+            // it refuses to submit empty and shows the error inline (v560 ITEM 3).
+            window.MealsDBConfirm.prompt({
+                title: (kind === 'unaccept') ? 'Un-accept PO' : 'Un-approve PO',
+                message: promptTxt,
+                required: true,
+                requiredMessage: t('reasonRequired', 'A reason is required.'),
+                destructive: true
+            }).then(function (reason) {
+                if (reason === null || !reason.trim()) { return; }
+                data.reason = reason.replace(/^\s+|\s+$/g, '');
+                submit();
+            });
+        } else {
+            window.MealsDBConfirm.confirm({
+                title: 'Please confirm',
+                message: map.confirm
+            }).then(function (ok) {
+                if (ok) { submit(); }
+            });
         }
-
-        $btn.prop('disabled', true);
-        msg(t('saving', 'Saving…'), false);
-        $.post(cfg.ajaxUrl, data, function (res) {
-            if (res && res.success) {
-                window.location.reload();
-                return;
-            }
-            $btn.prop('disabled', false);
-            msg((res && res.data && res.data.message) || t('requestFailed', 'Request failed.'), true);
-        }).fail(function () {
-            $btn.prop('disabled', false);
-            msg(t('requestFailed', 'Request failed.'), true);
-        });
     });
 
     $(document).on('click', '#mealsdb-po-complete-reconcile', function () {
@@ -321,33 +345,39 @@
             msg(t('noteRequired', 'A note is required for adjusted rows.'), true);
             return;
         }
-        if (!window.confirm(t('confirmComplete', 'Complete reconciliation?'))) { return; }
+        window.MealsDBConfirm.confirm({
+            title: 'Complete reconciliation',
+            message: t('confirmComplete', 'Complete reconciliation?'),
+            confirmLabel: 'Complete'
+        }).then(function (ok) {
+            if (!ok) { return; }
 
-        $btn.prop('disabled', true);
-        msg(t('saving', 'Saving…'), false);
-        // Flush any debounced note/count saves BEFORE completing, so the server
-        // validates the notes the operator actually typed (v561 ITEM 3b).
-        drainSavesThen(function () {
-            $.post(cfg.ajaxUrl, {
-                nonce: cfg.nonce, po_id: cfg.poId, action: 'mealsdb_po_complete_reconcile'
-            }, function (res) {
-                if (res && res.success) {
-                    window.location.href = cfg.baseUrl + '&po_id=' + cfg.poId;
-                    return;
-                }
-                $btn.prop('disabled', false);
-                // Highlight server-reported offenders (authoritative).
-                if (res && res.data && res.data.data && res.data.data.skus) {
-                    $.each(res.data.data.skus, function (_, sku) {
-                        $('#mealsdb-po-grid tbody tr').filter(function () {
-                            return String($(this).data('sku')) === String(sku);
-                        }).addClass('mealsdb-po-note-missing');
-                    });
-                }
-                msg((res && res.data && res.data.message) || t('requestFailed', 'Request failed.'), true);
-            }).fail(function () {
-                $btn.prop('disabled', false);
-                msg(t('requestFailed', 'Request failed.'), true);
+            $btn.prop('disabled', true);
+            msg(t('saving', 'Saving…'), false);
+            // Flush any debounced note/count saves BEFORE completing, so the server
+            // validates the notes the operator actually typed (v561 ITEM 3b).
+            drainSavesThen(function () {
+                $.post(cfg.ajaxUrl, {
+                    nonce: cfg.nonce, po_id: cfg.poId, action: 'mealsdb_po_complete_reconcile'
+                }, function (res) {
+                    if (res && res.success) {
+                        window.location.href = cfg.baseUrl + '&po_id=' + cfg.poId;
+                        return;
+                    }
+                    $btn.prop('disabled', false);
+                    // Highlight server-reported offenders (authoritative).
+                    if (res && res.data && res.data.data && res.data.data.skus) {
+                        $.each(res.data.data.skus, function (_, sku) {
+                            $('#mealsdb-po-grid tbody tr').filter(function () {
+                                return String($(this).data('sku')) === String(sku);
+                            }).addClass('mealsdb-po-note-missing');
+                        });
+                    }
+                    msg((res && res.data && res.data.message) || t('requestFailed', 'Request failed.'), true);
+                }).fail(function () {
+                    $btn.prop('disabled', false);
+                    msg(t('requestFailed', 'Request failed.'), true);
+                });
             });
         });
     });

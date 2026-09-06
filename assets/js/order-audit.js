@@ -30,10 +30,10 @@
             if (resp && resp.success) {
                 onSuccess(resp.data || {});
             } else {
-                window.alert((resp && resp.data && resp.data.message) || i18n.errorGeneric);
+                window.MealsDBNotice('error', (resp && resp.data && resp.data.message) || i18n.errorGeneric);
             }
         }).fail(function () {
-            window.alert(i18n.errorGeneric);
+            window.MealsDBNotice('error', i18n.errorGeneric);
         });
     }
 
@@ -87,11 +87,17 @@
         // --- Delete a draft audit (list page) ---
         $(document).on('click', '.oa-delete', function (e) {
             e.preventDefault();
-            if (!window.confirm(i18n.confirmDelete)) {
-                return;
-            }
-            post('mealsdb_order_audit_delete', { audit_id: $(this).data('audit-id') }, function () {
-                window.location.reload();
+            var auditIdVal = $(this).data('audit-id'); // capture before async confirm
+            window.MealsDBConfirm.confirm({
+                title: 'Delete audit',
+                message: i18n.confirmDelete,
+                confirmLabel: 'Delete',
+                destructive: true
+            }).then(function (ok) {
+                if (!ok) { return; }
+                post('mealsdb_order_audit_delete', { audit_id: auditIdVal }, function () {
+                    window.location.reload();
+                });
             });
         });
 
@@ -235,22 +241,33 @@
 
         // --- Finalize the whole audit ---
         $('#oa-finalize').on('click', function () {
-            if (!window.confirm(i18n.confirmFinalize)) {
-                return;
-            }
-            post('mealsdb_order_audit_finalize', { audit_id: auditId() }, function () {
-                window.location.reload();
+            window.MealsDBConfirm.confirm({
+                title: 'Finalize audit',
+                message: i18n.confirmFinalize,
+                confirmLabel: 'Finalize'
+            }).then(function (ok) {
+                if (!ok) { return; }
+                post('mealsdb_order_audit_finalize', { audit_id: auditId() }, function () {
+                    window.location.reload();
+                });
             });
         });
 
         // --- Unfinalize (reason required) ---
         $('#oa-unfinalize').on('click', function () {
-            var reason = window.prompt(i18n.promptUnfinalize, '');
-            if (reason === null || !reason.trim()) {
-                return;
-            }
-            post('mealsdb_order_audit_unfinalize', { audit_id: auditId(), reason: reason }, function () {
-                window.location.reload();
+            window.MealsDBConfirm.prompt({
+                title: 'Un-finalize audit',
+                message: i18n.promptUnfinalize,
+                required: true,
+                requiredMessage: 'A reason is required.'
+            }).then(function (reason) {
+                // null = cancelled; required:true guarantees a non-empty value.
+                if (reason === null || !reason.trim()) {
+                    return;
+                }
+                post('mealsdb_order_audit_unfinalize', { audit_id: auditId(), reason: reason }, function () {
+                    window.location.reload();
+                });
             });
         });
     });

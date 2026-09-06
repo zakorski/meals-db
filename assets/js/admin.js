@@ -63,9 +63,14 @@ jQuery(document).ready(function($) {
                     const d = response && response.data;
                     if (d && d.needs_confirm && !confirmed) {
                         setBusyState($button, false);
-                        if (window.confirm(d.message || '')) {
-                            doToggle(true); // operator acknowledged → retry
-                        }
+                        window.MealsDBConfirm.confirm({
+                            title: 'Please confirm',
+                            message: d.message || ''
+                        }).then(function (ok) {
+                            if (ok) {
+                                doToggle(true); // operator acknowledged → retry
+                            }
+                        });
                         return;
                     }
                     MealsDBNotice('error', (d && d.message) ? d.message : toggleErrorMessage);
@@ -330,29 +335,34 @@ jQuery(document).ready(function($) {
         const confirmName = wpUserName ?? 'this WordPress user';
         const confirmMessage = `Link this client to WordPress user ${confirmName}? This cannot be undone.`;
 
-        if (!window.confirm(confirmMessage)) {
-            return;
-        }
+        window.MealsDBConfirm.confirm({
+            title: 'Link client',
+            message: confirmMessage,
+            confirmLabel: 'Link',
+            destructive: true
+        }).then(function (ok) {
+            if (!ok) { return; }
 
-        $button.prop('disabled', true);
+            $button.prop('disabled', true);
 
-        $.post(ajaxurl, {
-            action: 'mealsdb_link_client',
-            nonce: mealsdb.nonce,
-            client_id: clientId,
-            wp_user_id: wpUserId
-        }, function (res) {
-            if (res && res.success) {
-                window.location.reload();
-                return;
-            } else {
-                const errorMessage = res && res.data && res.data.message ? res.data.message : 'Failed to link client.';
-                MealsDBNotice('error', errorMessage);
-            }
-        }).fail(function () {
-            MealsDBNotice('error', 'Failed to link client.');
-        }).always(function () {
-            $button.prop('disabled', false);
+            $.post(ajaxurl, {
+                action: 'mealsdb_link_client',
+                nonce: mealsdb.nonce,
+                client_id: clientId,
+                wp_user_id: wpUserId
+            }, function (res) {
+                if (res && res.success) {
+                    window.location.reload();
+                    return;
+                } else {
+                    const errorMessage = res && res.data && res.data.message ? res.data.message : 'Failed to link client.';
+                    MealsDBNotice('error', errorMessage);
+                }
+            }).fail(function () {
+                MealsDBNotice('error', 'Failed to link client.');
+            }).always(function () {
+                $button.prop('disabled', false);
+            });
         });
     });
 

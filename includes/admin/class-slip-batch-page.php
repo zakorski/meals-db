@@ -45,14 +45,16 @@ class MealsDB_Slip_Batch_Page {
             return;
         }
 
-        $notice_handle = class_exists('MealsDB_Admin_UI')
-            ? MealsDB_Admin_UI::register_notice_script()
+        // window.MealsDBConfirm (the cancel-batch confirm) + window.MealsDBNotice
+        // (the confirm helper depends on the notice one).
+        $confirm_handle = class_exists('MealsDB_Admin_UI')
+            ? MealsDB_Admin_UI::register_confirm_script()
             : 'jquery';
 
         wp_enqueue_script(
             'mealsdb-slip-batch-js',
             plugins_url('assets/js/slip-batch.js', dirname(dirname(__FILE__))),
-            ['jquery', $notice_handle],
+            ['jquery', $confirm_handle],
             defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false,
             true
         );

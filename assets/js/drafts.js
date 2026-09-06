@@ -20,26 +20,31 @@
 
     $(document).ready(function () {
         $(".delete-draft").on("click", function () {
-            if (!confirm(confirmDelete)) {
-                return;
-            }
-
+            // Capture the row refs before the async confirm.
             var draftId = $(this).data("id");
             var row = $("#draft-row-" + draftId);
 
-            $.post(ajaxUrl, {
-                action: "mealsdb_delete_draft",
-                nonce: data.nonce || "",
-                id: draftId
-            }, function (response) {
-                if (response.success) {
-                    row.fadeOut();
-                    if (response.data && response.data.message) {
-                        alert(response.data.message);
+            window.MealsDBConfirm.confirm({
+                title: "Delete draft",
+                message: confirmDelete,
+                confirmLabel: "Delete",
+                destructive: true
+            }).then(function (ok) {
+                if (!ok) { return; }
+                $.post(ajaxUrl, {
+                    action: "mealsdb_delete_draft",
+                    nonce: data.nonce || "",
+                    id: draftId
+                }, function (response) {
+                    if (response.success) {
+                        row.fadeOut();
+                        if (response.data && response.data.message) {
+                            window.MealsDBNotice("success", response.data.message);
+                        }
+                    } else {
+                        window.MealsDBNotice("error", failMessage);
                     }
-                } else {
-                    alert(failMessage);
-                }
+                });
             });
         });
     });

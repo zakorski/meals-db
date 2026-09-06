@@ -111,11 +111,19 @@
                     // Coverage warnings must be seen BEFORE the redirect wipes
                     // the page — they also persist on the Event Log, but the
                     // operator generating the draft is the one who can act.
+                    var draftUrl = cfg.pageUrl + '&draft_id=' + encodeURIComponent(resp.data.draft_id);
                     if (resp.data.coverage_warnings && resp.data.coverage_warnings.length) {
-                        window.alert((i18n.coverageWarn || 'SDNB coverage warnings:') + '\n\n- '
-                            + resp.data.coverage_warnings.join('\n- '));
+                        // Render as a list in a modal (not \n-joined text). The
+                        // redirect waits until the operator has read + dismissed it.
+                        window.MealsDBConfirm.alert({
+                            title: i18n.coverageWarn || 'SDNB coverage warnings',
+                            message: resp.data.coverage_warnings
+                        }).then(function () {
+                            window.location.href = draftUrl;
+                        });
+                    } else {
+                        window.location.href = draftUrl;
                     }
-                    window.location.href = cfg.pageUrl + '&draft_id=' + encodeURIComponent(resp.data.draft_id);
                 } else {
                     $msg.text((resp && resp.data && resp.data.message) || i18n.genericErr);
                     $btn.prop('disabled', false);
@@ -213,51 +221,55 @@
         // --- Finalize (list + review) ---
         $(document).on('click', '.mealsdb-draft-finalize', function (e) {
             e.preventDefault();
-            if (!window.confirm(i18n.confirmFin || 'Finalize this draft?')) {
-                return;
-            }
-            var $el = $(this);
-            $el.prop('disabled', true);
+            var $el = $(this); // capture before the async confirm
+            window.MealsDBConfirm.confirm({
+                title: 'Finalize draft',
+                message: i18n.confirmFin || 'Finalize this draft?',
+                confirmLabel: 'Finalize'
+            }).then(function (ok) {
+                if (!ok) { return; }
+                $el.prop('disabled', true);
 
-            post('mealsdb_finalize_draft', {
-                draft_id: $el.data('draft-id')
-            }).done(function (resp) {
-                if (resp && resp.success) {
-                    // Reload into the now read-only view / refreshed list.
-                    window.location.reload();
-                } else {
-                    MealsDBNotice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
+                post('mealsdb_finalize_draft', {
+                    draft_id: $el.data('draft-id')
+                }).done(function (resp) {
+                    if (resp && resp.success) {
+                        // Reload into the now read-only view / refreshed list.
+                        window.location.reload();
+                    } else {
+                        MealsDBNotice('error', (resp && resp.data && resp.data.message) || i18n.genericErr);
+                        $el.prop('disabled', false);
+                    }
+                }).fail(function () {
+                    MealsDBNotice('error', i18n.genericErr);
                     $el.prop('disabled', false);
-                }
-            }).fail(function () {
-                MealsDBNotice('error', i18n.genericErr);
-                $el.prop('disabled', false);
+                });
             });
         });
 
         // --- Un-finalize (list + review), directive INV-2 ---
         // Reverses the one-way finalize lock. A REASON is required (the server
-        // re-enforces non-empty); captured via window.prompt() for v1 per the
-        // directive (upgradeable to a modal later — the integrity logic is
-        // server-side). On success we reload into the now-editable view.
+        // re-enforces non-empty). The former confirm-then-prompt PAIR is now a
+        // SINGLE modal: the warning message plus a required reason field (the
+        // modal itself refuses to submit empty). On success we reload into the
+        // now-editable view.
         $(document).on('click', '.mealsdb-draft-unfinalize', function (e) {
             e.preventDefault();
-            if (!window.confirm(i18n.confirmUnfin || 'Un-finalize this invoice? It will become editable again.')) {
-                return;
-            }
-            var reason = window.prompt(i18n.reasonPrompt || 'Enter a reason for un-finalizing (required):', '');
-            // Cancelled prompt → abort silently. Empty/whitespace → block here too
-            // (the server also rejects it, but fail fast for the operator).
-            if (reason === null) {
-                return;
-            }
-            if (!reason || !reason.trim()) {
-                MealsDBNotice('error', i18n.reasonRequired || 'A reason is required to un-finalize.');
-                return;
-            }
-            var $el = $(this);
-            $el.prop('disabled', true);
-            sendUnfinalize($el, reason, 0);
+            var $el = $(this); // capture before the async prompt
+            window.MealsDBConfirm.prompt({
+                title: 'Un-finalize invoice',
+                message: i18n.confirmUnfin || 'Un-finalize this invoice? It will become editable again.',
+                required: true,
+                requiredMessage: i18n.reasonRequired || 'A reason is required to un-finalize.',
+                placeholder: i18n.reasonPrompt || 'Reason for un-finalizing (required)'
+            }).then(function (reason) {
+                // null = cancelled; required:true guarantees a non-empty value.
+                if (reason === null || !reason.trim()) {
+                    return;
+                }
+                $el.prop('disabled', true);
+                sendUnfinalize($el, reason, 0);
+            });
         });
     });
 
@@ -272,11 +284,19 @@
             cascade: cascade
         }).done(function (resp) {
             if (resp && resp.success && resp.data && resp.data.requires_confirmation) {
-                if (window.confirm(resp.data.message || i18n.confirmUnfin)) {
-                    sendUnfinalize($el, reason, 1);
-                } else {
-                    $el.prop('disabled', false);
-                }
+                // Dynamic server message (names the shared finalized invoices).
+                window.MealsDBConfirm.confirm({
+                    title: 'Un-finalize shared invoices',
+                    message: resp.data.message || i18n.confirmUnfin,
+                    confirmLabel: 'Un-finalize all',
+                    destructive: true
+                }).then(function (ok) {
+                    if (ok) {
+                        sendUnfinalize($el, reason, 1);
+                    } else {
+                        $el.prop('disabled', false);
+                    }
+                });
                 return;
             }
             if (resp && resp.success) {

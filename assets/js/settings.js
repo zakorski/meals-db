@@ -33,8 +33,8 @@
     //   action  {string}         AJAX action name (required).
     //   nonce   {string}         nonce value (default '').
     //   data    {object}         extra POST fields (optional).
-    //   confirm {string}         window.confirm() gate; abort silently if the
-    //                            operator declines (optional).
+    //   confirm {string}         MealsDBConfirm.confirm() gate; abort silently
+    //                            if the operator declines (optional).
     //   buttons {jQuery[]}       buttons this call OWNS — disabled before the
     //                            request and re-enabled on BOTH success and
     //                            failure. Dependent buttons (e.g. a preview's
@@ -46,34 +46,47 @@
     //                            re-enabled. NOT called on transport failure
     //                            (the shared `.fail()` path handles that).
     function runTool(opts) {
-        if (opts.confirm && !window.confirm(opts.confirm)) {
+        // The actual run — gated behind the (now in-page) confirm below so
+        // nothing executes before the operator approves.
+        function run() {
+            var buttons = opts.buttons || [];
+            function setDisabled(state) {
+                for (var i = 0; i < buttons.length; i++) {
+                    buttons[i].prop('disabled', state);
+                }
+            }
+            setDisabled(true);
+            if (opts.$result) {
+                opts.$result.text(opts.running || 'Running…');
+                tint(opts.$result, '#666');
+            }
+            $.post(
+                ajaxUrl,
+                $.extend({ action: opts.action, nonce: opts.nonce || '' }, opts.data || {}),
+                function (resp) {
+                    setDisabled(false);
+                    opts.done(resp);
+                }
+            ).fail(function () {
+                setDisabled(false);
+                if (opts.$result) {
+                    opts.$result.text('Request failed.');
+                    tint(opts.$result, '#dc3232');
+                }
+            });
+        }
+
+        if (opts.confirm) {
+            window.MealsDBConfirm.confirm({
+                title: opts.confirmTitle || 'Please confirm',
+                message: opts.confirm,
+                destructive: !!opts.destructive
+            }).then(function (ok) {
+                if (ok) { run(); }
+            });
             return;
         }
-        var buttons = opts.buttons || [];
-        function setDisabled(state) {
-            for (var i = 0; i < buttons.length; i++) {
-                buttons[i].prop('disabled', state);
-            }
-        }
-        setDisabled(true);
-        if (opts.$result) {
-            opts.$result.text(opts.running || 'Running…');
-            tint(opts.$result, '#666');
-        }
-        $.post(
-            ajaxUrl,
-            $.extend({ action: opts.action, nonce: opts.nonce || '' }, opts.data || {}),
-            function (resp) {
-                setDisabled(false);
-                opts.done(resp);
-            }
-        ).fail(function () {
-            setDisabled(false);
-            if (opts.$result) {
-                opts.$result.text('Request failed.');
-                tint(opts.$result, '#dc3232');
-            }
-        });
+        run();
     }
 
     // Generate key — no button/result lifecycle to share, so left standalone.
