@@ -81,19 +81,25 @@
     });
 
     $("#mealsdb-task-skip").on("click", function () {
-        if (!window.confirm(i18n.skipConfirm || "Skip this task?")) return;
-        $.post(ajaxUrl, {
-            action: "mealsdb_tasks_skip",
-            nonce: nonce,
-            task_id: taskId
-        }).done(function (resp) {
-            if (resp && resp.success) {
-                window.location.href = backUrl;
-            } else {
-                setStatus((resp && resp.data && resp.data.message) || i18n.failSkip || "Failed to skip.", "error");
-            }
-        }).fail(function () {
-            setStatus(i18n.failSkip || "Failed to skip.", "error");
+        window.MealsDBConfirm.confirm({
+            title: i18n.skipTitle || "Skip task",
+            message: i18n.skipConfirm || "Skip this task?",
+            confirmLabel: i18n.skipConfirmLabel || "Skip"
+        }).then(function (ok) {
+            if (!ok) { return; }
+            $.post(ajaxUrl, {
+                action: "mealsdb_tasks_skip",
+                nonce: nonce,
+                task_id: taskId
+            }).done(function (resp) {
+                if (resp && resp.success) {
+                    window.location.href = backUrl;
+                } else {
+                    setStatus((resp && resp.data && resp.data.message) || i18n.failSkip || "Failed to skip.", "error");
+                }
+            }).fail(function () {
+                setStatus(i18n.failSkip || "Failed to skip.", "error");
+            });
         });
     });
 })(jQuery);

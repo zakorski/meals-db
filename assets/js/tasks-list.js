@@ -42,15 +42,21 @@
     $('#mealsdb-tasks-bulk-skip').on('click', function () {
         var ids = collectSelected();
         if (!ids.length) return;
-        if (!confirm(data.confirmSkip || 'Skip selected tasks?')) return;
-        $.post(ajaxUrl, {
-            action: 'mealsdb_tasks_bulk_skip',
-            nonce: nonce,
-            task_ids: JSON.stringify(ids)
-        }).done(function (resp) {
-            window.location.reload();
-        }).fail(function () {
-            alert(data.skipFailed || 'Bulk skip failed.');
+        window.MealsDBConfirm.confirm({
+            title: 'Skip tasks',
+            message: data.confirmSkip || 'Skip selected tasks?',
+            confirmLabel: 'Skip'
+        }).then(function (ok) {
+            if (!ok) { return; }
+            $.post(ajaxUrl, {
+                action: 'mealsdb_tasks_bulk_skip',
+                nonce: nonce,
+                task_ids: JSON.stringify(ids)
+            }).done(function (resp) {
+                window.location.reload();
+            }).fail(function () {
+                window.MealsDBNotice('error', data.skipFailed || 'Bulk skip failed.');
+            });
         });
     });
 
@@ -64,7 +70,7 @@
         }).done(function (resp) {
             window.location.reload();
         }).fail(function () {
-            alert(data.deferFailed || 'Bulk defer failed.');
+            window.MealsDBNotice('error', data.deferFailed || 'Bulk defer failed.');
         });
     });
 })(jQuery);

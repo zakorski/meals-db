@@ -1741,32 +1741,10 @@
                 return;
             }
 
-            // Directive 1 (ITEM 5): sanity-check the dates — WARN, do not block.
-            // Retroactive entry (a past order/delivery date) is a legitimate
-            // workflow, so an empty or past date is a confirmable warning naming
-            // the field, never a hard stop. The Create button stays enabled; the
-            // operator proceeds by confirming. Skipped for a draft (a parked
-            // order is explicitly incomplete). The separate weekday-mismatch
-            // advisory (refreshDeliveryDateWarning) is unaffected and still
-            // never blocks.
-            if (!saveAsDraft) {
-                const dateWarnings = this.dateSanityWarnings(orderDate, deliveryDate);
-                if (dateWarnings.length) {
-                    const proceed = window.confirm(
-                        dateWarnings.join('\n') + '\n\n' + this.translate('Create this order anyway?')
-                    );
-                    if (!proceed) {
-                        // On cancel, focus the first offending field so it's easy
-                        // to fix — the empty Order Date is the usual culprit.
-                        if (!orderDate && this.$orderDate && this.$orderDate.length) {
-                            this.$orderDate.trigger('focus');
-                        }
-                        this.clearCreateOrderLoading(createButton);
-                        return;
-                    }
-                }
-            }
-
+            // The actual submit, gated below behind the in-page date-sanity
+            // confirm. Extracted into a closure so nothing is posted before the
+            // (asynchronous) confirm resolves. Arrow fn preserves `this`.
+            const submit = () => {
             const payloadItems = items.map((entry) => ({
                 product_id: entry.product.product_id,
                 quantity: entry.quantity,
@@ -1903,6 +1881,37 @@
                 this.setCreateOrderBusy(false);
                 this.clearCreateOrderLoading(createButton);
             });
+            }; // end submit()
+
+            // Directive 1 (ITEM 5): sanity-check the dates — WARN, do not block —
+            // now an in-page modal (native confirm() removed). Empty OR past order/
+            // delivery date lists the issues; the operator confirms to proceed
+            // (retroactive entry is legitimate). Skipped for a draft (a parked
+            // order is explicitly incomplete). The weekday-mismatch advisory is
+            // unaffected and still never blocks.
+            if (!saveAsDraft) {
+                const dateWarnings = this.dateSanityWarnings(orderDate, deliveryDate);
+                if (dateWarnings.length) {
+                    window.MealsDBConfirm.confirm({
+                        title: this.translate('Check the dates'),
+                        message: dateWarnings.concat([this.translate('Create this order anyway?')]),
+                        confirmLabel: this.translate('Create anyway')
+                    }).then((proceed) => {
+                        if (!proceed) {
+                            // On cancel, focus the first offending field — the
+                            // empty Order Date is the usual culprit.
+                            if (!orderDate && this.$orderDate && this.$orderDate.length) {
+                                this.$orderDate.trigger('focus');
+                            }
+                            this.clearCreateOrderLoading(createButton);
+                            return;
+                        }
+                        submit();
+                    });
+                    return; // submit() runs from the .then above
+                }
+            }
+            submit();
         },
 
         createOrderSuccessMessage(message, orderId) {

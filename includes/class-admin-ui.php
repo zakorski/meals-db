@@ -131,6 +131,45 @@ class MealsDB_Admin_UI {
     }
 
     /**
+     * Register the shared in-page modal helper (window.MealsDBConfirm) and return
+     * its handle, so any admin script can declare it as a dependency (which
+     * guarantees load order). Replaces native confirm()/prompt()/alert() — see
+     * assets/js/meals-confirm.js. Depends on the notice helper so the two globals
+     * are always available together. Also enqueues the modal CSS.
+     *
+     * @return string The registered script handle, for use as a dependency.
+     */
+    public static function register_confirm_script(): string {
+        $handle = 'meals-db-confirm';
+        if (!wp_script_is($handle, 'registered')) {
+            $path    = MEALS_DB_PLUGIN_DIR . 'assets/js/meals-confirm.js';
+            $version = file_exists($path) ? filemtime($path) : MEALS_DB_VERSION;
+            wp_register_script(
+                $handle,
+                MEALS_DB_PLUGIN_URL . 'assets/js/meals-confirm.js',
+                ['jquery', self::register_notice_script()],
+                $version,
+                true
+            );
+        }
+        // The CSS is registered/enqueued here too so the modal is styled wherever
+        // the helper is pulled in as a dependency.
+        $css_handle = 'meals-db-confirm-css';
+        if (!wp_style_is($css_handle, 'enqueued')) {
+            $css_path    = MEALS_DB_PLUGIN_DIR . 'assets/css/meals-confirm.css';
+            $css_version = file_exists($css_path) ? filemtime($css_path) : MEALS_DB_VERSION;
+            wp_enqueue_style(
+                $css_handle,
+                MEALS_DB_PLUGIN_URL . 'assets/css/meals-confirm.css',
+                [],
+                $css_version
+            );
+        }
+
+        return $handle;
+    }
+
+    /**
      * Register the shared report-utils helper (window.MealsDBReport: esc, fmt,
      * csvCell, csvRow, exportCsv, showStatus) and return its handle, so any
      * admin page can declare it as a dependency. Extracted view scripts that
@@ -172,7 +211,10 @@ class MealsDB_Admin_UI {
             wp_enqueue_script(
                 'mealsdb-view-' . $slug,
                 MEALS_DB_PLUGIN_URL . 'assets/js/' . $slug . '.js',
-                array_merge(['jquery'], $extra_deps),
+                // Every view script may raise an in-page dialog now (native
+                // confirm/prompt/alert are gone), so the modal helper is a base
+                // dependency of them all — it pulls in the notice helper too.
+                array_merge(['jquery', self::register_confirm_script()], $extra_deps),
                 filemtime($path),
                 true
             );
@@ -966,7 +1008,8 @@ class MealsDB_Admin_UI {
             wp_enqueue_script(
                 'mealsdb-quick-order',
                 MEALS_DB_PLUGIN_URL . 'assets/js/quick-order.js',
-                ['jquery'],
+                // Quick Order's date-sanity confirm is now an in-page modal.
+                ['jquery', self::register_confirm_script()],
                 $quick_order_script_version,
                 true
             );
@@ -1093,7 +1136,8 @@ class MealsDB_Admin_UI {
         wp_enqueue_script(
             'mealsdb-admin',
             MEALS_DB_PLUGIN_URL . 'assets/js/admin.js',
-            ['jquery', 'jquery-ui-datepicker', $notice_handle],
+            // admin.js's client-delete + duplicate-check confirms are now in-page.
+            ['jquery', 'jquery-ui-datepicker', $notice_handle, self::register_confirm_script()],
             $script_version,
             true
         );
@@ -1403,7 +1447,7 @@ class MealsDB_Admin_UI {
         wp_enqueue_script(
             'mealsdb-settings',
             MEALS_DB_PLUGIN_URL . 'assets/js/settings.js',
-            ['jquery'],
+            ['jquery', self::register_confirm_script()],
             $version,
             true
         );
@@ -1439,7 +1483,7 @@ class MealsDB_Admin_UI {
         wp_enqueue_script(
             'mealsdb-settings',
             MEALS_DB_PLUGIN_URL . 'assets/js/settings.js',
-            ['jquery'],
+            ['jquery', self::register_confirm_script()],
             $version,
             true
         );

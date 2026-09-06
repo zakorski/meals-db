@@ -91,20 +91,29 @@
     });
 
     $(document).on('click', '.mealsdb-rule-delete', function () {
-        if (!confirm(t('confirmDelete', 'Delete this rule? Existing spawned tasks will remain.'))) return;
+        // Capture the row id before the async confirm ($(this) is not valid
+        // inside the promise callback).
         var id = $(this).data('rule-id');
-        $.post(ajaxUrl, {
-            action: 'mealsdb_rules_delete',
-            nonce: nonce,
-            rule_id: id
-        }).done(function (resp) {
-            if (resp && resp.success) {
-                window.location.reload();
-            } else {
+        window.MealsDBConfirm.confirm({
+            title: t('confirmDeleteTitle', 'Delete rule'),
+            message: t('confirmDelete', 'Delete this rule? Existing spawned tasks will remain.'),
+            confirmLabel: t('deleteLabel', 'Delete'),
+            destructive: true
+        }).then(function (ok) {
+            if (!ok) { return; }
+            $.post(ajaxUrl, {
+                action: 'mealsdb_rules_delete',
+                nonce: nonce,
+                rule_id: id
+            }).done(function (resp) {
+                if (resp && resp.success) {
+                    window.location.reload();
+                } else {
+                    setStatus(t('deleteFailed', 'Delete failed.'), 'error');
+                }
+            }).fail(function () {
                 setStatus(t('deleteFailed', 'Delete failed.'), 'error');
-            }
-        }).fail(function () {
-            setStatus(t('deleteFailed', 'Delete failed.'), 'error');
+            });
         });
     });
 })(jQuery);

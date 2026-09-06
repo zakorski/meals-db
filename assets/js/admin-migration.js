@@ -44,9 +44,16 @@
     });
 
     $('#mig-reset-btn').on('click', function () {
-        if (!confirm('Reset migration progress and log?')) return;
-        ajax('reset', {}, function () {
-            location.reload();
+        window.MealsDBConfirm.confirm({
+            title: 'Reset migration',
+            message: 'Reset migration progress and log?',
+            confirmLabel: 'Reset',
+            destructive: true
+        }).then(function (ok) {
+            if (!ok) { return; }
+            ajax('reset', {}, function () {
+                location.reload();
+            });
         });
     });
 
@@ -191,21 +198,34 @@
         if (consState.running) return;
         consState.dryRun = $('#cons-dry-run').is(':checked');
         consState.ignoreRateLimit = $('#cons-ignore-rate-limit').is(':checked');
-        if (!consState.dryRun && !confirm('Run the consolidated migration for REAL? This writes to meals_* tables.')) {
+        var $btn = $(this); // captured before the async confirm
+        function run() {
+            consState.running = true;
+            consState.phase = CONS_FIRST;
+            consState.offset = 0;
+            consState.stats = {};
+            $btn.prop('disabled', true);
+            $('#cons-results').hide().empty();
+            for (var p = CONS_FIRST; p <= CONS_LAST; p++) {
+                consSetIcon(p, 'idle');
+                consSetStatus(p, '');
+                consSetBar(p, 0);
+            }
+            consRunPhase();
+        }
+        // A real (non-dry) run writes to meals_* — confirm in-page, destructive.
+        if (consState.dryRun) {
+            run();
             return;
         }
-        consState.running = true;
-        consState.phase = CONS_FIRST;
-        consState.offset = 0;
-        consState.stats = {};
-        $(this).prop('disabled', true);
-        $('#cons-results').hide().empty();
-        for (var p = CONS_FIRST; p <= CONS_LAST; p++) {
-            consSetIcon(p, 'idle');
-            consSetStatus(p, '');
-            consSetBar(p, 0);
-        }
-        consRunPhase();
+        window.MealsDBConfirm.confirm({
+            title: 'Run for REAL — writes meals_* tables',
+            message: 'Run the consolidated migration for REAL? This writes to meals_* tables.',
+            confirmLabel: 'Run for real',
+            destructive: true
+        }).then(function (ok) {
+            if (ok) { run(); }
+        });
     });
 
     // =================================================================
@@ -296,18 +316,31 @@
     function ddbStart(phase, label) {
         if (ddbRunning) return;
         var dryRun = $('#ddb-dry-run').is(':checked');
-        // A real (non-dry) run writes billing data — confirm first.
-        if (!dryRun && !confirm('Run "' + label + '" for REAL? This writes delivery dates / allocation billing data.')) {
+        function run() {
+            ddbRunning = true;
+            ddbSetButtons(true);
+            ddbRunPhase(phase, {
+                dryRun: dryRun,
+                startMonth: $('#ddb-start-month').val() || '',
+                endMonth: $('#ddb-end-month').val() || '',
+                label: label,
+                $progress: $('#ddb-progress')
+            });
+        }
+        // A real (non-dry) run writes billing data — confirm first, in-page and
+        // marked destructive (a dry run mistaken for a live one has cost a full
+        // diagnostic cycle on this project).
+        if (dryRun) {
+            run();
             return;
         }
-        ddbRunning = true;
-        ddbSetButtons(true);
-        ddbRunPhase(phase, {
-            dryRun: dryRun,
-            startMonth: $('#ddb-start-month').val() || '',
-            endMonth: $('#ddb-end-month').val() || '',
-            label: label,
-            $progress: $('#ddb-progress')
+        window.MealsDBConfirm.confirm({
+            title: 'Run for REAL — writes billing data',
+            message: 'Run "' + label + '" for REAL? This writes delivery dates / allocation billing data to meals_* tables.',
+            confirmLabel: 'Run for real',
+            destructive: true
+        }).then(function (ok) {
+            if (ok) { run(); }
         });
     }
 

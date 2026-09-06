@@ -9,8 +9,12 @@
  * Why on-page beats alert(): alert() blocks the page, vanishes on dismiss,
  * isn't tied to the field, and is invisible to screen readers. The
  * role="status"/aria-live="polite" region below is the accessibility win and
- * must be preserved. The 7 native confirm() guards are intentionally NOT
- * routed through here (see the directive's "Out of scope").
+ * must be preserved. Confirmations/prompts (yes-no gates, reason capture) go
+ * through window.MealsDBConfirm (meals-confirm.js), the sibling modal helper —
+ * this file is for one-way informational messages only. As of the
+ * replace-native-dialogs directive there are NO native confirm()/prompt()/
+ * alert() calls left in the admin JS; both helpers are in-page so a browser
+ * agent can drive every workflow without native dialog chrome.
  *
  * @package MealsDB
  */

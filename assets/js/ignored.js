@@ -38,7 +38,7 @@
                 if (response.success) {
                     $('#ignore-row-' + rowId).fadeOut();
                 } else {
-                    alert(failMessage);
+                    window.MealsDBNotice('error', failMessage);
                 }
             });
         });

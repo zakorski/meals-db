@@ -67,7 +67,8 @@ class MealsDB_Order_Audit_Page {
         wp_enqueue_script(
             'mealsdb-order-audit-js',
             plugins_url('assets/js/order-audit.js', dirname(dirname(__FILE__))),
-            ['jquery', 'selectWoo'],
+            // In-page dialog helper (confirm/prompt/alert) + selectWoo.
+            ['jquery', 'selectWoo', MealsDB_Admin_UI::register_confirm_script()],
             defined('MEALS_DB_VERSION') ? MEALS_DB_VERSION : false,
             true
         );
