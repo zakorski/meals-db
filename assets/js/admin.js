@@ -125,6 +125,11 @@ jQuery(document).ready(function($) {
     if ($clientForm.length) {
         const $customerTypeSelect = $('#client_type');
         const normalizeType = (value) => (value || '').toString().trim().toLowerCase();
+        // FOLLOW-UP DIRECTIVE B (ITEM 1): required-field validation is CREATE-only.
+        // On the edit form no field is `required` (the browser must not block a
+        // correction to a long-standing record), so the type-aware requiring
+        // below is suppressed entirely in edit mode.
+        const isEditMode = ($clientForm.data('formMode') || '').toString() === 'edit';
 
         const toggleInteractiveState = ($container, shouldEnable) => {
             $container.find('input, select, textarea, button').each(function () {
@@ -169,7 +174,8 @@ jQuery(document).ready(function($) {
                 const $row = $(this);
                 const allowedRaw = ($row.data('requiredFor') || '').toString().toLowerCase();
                 const allowedTypes = allowedRaw.split(',').map((item) => item.trim()).filter(Boolean);
-                const shouldRequire = allowedTypes.includes(normalized);
+                // Edit mode → never required (create-only validation).
+                const shouldRequire = !isEditMode && allowedTypes.includes(normalized);
 
                 $row.toggleClass('mealsdb-required-disabled', !shouldRequire);
                 $row.find('[data-base-required]').each(function () {
@@ -181,6 +187,13 @@ jQuery(document).ready(function($) {
                     }
                 });
             });
+
+            // Belt-and-suspenders: in edit mode strip `required` from every
+            // baseline-required input too (the PHP already omits the attribute,
+            // but this guarantees no field can block the save if markup changes).
+            if (isEditMode) {
+                $clientForm.find('[data-base-required]').prop('required', false).removeAttr('aria-required');
+            }
         };
 
         const syncAltContactName = () => {

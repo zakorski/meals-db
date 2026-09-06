@@ -384,6 +384,17 @@ class MealsDB_Quick_Order_Ajax {
 
             $order->update_meta_data('mealsdb_client_user_id', $wp_user_id);
 
+            // FOLLOW-UP DIRECTIVE B (ITEM 2): Quick Order derives date_created_gmt
+            // from the operator's Order Date (at 03:00), which is load-bearing —
+            // the allocation/billing-month/delivery-occurrence math reads it, and
+            // back-dated retroactive entry depends on it. So date_created must NOT
+            // be changed. Instead, stamp the REAL wall-clock creation time in a
+            // dedicated meta. The weekend-slip selection (Directive 4) uses this
+            // when present, so a weekend order taken through QO is no longer stamped
+            // "older than the batch" and silently dropped. gmdate = UTC, matching
+            // date_created_gmt's basis.
+            $order->update_meta_data('_mealsdb_wallclock_created', gmdate('Y-m-d H:i:s'));
+
             if ($client_id > 0) {
                 $order->update_meta_data('mealsdb_client_id', $client_id);
             }
@@ -829,15 +840,23 @@ class MealsDB_Quick_Order_Ajax {
             //   order_date, items, products, rate_id.
             // client_name is '' when client_id is unresolvable (MAJ-1 guard or
             // no active client); the JS then falls back to "Client #<id>".
+            // FOLLOW-UP DIRECTIVE C (ITEM 5): the source order's one-time delivery
+            // date (_delivery_date). The reopen path restores it so completing a
+            // reopened draft keeps its delivery date rather than placing an order
+            // with none. (The JS only applies it in reopen mode; a clone's
+            // delivery-date behaviour is an open decision and is left untouched.)
+            $source_delivery_date = (string) $source_order->get_meta('_delivery_date');
+
             wp_send_json([
-                'success'     => true,
-                'client_id'   => $wp_user_id > 0 ? $wp_user_id : null,
-                'client_type' => $client_type,
-                'client_name' => $client_name,
-                'order_date'  => $order_date,
-                'items'       => (object) $items,
-                'products'    => (object) $products,
-                'rate_id'     => $rate_id > 0 ? $rate_id : null,
+                'success'       => true,
+                'client_id'     => $wp_user_id > 0 ? $wp_user_id : null,
+                'client_type'   => $client_type,
+                'client_name'   => $client_name,
+                'order_date'    => $order_date,
+                'delivery_date' => $source_delivery_date !== '' ? $source_delivery_date : null,
+                'items'         => (object) $items,
+                'products'      => (object) $products,
+                'rate_id'       => $rate_id > 0 ? $rate_id : null,
             ]);
         } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] clone_get_order error: ' . $e->getMessage());

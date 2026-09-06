@@ -1744,6 +1744,16 @@ class MealsDB_Admin_UI {
         $client_id = intval($args['client_id']);
         $form_values = is_array($args['form_values']) ? $args['form_values'] : [];
 
+        // FOLLOW-UP DIRECTIVE B (ITEM 1): required-field validation is CREATE-only.
+        // On the EDIT form the native HTML `required` attribute must NOT render —
+        // otherwise the browser blocks the save (its validation bubble) before the
+        // create-only server-side skip is ever reached, so no existing client can
+        // be corrected. Emitted only when adding; the type-aware JS also skips
+        // re-adding `required` in edit mode (see assets/js/admin.js). The
+        // data-base-required marker stays so the JS knows which fields are the
+        // baseline-required set when creating.
+        $req = ($form_mode === 'edit') ? '' : 'required ';
+
         // Normalize all enum/select field values for case-insensitive matching with UI elements
         $normalize_field_value = static function (string $field_name, $value): string {
             if ($value === null || $value === '') {
@@ -1847,7 +1857,7 @@ class MealsDB_Admin_UI {
                     <th><label for="client_type"><?php esc_html_e('Client Type *', 'meals-db'); ?></label></th>
                     <td>
                         <?php $current_type = $client_type; ?>
-                        <select name="client_type" id="client_type" required data-base-required="1">
+                        <select name="client_type" id="client_type" <?php echo $req; ?>data-base-required="1">
                             <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
                             <option value="SDNB" <?php selected($current_type, 'SDNB'); ?>>SDNB</option>
                             <option value="Veteran" <?php selected($current_type, 'Veteran'); ?>>Veteran</option>
@@ -1870,7 +1880,7 @@ class MealsDB_Admin_UI {
                     </th>
                     <td>
                         <div class="mealsdb-wp-user-tools">
-                            <input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" required data-base-required="1" value="<?php echo esc_attr($client['wordpress_user_id'] ?? ''); ?>" />
+                            <input type="number" name="wordpress_user_id" id="wordpress_user_id" class="regular-text" min="1" step="1" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['wordpress_user_id'] ?? ''); ?>" />
                             <div class="mealsdb-wp-user-buttons">
                                 <button type="button" class="button" id="mealsdb-validate-wp-user"><?php esc_html_e('Validate', 'meals-db'); ?></button>
                                 <button type="button" class="button" id="mealsdb-pull-wp-user" disabled><?php esc_html_e('Pull Data', 'meals-db'); ?></button>
@@ -1908,7 +1918,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr>
                     <th><label for="first_name"><?php esc_html_e('First Name *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="first_name" id="first_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['first_name'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="first_name" id="first_name" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['first_name'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -1916,7 +1926,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr>
                     <th><label for="last_name"><?php esc_html_e('Last Name *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="last_name" id="last_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['last_name'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="last_name" id="last_name" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['last_name'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -1981,7 +1991,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="phone_primary"><?php esc_html_e('Phone Number *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="phone_primary" id="phone_primary" class="regular-text phone-mask" placeholder="(555)-555-5555" required data-base-required="1" value="<?php echo esc_attr($client['phone_primary'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="phone_primary" id="phone_primary" class="regular-text phone-mask" placeholder="(555)-555-5555" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['phone_primary'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2043,7 +2053,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_street_name"><?php esc_html_e('Address *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_street_name" id="address_street_name" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_street_name'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="address_street_name" id="address_street_name" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['address_street_name'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2051,7 +2061,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_city"><?php esc_html_e('City *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_city" id="address_city" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_city'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="address_city" id="address_city" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['address_city'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2059,7 +2069,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_province"><?php esc_html_e('Province *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_province" id="address_province" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['address_province'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="address_province" id="address_province" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['address_province'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2067,7 +2077,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_postal"><?php esc_html_e('Postal Code *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_postal" id="address_postal" class="regular-text postal-mask" maxlength="6" placeholder="A1A1A1" required data-base-required="1" value="<?php echo esc_attr($client['address_postal'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="address_postal" id="address_postal" class="regular-text postal-mask" maxlength="6" placeholder="A1A1A1" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['address_postal'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2104,7 +2114,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="payment_method"><?php esc_html_e('Payment Method *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="payment_method" id="payment_method" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['payment_method'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="payment_method" id="payment_method" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['payment_method'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2112,7 +2122,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="required_start_date"><?php esc_html_e('Required Start Date *', 'meals-db'); ?></label></th>
-                    <td><input type="date" name="required_start_date" id="required_start_date" class="mealsdb-datepicker" required data-base-required="1" value="<?php echo esc_attr($client['required_start_date'] ?? ''); ?>" /></td>
+                    <td><input type="date" name="required_start_date" id="required_start_date" class="mealsdb-datepicker" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['required_start_date'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2151,7 +2161,7 @@ class MealsDB_Admin_UI {
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_area_name"><?php esc_html_e('Delivery Area Name *', 'meals-db'); ?></label></th>
                     <td>
-                        <select name="delivery_area_name" id="delivery_area_name" class="regular-text" required data-base-required="1">
+                        <select name="delivery_area_name" id="delivery_area_name" class="regular-text" <?php echo $req; ?>data-base-required="1">
                             <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
                             <?php if ($current !== '' && !$known) : ?>
                                 <?php // Legacy value not in the schedule: keep it selected-but-flagged so an
@@ -2175,7 +2185,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_area_zone"><?php esc_html_e('Delivery Area Zone *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="delivery_area_zone" id="delivery_area_zone" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['delivery_area_zone'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="delivery_area_zone" id="delivery_area_zone" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['delivery_area_zone'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2184,7 +2194,7 @@ class MealsDB_Admin_UI {
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="ordering_contact_method"><?php esc_html_e('Ordering Contact Method *', 'meals-db'); ?></label></th>
                     <td>
-                        <select name="ordering_contact_method" id="ordering_contact_method" required data-base-required="1">
+                        <select name="ordering_contact_method" id="ordering_contact_method" <?php echo $req; ?>data-base-required="1">
                             <option value=""><?php esc_html_e('Select…', 'meals-db'); ?></option>
                             <?php foreach ($ordering_contact_method_options as $option) : ?>
                                 <?php $label = $format_enum_option_label($option); ?>
@@ -2199,7 +2209,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="ordering_frequency"><?php esc_html_e('Ordering Frequency *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="ordering_frequency" id="ordering_frequency" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['ordering_frequency'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="ordering_frequency" id="ordering_frequency" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['ordering_frequency'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2207,7 +2217,7 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="delivery_frequency"><?php esc_html_e('Delivery Frequency *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="delivery_frequency" id="delivery_frequency" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($client['delivery_frequency'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="delivery_frequency" id="delivery_frequency" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['delivery_frequency'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2365,7 +2375,7 @@ class MealsDB_Admin_UI {
                     <th><label for="delivery_initials"><?php esc_html_e('Initials for Delivery *', 'meals-db'); ?></label></th>
                     <td>
                         <div class="mealsdb-initials-tools">
-                            <input type="text" name="delivery_initials" id="delivery_initials" class="regular-text" required data-base-required="1" value="<?php echo esc_attr($delivery_initials_value); ?>" />
+                            <input type="text" name="delivery_initials" id="delivery_initials" class="regular-text" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($delivery_initials_value); ?>" />
                             <div class="mealsdb-initials-buttons">
                                 <button type="button" class="button mealsdb-initials-generate" id="mealsdb-generate-initials"><?php esc_html_e('Generate', 'meals-db'); ?></button>
                                 <button type="button" class="button mealsdb-initials-validate" id="mealsdb-validate-initials"><?php esc_html_e('Validate', 'meals-db'); ?></button>
@@ -2405,7 +2415,7 @@ class MealsDB_Admin_UI {
             },
         ];
         ?>
-        <form method="post" id="mealsdb-client-form" class="<?php echo esc_attr($form_class_attr); ?>">
+        <form method="post" id="mealsdb-client-form" class="<?php echo esc_attr($form_class_attr); ?>" data-form-mode="<?php echo esc_attr($form_mode); ?>">
             <?php wp_nonce_field('mealsdb_nonce', 'mealsdb_nonce_field'); ?>
             <?php if ($client_id > 0 && $form_mode === 'edit') : ?>
                 <input type="hidden" name="client_id" value="<?php echo esc_attr($client_id); ?>" />

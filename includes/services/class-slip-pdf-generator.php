@@ -162,8 +162,20 @@ class MealsDB_Slip_PDF_Generator {
         // own created_at belongs to the original run, not the weekend one);
         // created_end is INCLUSIVE (… up to 23:59:59 Sunday).
         if ($created_start !== '' || $created_end !== '') {
-            $orders = array_values(array_filter($orders, static function ($order) use ($created_start, $created_end) {
-                $created = (string) ($order['date_created_gmt'] ?? '');
+            // FOLLOW-UP DIRECTIVE B (ITEM 2): window on the REAL creation time.
+            // Quick Order sets date_created_gmt to the operator's Order Date (at
+            // 03:00), so a weekend order taken through QO otherwise looks older
+            // than the batch and is dropped. QO stamps _mealsdb_wallclock_created
+            // with the true placement time; prefer it here, falling back to
+            // date_created_gmt for WC "Add order" (and pre-fix QO) orders.
+            $order_ids = array_values(array_filter(array_map(static function ($o) {
+                return (int) ($o['order_id'] ?? 0);
+            }, $orders)));
+            $wallclock = $this->client_query->get_order_meta_map($order_ids, '_mealsdb_wallclock_created');
+
+            $orders = array_values(array_filter($orders, static function ($order) use ($created_start, $created_end, $wallclock) {
+                $oid     = (int) ($order['order_id'] ?? 0);
+                $created = (string) ($wallclock[$oid] ?? ($order['date_created_gmt'] ?? ''));
                 if ($created === '') {
                     return false;
                 }

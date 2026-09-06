@@ -25,6 +25,10 @@
                 hasLoadedClone: false,
                 isCloning: false,
                 nextDatesSeq: 0,
+                // FOLLOW-UP DIRECTIVE C (ITEM 1): guards the client-allocation
+                // fetch against an out-of-order response overwriting a newer
+                // client's context/allowance/zone panel with an older one's.
+                allocationSeq: 0,
                 cloneOrderId: null,
                 // Directive 1 (ITEM 2): the parked draft being completed in place.
                 // 0 = normal (new order) mode. Distinct from cloneOrderId, which
@@ -602,6 +606,20 @@
                     // empty (skipDeliveryPrefill).
                     if (payload.client_id) {
                         this.fetchNextDates(parseInt(payload.client_id, 10), { skipDeliveryPrefill: true });
+                    }
+                }
+
+                // FOLLOW-UP DIRECTIVE C (ITEM 5): restore the one-time delivery
+                // date when REOPENING a draft, so completing it keeps its delivery
+                // date instead of placing an order with none. Reopen only — a
+                // clone's delivery-date behaviour is a separate open decision, so
+                // it is deliberately left as-is. fetchNextDates above uses
+                // skipDeliveryPrefill so it won't clobber this.
+                if (this.state.reopenOrderId && payload.delivery_date) {
+                    const $dd = $('#mealsdb-qo-delivery-date');
+                    if ($dd.length) {
+                        $dd.val(payload.delivery_date);
+                        this.refreshDeliveryDateWarning();
                     }
                 }
 
@@ -1812,6 +1830,21 @@
                     if (this.$createOrder && this.$createOrder.length) {
                         this.$createOrder.text(this.translate('Create Order'));
                     }
+                    // FOLLOW-UP DIRECTIVE C (ITEM 5): after a completion the form
+                    // clears fully — NO client and NO items — so pressing Create
+                    // again cannot place a second order for the same client.
+                    // clearCart() empties the basket (it deliberately keeps the
+                    // client), so also deselect the client: clearing #client_id and
+                    // firing change cascades through handleClientSelectionChange to
+                    // reset the context/allowance/zone panels and the summary.
+                    this.clearCart();
+                    if (this.$clientSelect && this.$clientSelect.length) {
+                        this.$clientSelect.val('').data('clientType', '').data('clientAllergens', []);
+                    }
+                    if (this.$clientSearch && this.$clientSearch.length) {
+                        this.$clientSearch.val('');
+                    }
+                    this.handleClientSelectionChange();
                 } else {
                     successMessage = this.getResponseMessage(response, 'Order created successfully!');
                 }
@@ -2111,6 +2144,17 @@
             this.updateSummaryPanel();
             this.renderSummary();
             this.fetchClientRates(clientId);
+            // FOLLOW-UP DIRECTIVE C (ITEM 1): re-render the WHOLE client context on
+            // a client change. Clear the previous client's context/allowance/fees
+            // and zone up front so nothing stale can linger while (or if) the
+            // refresh is in flight — a stale panel is worse than an empty one.
+            // fetchClientAllocation repopulates for the new client and is
+            // sequence-guarded against an out-of-order response.
+            this.clearAllocationDisplay();
+            const $zoneCell = $('#mealsdb-quick-order-summary-zone');
+            if ($zoneCell.length) {
+                $zoneCell.text(this.translate('—'));
+            }
             this.fetchClientAllocation(clientId);
             // While cloning, don't let the change-triggered fetch prefill the
             // one-time delivery override (it must stay empty after a clone).
@@ -2209,7 +2253,14 @@
         deliveryDateWarning(ymd, expectedDay) {
             const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || '');
             if (!m) {
-                return '';
+                // FOLLOW-UP DIRECTIVE C (ITEM 2): an EMPTY delivery date is the case
+                // that matters most — an order with no delivery date gets no slip
+                // and no allocation, so it silently does not happen. Warn inline
+                // like the past/weekday cases (non-blocking). A malformed-but-
+                // non-empty value stays silent (the field is mid-edit).
+                return (ymd || '').trim() === ''
+                    ? 'Heads up: no delivery date set — this order gets no slip and no allocation. Saving anyway is allowed.'
+                    : '';
             }
             const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             const weekday = dayNames[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
@@ -2567,6 +2618,12 @@
                 return;
             }
 
+            // FOLLOW-UP DIRECTIVE C (ITEM 1): sequence-guard so an older client's
+            // response (arriving after a newer selection) can never overwrite the
+            // panel with stale data — the bug that left the previous client's
+            // context/allowance/zone on screen after a switch.
+            const seq = ++this.state.allocationSeq;
+
             $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'GET',
@@ -2577,6 +2634,9 @@
                     user_id: userId,
                 },
             }).done((response) => {
+                if (seq !== this.state.allocationSeq) {
+                    return; // a newer client was selected — ignore this stale response
+                }
                 if (response && response.success) {
                     this.state.allocation = response.allocation || null;
                     this.state.clientFees = response.fees || null;
@@ -2603,6 +2663,14 @@
                     } else {
                         this.showProductPrices();
                     }
+                } else {
+                    // A non-success response must not leave the previous client's
+                    // panel showing — clear rather than go stale (Directive C ITEM 1).
+                    this.clearAllocationDisplay();
+                }
+            }).fail(() => {
+                if (seq === this.state.allocationSeq) {
+                    this.clearAllocationDisplay();
                 }
             });
         },

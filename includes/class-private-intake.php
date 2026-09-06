@@ -99,8 +99,27 @@ class MealsDB_Private_Intake {
             return (int) $existing['client_id'];
         }
 
+        // FOLLOW-UP DIRECTIVE A: the caller (on_order_status_changed → the WC
+        // status-change hook) does NOT catch, and neither did this method — so a
+        // throw below (initials generation, create_index, encryption, the insert)
+        // would propagate into WC's hook loop UNLOGGED: a promotion producing no
+        // record with no signal, possibly breaking the order transition. Wrap the
+        // body (Pattern 7) so any throw is named and swallowed, returning null.
+        try {
         $payload = self::build_field_payload($wp_user_id, $order);
         if (empty($payload)) {
+            // FOLLOW-UP DIRECTIVE A: a promotion that resolved a user but built no
+            // payload produces no record — surface it rather than returning null
+            // silently, so a government user who ordered but was not created is
+            // diagnosable (this is one of the candidate causes named in the
+            // directive). error_log breadcrumb only: this is a genuine gap, not
+            // the hot already-exists path (which returns above without logging).
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error(sprintf(
+                    '[MealsDB Promote] empty payload — no record created for user=%d (build_field_payload returned nothing).',
+                    $wp_user_id
+                ));
+            }
             return null;
         }
 
@@ -212,6 +231,47 @@ class MealsDB_Private_Intake {
 
         $client_id = MealsDB_Clients_Repository::create($data);
         if ($client_id <= 0) {
+            // FOLLOW-UP DIRECTIVE A: a failed promotion INSERT used to return null
+            // silently — the exact silent-insert shape that cost a full debugging
+            // session on 2026-08-31 (a varchar column rejecting free text). Make
+            // it loud and named: the repository records the offending column
+            // (last_failed_column), so surface it with the user, resolved type and
+            // group here. This is what a government-user order producing NO client
+            // record will now show, instead of nothing.
+            $failed_column = class_exists('MealsDB_Clients_Repository')
+                ? MealsDB_Clients_Repository::last_failed_column()
+                : null;
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error',
+                    'category'  => 'sync',
+                    'subsystem' => 'private_intake',
+                    'event'     => 'promote.insert_failed',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'   => sprintf(
+                        'Promotion INSERT failed for user %d (type %s, customer_group "%s")%s — no client record created.',
+                        $wp_user_id,
+                        $client_type,
+                        $group_raw,
+                        $failed_column !== null ? ' — offending column: ' . $failed_column : ''
+                    ),
+                    'context'   => [
+                        'wp_user_id'     => $wp_user_id,
+                        'client_type'    => $client_type,
+                        'customer_group' => $group_raw,
+                        'failed_column'  => $failed_column,
+                    ],
+                ]);
+            }
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error(sprintf(
+                    '[MealsDB Promote] INSERT failed user=%d type=%s group="%s" column=%s',
+                    $wp_user_id,
+                    $client_type,
+                    $group_raw,
+                    $failed_column ?? 'unknown'
+                ));
+            }
             return null;
         }
 
@@ -238,6 +298,36 @@ class MealsDB_Private_Intake {
         );
 
         return $client_id;
+        } catch (\Throwable $e) {
+            // Name the throw (with the user) so a promotion that dies here is
+            // diagnosable rather than a silent no-record, and swallow it so the
+            // order's status transition is never broken by an intake failure.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error',
+                    'category'  => 'sync',
+                    'subsystem' => 'private_intake',
+                    'event'     => 'promote.threw',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'   => sprintf(
+                        'Promotion threw for user %d (%s): %s',
+                        $wp_user_id,
+                        get_class($e),
+                        $e->getMessage()
+                    ),
+                    'context'   => ['wp_user_id' => $wp_user_id, 'exception' => get_class($e)],
+                ]);
+            }
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error(sprintf(
+                    '[MealsDB Promote] threw for user=%d: %s: %s',
+                    $wp_user_id,
+                    get_class($e),
+                    $e->getMessage()
+                ));
+            }
+            return null;
+        }
     }
 
     /**
