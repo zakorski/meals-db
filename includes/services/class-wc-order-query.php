@@ -58,6 +58,40 @@ class MealsDB_WC_Order_Query {
     }
 
     /**
+     * Batch-fetch one HPOS order meta value for many orders.
+     *
+     * Used by the weekend-slip selection (FOLLOW-UP DIRECTIVE B ITEM 2) to read
+     * each order's real wall-clock creation time (_mealsdb_wallclock_created),
+     * since date_created_gmt carries the operator's Order Date, not the placement
+     * time. One query, not an N+1.
+     *
+     * @param int[]  $order_ids
+     * @param string $meta_key
+     * @return array<int,string> order_id => meta_value (only orders that have it)
+     */
+    public function get_order_meta_map(array $order_ids, string $meta_key): array {
+        $map = [];
+        $order_ids = array_values(array_unique(array_filter(array_map('intval', $order_ids))));
+        if (empty($order_ids) || $meta_key === '') {
+            return $map;
+        }
+        $meta_table   = $this->orders_meta_table();
+        $placeholders = implode(',', array_fill(0, count($order_ids), '%d'));
+        $params       = array_merge([$meta_key], $order_ids);
+        $rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT order_id, meta_value FROM {$meta_table}
+             WHERE meta_key = %s AND order_id IN ({$placeholders})",
+            $params
+        ), ARRAY_A);
+        if (is_array($rows)) {
+            foreach ($rows as $r) {
+                $map[(int) $r['order_id']] = (string) $r['meta_value'];
+            }
+        }
+        return $map;
+    }
+
+    /**
      * Fetch orders for the given WP user IDs within a date range.
      *
      * @param int[]    $wp_user_ids      WordPress user IDs.

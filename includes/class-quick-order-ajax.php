@@ -384,6 +384,17 @@ class MealsDB_Quick_Order_Ajax {
 
             $order->update_meta_data('mealsdb_client_user_id', $wp_user_id);
 
+            // FOLLOW-UP DIRECTIVE B (ITEM 2): Quick Order derives date_created_gmt
+            // from the operator's Order Date (at 03:00), which is load-bearing —
+            // the allocation/billing-month/delivery-occurrence math reads it, and
+            // back-dated retroactive entry depends on it. So date_created must NOT
+            // be changed. Instead, stamp the REAL wall-clock creation time in a
+            // dedicated meta. The weekend-slip selection (Directive 4) uses this
+            // when present, so a weekend order taken through QO is no longer stamped
+            // "older than the batch" and silently dropped. gmdate = UTC, matching
+            // date_created_gmt's basis.
+            $order->update_meta_data('_mealsdb_wallclock_created', gmdate('Y-m-d H:i:s'));
+
             if ($client_id > 0) {
                 $order->update_meta_data('mealsdb_client_id', $client_id);
             }

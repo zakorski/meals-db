@@ -350,7 +350,14 @@ class MealsDB_Quick_Order_Products {
     public static function get_categories(): array {
         $cached = get_transient(self::CATEGORIES_TRANSIENT_KEY);
         if (is_array($cached)) {
-            return $cached;
+            // FOLLOW-UP DIRECTIVE C (ITEM 3): apply the tab order on the READ path
+            // too, not only when (re)building the cache. A cache built by an older
+            // build — e.g. a production copy taken before Directive 3 shipped —
+            // would otherwise be returned alphabetically and still carry the parent
+            // 'main' category (rendering a duplicate "Main" tab beside the derived
+            // "Mains"). Re-ordering on read makes the tab strip correct regardless
+            // of when the cache was written; it is a cheap sort + filter.
+            return self::order_categories_for_tabs($cached);
         }
 
         $products = self::get_all_products();

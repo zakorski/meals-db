@@ -25,6 +25,10 @@
                 hasLoadedClone: false,
                 isCloning: false,
                 nextDatesSeq: 0,
+                // FOLLOW-UP DIRECTIVE C (ITEM 1): guards the client-allocation
+                // fetch against an out-of-order response overwriting a newer
+                // client's context/allowance/zone panel with an older one's.
+                allocationSeq: 0,
                 cloneOrderId: null,
                 // Directive 1 (ITEM 2): the parked draft being completed in place.
                 // 0 = normal (new order) mode. Distinct from cloneOrderId, which
@@ -2129,6 +2133,17 @@
             this.updateSummaryPanel();
             this.renderSummary();
             this.fetchClientRates(clientId);
+            // FOLLOW-UP DIRECTIVE C (ITEM 1): re-render the WHOLE client context on
+            // a client change. Clear the previous client's context/allowance/fees
+            // and zone up front so nothing stale can linger while (or if) the
+            // refresh is in flight — a stale panel is worse than an empty one.
+            // fetchClientAllocation repopulates for the new client and is
+            // sequence-guarded against an out-of-order response.
+            this.clearAllocationDisplay();
+            const $zoneCell = $('#mealsdb-quick-order-summary-zone');
+            if ($zoneCell.length) {
+                $zoneCell.text(this.translate('—'));
+            }
             this.fetchClientAllocation(clientId);
             // While cloning, don't let the change-triggered fetch prefill the
             // one-time delivery override (it must stay empty after a clone).
@@ -2592,6 +2607,12 @@
                 return;
             }
 
+            // FOLLOW-UP DIRECTIVE C (ITEM 1): sequence-guard so an older client's
+            // response (arriving after a newer selection) can never overwrite the
+            // panel with stale data — the bug that left the previous client's
+            // context/allowance/zone on screen after a switch.
+            const seq = ++this.state.allocationSeq;
+
             $.ajax({
                 url: this.getAjaxUrl(),
                 method: 'GET',
@@ -2602,6 +2623,9 @@
                     user_id: userId,
                 },
             }).done((response) => {
+                if (seq !== this.state.allocationSeq) {
+                    return; // a newer client was selected — ignore this stale response
+                }
                 if (response && response.success) {
                     this.state.allocation = response.allocation || null;
                     this.state.clientFees = response.fees || null;
@@ -2628,6 +2652,14 @@
                     } else {
                         this.showProductPrices();
                     }
+                } else {
+                    // A non-success response must not leave the previous client's
+                    // panel showing — clear rather than go stale (Directive C ITEM 1).
+                    this.clearAllocationDisplay();
+                }
+            }).fail(() => {
+                if (seq === this.state.allocationSeq) {
+                    this.clearAllocationDisplay();
                 }
             });
         },
