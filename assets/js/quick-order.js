@@ -1830,10 +1830,21 @@
                     if (this.$createOrder && this.$createOrder.length) {
                         this.$createOrder.text(this.translate('Create Order'));
                     }
-                    // FOLLOW-UP DIRECTIVE C (ITEM 5): clear the basket after a
-                    // completion so pressing Create again cannot place a SECOND
-                    // order for the same client with the same items.
+                    // FOLLOW-UP DIRECTIVE C (ITEM 5): after a completion the form
+                    // clears fully — NO client and NO items — so pressing Create
+                    // again cannot place a second order for the same client.
+                    // clearCart() empties the basket (it deliberately keeps the
+                    // client), so also deselect the client: clearing #client_id and
+                    // firing change cascades through handleClientSelectionChange to
+                    // reset the context/allowance/zone panels and the summary.
                     this.clearCart();
+                    if (this.$clientSelect && this.$clientSelect.length) {
+                        this.$clientSelect.val('').data('clientType', '').data('clientAllergens', []);
+                    }
+                    if (this.$clientSearch && this.$clientSearch.length) {
+                        this.$clientSearch.val('');
+                    }
+                    this.handleClientSelectionChange();
                 } else {
                     successMessage = this.getResponseMessage(response, 'Order created successfully!');
                 }
