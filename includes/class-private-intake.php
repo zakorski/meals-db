@@ -99,6 +99,13 @@ class MealsDB_Private_Intake {
             return (int) $existing['client_id'];
         }
 
+        // FOLLOW-UP DIRECTIVE A: the caller (on_order_status_changed → the WC
+        // status-change hook) does NOT catch, and neither did this method — so a
+        // throw below (initials generation, create_index, encryption, the insert)
+        // would propagate into WC's hook loop UNLOGGED: a promotion producing no
+        // record with no signal, possibly breaking the order transition. Wrap the
+        // body (Pattern 7) so any throw is named and swallowed, returning null.
+        try {
         $payload = self::build_field_payload($wp_user_id, $order);
         if (empty($payload)) {
             // FOLLOW-UP DIRECTIVE A: a promotion that resolved a user but built no
@@ -291,6 +298,36 @@ class MealsDB_Private_Intake {
         );
 
         return $client_id;
+        } catch (\Throwable $e) {
+            // Name the throw (with the user) so a promotion that dies here is
+            // diagnosable rather than a silent no-record, and swallow it so the
+            // order's status transition is never broken by an intake failure.
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error',
+                    'category'  => 'sync',
+                    'subsystem' => 'private_intake',
+                    'event'     => 'promote.threw',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'   => sprintf(
+                        'Promotion threw for user %d (%s): %s',
+                        $wp_user_id,
+                        get_class($e),
+                        $e->getMessage()
+                    ),
+                    'context'   => ['wp_user_id' => $wp_user_id, 'exception' => get_class($e)],
+                ]);
+            }
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::error(sprintf(
+                    '[MealsDB Promote] threw for user=%d: %s: %s',
+                    $wp_user_id,
+                    get_class($e),
+                    $e->getMessage()
+                ));
+            }
+            return null;
+        }
     }
 
     /**
