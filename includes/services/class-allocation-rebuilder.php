@@ -426,63 +426,128 @@ class MealsDB_Allocation_Rebuilder {
             $remaining_tax_sides   = (int) $d['tax_sides'];
             $remaining_nontax_sides = (int) $d['nontax_sides'];
 
-            // Pass 1: fill the delivery month up to headroom.
-            $place_to_month = function(string $month) use (
-                &$remaining_mains, &$remaining_tax_sides, &$remaining_nontax_sides,
-                &$headroom, $d, $client_id, $alloc_table, $finalized, $consume_only
-            ) {
-                if (!isset($headroom[$month]) || !empty($finalized[$month])) {
-                    // Outside our window, OR finalized (immutable): leave the
-                    // meals for the caller to spill / count as unplaced. You
-                    // cannot retroactively add meals to a submitted invoice.
-                    return;
+            if (!$uncap_sides) {
+                // ---- SDNB / capped path (UNCHANGED) ------------------------
+                // Pass 1: fill the delivery month up to headroom.
+                $place_to_month = function(string $month) use (
+                    &$remaining_mains, &$remaining_tax_sides, &$remaining_nontax_sides,
+                    &$headroom, $d, $client_id, $alloc_table, $finalized, $consume_only
+                ) {
+                    if (!isset($headroom[$month]) || !empty($finalized[$month])) {
+                        // Outside our window, OR finalized (immutable): leave the
+                        // meals for the caller to spill / count as unplaced. You
+                        // cannot retroactively add meals to a submitted invoice.
+                        return;
+                    }
+                    $put_mains       = min($remaining_mains,                $headroom[$month]['mains']);
+                    $sides_remaining = $remaining_tax_sides + $remaining_nontax_sides;
+                    $put_sides       = min($sides_remaining,                $headroom[$month]['sides']);
+
+                    // Within sides, allocate taxable first then non-taxable to
+                    // preserve the existing tax accounting convention.
+                    $put_tax    = min($remaining_tax_sides,    $put_sides);
+                    $put_nontax = $put_sides - $put_tax;
+
+                    if ($put_mains === 0 && $put_sides === 0) {
+                        return;
+                    }
+
+                    // BC-1: a consume-only month (prior-prior leading edge) consumes
+                    // headroom — so the delivery's overflow into the write window is
+                    // computed correctly — but its row is NOT written. Its existing,
+                    // already-billed row was deliberately left in place (not deleted
+                    // above), so re-inserting here would duplicate it.
+                    if (empty($consume_only[$month])) {
+                        $this->wpdb->insert($alloc_table, [
+                            'client_id'          => $client_id,
+                            'wc_order_id'        => (int) $d['wc_order_id'],
+                            'order_date'         => (string) $d['order_date'],
+                            'delivery_date'      => (string) $d['delivery_date'],
+                            'billing_month'      => $month,
+                            'mains_count'        => $put_mains,
+                            'sides_count'        => $put_sides,
+                            'tax_sides_count'    => $put_tax,
+                            'nontax_sides_count' => $put_nontax,
+                            'coverage_start'     => (string) $d['delivery_date'],
+                            'coverage_end'       => (string) ($d['coverage_end'] ?? $d['delivery_date']),
+                        ]);
+                    }
+
+                    $remaining_mains        -= $put_mains;
+                    $remaining_tax_sides    -= $put_tax;
+                    $remaining_nontax_sides -= $put_nontax;
+                    $headroom[$month]['mains'] -= $put_mains;
+                    $headroom[$month]['sides'] -= $put_sides;
+                };
+
+                $place_to_month($delivery_month);
+
+                // Spill: anything that did not fit goes to the next month.
+                if ($remaining_mains > 0 || $remaining_tax_sides + $remaining_nontax_sides > 0) {
+                    $place_to_month($next_month);
                 }
-                $put_mains       = min($remaining_mains,                $headroom[$month]['mains']);
-                $sides_remaining = $remaining_tax_sides + $remaining_nontax_sides;
-                $put_sides       = min($sides_remaining,                $headroom[$month]['sides']);
+            } else {
+                // ---- VAC proportional path (Directive 2026-09-05) ----------
+                // VAC sides distribute across the billing months in the SAME
+                // proportion as THIS delivery's mains — never all in whichever
+                // month the allocator reaches first. Compute how the mains split
+                // (respecting the mains cap + finalized/window guards, exactly as
+                // the capped path does), then apportion sides to match, taxable
+                // and non-taxable INDEPENDENTLY, with any rounding remainder to the
+                // EARLIEST month. VAC sides have no per-month count cap (the dollar
+                // ceiling is enforced later, at invoice time), so they always
+                // follow the placed mains and are never independently unplaced.
+                $avail_del = (isset($headroom[$delivery_month]) && empty($finalized[$delivery_month]))
+                    ? (int) $headroom[$delivery_month]['mains'] : 0;
+                $mains_del = min($remaining_mains, $avail_del);
 
-                // Within sides, allocate taxable first then non-taxable to
-                // preserve the existing tax accounting convention.
-                $put_tax    = min($remaining_tax_sides,    $put_sides);
-                $put_nontax = $put_sides - $put_tax;
+                $avail_next = (isset($headroom[$next_month]) && empty($finalized[$next_month]))
+                    ? (int) $headroom[$next_month]['mains'] : 0;
+                $mains_next = min($remaining_mains - $mains_del, $avail_next);
 
-                if ($put_mains === 0 && $put_sides === 0) {
-                    return;
+                [$tax_del, $tax_next]       = self::split_sides_proportional($remaining_tax_sides, $mains_del, $mains_next);
+                [$nontax_del, $nontax_next] = self::split_sides_proportional($remaining_nontax_sides, $mains_del, $mains_next);
+
+                // Write one row per month with the placed mains + apportioned
+                // sides. Mirrors place_to_month's guards: a finalized/out-of-window
+                // month is skipped; a consume-only month grants headroom but is not
+                // (re)written.
+                $write_vac = function (string $month, int $mains, int $tax, int $nontax) use (
+                    &$headroom, $finalized, $consume_only, $client_id, $alloc_table, $d
+                ) {
+                    if (!isset($headroom[$month]) || !empty($finalized[$month])) { return; }
+                    if ($mains === 0 && $tax === 0 && $nontax === 0) { return; }
+                    if (empty($consume_only[$month])) {
+                        $this->wpdb->insert($alloc_table, [
+                            'client_id'          => $client_id,
+                            'wc_order_id'        => (int) $d['wc_order_id'],
+                            'order_date'         => (string) $d['order_date'],
+                            'delivery_date'      => (string) $d['delivery_date'],
+                            'billing_month'      => $month,
+                            'mains_count'        => $mains,
+                            'sides_count'        => $tax + $nontax,
+                            'tax_sides_count'    => $tax,
+                            'nontax_sides_count' => $nontax,
+                            'coverage_start'     => (string) $d['delivery_date'],
+                            'coverage_end'       => (string) ($d['coverage_end'] ?? $d['delivery_date']),
+                        ]);
+                    }
+                    $headroom[$month]['mains'] -= $mains;
+                    $headroom[$month]['sides'] -= ($tax + $nontax);
+                };
+
+                $write_vac($delivery_month, $mains_del, $tax_del, $nontax_del);
+                $write_vac($next_month,     $mains_next, $tax_next, $nontax_next);
+
+                $remaining_mains -= ($mains_del + $mains_next);
+                if ($mains_del + $mains_next > 0) {
+                    // Sides fully followed the placed mains — none remain.
+                    $remaining_tax_sides    = 0;
+                    $remaining_nontax_sides = 0;
                 }
-
-                // BC-1: a consume-only month (prior-prior leading edge) consumes
-                // headroom — so the delivery's overflow into the write window is
-                // computed correctly — but its row is NOT written. Its existing,
-                // already-billed row was deliberately left in place (not deleted
-                // above), so re-inserting here would duplicate it.
-                if (empty($consume_only[$month])) {
-                    $this->wpdb->insert($alloc_table, [
-                        'client_id'          => $client_id,
-                        'wc_order_id'        => (int) $d['wc_order_id'],
-                        'order_date'         => (string) $d['order_date'],
-                        'delivery_date'      => (string) $d['delivery_date'],
-                        'billing_month'      => $month,
-                        'mains_count'        => $put_mains,
-                        'sides_count'        => $put_sides,
-                        'tax_sides_count'    => $put_tax,
-                        'nontax_sides_count' => $put_nontax,
-                        'coverage_start'     => (string) $d['delivery_date'],
-                        'coverage_end'       => (string) ($d['coverage_end'] ?? $d['delivery_date']),
-                    ]);
-                }
-
-                $remaining_mains        -= $put_mains;
-                $remaining_tax_sides    -= $put_tax;
-                $remaining_nontax_sides -= $put_nontax;
-                $headroom[$month]['mains'] -= $put_mains;
-                $headroom[$month]['sides'] -= $put_sides;
-            };
-
-            $place_to_month($delivery_month);
-
-            // Spill: anything that did not fit goes to the next month.
-            if ($remaining_mains > 0 || $remaining_tax_sides + $remaining_nontax_sides > 0) {
-                $place_to_month($next_month);
+                // else: no mains could be placed, so sides had nothing to follow —
+                // leave them in $remaining_* so the spillover block below surfaces
+                // them (never silently dropped).
             }
 
             // Still left after the single-month spill? Multi-month spillover
@@ -526,6 +591,41 @@ class MealsDB_Allocation_Rebuilder {
         }
 
         return ['mains_unplaced' => $total_unplaced_mains, 'sides_unplaced' => $total_unplaced_sides];
+    }
+
+    /**
+     * Split a VAC side count across two billing months in the same proportion as
+     * the delivery's mains landed in those months (Directive 2026-09-05). Any
+     * rounding remainder goes to the EARLIEST month.
+     *
+     * Applied to taxable and non-taxable counts INDEPENDENTLY (HST is computed
+     * from the taxable figure alone, so each must preserve its own total).
+     *
+     *   split(16, 56, 56) → [8, 8]        (50/50, no remainder)
+     *   split(7,  31, 30) → [4, 3]        (31/61 × 7 = 3.56 → earliest gets the +1)
+     *   split(S,  m,  0)  → [S, 0]        (single-month delivery: all stay put)
+     *   split(S,  0,  m)  → [0, S]        (all mains in the later month → sides follow)
+     *
+     * When no mains landed at all (total 0) the proportion is undefined; all
+     * sides go to the earliest month rather than being dropped.
+     *
+     * @param int $sides           Sides of this category on the delivery.
+     * @param int $mains_earliest  Mains placed in the earliest (delivery) month.
+     * @param int $mains_later     Mains placed in the later (next) month.
+     * @return array{0:int,1:int}  [earliest_sides, later_sides] — sums to $sides.
+     */
+    public static function split_sides_proportional(int $sides, int $mains_earliest, int $mains_later): array {
+        if ($sides <= 0) {
+            return [0, 0];
+        }
+        $total = $mains_earliest + $mains_later;
+        if ($total <= 0) {
+            return [$sides, 0];
+        }
+        $earliest  = intdiv($sides * $mains_earliest, $total); // floor
+        $later     = intdiv($sides * $mains_later,     $total); // floor
+        $earliest += $sides - $earliest - $later;              // remainder → earliest
+        return [$earliest, $later];
     }
 
     /**
