@@ -829,15 +829,23 @@ class MealsDB_Quick_Order_Ajax {
             //   order_date, items, products, rate_id.
             // client_name is '' when client_id is unresolvable (MAJ-1 guard or
             // no active client); the JS then falls back to "Client #<id>".
+            // FOLLOW-UP DIRECTIVE C (ITEM 5): the source order's one-time delivery
+            // date (_delivery_date). The reopen path restores it so completing a
+            // reopened draft keeps its delivery date rather than placing an order
+            // with none. (The JS only applies it in reopen mode; a clone's
+            // delivery-date behaviour is an open decision and is left untouched.)
+            $source_delivery_date = (string) $source_order->get_meta('_delivery_date');
+
             wp_send_json([
-                'success'     => true,
-                'client_id'   => $wp_user_id > 0 ? $wp_user_id : null,
-                'client_type' => $client_type,
-                'client_name' => $client_name,
-                'order_date'  => $order_date,
-                'items'       => (object) $items,
-                'products'    => (object) $products,
-                'rate_id'     => $rate_id > 0 ? $rate_id : null,
+                'success'       => true,
+                'client_id'     => $wp_user_id > 0 ? $wp_user_id : null,
+                'client_type'   => $client_type,
+                'client_name'   => $client_name,
+                'order_date'    => $order_date,
+                'delivery_date' => $source_delivery_date !== '' ? $source_delivery_date : null,
+                'items'         => (object) $items,
+                'products'      => (object) $products,
+                'rate_id'       => $rate_id > 0 ? $rate_id : null,
             ]);
         } catch (\Throwable $e) {
             error_log('[MealsDB QuickOrder] clone_get_order error: ' . $e->getMessage());

@@ -605,6 +605,20 @@
                     }
                 }
 
+                // FOLLOW-UP DIRECTIVE C (ITEM 5): restore the one-time delivery
+                // date when REOPENING a draft, so completing it keeps its delivery
+                // date instead of placing an order with none. Reopen only — a
+                // clone's delivery-date behaviour is a separate open decision, so
+                // it is deliberately left as-is. fetchNextDates above uses
+                // skipDeliveryPrefill so it won't clobber this.
+                if (this.state.reopenOrderId && payload.delivery_date) {
+                    const $dd = $('#mealsdb-qo-delivery-date');
+                    if ($dd.length) {
+                        $dd.val(payload.delivery_date);
+                        this.refreshDeliveryDateWarning();
+                    }
+                }
+
                 if (hasItems) {
                     this.applyClonedItems(parsedItems.available);
                 }
@@ -1812,6 +1826,10 @@
                     if (this.$createOrder && this.$createOrder.length) {
                         this.$createOrder.text(this.translate('Create Order'));
                     }
+                    // FOLLOW-UP DIRECTIVE C (ITEM 5): clear the basket after a
+                    // completion so pressing Create again cannot place a SECOND
+                    // order for the same client with the same items.
+                    this.clearCart();
                 } else {
                     successMessage = this.getResponseMessage(response, 'Order created successfully!');
                 }
@@ -2209,7 +2227,14 @@
         deliveryDateWarning(ymd, expectedDay) {
             const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || '');
             if (!m) {
-                return '';
+                // FOLLOW-UP DIRECTIVE C (ITEM 2): an EMPTY delivery date is the case
+                // that matters most — an order with no delivery date gets no slip
+                // and no allocation, so it silently does not happen. Warn inline
+                // like the past/weekday cases (non-blocking). A malformed-but-
+                // non-empty value stays silent (the field is mid-edit).
+                return (ymd || '').trim() === ''
+                    ? 'Heads up: no delivery date set — this order gets no slip and no allocation. Saving anyway is allowed.'
+                    : '';
             }
             const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             const weekday = dayNames[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()];
