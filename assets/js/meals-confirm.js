@@ -15,6 +15,12 @@
  *   mealsdb-modal, mealsdb-modal-title, mealsdb-modal-message, mealsdb-modal-input,
  *   mealsdb-modal-confirm, mealsdb-modal-cancel, mealsdb-modal-error.
  *
+ * DIRECTIVE K1: the CSS classes live under the `.mealsdb-confirm*` namespace,
+ * NOT `.mealsdb-modal*` — the latter belongs to the pre-existing Client Table
+ * Modal in admin.css, whose `display:none` (revealed by `.is-visible`) hid this
+ * dialog entirely. The `data-testid` values above are UNCHANGED (they keep the
+ * `mealsdb-modal-*` spelling) — only the styling hooks moved.
+ *
  * Accessibility: role="dialog", aria-modal, aria-labelledby → title; focus moves
  * into the dialog on open and back to the trigger on close; focus is trapped;
  * Escape cancels (matching the native dialog it replaces).
@@ -51,7 +57,7 @@
     function messageHtml(message) {
         if ($.isArray(message)) {
             var items = message.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('');
-            return '<ul class="mealsdb-modal__list">' + items + '</ul>';
+            return '<ul class="mealsdb-confirm__list">' + items + '</ul>';
         }
         return '<p>' + esc(message) + '</p>';
     }
@@ -116,7 +122,7 @@
         var inputHtml = '';
         if (isPrompt) {
             inputHtml =
-                '<input type="text" class="regular-text mealsdb-modal__input" data-testid="mealsdb-modal-input"' +
+                '<input type="text" class="regular-text mealsdb-confirm__input" data-testid="mealsdb-modal-input"' +
                 ' value="' + esc(o.defaultValue || '') + '"' +
                 (o.placeholder ? ' placeholder="' + esc(o.placeholder) + '"' : '') + ' />';
         }
@@ -124,25 +130,25 @@
         var actionsHtml = '';
         if (!isAlert) {
             actionsHtml +=
-                '<button type="button" class="button mealsdb-modal__btn-cancel" data-testid="mealsdb-modal-cancel">' +
+                '<button type="button" class="button mealsdb-confirm__btn-cancel" data-testid="mealsdb-modal-cancel">' +
                 esc(cancelLabel) + '</button> ';
         }
         actionsHtml +=
-            '<button type="button" class="button button-primary mealsdb-modal__btn-confirm' +
-            (o.destructive ? ' mealsdb-modal__btn-destructive' : '') +
+            '<button type="button" class="button button-primary mealsdb-confirm__btn-confirm' +
+            (o.destructive ? ' mealsdb-confirm__btn-destructive' : '') +
             '" data-testid="mealsdb-modal-confirm">' + esc(confirmLabel) + '</button>';
 
         var html =
-            '<div class="mealsdb-modal-overlay" data-testid="mealsdb-modal-overlay">' +
-              '<div class="mealsdb-modal" role="dialog" aria-modal="true"' +
+            '<div class="mealsdb-confirm-overlay" data-testid="mealsdb-modal-overlay">' +
+              '<div class="mealsdb-confirm" role="dialog" aria-modal="true"' +
                 ' aria-labelledby="mealsdb-modal-title" data-testid="mealsdb-modal" tabindex="-1">' +
-                '<h2 class="mealsdb-modal__title" id="mealsdb-modal-title" data-testid="mealsdb-modal-title">' +
+                '<h2 class="mealsdb-confirm__title" id="mealsdb-modal-title" data-testid="mealsdb-modal-title">' +
                   esc(title) + '</h2>' +
-                '<div class="mealsdb-modal__message" data-testid="mealsdb-modal-message">' +
+                '<div class="mealsdb-confirm__message" data-testid="mealsdb-modal-message">' +
                   messageHtml(o.message) + '</div>' +
                 inputHtml +
-                '<div class="mealsdb-modal__error" data-testid="mealsdb-modal-error" role="alert" hidden></div>' +
-                '<div class="mealsdb-modal__actions">' + actionsHtml + '</div>' +
+                '<div class="mealsdb-confirm__error" data-testid="mealsdb-modal-error" role="alert" hidden></div>' +
+                '<div class="mealsdb-confirm__actions">' + actionsHtml + '</div>' +
               '</div>' +
             '</div>';
 

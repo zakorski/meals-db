@@ -53,13 +53,50 @@ class MealsDB_Private_Intake {
      */
     public static function on_order_status_changed(int $order_id, string $from, string $to, $order = null): void {
         if (!in_array($to, self::ACTIVE_STATUSES, true)) {
+            // Not entering an active state — nothing to promote. Deliberately
+            // NOT logged: this fires on every cancel/refund/fail transition and
+            // carries no promotion signal.
             return;
         }
-        // Ignore intra-active transitions — the promotion already ran
-        // when the order first entered an active state.
-        if (in_array($from, self::ACTIVE_STATUSES, true)) {
-            return;
-        }
+
+        // DIRECTIVE K3 ITEM 1: the intra-active guard that used to sit here
+        // (return when $from was ALSO active) discarded the case that matters
+        // most. WooCommerce's "Add order" admin screen creates the order at
+        // 'pending' WITHOUT firing woocommerce_order_status_changed — that hook
+        // fires only on a CHANGE. So the order enters its first active state
+        // silently, and the operator's subsequent move to Processing arrives as
+        // from='pending', to='processing' — both in ACTIVE_STATUSES — and was
+        // dropped before maybe_promote() was ever reached. A government client
+        // ordering this way got no client record and billed nothing; v571's
+        // instrumentation logged nothing because the routine returned three
+        // lines before any logging call.
+        //
+        // The guard was protecting against re-running promotion on every later
+        // status change. maybe_promote() is idempotent — it returns the existing
+        // client_id when a record already exists (verified, not assumed) — so
+        // that cost does not exist and the guard is redundant. Dropping it is the
+        // smallest correct fix. NOTE: do NOT instead remove 'pending' from
+        // ACTIVE_STATUSES — that constant governs which orders count as active
+        // everywhere else it is used.
+
+        // DIRECTIVE K3 ITEM 2: log the decision at the ENTRY point, with from/to,
+        // for EVERY active transition (acceptable volume — one row per status
+        // change). The old early-return exits logged nothing, which is exactly
+        // why the promotion path was undiagnosable.
+        $log = static function (string $event, string $outcome, string $severity, string $message, array $ctx = []) use ($order_id, $from, $to) {
+            if (!class_exists('MealsDB_Event_Log')) {
+                return;
+            }
+            MealsDB_Event_Log::record([
+                'severity'  => $severity,
+                'category'  => 'sync',
+                'subsystem' => 'private_intake',
+                'event'     => $event,
+                'outcome'   => $outcome,
+                'message'   => $message,
+                'context'   => array_merge(['order_id' => $order_id, 'from' => $from, 'to' => $to], $ctx),
+            ]);
+        };
 
         if (!($order instanceof WC_Order)) {
             if (!function_exists('wc_get_order')) {
@@ -76,10 +113,56 @@ class MealsDB_Private_Intake {
             // Guest order — nothing to promote. meals_clients requires
             // a wp_user_id for the sync / allocation relationships, so
             // guest intake is a separate feature.
+            $log(
+                'promote.skipped_guest',
+                MealsDB_Event_Log::OUTCOME_SUCCEEDED,
+                'debug',
+                sprintf('Order %d reached "%s" but has no customer (guest) — no promotion.', $order_id, $to),
+                ['wp_user_id' => 0]
+            );
             return;
         }
 
-        self::maybe_promote($wp_user_id, $order);
+        // Distinguish "created" from "already existed" for the log WITHOUT
+        // trusting maybe_promote()'s internals: check first (it re-checks the
+        // same way). One extra read per active transition is acceptable.
+        $existing = MealsDB_Clients_Repository::get_by_wp_user_id($wp_user_id);
+        $existed  = is_array($existing) && !empty($existing['client_id']);
+
+        $client_id = self::maybe_promote($wp_user_id, $order);
+
+        if ($client_id === null) {
+            // maybe_promote() already recorded the SPECIFIC failure
+            // (promote.insert_failed / empty payload / a thrown-and-swallowed
+            // error). Add the transition context so the failure ties to this
+            // order and status move.
+            $log(
+                'promote.failed',
+                MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'warning',
+                sprintf('Promotion produced no client for user %d on %s→%s (order %d).', $wp_user_id, $from, $to, $order_id),
+                ['wp_user_id' => $wp_user_id]
+            );
+            return;
+        }
+
+        if ($existed) {
+            $log(
+                'promote.skipped_existing',
+                MealsDB_Event_Log::OUTCOME_SUCCEEDED,
+                'debug',
+                sprintf('User %d already has client %d — no new record on %s→%s (order %d).', $wp_user_id, $client_id, $from, $to, $order_id),
+                ['wp_user_id' => $wp_user_id, 'client_id' => $client_id]
+            );
+        } else {
+            $log(
+                'promote.created',
+                MealsDB_Event_Log::OUTCOME_SUCCEEDED,
+                'info',
+                sprintf('Created client %d for user %d on %s→%s (order %d).', $client_id, $wp_user_id, $from, $to, $order_id),
+                ['wp_user_id' => $wp_user_id, 'client_id' => $client_id]
+            );
+        }
     }
 
     /**
