@@ -110,6 +110,9 @@
         runTool({
             action: 'mealsdb_resync_delivery_days',
             nonce: nonces.settings || '',
+            // DIRECTIVE K5: gate the tool behind a named confirmation.
+            confirmTitle: 'Resync delivery days',
+            confirm: 'Recompute each active client\'s delivery day from their zone and update any that drifted? This writes delivery_day and recomputes delivery dates.',
             buttons: [$(this)],
             $result: $result,
             running: 'Running…',
@@ -151,6 +154,15 @@
         runTool({
             action: 'mealsdb_backfill_next_dates',
             nonce: nonces.general || '',
+            // DIRECTIVE K5 (ITEM 1 + ITEM 2): named, destructive confirm. ITEM 2 —
+            // this tool applies date corrections even to clients whose drift
+            // auto-correction (derived_autocorrect) is turned OFF, so the confirm
+            // says so unconditionally (the toggle lives on the Settings page and
+            // is not readable from here, and the surprising behaviour is exactly
+            // that it corrects regardless of the toggle).
+            confirmTitle: 'Backfill next dates',
+            destructive: true,
+            confirm: 'Update next order and delivery dates for all active clients? This writes next_order_date and next_delivery_date and APPLIES corrections even to clients where drift auto-correction is turned OFF.',
             buttons: [$(this)],
             $result: $result,
             running: 'Running...',
@@ -178,6 +190,11 @@
         runTool({
             action: 'mealsdb_recalculate_allocations',
             nonce: nonces.general || '',
+            // DIRECTIVE K5: named, destructive confirm — this rebuilds allocation
+            // detail (the last uncontrolled click rebuilt 1,667 client-months).
+            confirmTitle: 'Recalculate allocations',
+            destructive: true,
+            confirm: 'Rebuild every dirty client-month allocation now? This deletes and recomputes allocation detail for all dirty months (finalized/submitted months are left untouched).',
             buttons: [$(this)],
             $result: $result,
             running: 'Running...',
@@ -247,6 +264,9 @@
             action: 'mealsdb_run_private_backfill',
             nonce: nonces.general || '',
             data: { lookback_months: lookback },
+            // DIRECTIVE K5: a writing tool — mark the confirm destructive.
+            confirmTitle: 'Run private backfill',
+            destructive: true,
             confirm: 'Promote all eligible WC users into meals_clients as Private customers?',
             buttons: [$(this)],
             $result: $result,
@@ -316,6 +336,9 @@
             action: 'mealsdb_run_private_deactivation',
             nonce: nonces.general || '',
             data: { lookback_months: lookback },
+            // DIRECTIVE K5: a writing tool — mark the confirm destructive.
+            confirmTitle: 'Run private deactivation',
+            destructive: true,
             confirm: 'Deactivate every stale Private customer identified by the preview?',
             buttons: [$(this)],
             $result: $result,
@@ -381,6 +404,9 @@
         runTool({
             action: 'mealsdb_sync_product_display',
             nonce: nonces.general || '',
+            // DIRECTIVE K5: gate the tool behind a named confirmation.
+            confirmTitle: 'Sync product display data',
+            confirm: 'Re-sync display data (names, prices, categories) for all products from WooCommerce?',
             buttons: [$(this)],
             $result: $result,
             running: 'Syncing...',
@@ -401,6 +427,9 @@
         runTool({
             action: 'mealsdb_case_count_sync',
             nonce: nonces.general || '',
+            // DIRECTIVE K5: gate the tool behind a named confirmation.
+            confirmTitle: 'Sync case counts',
+            confirm: 'Backfill case sizes from legacy data for products that have none? Existing case sizes are left unchanged.',
             buttons: [$(this)],
             $result: $result,
             running: 'Syncing case counts...',

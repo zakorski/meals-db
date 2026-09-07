@@ -56,6 +56,21 @@ eq(MealsDB_Phone::format('  506555  '), '506555', 'format: short residue returns
 eq(MealsDB_Phone::format('5065550100x123'), '5065550100x123', 'format: >10 digits returns original (NOT truncated) — diverges from canonical');
 eq(MealsDB_Phone::format('25065550100'), '25065550100', 'format: 11-digit leading non-1 returns original (not exactly 10)');
 
+// -- format_with_optional_contact(): DIRECTIVE K2 ITEM 2 ----------------------
+// Like format(), but preserves a trailing contact name after the number.
+eq(MealsDB_Phone::format_with_optional_contact(''), '', 'contact: empty → empty');
+eq(MealsDB_Phone::format_with_optional_contact('   '), '', 'contact: whitespace → empty');
+eq(MealsDB_Phone::format_with_optional_contact('506-536-1236'), '(506)-536-1236', 'contact: plain dashed 10 → canonical (the shape 71 clients hold)');
+eq(MealsDB_Phone::format_with_optional_contact('(506)-536-1236'), '(506)-536-1236', 'contact: already-canonical unchanged');
+eq(MealsDB_Phone::format_with_optional_contact('5065361236'), '(506)-536-1236', 'contact: bare 10 digits → canonical');
+eq(MealsDB_Phone::format_with_optional_contact('506-988-1777 Denise'), '(506)-988-1777 Denise', 'contact: number + trailing name PRESERVED (the 28-variant shape)');
+eq(MealsDB_Phone::format_with_optional_contact('(506) 988-1777  Denise Smith'), '(506)-988-1777 Denise Smith', 'contact: multi-word name preserved, inner whitespace collapsed to one space');
+eq(MealsDB_Phone::format_with_optional_contact('1-506-988-1777 Denise'), '(506)-988-1777 Denise', 'contact: leading country-code 1 dropped, name preserved');
+eq(MealsDB_Phone::format_with_optional_contact('   506-536-1236   '), '(506)-536-1236', 'contact: outer whitespace trimmed');
+// No valid number → returns trimmed original so validate() surfaces an error.
+eq(MealsDB_Phone::format_with_optional_contact('call the front desk'), 'call the front desk', 'contact: no number → trimmed original (validate() will reject)');
+eq(MealsDB_Phone::format_with_optional_contact('506-1236 Denise'), '506-1236 Denise', 'contact: too-few digits in token → original (not a phone)');
+
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
 exit(empty($failures) ? 0 : 1);

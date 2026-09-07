@@ -511,32 +511,38 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     });
 
     $('#backfill-run').on('click', function() {
-        if (!confirm('This will update allowance_mains, allowance_sides, and requisition_period on all matching meals_clients records. Continue?')) {
-            return;
-        }
-
+        // DIRECTIVE K5 ITEM 3: in-page confirm (native confirm() is invisible to
+        // the browser test agent). Nothing runs until the promise resolves true.
         var $btn = $(this);
-        $btn.prop('disabled', true).text('Running...');
-        $('#backfill-result').empty();
+        window.MealsDBConfirm.confirm({
+            title: 'Backfill allowances',
+            message: 'This will update allowance_mains, allowance_sides, and requisition_period on all matching meals_clients records. Continue?',
+            confirmLabel: 'Run Backfill',
+            destructive: true
+        }).then(function(ok) {
+            if (!ok) { return; }
+            $btn.prop('disabled', true).text('Running...');
+            $('#backfill-result').empty();
 
-        $.post(ajaxurl, {
-            action: 'mealsdb_backfill_allowances',
-            nonce: backfillNonce
-        }, function(resp) {
-            $btn.prop('disabled', false).text('Run Backfill');
-            if (resp.success) {
-                var d = resp.data;
-                showBackfillResult(
-                    'Backfill complete. Total: ' + d.total + ', Updated: ' + d.updated +
-                    ', Skipped: ' + d.skipped + ', Errors: ' + d.errors,
-                    'success'
-                );
-            } else {
-                showBackfillResult(resp.data.message || 'Backfill failed.', 'error');
-            }
-        }).fail(function() {
-            $btn.prop('disabled', false).text('Run Backfill');
-            showBackfillResult('Request failed.', 'error');
+            $.post(ajaxurl, {
+                action: 'mealsdb_backfill_allowances',
+                nonce: backfillNonce
+            }, function(resp) {
+                $btn.prop('disabled', false).text('Run Backfill');
+                if (resp.success) {
+                    var d = resp.data;
+                    showBackfillResult(
+                        'Backfill complete. Total: ' + d.total + ', Updated: ' + d.updated +
+                        ', Skipped: ' + d.skipped + ', Errors: ' + d.errors,
+                        'success'
+                    );
+                } else {
+                    showBackfillResult(resp.data.message || 'Backfill failed.', 'error');
+                }
+            }).fail(function() {
+                $btn.prop('disabled', false).text('Run Backfill');
+                showBackfillResult('Request failed.', 'error');
+            });
         });
     });
 
@@ -591,36 +597,42 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     });
 
     $('#backfill-addr-run').on('click', function() {
-        if (!confirm('This will update delivery_area_name, street_name, delivery_street_name, apartment_number, delivery_apartment_number, and default_rate_id on matching meals_clients records. Continue?')) {
-            return;
-        }
-
+        // DIRECTIVE K5 ITEM 3: in-page confirm (native confirm() is invisible to
+        // the browser test agent). Nothing runs until the promise resolves true.
         var $btn = $(this);
-        $btn.prop('disabled', true).text('Running...');
-        $('#backfill-addr-result').empty();
+        window.MealsDBConfirm.confirm({
+            title: 'Backfill addresses',
+            message: 'This will update delivery_area_name, street_name, delivery_street_name, apartment_number, delivery_apartment_number, and default_rate_id on matching meals_clients records. Continue?',
+            confirmLabel: 'Run Backfill',
+            destructive: true
+        }).then(function(ok) {
+            if (!ok) { return; }
+            $btn.prop('disabled', true).text('Running...');
+            $('#backfill-addr-result').empty();
 
-        $.post(ajaxurl, {
-            action: 'mealsdb_backfill_addresses',
-            nonce: addrNonce
-        }, function(resp) {
-            $btn.prop('disabled', false).text('Run Backfill');
-            if (resp.success) {
-                var d = resp.data;
-                showAddrResult(
-                    'Backfill complete. Total: ' + d.total +
-                    ', Zones fixed: ' + d.zones_fixed +
-                    ', Addresses fixed: ' + d.addresses_fixed +
-                    ', Rates linked: ' + d.rates_linked +
-                    ', Skipped: ' + d.skipped +
-                    ', Errors: ' + d.errors,
-                    'success'
-                );
-            } else {
-                showAddrResult(resp.data.message || 'Backfill failed.', 'error');
-            }
-        }).fail(function() {
-            $btn.prop('disabled', false).text('Run Backfill');
-            showAddrResult('Request failed.', 'error');
+            $.post(ajaxurl, {
+                action: 'mealsdb_backfill_addresses',
+                nonce: addrNonce
+            }, function(resp) {
+                $btn.prop('disabled', false).text('Run Backfill');
+                if (resp.success) {
+                    var d = resp.data;
+                    showAddrResult(
+                        'Backfill complete. Total: ' + d.total +
+                        ', Zones fixed: ' + d.zones_fixed +
+                        ', Addresses fixed: ' + d.addresses_fixed +
+                        ', Rates linked: ' + d.rates_linked +
+                        ', Skipped: ' + d.skipped +
+                        ', Errors: ' + d.errors,
+                        'success'
+                    );
+                } else {
+                    showAddrResult(resp.data.message || 'Backfill failed.', 'error');
+                }
+            }).fail(function() {
+                $btn.prop('disabled', false).text('Run Backfill');
+                showAddrResult('Request failed.', 'error');
+            });
         });
     });
 
@@ -686,42 +698,48 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     });
 
     $('#mealsdb_backfill_allocations_run').on('click', function() {
-        if (!confirm('This will populate the allocation tables from historical WooCommerce orders. This cannot be easily undone. Continue?')) {
-            return;
-        }
-
+        // DIRECTIVE K5 ITEM 3: in-page confirm (native confirm() is invisible to
+        // the browser test agent). Nothing runs until the promise resolves true.
         var $btn = $(this);
-        var startMonth = $('#mealsdb_backfill_start').val();
-        var endMonth   = $('#mealsdb_backfill_end').val();
+        window.MealsDBConfirm.confirm({
+            title: 'Backfill allocations from orders',
+            message: 'This will populate the allocation tables from historical WooCommerce orders. This cannot be easily undone. Continue?',
+            confirmLabel: 'Run Backfill',
+            destructive: true
+        }).then(function(ok) {
+            if (!ok) { return; }
+            var startMonth = $('#mealsdb_backfill_start').val();
+            var endMonth   = $('#mealsdb_backfill_end').val();
 
-        $btn.prop('disabled', true).text('Running...');
-        $('#backfill-alloc-result').empty();
+            $btn.prop('disabled', true).text('Running...');
+            $('#backfill-alloc-result').empty();
 
-        $.post(ajaxurl, {
-            action: 'mealsdb_backfill_allocation_engine',
-            nonce: allocNonce,
-            start_month: startMonth,
-            end_month: endMonth
-        }, function(resp) {
-            $btn.prop('disabled', false).text('Run Backfill');
-            if (resp.success && resp.stats) {
-                var d = resp.stats;
-                showAllocResult(
-                    'Backfill complete. Months: ' + d.months_processed +
-                    ', Clients: ' + d.clients_processed +
-                    ', Orders: ' + d.orders_processed +
-                    ', Allocations: ' + d.allocations_created,
-                    'success'
-                );
-            } else {
-                showAllocResult(
-                    (resp.data && resp.data.message) || resp.message || 'Backfill failed.',
-                    'error'
-                );
-            }
-        }).fail(function() {
-            $btn.prop('disabled', false).text('Run Backfill');
-            showAllocResult('Request failed.', 'error');
+            $.post(ajaxurl, {
+                action: 'mealsdb_backfill_allocation_engine',
+                nonce: allocNonce,
+                start_month: startMonth,
+                end_month: endMonth
+            }, function(resp) {
+                $btn.prop('disabled', false).text('Run Backfill');
+                if (resp.success && resp.stats) {
+                    var d = resp.stats;
+                    showAllocResult(
+                        'Backfill complete. Months: ' + d.months_processed +
+                        ', Clients: ' + d.clients_processed +
+                        ', Orders: ' + d.orders_processed +
+                        ', Allocations: ' + d.allocations_created,
+                        'success'
+                    );
+                } else {
+                    showAllocResult(
+                        (resp.data && resp.data.message) || resp.message || 'Backfill failed.',
+                        'error'
+                    );
+                }
+            }).fail(function() {
+                $btn.prop('disabled', false).text('Run Backfill');
+                showAllocResult('Request failed.', 'error');
+            });
         });
     });
 

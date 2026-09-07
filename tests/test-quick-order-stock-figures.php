@@ -1,11 +1,12 @@
 <?php
 /**
- * DIRECTIVE 2 (ITEMS 1 & 2) test — stock figures merged onto product payloads.
+ * DIRECTIVE K7 ITEM 2 test — only current_stock is merged onto product payloads.
  *
- * available_stock = current_stock − committed-on-unfulfilled. A product that
- * does not manage stock (no _stock row) carries null current/available so the
- * UI shows "not tracked" instead of a misleading 0. Colour/out-of-stock keys
- * on available, not current.
+ * The former available_stock (current − committed-on-unfulfilled) was REMOVED:
+ * operators do not close out orders, so committed never drained and the derived
+ * figure was misleading (e.g. −530 for a product with 46 in stock). The raw
+ * _stock figure is kept; a product that does not manage stock carries null so the
+ * UI shows "not tracked". Out-of-stock colour now keys on current_stock.
  *
  * inject_stock_figures() is exercised directly (private static, via reflection)
  * with a stubbed $wpdb so the merge logic is covered without a live DB.
@@ -17,34 +18,29 @@ require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
 
-// Stub $wpdb: prepare() is a pass-through; get_results() returns canned rows
-// keyed by which query is running (committed vs current-stock).
+// Stub $wpdb: prepare() is a pass-through; get_results() returns the stock rows.
+// K7: the committed-quantities query is gone, so a committed_qty query arriving
+// here would be a regression — fail loudly if one is ever issued again.
 class MealsDB_Test_Stock_Wpdb {
     public $prefix   = 'wp_';
     public $postmeta = 'wp_postmeta';
     public $stock_rows = [];
-    public $committed_rows = [];
+    public $committed_query_seen = false;
     public function prepare($sql, $args = null) { return $sql; }
     public function get_results($sql, $output = null) {
-        if (strpos($sql, 'committed_qty') !== false) { return $this->committed_rows; }
+        if (strpos($sql, 'committed_qty') !== false) { $this->committed_query_seen = true; return []; }
         if (strpos($sql, '_stock') !== false)        { return $this->stock_rows; }
         return [];
     }
 }
 
 $wpdb = new MealsDB_Test_Stock_Wpdb();
-// product 10: 40 in stock, 12 committed  -> available 28
-// product 11: 10 in stock, 10 committed  -> available 0  (out)
-// product 13:  5 in stock,  0 committed  -> available 5
-// product 12: NOT managed (no _stock row) -> null / null
+// product 10: 40 in stock; product 11: 0 in stock (out); product 13: 5 in stock;
+// product 12: NOT managed (no _stock row) -> null.
 $wpdb->stock_rows = [
     ['product_id' => 10, 'stock' => '40'],
-    ['product_id' => 11, 'stock' => '10'],
+    ['product_id' => 11, 'stock' => '0'],
     ['product_id' => 13, 'stock' => '5'],
-];
-$wpdb->committed_rows = [
-    ['product_id' => 10, 'committed_qty' => '12'],
-    ['product_id' => 11, 'committed_qty' => '10'],
 ];
 $GLOBALS['wpdb'] = $wpdb;
 
@@ -68,12 +64,17 @@ function chk($got, $exp, $label) {
     else { $failures[] = "$label: expected " . var_export($exp, true) . " got " . var_export($got, true); }
 }
 
-chk($by_id[10]['current_stock'], 40, 'p10 current');
-chk($by_id[10]['available_stock'], 28, 'p10 available = 40 - 12');
-chk($by_id[11]['available_stock'], 0, 'p11 available = 10 - 10 (out)');
-chk($by_id[13]['available_stock'], 5, 'p13 available = 5 - 0 (no committed row)');
+chk($by_id[10]['current_stock'], 40, 'p10 current = 40');
+chk($by_id[11]['current_stock'], 0, 'p11 current = 0 (out of stock)');
+chk($by_id[13]['current_stock'], 5, 'p13 current = 5');
 chk($by_id[12]['current_stock'], null, 'p12 current null (unmanaged)');
-chk($by_id[12]['available_stock'], null, 'p12 available null (unmanaged)');
+
+// available_stock must no longer be produced.
+chk(array_key_exists('available_stock', $by_id[10]), false, 'p10 has NO available_stock key (removed)');
+chk(array_key_exists('available_stock', $by_id[12]), false, 'p12 has NO available_stock key (removed)');
+
+// The committed-quantities query must never be issued.
+chk($wpdb->committed_query_seen, false, 'no committed-quantities query is issued (get_committed_quantities removed)');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) echo "FAIL: $f\n";

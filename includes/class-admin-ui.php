@@ -798,7 +798,17 @@ class MealsDB_Admin_UI {
         if (is_object($order) && method_exists($order, 'get_meta')) {
             $value = (string) $order->get_meta('_delivery_date');
         }
-        echo $value !== '' ? esc_html($value) : '<span aria-hidden="true">—</span>';
+        // DIRECTIVE K7 ITEM 1: display the delivery date in the site's configured
+        // date format (Settings → General), matching the adjacent Order Date
+        // column ("Sep 9, 2026") instead of the raw stored "2026-09-09". This is
+        // DISPLAY ONLY — _delivery_date stays YYYY-MM-DD (the sort reads the meta
+        // directly and depends on that format collating correctly). The em-dash
+        // fallback for an order with no delivery date is preserved (it must NOT
+        // fall back to the order date).
+        $ts = $value !== '' ? strtotime($value) : false;
+        echo $ts !== false
+            ? esc_html(date_i18n(get_option('date_format'), $ts))
+            : '<span aria-hidden="true">—</span>';
     }
 
     /**
@@ -959,6 +969,13 @@ class MealsDB_Admin_UI {
         }
 
         if ($is_data_ops_page) {
+            // DIRECTIVE K5 ITEM 3: the backfill confirmations in views/data-ops.php
+            // are INLINE <script> (no dependency chain), so the shared confirm
+            // helper — registered-not-enqueued by default (dependents pull it in) —
+            // must be enqueued explicitly here or window.MealsDBConfirm is undefined
+            // on this page.
+            wp_enqueue_script(self::register_confirm_script());
+
             // Schema-changes tool (H7): preview + typed-confirm apply of the
             // RISKY column drifts the version-bump path leaves for the operator.
             $sa_path = MEALS_DB_PLUGIN_DIR . 'assets/js/schema-alter-tool.js';

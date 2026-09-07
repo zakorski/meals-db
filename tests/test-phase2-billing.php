@@ -4,7 +4,8 @@
  *
  * Exercises:
  *   - MealsDB_Invoice_Generator::get_phase2_billing_data (the canonical
- *     fetcher: allocated quantities + contribution sum + tax)
+ *     fetcher: allocated quantities + contribution + tax). K8: the contribution
+ *     is the client record's client_contribution, NOT an order-line sum.
  *   - Tax computation against the real Janet rate $14.66 (modal 30 tax sides
  *     × urban side rate 4.48 × 15% = $20.16, matching her Nov 2025 submission).
  *     Post-LB-7 HST is side_rate × 0.15; the urban result is unchanged because
@@ -18,8 +19,6 @@
  */
 if (!defined('ABSPATH')) { define('ABSPATH', dirname(__DIR__) . '/'); }
 if (!defined('ARRAY_A')) { define('ARRAY_A', 'ARRAY_A'); }
-// BC-5: sum_contribution_for_orders now resolves the contribution product id via
-// get_fee_product_ids() -> get_option(). With no override, defaults apply (5675).
 if (!function_exists('get_option')) { function get_option($name, $default = false) { return $default; } }
 // MealsDB_Event_Log::record() (missing-zone surfacing tests below) encodes
 // context via wp_json_encode.
@@ -178,7 +177,11 @@ $out = call_p2([$rural_client], '2025-11');
 chk((int) $out[42]['tax_cents'], 2016, 'missing zone falls back to urban side rate (2016 cents)');
 
 // ---------------------------------------------------------------------------
-// Test 2: contribution sum picks up the order-line query result.
+// Test 2 (K8): the contribution comes from the CLIENT RECORD
+// (meals_clients.client_contribution), NOT from order line items. The order-line
+// sum is set to a DIFFERENT value to prove it is ignored — this is the exact
+// defect K8 fixes (six SDNB clients billed a $1.00 order-line placeholder
+// instead of their real record contribution).
 // ---------------------------------------------------------------------------
 $wpdb3 = new P2WpdbWithRate();
 $wpdb3->rate = 14.66;
@@ -187,18 +190,16 @@ $wpdb3->scripted = [
         "FROM `wp_meals_client_allocations`" => [
             ['client_id' => 7, 'used_mains' => 30, 'used_sides' => 0, 'used_tax_sides' => 0, 'used_nontax_sides' => 0],
         ],
-        "FROM `wp_meals_delivery_allocations`" => [
-            ['client_id' => 7, 'wc_order_id' => 555],
-        ],
     ],
     'get_var' => [
-        // The product-5675 contribution sum query returns this decimal:
-        "SUM(CAST(ls.meta_value AS DECIMAL" => '19.7700',
+        // If the (now-deleted) order-line sum were still consulted it would win;
+        // it must NOT — assert the record value below, not this.
+        "SUM(CAST(ls.meta_value AS DECIMAL" => '999.9900',
     ],
 ];
 $GLOBALS['wpdb'] = $wpdb3;
-$out = call_p2([['client_id' => 7, 'wp_user_id' => 50, 'default_rate_id' => 1, 'first_name' => 'T', 'last_name' => 'L']], '2025-11');
-chk((int) $out[7]['contribution_cents'], 1977, 'contribution: $19.77 → 1977 cents (Terrence LeBlanc real case)');
+$out = call_p2([['client_id' => 7, 'wp_user_id' => 50, 'default_rate_id' => 1, 'client_contribution' => 19.77, 'first_name' => 'T', 'last_name' => 'L']], '2025-11');
+chk((int) $out[7]['contribution_cents'], 1977, 'contribution: $19.77 from the client record (Terrence LeBlanc); order-line $999.99 IGNORED (K8)');
 
 // ---------------------------------------------------------------------------
 // Test 3: Janet's real Brammah Peter row math.
@@ -244,10 +245,11 @@ $new_total = $vet_mains_cost + $sides_cost + $sides_tax;
 chk($new_total, 28055, 'VAC Ralph: new_total = $280.55 (no contribution subtraction)');
 
 // ---------------------------------------------------------------------------
-// Test 6 (operator ruling 2026-07-30): a client with NO mains and NO sides
-// attributed in the month must NOT appear on the invoice — even when a
-// contribution line item exists on an order in that month. Previously the
-// contribution alone kept the row alive.
+// Test 6 (operator ruling 2026-07-30, reinforced by K8): a client with NO mains
+// and NO sides attributed in the month must NOT appear on the invoice — even
+// when they have a configured client_contribution. This matters MORE after K8:
+// every client now has a contribution figure from their record, so the omission
+// rule must key on allocated mains/sides, never on whether a contribution exists.
 // ---------------------------------------------------------------------------
 $wpdb6 = new P2WpdbWithRate();
 $wpdb6->rate = 14.66;
@@ -256,17 +258,11 @@ $wpdb6->scripted = [
         "FROM `wp_meals_client_allocations`" => [
             ['client_id' => 8, 'used_mains' => 0, 'used_sides' => 0, 'used_tax_sides' => 0, 'used_nontax_sides' => 0],
         ],
-        "FROM `wp_meals_delivery_allocations`" => [
-            ['client_id' => 8, 'wc_order_id' => 777],
-        ],
-    ],
-    'get_var' => [
-        "SUM(CAST(ls.meta_value AS DECIMAL" => '19.7700', // contribution exists…
     ],
 ];
 $GLOBALS['wpdb'] = $wpdb6;
-$out = call_p2([['client_id' => 8, 'wp_user_id' => 51, 'default_rate_id' => 1, 'first_name' => 'C', 'last_name' => 'Only']], '2025-11');
-chk(isset($out[8]), false, 'zero-attribution: contribution-only client excluded from invoice');
+$out = call_p2([['client_id' => 8, 'wp_user_id' => 51, 'default_rate_id' => 1, 'client_contribution' => 50.00, 'first_name' => 'C', 'last_name' => 'Only']], '2025-11');
+chk(isset($out[8]), false, 'zero-attribution: a client with a configured contribution but NO deliveries is excluded (K8 verify #4)');
 
 // …but a SIDES-only client (no mains) still has attribution and stays.
 $wpdb6b = new P2WpdbWithRate();

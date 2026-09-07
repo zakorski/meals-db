@@ -246,6 +246,10 @@ class MealsDB_Migration_Page {
                     &nbsp;
                     <span class="description"><?php esc_html_e( '(leave blank for the default 24-month window)', 'meals-db' ); ?></span>
                 </p>
+                <?php // DIRECTIVE K6 ITEM 6: the rebuild is not confined to the selected month. ?>
+                <p class="description" style="margin-top:-6px;">
+                    <?php esc_html_e( 'Note: rebuilding a month also rewrites its immediate neighbours — a delivery in the selected month can bill into the prior or next month, so those billing months are recomputed too. A one-month range typically writes rows in three months. Finalized (submitted) months are never touched.', 'meals-db' ); ?>
+                </p>
                 <p>
                     <label><input type="checkbox" id="ddb-dry-run" checked> <?php esc_html_e( 'Dry run (no writes)', 'meals-db' ); ?></label>
                 </p>

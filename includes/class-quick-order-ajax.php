@@ -384,16 +384,10 @@ class MealsDB_Quick_Order_Ajax {
 
             $order->update_meta_data('mealsdb_client_user_id', $wp_user_id);
 
-            // FOLLOW-UP DIRECTIVE B (ITEM 2): Quick Order derives date_created_gmt
-            // from the operator's Order Date (at 03:00), which is load-bearing —
-            // the allocation/billing-month/delivery-occurrence math reads it, and
-            // back-dated retroactive entry depends on it. So date_created must NOT
-            // be changed. Instead, stamp the REAL wall-clock creation time in a
-            // dedicated meta. The weekend-slip selection (Directive 4) uses this
-            // when present, so a weekend order taken through QO is no longer stamped
-            // "older than the batch" and silently dropped. gmdate = UTC, matching
-            // date_created_gmt's basis.
-            $order->update_meta_data('_mealsdb_wallclock_created', gmdate('Y-m-d H:i:s'));
+            // The real wall-clock creation time (_mealsdb_wallclock_created) is now
+            // stamped inside create_wc_order() itself (DIRECTIVE K6 ITEM 5), so
+            // every QO-built order carries it regardless of caller — see the note
+            // there. Not re-stamped here.
 
             if ($client_id > 0) {
                 $order->update_meta_data('mealsdb_client_id', $client_id);
@@ -1265,6 +1259,19 @@ class MealsDB_Quick_Order_Ajax {
                 // Ignore date parsing errors and keep default creation date.
             }
         }
+
+        // FOLLOW-UP DIRECTIVE B (ITEM 2) / DIRECTIVE K6 ITEM 5: stamp the REAL
+        // wall-clock creation time here, at the point of build, so EVERY QO order
+        // carries it — not only the one create_order() caller that used to add it
+        // afterwards. date_created_gmt is deliberately set to the operator's Order
+        // Date above (the allocation / billing-month / delivery-occurrence math and
+        // the SDNB invoice window all read it, so it must NOT change); the weekend
+        // slip selection reads THIS meta instead, so a weekend order taken through
+        // Quick Order is no longer stamped "older than the batch" and silently
+        // dropped. gmdate = UTC, matching date_created_gmt's basis. Kept here at
+        // creation rather than in the handler so a future caller of this builder
+        // cannot reintroduce the drop.
+        $order->update_meta_data('_mealsdb_wallclock_created', gmdate('Y-m-d H:i:s'));
 
         // Quick Order creates operator-entered delivery orders, not card-payment
         // e-commerce orders. Put them straight into an active, slip-eligible status so

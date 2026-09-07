@@ -158,47 +158,12 @@ class MealsDB_Invoice_Generator {
             $summary_by_cid[(int) $r['client_id']] = $r;
         }
 
-        // Bulk-fetch the list of orders whose meals were allocated to this
-        // billing month, per client. Contribution and tax both ride on
-        // these orders.
-        $allocated_order_rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT DISTINCT client_id, wc_order_id
-             FROM `{$alloc_table}`
-             WHERE billing_month = %s AND client_id IN ({$cid_list})",
-            $billing_month
-        ), ARRAY_A);
-        $orders_by_cid = [];
-        $all_order_ids = [];
-        foreach ((array) $allocated_order_rows as $r) {
-            $oid = (int) $r['wc_order_id'];
-            $orders_by_cid[(int) $r['client_id']][] = $oid;
-            $all_order_ids[$oid] = true;
-        }
-
-        // BC-5: compute each order's PRIMARY (earliest) billing month so an order
-        // that spilled across a month boundary has its contribution counted in
-        // exactly one month (its primary), not deducted twice.
-        $primary_month_by_order = [];
-        if (!empty($all_order_ids)) {
-            $oid_list = implode(',', array_map('intval', array_keys($all_order_ids)));
-            $primary_rows = $wpdb->get_results(
-                "SELECT wc_order_id, MIN(billing_month) AS primary_month
-                 FROM `{$alloc_table}`
-                 WHERE wc_order_id IN ({$oid_list})
-                 GROUP BY wc_order_id",
-                ARRAY_A
-            );
-            foreach ((array) $primary_rows as $pr) {
-                // Only record a real month — a missing/empty value must default
-                // to "keep" (contribution_orders_for_month treats an absent entry
-                // as the current month), never silently drop the contribution.
-                $pm = (string) ($pr['primary_month'] ?? '');
-                if ($pm !== '') {
-                    $primary_month_by_order[(int) $pr['wc_order_id']] = $pm;
-                }
-            }
-        }
-
+        // DIRECTIVE K8: the client contribution is sourced from the client
+        // record (meals_clients.client_contribution), NOT from order line items,
+        // so the per-order fetch and the BC-5 primary-month plumbing that used to
+        // live here are gone. (Tax does NOT ride on the orders either — it is
+        // computed from the allocated taxable-side count in the summary below —
+        // so nothing else needs the order list.)
         $order_query = new MealsDB_WC_Order_Query($wpdb);
 
         // Resolve the HST rate once for the whole batch (sourced live from
@@ -233,16 +198,18 @@ class MealsDB_Invoice_Generator {
             $rate_id       = isset($client['default_rate_id']) ? (int) $client['default_rate_id'] : 0;
             $resolved_rate = $order_query->resolve_rate_for_order($rate_id, $cid, $client['client_type'] ?? '', $client['delivery_area_zone'] ?? null);
 
-            // Contribution: sum of Client Contribution line items across orders
-            // whose meals landed in this billing month for this client. BC-5:
-            // restrict to orders whose PRIMARY month is this month, so a
-            // boundary-spanning order is counted once (in its primary month).
-            $contribution_order_ids = self::contribution_orders_for_month(
-                $orders_by_cid[$cid] ?? [],
-                $primary_month_by_order,
-                $billing_month
-            );
-            $contribution_cents = self::sum_contribution_for_orders($contribution_order_ids);
+            // DIRECTIVE K8: the client contribution is the client record's own
+            // monthly figure (meals_clients.client_contribution), full stop — the
+            // order line items (a $1.00 placeholder contribution product on some
+            // orders) are NOT consulted. Sourcing from the orders made the
+            // deduction move whenever unrelated order data changed and under-
+            // deducted six SDNB clients to $1.00 (SDNB over-billed ~$380/month).
+            //
+            // NO PRORATING: this monthly figure is billed IN FULL regardless of a
+            // mid-month service start/end. Do NOT apply the effective_days
+            // proration that permitted_mains uses — the next reader will assume
+            // proration by analogy with the allowance; it does not apply here.
+            $contribution_cents = MealsDB_Money::to_cents($client['client_contribution'] ?? 0);
 
             // Basic = allocated_units × rate. "Allocated units" = mains for
             // most clients; legacy two-line splitting may include sides on
@@ -311,74 +278,12 @@ class MealsDB_Invoice_Generator {
         return $out;
     }
 
-    /**
-     * Sum the cents of Client Contribution line items across the given
-     * wc_order_ids. Reads WC HPOS order_itemmeta directly so it runs against
-     * the same data WC uses.
-     *
-     * BC-5: resolve the contribution product id the SAME way the fee engine and
-     * the reconciliation layer do (get_fee_product_ids) — never hardcode 5675,
-     * or a changed mealsdb_fee_product_ids option silently zeroes the invoice's
-     * contribution and over-bills the department. Sum _line_subtotal to match
-     * MealsDB_WC_Order_Query (one basis across invoice + reconciliation).
-     */
-    private static function sum_contribution_for_orders(array $wc_order_ids): int {
-        if (empty($wc_order_ids)) { return 0; }
-        global $wpdb;
-
-        $fee_ids = self::get_fee_product_ids();
-        $contribution_pid = (int) ($fee_ids['client_contribution'] ?? 0);
-        if ($contribution_pid <= 0) { return 0; }
-
-        $order_list = implode(',', array_map('intval', $wc_order_ids));
-        $items_table = $wpdb->prefix . 'woocommerce_order_items';
-        $meta_table  = $wpdb->prefix . 'woocommerce_order_itemmeta';
-
-        // _line_subtotal is stored as a string-formatted decimal; CAST to handle.
-        $sql = $wpdb->prepare("
-            SELECT COALESCE(SUM(CAST(ls.meta_value AS DECIMAL(12,4))), 0)
-            FROM `{$items_table}` i
-            INNER JOIN `{$meta_table}` pm ON pm.order_item_id = i.order_item_id
-                                          AND pm.meta_key = '_product_id'
-                                          AND pm.meta_value = %s
-            INNER JOIN `{$meta_table}` ls ON ls.order_item_id = i.order_item_id
-                                          AND ls.meta_key = '_line_subtotal'
-            WHERE i.order_id IN ({$order_list})
-              AND i.order_item_type = 'line_item'
-        ", (string) $contribution_pid);
-
-        $sum_decimal = (string) $wpdb->get_var($sql);
-        // Convert decimal dollars to integer cents without float drift.
-        return MealsDB_Money::to_cents($sum_decimal);
-    }
-
-    /**
-     * BC-5: keep only the orders whose PRIMARY (earliest) billing month is the
-     * month being invoiced. An order whose meals spilled across a month boundary
-     * has delivery_allocations rows in BOTH months, so it appears in both
-     * months' order lists; without this, its contribution line is deducted
-     * twice. An order with no recorded primary month defaults to the current
-     * month (kept) — defensive, should not happen for an allocated order.
-     *
-     * @param int[]                 $order_ids
-     * @param array<int,string>     $primary_month_by_order order_id => YYYY-MM
-     * @param string                $billing_month
-     * @return int[]
-     */
-    private static function contribution_orders_for_month(array $order_ids, array $primary_month_by_order, string $billing_month): array {
-        $out = [];
-        foreach ($order_ids as $oid) {
-            $oid = (int) $oid;
-            $primary = $primary_month_by_order[$oid] ?? $billing_month;
-            if ($primary === $billing_month) {
-                $out[] = $oid;
-            }
-        }
-        return $out;
-    }
-
-
-
+    // DIRECTIVE K8: sum_contribution_for_orders() and contribution_orders_for_month()
+    // were DELETED. They existed only to derive the client contribution from
+    // order line items — the wrong source (see get_phase2_billing_data). The
+    // contribution now comes exclusively from meals_clients.client_contribution;
+    // leaving a second, order-based path present is how this class of defect
+    // returns, so it is removed rather than left dangling.
 
     /**
      * Split a client's allowance row into one or two invoice lines.

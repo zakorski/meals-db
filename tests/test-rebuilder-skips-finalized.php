@@ -38,6 +38,9 @@ class FinFakeWpdb extends wpdb {
     public string $client_type = 'SDNB';
     public array $finalized = [];       // YYYY-MM values treated as finalized
     public array $dirty_client_ids = [1];
+    // K4: what a finalized month already holds for one order, keyed "month|wcid"
+    // => ['mains'=>,'tax'=>,'nontax'=>]. Answers finalized_held_for_delivery().
+    public array $finalized_held = [];
     public function prepare($q, ...$a) {
         if (count($a) === 1 && is_array($a[0])) { $a = $a[0]; }
         $i = 0;
@@ -65,7 +68,17 @@ class FinFakeWpdb extends wpdb {
         return 1;
     }
     public function get_var($q) { return $this->client_type; }
-    public function get_row($q, $o = null) { return null; }
+    public function get_row($q, $o = null) {
+        // K4: finalized_held_for_delivery's SUM query.
+        if (stripos($q, 'COALESCE(SUM(mains_count)') !== false) {
+            if (preg_match("/billing_month = '([^']+)' AND wc_order_id = (\\d+)/", $q, $m)) {
+                $h = $this->finalized_held[$m[1] . '|' . $m[2]] ?? ['mains' => 0, 'tax' => 0, 'nontax' => 0];
+                return ['mains' => $h['mains'], 'tax_sides' => $h['tax'], 'nontax_sides' => $h['nontax']];
+            }
+            return ['mains' => 0, 'tax_sides' => 0, 'nontax_sides' => 0];
+        }
+        return null;
+    }
     public function get_results($q, $o = null) { return []; }
     public function get_col($q) {
         if (stripos($q, 'is_finalized = 1') !== false) {
@@ -238,6 +251,48 @@ $stats = $rb->rebuild_for_invoice('2025-03', [1]);
 chk(count($GLOBALS['wpdb']->inserts[alloc_table()] ?? []), 0, 're-invoice: no detail written for finalized month');
 chk(count($GLOBALS['wpdb']->deletes), 0, 're-invoice: no DELETE issued for finalized month');
 chk((int) $stats['rebuilt'], 1, 're-invoice: the client-month was visited (counted) but produced no writes');
+
+// ---------------------------------------------------------------------------
+// Case 5 (DIRECTIVE K4): a delivery whose OWN month is finalized must NOT spill
+// its full amount into the next month. The finalized month already holds the
+// delivery's row (survives the DELETE); before K4 the whole delivery ALSO
+// spilled forward, double-counting the meals. Finalize May holding all 7 mains
+// of order 850; rebuild open June (window {May,June,July}). The May delivery is
+// pulled in as a finalized neighbour and must place NOTHING new.
+// ---------------------------------------------------------------------------
+$GLOBALS['wpdb'] = new FinFakeWpdb();
+$GLOBALS['wpdb']->finalized = ['2025-05'];
+$GLOBALS['wpdb']->finalized_held = ['2025-05|850' => ['mains' => 7, 'tax' => 0, 'nontax' => 0]];
+$eng = new FinFakeEngine();
+$eng->caps = ['2025-05' => cap(31, 31), '2025-06' => cap(31, 100), '2025-07' => cap(31, 100)];
+$rb = new FinTestable();
+$rb->inject_engine($eng);
+$rb->injected_deliveries = [ delivery('2025-05-20', 7, 0, 0, 850) ];
+$res = $rb->rebuild_client_month(1, '2025-06');
+
+chk(count(inserts_into($GLOBALS['wpdb'], '2025-06')), 0, 'K4: fully-held finalized-May delivery does NOT spill a phantom row into June');
+chk(delete_mentions($GLOBALS['wpdb'], '2025-05'), false, 'K4: finalized May not deleted');
+chk(count(inserts_into($GLOBALS['wpdb'], '2025-05')), 0, 'K4: nothing written into finalized May');
+chk((int) $res['mains_unplaced'], 0, 'K4: nothing unplaced — the meals are already recorded in finalized May');
+
+// ---------------------------------------------------------------------------
+// Case 6 (DIRECTIVE K4): GENUINE overflow still spills. Finalize May but its
+// row was itself capped short — it holds only 5 of a 7-main delivery. The 2
+// beyond what May recorded are real overflow and must carry into open June.
+// ---------------------------------------------------------------------------
+$GLOBALS['wpdb'] = new FinFakeWpdb();
+$GLOBALS['wpdb']->finalized = ['2025-05'];
+$GLOBALS['wpdb']->finalized_held = ['2025-05|860' => ['mains' => 5, 'tax' => 0, 'nontax' => 0]];
+$eng = new FinFakeEngine();
+$eng->caps = ['2025-05' => cap(5, 31), '2025-06' => cap(31, 100), '2025-07' => cap(31, 100)];
+$rb = new FinTestable();
+$rb->inject_engine($eng);
+$rb->injected_deliveries = [ delivery('2025-05-20', 7, 0, 0, 860) ];
+$res = $rb->rebuild_client_month(1, '2025-06');
+
+chk(count(inserts_into($GLOBALS['wpdb'], '2025-06')), 1, 'K4: genuine overflow spills one row into open June');
+chk((int) (inserts_into($GLOBALS['wpdb'], '2025-06')[0]['mains_count'] ?? -1), 2, 'K4: exactly the 2-main overflow spills, not the full 7');
+chk((int) $res['mains_unplaced'], 0, 'K4: the overflow was placed, nothing unplaced');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) echo "FAIL: $f\n";

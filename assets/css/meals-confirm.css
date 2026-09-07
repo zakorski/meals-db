@@ -1,8 +1,17 @@
 /**
  * Styling for the shared in-page modal (window.MealsDBConfirm).
  * See assets/js/meals-confirm.js. WP-admin-flavoured, deliberately plain.
+ *
+ * DIRECTIVE K1: this component owns the `.mealsdb-confirm*` class namespace.
+ * It deliberately does NOT use `.mealsdb-modal*` — that namespace belongs to
+ * the pre-existing "Client Table Modal" in assets/css/admin.css, whose
+ * `.mealsdb-modal { display:none }` (revealed via `.is-visible`) silently hid
+ * every dialog this helper rendered. Visibility here is by DOM presence: the
+ * JS appends the overlay to open and removes it to close, so no display-toggle
+ * class is required. The eight `data-testid` attributes are a test-tooling
+ * contract and keep the `mealsdb-modal-*` spelling — only the CSS classes moved.
  */
-.mealsdb-modal-overlay {
+.mealsdb-confirm-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
@@ -13,7 +22,7 @@
     padding: 8vh 16px 16px;
 }
 
-.mealsdb-modal {
+.mealsdb-confirm {
     background: #fff;
     border-radius: 4px;
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
@@ -21,36 +30,47 @@
     width: 100%;
     padding: 20px 24px 18px;
     outline: none;
+    /* K1 ITEM 2: a long message (e.g. the SDNB coverage-warning list) must not
+       run off the bottom of the viewport with no scroll and no reachable
+       buttons. Column layout caps the whole dialog; only the message region
+       scrolls, so the title and action buttons stay visible. */
+    display: flex;
+    flex-direction: column;
+    max-height: 84vh;
 }
 
-.mealsdb-modal__title {
+.mealsdb-confirm__title {
     margin: 0 0 10px;
     font-size: 18px;
     line-height: 1.3;
 }
 
-.mealsdb-modal__message {
+.mealsdb-confirm__message {
     margin: 0 0 12px;
     font-size: 14px;
     color: #1d2327;
+    /* Scroll the message, not the whole dialog, so the actions stay pinned.
+       min-height:0 lets this flex child shrink below its content height. */
+    overflow-y: auto;
+    min-height: 0;
 }
 
-.mealsdb-modal__message p { margin: 0 0 8px; }
-.mealsdb-modal__list { margin: 0 0 8px 18px; }
-.mealsdb-modal__list li { margin: 2px 0; }
+.mealsdb-confirm__message p { margin: 0 0 8px; }
+.mealsdb-confirm__list { margin: 0 0 8px 18px; }
+.mealsdb-confirm__list li { margin: 2px 0; }
 
-.mealsdb-modal__input {
+.mealsdb-confirm__input {
     width: 100%;
     margin: 0 0 10px;
 }
 
-.mealsdb-modal__error {
+.mealsdb-confirm__error {
     color: #d63638;
     font-size: 13px;
     margin: 0 0 10px;
 }
 
-.mealsdb-modal__actions {
+.mealsdb-confirm__actions {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
@@ -58,9 +78,9 @@
 }
 
 /* Destructive confirm — red primary, matching WP's danger affordance. */
-.mealsdb-modal__btn-destructive.button-primary,
-.mealsdb-modal__btn-destructive.button-primary:hover,
-.mealsdb-modal__btn-destructive.button-primary:focus {
+.mealsdb-confirm__btn-destructive.button-primary,
+.mealsdb-confirm__btn-destructive.button-primary:hover,
+.mealsdb-confirm__btn-destructive.button-primary:focus {
     background: #d63638;
     border-color: #b32d2e;
     box-shadow: 0 0 0 1px #b32d2e;

@@ -226,11 +226,16 @@
     // ------------------------------------------------------------------
     // Lifecycle actions
     // ------------------------------------------------------------------
+    // DIRECTIVE K6 ITEM 3: every action names itself with a specific title/verb —
+    // "Please confirm" / "OK" is uninformative, and Accept in particular is the
+    // most consequential (it ADDS ordered quantities to live inventory), so it
+    // must not be the one with the generic wording. title/confirmLabel/destructive
+    // are consumed by the generic confirm branch below.
     var ACTION_MAP = {
         approve:   { action: 'mealsdb_po_approve',       confirm: t('confirmApprove', 'Approve this purchase order?') },
-        accept:    { action: 'mealsdb_po_mark_accepted', confirm: t('confirmAccept', 'Mark accepted? Quantities will be added to inventory.') },
-        receive:   { action: 'mealsdb_po_mark_received', confirm: t('confirmReceive', 'Mark received? Stock was already committed at Accept.') },
-        cancel:    { action: 'mealsdb_po_cancel',        confirm: t('confirmCancel', 'Cancel this draft purchase order?') },
+        accept:    { action: 'mealsdb_po_mark_accepted', title: 'Accept PO',  confirmLabel: 'Accept',     destructive: true, confirm: t('confirmAccept', 'Mark accepted? Ordered quantities will be ADDED to inventory now.') },
+        receive:   { action: 'mealsdb_po_mark_received', title: 'Receive PO', confirmLabel: 'Receive',                       confirm: t('confirmReceive', 'Mark received? Stock was already committed at Accept.') },
+        cancel:    { action: 'mealsdb_po_cancel',        title: 'Cancel PO',  confirmLabel: 'Cancel this PO', destructive: true, confirm: t('confirmCancel', 'Cancel this draft purchase order?') },
         unapprove: { action: 'mealsdb_po_unapprove',     confirm: null },
         unaccept:  { action: 'mealsdb_po_unaccept',      confirm: null }
     };
@@ -318,8 +323,10 @@
             });
         } else {
             window.MealsDBConfirm.confirm({
-                title: 'Please confirm',
-                message: map.confirm
+                title: map.title || 'Please confirm',
+                message: map.confirm,
+                confirmLabel: map.confirmLabel || 'OK',
+                destructive: !!map.destructive
             }).then(function (ok) {
                 if (ok) { submit(); }
             });

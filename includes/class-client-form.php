@@ -307,6 +307,61 @@ class MealsDB_Client_Form {
             ];
         };
 
+        // DIRECTIVE K2 ITEM 3: validate only what changed. Whole-record format
+        // validation on every save is what turns one legacy value into a
+        // permanently unsavable client — the operator changes an unrelated
+        // field and the save is rejected because a DIFFERENT field holds a
+        // legacy shape. On EDIT, a format check for a field whose (normalised)
+        // value equals what is already stored is skipped: that value is the
+        // system's own output, and re-rejecting it serves no purpose. Any field
+        // the operator actually CHANGED is still validated. On CREATE nothing is
+        // stored, so every field is validated (the closure returns false).
+        //
+        // Scope: the NON-encrypted format-checked fields (phones, postal codes,
+        // provinces, emails). A plaintext string compare against the stored
+        // DB-side value is correct for these. The stored record is loaded once,
+        // lazily, only if an edit actually reaches a gated check.
+        $stored_record = null;
+        $stored_loaded = false;
+        $form_to_db_for_diff = [
+            'phone_primary'               => 'client_phone_1',
+            'phone_secondary'             => 'client_phone_2',
+            'alt_contact_phone_primary'   => 'alternate_contact_phone_1',
+            'alt_contact_phone_secondary' => 'alternate_contact_phone_2',
+            'address_postal'              => 'postal_code',
+            'delivery_address_postal'     => 'delivery_postal_code',
+            'address_province'            => 'province',
+            'delivery_address_province'   => 'delivery_province',
+            // NB: social_worker_email maps to assigned_worker_email DB-side.
+            'social_worker_email'         => 'assigned_worker_email',
+            'alt_contact_email'           => 'alternate_contact_email',
+            'client_email'                => 'client_email',
+        ];
+        $unchanged_on_edit = function (string $form_field, $incoming_value) use (
+            $ignore_client_id, &$stored_record, &$stored_loaded, $form_to_db_for_diff
+        ): bool {
+            if ($ignore_client_id === null) {
+                return false; // create — validate everything
+            }
+            if (!$stored_loaded) {
+                $stored_loaded = true;
+                if (class_exists('MealsDB_Clients_Repository')) {
+                    $repo = new MealsDB_Clients_Repository();
+                    // Returns DB-side column names; the gated fields are all
+                    // non-encrypted, so a plaintext compare is valid.
+                    $stored_record = $repo->get_client_by_id($ignore_client_id);
+                }
+            }
+            if (!is_array($stored_record)) {
+                return false; // can't confirm unchanged → validate (fail safe)
+            }
+            $db_col = $form_to_db_for_diff[$form_field] ?? null;
+            if ($db_col === null || !array_key_exists($db_col, $stored_record)) {
+                return false;
+            }
+            return (string) $stored_record[$db_col] === (string) $incoming_value;
+        };
+
         // Postal Code
         $postal_pattern = '/^[A-Z]\d[A-Z]\d[A-Z]\d$/';
 
@@ -318,31 +373,58 @@ class MealsDB_Client_Form {
         };
 
         $sanitized['address_postal'] = $normalize_postal($sanitized['address_postal'] ?? '');
-        if ($sanitized['address_postal'] !== '' && !preg_match($postal_pattern, $sanitized['address_postal'])) {
+        if ($sanitized['address_postal'] !== ''
+            && !$unchanged_on_edit('address_postal', $sanitized['address_postal'])
+            && !preg_match($postal_pattern, $sanitized['address_postal'])) {
             $record_format_error('address_postal', 'Postal code must be in A1A1A1 format.');
         }
 
         $sanitized['delivery_address_postal'] = $normalize_postal($sanitized['delivery_address_postal'] ?? '');
-        if ($sanitized['delivery_address_postal'] !== '' && !preg_match($postal_pattern, $sanitized['delivery_address_postal'])) {
+        if ($sanitized['delivery_address_postal'] !== ''
+            && !$unchanged_on_edit('delivery_address_postal', $sanitized['delivery_address_postal'])
+            && !preg_match($postal_pattern, $sanitized['delivery_address_postal'])) {
             $record_format_error('delivery_address_postal', 'Delivery postal code must be in A1A1A1 format.');
         }
 
-        // Phone
-        $phonePattern = '/^\(\d{3}\)-\d{3}-\d{4}$/';
-        if (!empty($sanitized['phone_primary']) && !preg_match($phonePattern, $sanitized['phone_primary'])) {
-            $record_format_error('phone_primary', 'Phone number must be in (###)-###-#### format.');
-        }
-
-        if (!empty($sanitized['phone_secondary']) && !preg_match($phonePattern, $sanitized['phone_secondary'])) {
-            $record_format_error('phone_secondary', 'Client phone #2 must be in (###)-###-#### format.');
-        }
-
-        if (!empty($sanitized['alt_contact_phone_primary']) && !preg_match($phonePattern, $sanitized['alt_contact_phone_primary'])) {
-            $record_format_error('alt_contact_phone_primary', 'Alternate contact phone #1 must be in (###)-###-#### format.');
-        }
-
-        if (!empty($sanitized['alt_contact_phone_secondary']) && !preg_match($phonePattern, $sanitized['alt_contact_phone_secondary'])) {
-            $record_format_error('alt_contact_phone_secondary', 'Alternate contact phone #2 must be in (###)-###-#### format.');
+        // Phone — DIRECTIVE K2 (ITEM 1 + ITEM 2). The old rule demanded exactly
+        // (###)-###-#### and rejected everything else, including the shapes the
+        // system itself stored: NOT ONE existing client matched it (71 held the
+        // plain ###-###-#### form, 28 held a number plus a trailing contact
+        // name like "506-988-1777 Denise", 0 matched). Whole-record validation
+        // on save then made every one of those clients uneditable.
+        //
+        // Now: normalise each phone through MealsDB_Phone::format_with_optional_contact()
+        // — which accepts ###-###-####, (###)-###-####, bare 10 digits and a
+        // leading country-code 1, reshapes the number to (###)-###-####, and
+        // PRESERVES any trailing contact name (ITEM 2, operator's decision:
+        // permit trailing text on the phone field). Only when there is no valid
+        // 10-digit number at all does it error. The accepted post-normalisation
+        // shape is (###)-###-#### optionally followed by a space and free text.
+        $phonePattern = '/^\(\d{3}\)-\d{3}-\d{4}(?:\s+\S.*)?$/';
+        $phone_fields = [
+            'phone_primary'                => 'Phone number must contain a valid 10-digit number (a trailing contact name is allowed).',
+            'phone_secondary'              => 'Client phone #2 must contain a valid 10-digit number (a trailing contact name is allowed).',
+            'alt_contact_phone_primary'    => 'Alternate contact phone #1 must contain a valid 10-digit number (a trailing contact name is allowed).',
+            'alt_contact_phone_secondary'  => 'Alternate contact phone #2 must contain a valid 10-digit number (a trailing contact name is allowed).',
+        ];
+        foreach ($phone_fields as $phone_field => $phone_message) {
+            if (empty($sanitized[$phone_field])) {
+                continue;
+            }
+            if (class_exists('MealsDB_Phone')) {
+                $sanitized[$phone_field] = MealsDB_Phone::format_with_optional_contact((string) $sanitized[$phone_field]);
+            }
+            // ITEM 3: on EDIT, don't re-reject a phone the operator did not
+            // touch. A value equal to what is already stored (after
+            // normalisation) is legacy data the system produced — validating it
+            // again only blocks unrelated edits. Changed values are still
+            // validated. $unchanged_on_edit() returns false on create.
+            if ($unchanged_on_edit($phone_field, $sanitized[$phone_field])) {
+                continue;
+            }
+            if (!preg_match($phonePattern, $sanitized[$phone_field])) {
+                $record_format_error($phone_field, $phone_message);
+            }
         }
 
         // Province — must be a 2-letter Canadian code (sanitize already
@@ -350,7 +432,9 @@ class MealsDB_Client_Form {
         // a recognised code is rejected here with a named field error instead
         // of overflowing VARCHAR(10) at insert. Directive GUI-F3F5.
         foreach (['address_province', 'delivery_address_province'] as $province_field) {
-            if (!empty($sanitized[$province_field]) && !self::is_valid_province_code($sanitized[$province_field])) {
+            if (!empty($sanitized[$province_field])
+                && !$unchanged_on_edit($province_field, $sanitized[$province_field])
+                && !self::is_valid_province_code($sanitized[$province_field])) {
                 $record_format_error(
                     $province_field,
                     sprintf('%s must be a 2-letter province code (e.g. NB).', self::get_field_label($province_field))
@@ -359,15 +443,21 @@ class MealsDB_Client_Form {
         }
 
         // Email
-        if (!empty($sanitized['client_email']) && !filter_var($sanitized['client_email'], FILTER_VALIDATE_EMAIL)) {
+        if (!empty($sanitized['client_email'])
+            && !$unchanged_on_edit('client_email', $sanitized['client_email'])
+            && !filter_var($sanitized['client_email'], FILTER_VALIDATE_EMAIL)) {
             $record_format_error('client_email', 'Invalid client email address.');
         }
 
-        if (!empty($sanitized['social_worker_email']) && !filter_var($sanitized['social_worker_email'], FILTER_VALIDATE_EMAIL)) {
+        if (!empty($sanitized['social_worker_email'])
+            && !$unchanged_on_edit('social_worker_email', $sanitized['social_worker_email'])
+            && !filter_var($sanitized['social_worker_email'], FILTER_VALIDATE_EMAIL)) {
             $record_format_error('social_worker_email', 'Invalid social worker email address.');
         }
 
-        if (!empty($sanitized['alt_contact_email']) && !filter_var($sanitized['alt_contact_email'], FILTER_VALIDATE_EMAIL)) {
+        if (!empty($sanitized['alt_contact_email'])
+            && !$unchanged_on_edit('alt_contact_email', $sanitized['alt_contact_email'])
+            && !filter_var($sanitized['alt_contact_email'], FILTER_VALIDATE_EMAIL)) {
             $record_format_error('alt_contact_email', 'Invalid alternate contact email address.');
         }
 
@@ -557,10 +647,16 @@ class MealsDB_Client_Form {
             // The phone *format* rule below also catches over-long phones, but
             // listing them here gives a length-attributed message for the
             // length case and matches the column widths exactly.
-            'phone_primary' => 20,
-            'phone_secondary' => 20,
-            'alt_contact_phone_primary' => 20,
-            'alt_contact_phone_secondary' => 20,
+            //
+            // DIRECTIVE K2 ITEM 2: the phone columns are VARCHAR(100) (widened
+            // from 20 in the Aug phone-columns directive) and now legitimately
+            // hold a number PLUS a trailing contact name — "(506)-988-1777
+            // Denise" is 21 chars. The cap must match the column (100), not the
+            // stale 20 that would reject the very shape we now preserve.
+            'phone_primary' => 100,
+            'phone_secondary' => 100,
+            'alt_contact_phone_primary' => 100,
+            'alt_contact_phone_secondary' => 100,
             'address_province' => 10,
             'delivery_address_province' => 10,
         ];
@@ -784,16 +880,18 @@ class MealsDB_Client_Form {
             // for a future caller that reaches here with already-mapped data,
             // so an over-long value is fast-failed before it overflows its
             // column at $wpdb->insert (directive GUI-F3F5: province
-            // "New Brunswick" overflowed VARCHAR(10); an unclamped phone
-            // overflows VARCHAR(20)).
-            'phone_primary'             => 20,
-            'phone_secondary'           => 20,
-            'alt_contact_phone_primary' => 20,
-            'alt_contact_phone_secondary' => 20,
-            'client_phone_1'            => 20,
-            'client_phone_2'            => 20,
-            'alternate_contact_phone_1' => 20,
-            'alternate_contact_phone_2' => 20,
+            // "New Brunswick" overflowed VARCHAR(10)). The phone columns are
+            // VARCHAR(100) since the Aug widen and now hold a number plus an
+            // optional trailing contact name (DIRECTIVE K2 ITEM 2), so the caps
+            // track the column width (100), not the stale 20.
+            'phone_primary'             => 100,
+            'phone_secondary'           => 100,
+            'alt_contact_phone_primary' => 100,
+            'alt_contact_phone_secondary' => 100,
+            'client_phone_1'            => 100,
+            'client_phone_2'            => 100,
+            'alternate_contact_phone_1' => 100,
+            'alternate_contact_phone_2' => 100,
             'address_province'          => 10,
             'delivery_address_province' => 10,
             'province'                  => 10,

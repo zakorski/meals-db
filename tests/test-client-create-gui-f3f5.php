@@ -207,10 +207,20 @@ check((($wpdb->lastInsert['province'] ?? null) === 'NB'), '"New Brunswick" norma
 // ---------------------------------------------------------------------------
 // T-1: over-long phone and bogus province are rejected by validate() with NAMED
 // field errors — before any DB write.
+//
+// DIRECTIVE K2 ITEM 2: a phone MAY now carry trailing text (a contact name /
+// extension), so the "over-long" case must genuinely exceed the VARCHAR(100)
+// column — the length cap and its named error still hold. A short number plus
+// a normal trailing name is ACCEPTED (asserted below), not rejected.
 // ---------------------------------------------------------------------------
-$v1 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '(506)-555-1234 ext 99999']));
-check($v1['valid'] === false, 'over-long phone fails validation');
+$v1 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '(506)-555-1234 ' . str_repeat('x', 120)]));
+check($v1['valid'] === false, 'over-long phone (>100 chars) fails validation');
 check(isset($v1['error_details']['invalid_format']['phone_primary']), 'over-long phone produces a named phone field error');
+
+// K2 ITEM 2: a number plus a trailing contact name (within length) is accepted.
+$v1b = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '506-988-1777 Denise']));
+check($v1b['valid'] === true, 'phone with a trailing contact name is accepted (K2 ITEM 2)');
+check(($v1b['sanitized']['phone_primary'] ?? null) === '(506)-988-1777 Denise', 'trailing contact name preserved, number normalised');
 
 $v2 = MealsDB_Client_Form::validate(valid_private_payload(['address_province' => 'Onterio']));
 check($v2['valid'] === false, 'unrecognised province fails validation');
