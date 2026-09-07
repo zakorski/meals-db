@@ -307,159 +307,76 @@ class MealsDB_Client_Form {
             ];
         };
 
-        // DIRECTIVE K2 ITEM 3: validate only what changed. Whole-record format
-        // validation on every save is what turns one legacy value into a
-        // permanently unsavable client — the operator changes an unrelated
-        // field and the save is rejected because a DIFFERENT field holds a
-        // legacy shape. On EDIT, a format check for a field whose (normalised)
-        // value equals what is already stored is skipped: that value is the
-        // system's own output, and re-rejecting it serves no purpose. Any field
-        // the operator actually CHANGED is still validated. On CREATE nothing is
-        // stored, so every field is validated (the closure returns false).
-        //
-        // Scope: the NON-encrypted format-checked fields (phones, postal codes,
-        // provinces, emails). A plaintext string compare against the stored
-        // DB-side value is correct for these. The stored record is loaded once,
-        // lazily, only if an edit actually reaches a gated check.
-        $stored_record = null;
-        $stored_loaded = false;
-        $form_to_db_for_diff = [
-            'phone_primary'               => 'client_phone_1',
-            'phone_secondary'             => 'client_phone_2',
-            'alt_contact_phone_primary'   => 'alternate_contact_phone_1',
-            'alt_contact_phone_secondary' => 'alternate_contact_phone_2',
-            'address_postal'              => 'postal_code',
-            'delivery_address_postal'     => 'delivery_postal_code',
-            'address_province'            => 'province',
-            'delivery_address_province'   => 'delivery_province',
-            // NB: social_worker_email maps to assigned_worker_email DB-side.
-            'social_worker_email'         => 'assigned_worker_email',
-            'alt_contact_email'           => 'alternate_contact_email',
-            'client_email'                => 'client_email',
-        ];
-        $unchanged_on_edit = function (string $form_field, $incoming_value) use (
-            $ignore_client_id, &$stored_record, &$stored_loaded, $form_to_db_for_diff
-        ): bool {
-            if ($ignore_client_id === null) {
-                return false; // create — validate everything
-            }
-            if (!$stored_loaded) {
-                $stored_loaded = true;
-                if (class_exists('MealsDB_Clients_Repository')) {
-                    $repo = new MealsDB_Clients_Repository();
-                    // Returns DB-side column names; the gated fields are all
-                    // non-encrypted, so a plaintext compare is valid.
-                    $stored_record = $repo->get_client_by_id($ignore_client_id);
-                }
-            }
-            if (!is_array($stored_record)) {
-                return false; // can't confirm unchanged → validate (fail safe)
-            }
-            $db_col = $form_to_db_for_diff[$form_field] ?? null;
-            if ($db_col === null || !array_key_exists($db_col, $stored_record)) {
-                return false;
-            }
-            return (string) $stored_record[$db_col] === (string) $incoming_value;
-        };
+        // DIRECTIVE K9: whole-record FORMAT validation was removed OUTRIGHT, not
+        // narrowed. Operator ruling (Zak 2026-09-07): the edit form should block
+        // a save only when a value (A) CHANGED from what was stored AND (B) would
+        // FAIL TO INSERT. Format-only checks (postal A1A1A1, phone (###)-###-####,
+        // province 2-letter, email) are none of the operator's business — they
+        // are neither insert failures (the columns are wide VARCHARs, length-
+        // capped below) nor data the form produced. So the K2-ITEM-3
+        // "$unchanged_on_edit / $form_to_db_for_diff / $stored_record" apparatus
+        // that used to gate those checks on edit is GONE — it had zero call sites
+        // once the checks it gated were deleted, and a dormant gate is how this
+        // class of defect returns (cf. K8's deleted order-line contribution path).
+        // What REMAINS as validation: length caps ($max_lengths), the initials
+        // uniqueness hard-block (a real UNIQUE index → errno 1062), numeric/enum/
+        // units/wp_user_id insert-failure guards, and the vet_health_card business
+        // rule. Those are category (B) and stay.
 
-        // Postal Code
-        $postal_pattern = '/^[A-Z]\d[A-Z]\d[A-Z]\d$/';
-
+        // Postal Code — DIRECTIVE K9 ITEM 2. Normalise on save; reject nothing on
+        // format. A clean Canadian postal (any spacing/case) reshapes to A1A1A1;
+        // anything else is stored VERBATIM (trimmed) rather than mangled — the old
+        // closure truncated every value to 6 chars, silently dropping an
+        // operator's "A1A 1A1 rear door" down to "A1A1A1". The ONLY postal guard
+        // now is the VARCHAR(10) length cap in $max_lengths (K9 ITEM 1), which
+        // rejects a genuinely over-long value with a named field error instead of
+        // a generic DB error at insert.
         $normalize_postal = static function ($value): string {
-            $normalized = strtoupper((string) $value);
-            $normalized = preg_replace('/[^A-Z0-9]/', '', $normalized ?? '');
-
-            return substr($normalized, 0, 6);
+            $trimmed = trim((string) $value);
+            if ($trimmed === '') {
+                return '';
+            }
+            $compact = strtoupper((string) preg_replace('/[^A-Za-z0-9]/', '', $trimmed));
+            if (preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/', $compact)) {
+                return $compact; // reshapeable → canonical A1A1A1
+            }
+            return $trimmed;      // not a clean postal → store verbatim, reject nothing
         };
 
-        $sanitized['address_postal'] = $normalize_postal($sanitized['address_postal'] ?? '');
-        if ($sanitized['address_postal'] !== ''
-            && !$unchanged_on_edit('address_postal', $sanitized['address_postal'])
-            && !preg_match($postal_pattern, $sanitized['address_postal'])) {
-            $record_format_error('address_postal', 'Postal code must be in A1A1A1 format.');
-        }
-
+        $sanitized['address_postal']          = $normalize_postal($sanitized['address_postal'] ?? '');
         $sanitized['delivery_address_postal'] = $normalize_postal($sanitized['delivery_address_postal'] ?? '');
-        if ($sanitized['delivery_address_postal'] !== ''
-            && !$unchanged_on_edit('delivery_address_postal', $sanitized['delivery_address_postal'])
-            && !preg_match($postal_pattern, $sanitized['delivery_address_postal'])) {
-            $record_format_error('delivery_address_postal', 'Delivery postal code must be in A1A1A1 format.');
-        }
 
-        // Phone — DIRECTIVE K2 (ITEM 1 + ITEM 2). The old rule demanded exactly
-        // (###)-###-#### and rejected everything else, including the shapes the
-        // system itself stored: NOT ONE existing client matched it (71 held the
-        // plain ###-###-#### form, 28 held a number plus a trailing contact
-        // name like "506-988-1777 Denise", 0 matched). Whole-record validation
-        // on save then made every one of those clients uneditable.
-        //
-        // Now: normalise each phone through MealsDB_Phone::format_with_optional_contact()
-        // — which accepts ###-###-####, (###)-###-####, bare 10 digits and a
-        // leading country-code 1, reshapes the number to (###)-###-####, and
-        // PRESERVES any trailing contact name (ITEM 2, operator's decision:
-        // permit trailing text on the phone field). Only when there is no valid
-        // 10-digit number at all does it error. The accepted post-normalisation
-        // shape is (###)-###-#### optionally followed by a space and free text.
-        $phonePattern = '/^\(\d{3}\)-\d{3}-\d{4}(?:\s+\S.*)?$/';
-        $phone_fields = [
-            'phone_primary'                => 'Phone number must contain a valid 10-digit number (a trailing contact name is allowed).',
-            'phone_secondary'              => 'Client phone #2 must contain a valid 10-digit number (a trailing contact name is allowed).',
-            'alt_contact_phone_primary'    => 'Alternate contact phone #1 must contain a valid 10-digit number (a trailing contact name is allowed).',
-            'alt_contact_phone_secondary'  => 'Alternate contact phone #2 must contain a valid 10-digit number (a trailing contact name is allowed).',
-        ];
-        foreach ($phone_fields as $phone_field => $phone_message) {
+        // Phone — DIRECTIVE K9 ITEM 3. KEEP the normalisation (reshape a parseable
+        // number to (###)-###-####, preserve a trailing contact name, return the
+        // trimmed original when it cannot parse); DROP the format-pattern
+        // rejection. A staging query on 2026-09-07 found 32 clients whose stored
+        // phone cannot satisfy any pattern (multi-number fields, 7-digit locals,
+        // a leading contact name) — all fit VARCHAR(100) and insert cleanly. The
+        // length cap (100) in $max_lengths is the only phone guard, and the right
+        // one.
+        $phone_fields = ['phone_primary', 'phone_secondary', 'alt_contact_phone_primary', 'alt_contact_phone_secondary'];
+        foreach ($phone_fields as $phone_field) {
             if (empty($sanitized[$phone_field])) {
                 continue;
             }
             if (class_exists('MealsDB_Phone')) {
                 $sanitized[$phone_field] = MealsDB_Phone::format_with_optional_contact((string) $sanitized[$phone_field]);
             }
-            // ITEM 3: on EDIT, don't re-reject a phone the operator did not
-            // touch. A value equal to what is already stored (after
-            // normalisation) is legacy data the system produced — validating it
-            // again only blocks unrelated edits. Changed values are still
-            // validated. $unchanged_on_edit() returns false on create.
-            if ($unchanged_on_edit($phone_field, $sanitized[$phone_field])) {
-                continue;
-            }
-            if (!preg_match($phonePattern, $sanitized[$phone_field])) {
-                $record_format_error($phone_field, $phone_message);
-            }
         }
 
-        // Province — must be a 2-letter Canadian code (sanitize already
-        // normalises known full names to their code; anything left that is not
-        // a recognised code is rejected here with a named field error instead
-        // of overflowing VARCHAR(10) at insert. Directive GUI-F3F5.
-        foreach (['address_province', 'delivery_address_province'] as $province_field) {
-            if (!empty($sanitized[$province_field])
-                && !$unchanged_on_edit($province_field, $sanitized[$province_field])
-                && !self::is_valid_province_code($sanitized[$province_field])) {
-                $record_format_error(
-                    $province_field,
-                    sprintf('%s must be a 2-letter province code (e.g. NB).', self::get_field_label($province_field))
-                );
-            }
-        }
+        // Province — DIRECTIVE K9 ITEM 4. The 2-letter-code rejection is removed;
+        // the VARCHAR(10) length cap in $max_lengths is the real (insert-failure)
+        // guard. sanitize_payload() still normalises known full names to their
+        // code. NOTE: the client address is copied onto the order so WooCommerce
+        // resolves tax by province (directive hst-rate-source ITEM 2). An
+        // unrecognised province does not error — it matches no tax rate and yields
+        // ZERO HST. Private-pay only; flagged and accepted by the operator
+        // (2026-09-07). is_valid_province_code() is intentionally left in place.
 
-        // Email
-        if (!empty($sanitized['client_email'])
-            && !$unchanged_on_edit('client_email', $sanitized['client_email'])
-            && !filter_var($sanitized['client_email'], FILTER_VALIDATE_EMAIL)) {
-            $record_format_error('client_email', 'Invalid client email address.');
-        }
-
-        if (!empty($sanitized['social_worker_email'])
-            && !$unchanged_on_edit('social_worker_email', $sanitized['social_worker_email'])
-            && !filter_var($sanitized['social_worker_email'], FILTER_VALIDATE_EMAIL)) {
-            $record_format_error('social_worker_email', 'Invalid social worker email address.');
-        }
-
-        if (!empty($sanitized['alt_contact_email'])
-            && !$unchanged_on_edit('alt_contact_email', $sanitized['alt_contact_email'])
-            && !filter_var($sanitized['alt_contact_email'], FILTER_VALIDATE_EMAIL)) {
-            $record_format_error('alt_contact_email', 'Invalid alternate contact email address.');
-        }
+        // Email — DIRECTIVE K9 ITEM 5. Format rejection removed for all three
+        // address fields; the columns are VARCHAR(255) and length-capped. A
+        // malformed address does not fail to insert — it fails to receive mail,
+        // which is not the form's problem.
 
         // Required fields based on client type configuration.
         $client_type = strtoupper(trim($sanitized['client_type'] ?? ''));
@@ -635,6 +552,13 @@ class MealsDB_Client_Form {
             'address_city' => 255,
             'delivery_address_street_name' => 255,
             'delivery_address_city' => 255,
+            // DIRECTIVE K9 ITEM 1: the A1A1A1 regex used to cap the postals at 6
+            // chars as a side effect. That regex is removed (K9 ITEM 2), so the
+            // VARCHAR(10) width must be enforced explicitly or an over-long postal
+            // reaches $wpdb->insert and dies with a generic DB error (cf.
+            // GUI-F3F5). delivery_address_postal was already listed; address_postal
+            // was NOT — both are required now.
+            'address_postal' => 10,
             'delivery_address_postal' => 10,
             'alt_contact_name' => 255,
             'social_worker_email' => 255,
@@ -896,6 +820,15 @@ class MealsDB_Client_Form {
             'delivery_address_province' => 10,
             'province'                  => 10,
             'delivery_province'         => 10,
+            // DIRECTIVE K9 ITEM 1 (parity): the postals are VARCHAR(10). validate()
+            // caps them now that the A1A1A1 regex is gone, but this belt-and-
+            // suspenders bound runs for callers that SKIP validate() (draft-resume)
+            // — see the docblock — so it must cap the postals too, or an over-long
+            // value reaches $wpdb->insert on that path. Form-side + DB-side aliases.
+            'address_postal'            => 10,
+            'delivery_address_postal'   => 10,
+            'postal_code'               => 10,
+            'delivery_postal_code'      => 10,
         ];
         foreach ($max_lengths as $field => $max) {
             if (!array_key_exists($field, $row)) {

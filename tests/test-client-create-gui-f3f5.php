@@ -222,12 +222,16 @@ $v1b = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '
 check($v1b['valid'] === true, 'phone with a trailing contact name is accepted (K2 ITEM 2)');
 check(($v1b['sanitized']['phone_primary'] ?? null) === '(506)-988-1777 Denise', 'trailing contact name preserved, number normalised');
 
+// DIRECTIVE K9 ITEM 4: an unrecognised province no longer fails validation —
+// format is not an insert failure (VARCHAR(10) length cap is the only guard, and
+//'Onterio' fits). It is stored as-is. (This assertion flipped from the pre-K9
+// rejection — it must fail against v1.0.574.)
 $v2 = MealsDB_Client_Form::validate(valid_private_payload(['address_province' => 'Onterio']));
-check($v2['valid'] === false, 'unrecognised province fails validation');
-check(isset($v2['error_details']['invalid_format']['address_province']), 'bad province produces a named province field error');
+check($v2['valid'] === true, 'K9: unrecognised province validates (no format rejection)');
+check(!isset($v2['error_details']['invalid_format']['address_province']), 'K9: no province format error recorded');
 
 $v3 = MealsDB_Client_Form::validate(valid_private_payload(['address_province' => 'New Brunswick']));
-check($v3['valid'] === true, 'full-name province validates (normalised to code)');
+check($v3['valid'] === true, 'full-name province validates (normalised to code by sanitize_payload)');
 
 // ---------------------------------------------------------------------------
 // T-5: a well-formatted phone with trailing whitespace is normalised and
