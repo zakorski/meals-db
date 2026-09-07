@@ -474,20 +474,22 @@ class MealsDB_Quick_Order_Products {
     }
 
     /**
-     * Directive 2 (ITEMS 1 & 2): attach current + available stock to each
-     * product payload.
+     * Attach the current WooCommerce _stock figure to each product payload.
      *
-     *   current_stock   = the WooCommerce _stock figure (null when the product
-     *                     does not manage stock).
-     *   available_stock = current_stock minus everything committed on
-     *                     UNFULFILLED orders (wc-processing / wc-paid). Excludes
-     *                     wc-completed (already delivered) and drafts (nothing is
-     *                     committed until an order is placed).
+     *   current_stock = the WooCommerce _stock figure (null when the product
+     *                   does not manage stock → UI renders "—", no colour).
      *
-     * Computed FRESH on every load — deliberately NOT folded into the 30-minute
-     * product cache: "available" answers "can I promise this today", so a stale
-     * figure would mislead. Two batched queries total (stock map + committed
-     * map), regardless of catalogue size.
+     * DIRECTIVE K7 ITEM 2: the former `available_stock` (current minus quantity
+     * committed on unfulfilled orders) was REMOVED. Operators here do not close
+     * out orders, so the committed side of that subtraction never drained: it
+     * accumulated without bound and rendered a nonsense shelf figure (e.g. −530
+     * for a product with 46 in stock) and fired the out-of-stock state on 159 of
+     * 160 products — a signal that carries no information. The raw _stock figure
+     * is accurate and kept; the derived "available" number and its committed-
+     * quantities query are gone.
+     *
+     * Computed FRESH on every load (deliberately NOT folded into the 30-minute
+     * product cache — a stock figure should not be stale). One batched query.
      *
      * @param array<int, array<string, mixed>> $products Formatted QO payloads.
      * @return array<int, array<string, mixed>>
@@ -509,25 +511,17 @@ class MealsDB_Quick_Order_Products {
             return $products;
         }
 
-        $stock_map     = self::get_current_stock_map($product_ids);
-        $committed_map = self::get_committed_quantities($product_ids);
+        $stock_map = self::get_current_stock_map($product_ids);
 
         foreach ($products as &$product) {
             $pid = isset($product['product_id']) ? (int) $product['product_id'] : 0;
 
-            // Null current stock = product does not manage stock; leave both
-            // null so the UI can render "—" and skip the out-of-stock colour.
-            if ($pid <= 0 || !array_key_exists($pid, $stock_map) || $stock_map[$pid] === null) {
-                $product['current_stock']   = null;
-                $product['available_stock'] = null;
-                continue;
-            }
-
-            $current   = (int) $stock_map[$pid];
-            $committed = isset($committed_map[$pid]) ? (int) $committed_map[$pid] : 0;
-
-            $product['current_stock']   = $current;
-            $product['available_stock'] = $current - $committed;
+            // Null current stock = product does not manage stock; leave it null
+            // so the UI can render "—" and skip the out-of-stock colour.
+            $product['current_stock'] =
+                ($pid <= 0 || !array_key_exists($pid, $stock_map) || $stock_map[$pid] === null)
+                    ? null
+                    : (int) $stock_map[$pid];
         }
         unset($product);
 
@@ -577,50 +571,10 @@ class MealsDB_Quick_Order_Products {
         return $map;
     }
 
-    /**
-     * Batch-sum quantities committed on UNFULFILLED orders per product.
-     * Unfulfilled = wc-processing / wc-paid (placed, not yet delivered). Excludes
-     * wc-completed and every draft/cancelled status. Models the PO-forecast
-     * quantity roll-up in class-reports.php.
-     *
-     * @param int[] $product_ids
-     * @return array<int, int> product_id => committed quantity
-     */
-    private static function get_committed_quantities(array $product_ids): array {
-        global $wpdb;
-        $map = [];
-        if (empty($product_ids) || !isset($wpdb)) {
-            return $map;
-        }
-
-        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
-        $sql = $wpdb->prepare(
-            "SELECT CAST(pm.meta_value AS UNSIGNED) AS product_id,
-                    SUM(CAST(qm.meta_value AS DECIMAL(10,2))) AS committed_qty
-             FROM {$wpdb->prefix}woocommerce_order_items oi
-             INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta pm
-                     ON pm.order_item_id = oi.order_item_id AND pm.meta_key = '_product_id'
-             INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta qm
-                     ON qm.order_item_id = oi.order_item_id AND qm.meta_key = '_qty'
-             INNER JOIN {$wpdb->prefix}wc_orders o
-                     ON o.id = oi.order_id
-                    AND o.type = 'shop_order'
-                    AND o.status IN ('wc-processing', 'wc-paid')
-             WHERE oi.order_item_type = 'line_item'
-               AND CAST(pm.meta_value AS UNSIGNED) IN ({$placeholders})
-             GROUP BY product_id",
-            $product_ids
-        );
-
-        $rows = $wpdb->get_results($sql, ARRAY_A);
-        if (is_array($rows)) {
-            foreach ($rows as $row) {
-                $map[(int) $row['product_id']] = (int) round((float) $row['committed_qty']);
-            }
-        }
-
-        return $map;
-    }
+    // DIRECTIVE K7 ITEM 2: get_committed_quantities() was removed along with the
+    // available_stock figure it fed. Operators do not close out orders, so the
+    // committed total never drained and the derived "available" number was
+    // misleading (see inject_stock_figures). Nothing else consumed it.
 
     /**
      * Search published products by keyword.

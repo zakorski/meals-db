@@ -1312,15 +1312,16 @@
                 ? `<div class="mealsdb-qo-restriction" role="status">${this.escapeHtml(restrictionTitle)}</div>`
                 : '';
 
-            // Directive 2 (ITEMS 1 & 2): stock lines + out-of-stock (available <= 0)
-            // red state. The colour keys on AVAILABLE, not current — a product with
-            // stock but everything committed is effectively out. Tiles stay
-            // selectable regardless (a warning, not a block).
+            // DIRECTIVE K7 ITEM 2: the out-of-stock red state keys on current_stock
+            // (the raw _stock figure). The former available_stock (current minus
+            // committed) was removed — operators do not close out orders, so its
+            // committed subtraction never drained and fired the red state on 159 of
+            // 160 products. Tiles stay selectable regardless (a warning, not a block).
             const stockHtml = this.buildProductStock(product);
-            const available = (product && product.available_stock !== null && typeof product.available_stock !== 'undefined')
-                ? parseInt(product.available_stock, 10)
+            const current = (product && product.current_stock !== null && typeof product.current_stock !== 'undefined')
+                ? parseInt(product.current_stock, 10)
                 : null;
-            const outOfStockClass = (available !== null && !Number.isNaN(available) && available <= 0)
+            const outOfStockClass = (current !== null && !Number.isNaN(current) && current <= 0)
                 ? ' mealsdb-qo-tile--out-of-stock'
                 : '';
 
@@ -1348,11 +1349,11 @@
                 </div>`;
         },
 
-        // Directive 2 (ITEM 1): two clearly-labelled figures per product —
-        // "Available" (current minus everything committed on unfulfilled orders,
-        // the number that answers "can I promise this today") and the raw
-        // in-stock count for reference. A product that does not manage stock
-        // shows an explicit "not tracked" rather than a misleading 0.
+        // DIRECTIVE K7 ITEM 2: ONE figure per product — the raw in-stock count.
+        // The derived "Available" (current minus committed) was removed as
+        // misleading: operators do not close out orders, so committed never
+        // drained and "Available" read as e.g. −530 for a product with 46 in
+        // stock. A product that does not manage stock shows "not tracked".
         buildProductStock(product) {
             const hasCurrent =
                 product && product.current_stock !== null && typeof product.current_stock !== 'undefined';
@@ -1363,15 +1364,10 @@
             }
 
             const current = parseInt(product.current_stock, 10) || 0;
-            const available =
-                product.available_stock !== null && typeof product.available_stock !== 'undefined'
-                    ? parseInt(product.available_stock, 10)
-                    : current;
-            const outClass = available <= 0 ? ' mealsdb-qo-stock--out' : '';
+            const outClass = current <= 0 ? ' mealsdb-qo-stock--out' : '';
 
             return (
                 `<div class="mealsdb-qo-stock${outClass}">` +
-                `<span class="mealsdb-qo-stock__avail">${this.escapeHtml(this.translate('Available'))}: ${available}</span> ` +
                 `<span class="mealsdb-qo-stock__current">${this.escapeHtml(this.translate('in stock'))}: ${current}</span>` +
                 `</div>`
             );

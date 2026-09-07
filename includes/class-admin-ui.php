@@ -798,7 +798,17 @@ class MealsDB_Admin_UI {
         if (is_object($order) && method_exists($order, 'get_meta')) {
             $value = (string) $order->get_meta('_delivery_date');
         }
-        echo $value !== '' ? esc_html($value) : '<span aria-hidden="true">—</span>';
+        // DIRECTIVE K7 ITEM 1: display the delivery date in the site's configured
+        // date format (Settings → General), matching the adjacent Order Date
+        // column ("Sep 9, 2026") instead of the raw stored "2026-09-09". This is
+        // DISPLAY ONLY — _delivery_date stays YYYY-MM-DD (the sort reads the meta
+        // directly and depends on that format collating correctly). The em-dash
+        // fallback for an order with no delivery date is preserved (it must NOT
+        // fall back to the order date).
+        $ts = $value !== '' ? strtotime($value) : false;
+        echo $ts !== false
+            ? esc_html(date_i18n(get_option('date_format'), $ts))
+            : '<span aria-hidden="true">—</span>';
     }
 
     /**
