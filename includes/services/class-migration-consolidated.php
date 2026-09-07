@@ -2082,6 +2082,12 @@ class MealsDB_Migration_Consolidated {
         ];
 
         if ($offset >= $total) {
+            // K10 ITEM 3: keep the terminal (past-the-end) return consistent with
+            // the dry-run branch below — a dry run never computes unplaced_total,
+            // so it must not surface a placeholder 0 here either.
+            if ($dry_run) {
+                unset($stats['unplaced_total']);
+            }
             return [
                 'stats'    => $stats,
                 'offset'   => $offset + 1,
@@ -2115,6 +2121,15 @@ class MealsDB_Migration_Consolidated {
         if ($dry_run) {
             // Preview only: report how many clients WOULD be rebuilt for this
             // month; touch nothing.
+            //
+            // DIRECTIVE K10 ITEM 3: the dry run returns BEFORE the rebuilder runs,
+            // so unplaced_total is never computed — it would always report 0
+            // regardless of the data (the live run over the identical range showed
+            // 99). Reporting a constant as if it were a real figure is worse than
+            // silence, and a faithful count would have to do the placement work —
+            // i.e. most of the live run. So OMIT unplaced_total from the dry-run
+            // stats; the progress panel renders it only when present.
+            unset($stats['unplaced_total']);
             $stats['months_processed'] = 1;
             $stats['clients_rebuilt']  = count($client_ids);
             return [

@@ -48,7 +48,16 @@ if (!function_exists('wp_unslash'))          { function wp_unslash($v) { return 
 if (!function_exists('is_user_logged_in'))   { function is_user_logged_in() { return true; } }
 if (!function_exists('current_user_can'))    { function current_user_can($c) { return true; } }
 if (!function_exists('get_current_user_id')) { function get_current_user_id() { return (int) ($GLOBALS['mealsdb_current_user'] ?? 1); } }
-if (!function_exists('sanitize_email'))      { function sanitize_email($v) { return trim((string) $v); } }
+// Mirror WP's real sanitize_email(): returns '' for an invalid address. The
+// lenient trim-only stub used to hide K10 ITEM 1 — the whole point of that fix
+// is that sanitize_email() WIPED an invalid entry, so the stub must reproduce it
+// for the "email stored verbatim" test to be meaningful (fail against v1.0.575).
+if (!function_exists('sanitize_email')) {
+    function sanitize_email($v) {
+        $v = trim((string) $v);
+        return filter_var($v, FILTER_VALIDATE_EMAIL) ? $v : '';
+    }
+}
 if (!function_exists('wp_json_encode'))      { function wp_json_encode($v, $opt = 0, $depth = 512) { return json_encode($v, $opt, max(1, $depth)); } }
 if (!function_exists('sanitize_text_field')) {
     function sanitize_text_field($v) {
@@ -424,6 +433,24 @@ check(($resK9norm['sanitized']['address_postal'] ?? null) === 'E1E1E1', 'K9.2: a
 $wpdb = fresh_wpdb();
 $resK9pn = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '5068581234']));
 check(($resK9pn['sanitized']['phone_primary'] ?? null) === '(506)-858-1234', 'K9: bare 10-digit phone normalised to (###)-###-####');
+
+// K10 ITEM 1: an invalid email is STORED VERBATIM, not wiped to ''. Pre-K10 the
+// sanitize switch called sanitize_email() (returns '' for anything invalid),
+// which — after K9 removed the validate() rejection — silently destroyed a stored
+// address on save. Now sanitize_text_field() keeps the value; the length cap is
+// the only guard. (Fails against v1.0.575, given the realistic sanitize_email stub.)
+$wpdb = fresh_wpdb();
+$resEmail = MealsDB_Client_Form::validate(valid_private_payload(['client_email' => 'not-an-email']));
+check(($resEmail['sanitized']['client_email'] ?? null) === 'not-an-email', 'K10.1: an invalid email is stored verbatim, not wiped to empty');
+check($resEmail['valid'] === true, 'K10.1: an invalid email does not fail validation (format is not an insert failure)');
+
+// K10 ITEM 1: the email length cap still fires — a 300-char address is rejected
+// with a named field error (the cap is now the only email guard).
+$wpdb = fresh_wpdb();
+$longEmail = str_repeat('a', 290) . '@example.com';
+$resLong = MealsDB_Client_Form::validate(valid_private_payload(['client_email' => $longEmail]));
+check($resLong['valid'] === false, 'K10.2: a 300-char email is rejected (length cap)');
+check(isset($resLong['error_details']['invalid_format']['client_email']), 'K10.2: over-long email produces a named field error');
 
 // K9 edit-path (directive test cases 1 & 2): on EDIT (positive $ignore_client_id)
 // a legacy multi-number phone validates, and CHANGING a phone to a

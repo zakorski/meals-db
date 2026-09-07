@@ -259,10 +259,19 @@
             }
         });
 
-        // Move focus into the dialog on open — the input for a prompt, else the
-        // confirm button.
+        // Move focus into the dialog on open.
+        // DIRECTIVE K10 ITEM 4: for a confirm dialog, focus the CANCEL button, not
+        // the confirm one — a stray Enter on open used to trigger the destructive
+        // action (observed on the PO cancel dialog; this is the shared component,
+        // so it affected all seven Data Ops tools and every confirm site). A
+        // prompt still focuses+selects its input; an alert has no cancel button so
+        // its sole OK button (the confirm) is focused. The focus TRAP, the
+        // restore-to-trigger behaviour, and the K6 $lastTrigger fallback are
+        // unchanged — this is the initial-focus target only.
         if (isPrompt && $input.length) {
             $input.trigger('focus').trigger('select');
+        } else if ($cancel.length) {
+            $cancel.trigger('focus');
         } else {
             $confirm.trigger('focus');
         }

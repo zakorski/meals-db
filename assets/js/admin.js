@@ -103,12 +103,17 @@ jQuery(document).ready(function($) {
     // -----------------------------
     // 📞 Phone Formatter
     // -----------------------------
-    // DIRECTIVE K2 ITEM 2: mask ONLY the leading number; preserve a trailing
-    // contact name. The old mask stripped every non-digit on each keystroke, so
-    // an operator could never type "506-988-1777 Denise" — the name vanished as
-    // fast as it was typed, even though the server now stores it. Split at the
-    // first letter (where the name begins), format the number portion, and
-    // re-append the name verbatim after a single space.
+    // DIRECTIVE K10 ITEM 2a: the phone mask must MIRROR the server
+    // (MealsDB_Phone::format_with_optional_contact) — format ONLY what parses,
+    // otherwise leave the operator's input alone. The previous mask stripped to
+    // digits and did .substring(0, 10), which DESTROYED the second number of a
+    // two-number field the instant the operator touched it (22 active clients
+    // hold two+ numbers in client_phone_1), and its progressive "(506" / "(506)-204"
+    // bracketing re-bracketed a 7-digit local wrongly ("229-5106" → "(229)-510-6",
+    // 7 active clients). Both the truncation and the progressive bracketing are
+    // removed. Split at the first letter (where a contact name begins), format the
+    // number region only when it is exactly 10 digits (or 11 with a leading 1),
+    // re-append the name verbatim; in every other case leave the field UNCHANGED.
     $('.phone-mask').on('input', function () {
         const raw = $(this).val();
         const letter = raw.match(/[A-Za-z]/);
@@ -119,16 +124,18 @@ jQuery(document).ready(function($) {
             numberPart = raw.slice(0, idx);
             name = raw.slice(idx).replace(/^\s+/, ''); // trailing contact name
         }
-        let val = numberPart.replace(/\D/g, '').substring(0, 10);
-        let formatted = val;
-        if (val.length > 6)
-            formatted = `(${val.substring(0,3)})-${val.substring(3,6)}-${val.substring(6,10)}`;
-        else if (val.length > 3)
-            formatted = `(${val.substring(0,3)})-${val.substring(3)}`;
-        else if (val.length > 0)
-            formatted = `(${val}`;
+        let digits = numberPart.replace(/\D/g, '');
+        // Drop a leading NANP country-code 1 on an 11-digit number (mirrors the
+        // server helper). Format ONLY when exactly 10 digits remain.
+        if (digits.length === 11 && digits.charAt(0) === '1') {
+            digits = digits.slice(1);
+        }
+        if (digits.length !== 10) {
+            return; // not a clean 10-digit number → leave the input untouched
+        }
+        let formatted = `(${digits.substring(0, 3)})-${digits.substring(3, 6)}-${digits.substring(6, 10)}`;
         if (name !== '') {
-            formatted = formatted === '' ? name : formatted + ' ' + name;
+            formatted = formatted + ' ' + name;
         }
         $(this).val(formatted);
     });
@@ -136,9 +143,18 @@ jQuery(document).ready(function($) {
     // -----------------------------
     // 🇨🇦 Postal Code Formatter
     // -----------------------------
+    // DIRECTIVE K10 ITEM 2b: compact/uppercase ONLY when the result is a clean
+    // Canadian postal (A1A1A1); otherwise leave the input UNCHANGED. The old mask
+    // did .substring(0, 6) — the same truncation removed from normalize_postal()
+    // server-side in K9, which survived here — silently discarding anything past
+    // the sixth character (e.g. "E1C 8R5-2"). No truncation now; the VARCHAR(10)
+    // server length cap (which returns a named field error) is the real guard.
     $('.postal-mask').on('input', function () {
-        const val = $(this).val().toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 6);
-        $(this).val(val);
+        const compact = $(this).val().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(compact)) {
+            $(this).val(compact);
+        }
+        // else: not a clean postal → leave whatever the operator typed.
     });
 
     // -----------------------------

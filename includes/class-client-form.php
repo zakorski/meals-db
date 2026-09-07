@@ -1926,11 +1926,18 @@ class MealsDB_Client_Form {
             case 'client_email':
             case 'social_worker_email':
             case 'alt_contact_email':
-                if (function_exists('sanitize_email')) {
-                    $value = sanitize_email($value);
-                } else {
-                    $value = trim(filter_var($value, FILTER_SANITIZE_EMAIL));
-                }
+                // DIRECTIVE K10 ITEM 1: was sanitize_email(), which returns '' for
+                // ANY invalid address. That was harmless while validate() rejected
+                // invalid emails first (pre-K9) — save() never saw one. K9 removed
+                // that rejection and left this sanitiser, so an invalid entry
+                // became '' and silently WIPED a previously valid stored address on
+                // save, under a "Client updated" notice (confirmed: a stored
+                // address destroyed by submitting "not-an-email"). Store verbatim
+                // instead — the column is VARCHAR(255) and the length cap in
+                // $max_lengths is the real (insert-failure) guard. An unmailable
+                // address is a delivery problem, not an insert failure. Interim fix
+                // pending the wider contact-data overhaul (Zak, 2026-09-07).
+                $value = sanitize_text_field($value);
                 break;
             case 'wordpress_user_id':
                 $value = trim($value);
