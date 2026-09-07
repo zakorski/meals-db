@@ -1995,7 +1995,8 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr>
                     <th><label for="client_email"><?php esc_html_e('Client Email', 'meals-db'); ?></label></th>
-                    <td><input type="email" name="client_email" id="client_email" class="regular-text" data-base-required="1" value="<?php echo esc_attr($client['client_email'] ?? ''); ?>" /></td>
+                    <?php // K10 ITEM 2c: type="text", not "email" — the browser's native email validation refused to submit the whole form (blocking the request before it reached the server), which is the client-side mirror K9 did not remove. Server stores verbatim; length cap guards overflow. ?>
+                    <td><input type="text" name="client_email" id="client_email" class="regular-text" data-base-required="1" value="<?php echo esc_attr($client['client_email'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2101,7 +2102,8 @@ class MealsDB_Admin_UI {
                         </tr>
                         <tr>
                             <th><label for="alt_contact_email"><?php esc_html_e('Contact Email', 'meals-db'); ?></label></th>
-                            <td><input type="email" name="alt_contact_email" id="alt_contact_email" class="regular-text" value="<?php echo esc_attr($form_values['alt_contact_email'] ?? ''); ?>" /></td>
+                            <?php // K10 ITEM 2c: type="text" (see client_email above). ?>
+                            <td><input type="text" name="alt_contact_email" id="alt_contact_email" class="regular-text" value="<?php echo esc_attr($form_values['alt_contact_email'] ?? ''); ?>" /></td>
                         </tr>
                     </table>
                 </div>
@@ -2138,7 +2140,8 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-required-for="sdnb,veteran,private">
                     <th><label for="address_postal"><?php esc_html_e('Postal Code *', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="address_postal" id="address_postal" class="regular-text postal-mask" maxlength="6" placeholder="A1A1A1" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['address_postal'] ?? ''); ?>" /></td>
+                    <?php // K10 ITEM 2b: no maxlength — the server VARCHAR(10) cap returns a named field error; a hard 6-char UI cap silently discarded anything past the sixth character. ?>
+                    <td><input type="text" name="address_postal" id="address_postal" class="regular-text postal-mask" placeholder="A1A1A1" <?php echo $req; ?>data-base-required="1" value="<?php echo esc_attr($client['address_postal'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
@@ -2162,7 +2165,8 @@ class MealsDB_Admin_UI {
                         </tr>
                         <tr>
                             <th><label for="delivery_address_postal"><?php esc_html_e('Postal Code', 'meals-db'); ?></label></th>
-                            <td><input type="text" name="delivery_address_postal" id="delivery_address_postal" class="regular-text postal-mask" maxlength="6" placeholder="A1A1A1" value="<?php echo esc_attr($form_values['delivery_address_postal'] ?? ''); ?>" /></td>
+                            <?php // K10 ITEM 2b: no maxlength (see the primary postal field above). ?>
+                            <td><input type="text" name="delivery_address_postal" id="delivery_address_postal" class="regular-text postal-mask" placeholder="A1A1A1" value="<?php echo esc_attr($form_values['delivery_address_postal'] ?? ''); ?>" /></td>
                         </tr>
                     </table>
                 </div>
@@ -2301,7 +2305,8 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr>
                     <th><label for="social_worker_email"><?php esc_html_e('Social Worker Email Address', 'meals-db'); ?></label></th>
-                    <td><input type="email" name="social_worker_email" id="social_worker_email" class="regular-text" value="<?php echo esc_attr($client['social_worker_email'] ?? ''); ?>" /></td>
+                    <?php // K10 ITEM 2c: type="text" (see client_email above). ?>
+                    <td><input type="text" name="social_worker_email" id="social_worker_email" class="regular-text" value="<?php echo esc_attr($client['social_worker_email'] ?? ''); ?>" /></td>
                 </tr>
                 <?php
             },
