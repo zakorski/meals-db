@@ -84,4 +84,55 @@ class MealsDB_Phone {
         }
         return $value;
     }
+
+    /**
+     * Form-valid display shape, tolerant of a trailing contact name after the
+     * number (DIRECTIVE K2 ITEM 2). Operators legitimately store a phone plus
+     * whose phone it is — e.g. "506-988-1777 Denise" — and the driver needs
+     * that name. format() strips every non-digit and would discard "Denise";
+     * this variant preserves it.
+     *
+     * The value is split at the first ALPHABETIC character — the point where a
+     * contact name begins. Everything before it is the number region (digits
+     * and phone punctuation: parens, dashes, dots, spaces, a leading +/1); it
+     * must reduce to exactly 10 digits (after dropping a country-code 1) and is
+     * reshaped to (###)-###-####. The remainder is re-appended after a single
+     * space, verbatim. This boundary handles every stored shape — plain
+     * "506-988-1777", paren-and-space "(506) 988-1777", and either followed by
+     * a name — without assuming the number has no internal spaces.
+     *
+     * When the number region is not a 10-digit number the trimmed ORIGINAL is
+     * returned unchanged, so MealsDB_Client_Form::validate() surfaces a named
+     * error rather than a silent reshape of something we can't parse — the same
+     * fail-visible contract as format(). Limitation: trailing free text that
+     * begins with a digit (e.g. "… 2nd floor") folds into the number region and
+     * will not parse; the documented data is names, and this fails visibly
+     * rather than silently mangling.
+     */
+    public static function format_with_optional_contact(string $value): string {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+        // The contact name (if any) starts at the first letter. Split there.
+        if (preg_match('/[A-Za-z]/', $value, $m, PREG_OFFSET_CAPTURE)) {
+            $pos          = $m[0][1];
+            $number_part  = substr($value, 0, $pos);
+            $rest         = trim(substr($value, $pos));
+        } else {
+            $number_part  = $value;
+            $rest         = '';
+        }
+
+        $digits = self::digits_dropping_country_code($number_part);
+        if (strlen($digits) !== 10) {
+            return $value;
+        }
+        $formatted = sprintf('(%s)-%s-%s',
+            substr($digits, 0, 3),
+            substr($digits, 3, 3),
+            substr($digits, 6, 4)
+        );
+        return $rest === '' ? $formatted : $formatted . ' ' . $rest;
+    }
 }

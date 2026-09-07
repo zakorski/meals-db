@@ -370,6 +370,31 @@ $sdnb_required = $rm_req->invoke(null, 'SDNB');
 check(!in_array('vendor_number', $sdnb_required, true), 'H: vendor_number removed from SDNB required fields');
 
 // ---------------------------------------------------------------------------
+// K2 (ITEM 1): the validator accepts the phone shapes the system itself stored.
+// A plain ###-###-#### number — which NOT ONE existing client's stored value
+// matched against the old strict (###)-###-#### rule — now validates and is
+// normalised to the canonical form.
+// ---------------------------------------------------------------------------
+$wpdb = fresh_wpdb();
+$resK1 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '506-536-1236']));
+check($resK1['valid'] === true, 'K2.1: a plain ###-###-#### phone validates');
+check(($resK1['sanitized']['phone_primary'] ?? null) === '(506)-536-1236',
+    'K2.1: the plain phone is normalised to (###)-###-####');
+
+// K2 (ITEM 2): a phone that carries a trailing contact name validates and the
+// name is PRESERVED (operator decision: permit trailing text on the field).
+$wpdb = fresh_wpdb();
+$resK2 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '506-988-1777 Denise']));
+check($resK2['valid'] === true, 'K2.2: a phone with a trailing contact name validates');
+check(($resK2['sanitized']['phone_primary'] ?? null) === '(506)-988-1777 Denise',
+    'K2.2: the contact name is preserved, number normalised');
+
+// K2: a value with no real phone number is still rejected (fail-visible).
+$wpdb = fresh_wpdb();
+$resK3 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => 'call the office']));
+check($resK3['valid'] === false, 'K2.3: a value with no valid number is rejected');
+
+// ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
 if (!empty($failures)) {
