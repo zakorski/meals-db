@@ -426,6 +426,25 @@ class MealsDB_Allocation_Rebuilder {
             $remaining_tax_sides   = (int) $d['tax_sides'];
             $remaining_nontax_sides = (int) $d['nontax_sides'];
 
+            // DIRECTIVE K4: if THIS delivery's own month is finalized, its meals
+            // are ALREADY recorded in that month — the DELETE above deliberately
+            // skips finalized months, so the finalized row survives untouched.
+            // Treat what the finalized month already holds for this order as
+            // placed, and decrement it from the remaining totals up front, so
+            // only genuine OVERFLOW (meals beyond what the finalized month
+            // recorded — e.g. a delivery whose finalized row was itself capped
+            // short) carries forward. Without this the FULL delivery spilled into
+            // the next month while the finalized month still held its row, so the
+            // same meals were counted twice (5,188 phantom mains across Aug+Sep;
+            // every affected order belonged to a client whose Aug was finalized).
+            // This is shared by both the capped (SDNB) and VAC paths below.
+            if (!empty($finalized[$delivery_month])) {
+                $held = $this->finalized_held_for_delivery($client_id, $delivery_month, (int) $d['wc_order_id']);
+                $remaining_mains        = max(0, $remaining_mains        - $held['mains']);
+                $remaining_tax_sides    = max(0, $remaining_tax_sides    - $held['tax_sides']);
+                $remaining_nontax_sides = max(0, $remaining_nontax_sides - $held['nontax_sides']);
+            }
+
             if (!$uncap_sides) {
                 // ---- SDNB / capped path (UNCHANGED) ------------------------
                 // Pass 1: fill the delivery month up to headroom.
@@ -433,10 +452,20 @@ class MealsDB_Allocation_Rebuilder {
                     &$remaining_mains, &$remaining_tax_sides, &$remaining_nontax_sides,
                     &$headroom, $d, $client_id, $alloc_table, $finalized, $consume_only
                 ) {
-                    if (!isset($headroom[$month]) || !empty($finalized[$month])) {
-                        // Outside our window, OR finalized (immutable): leave the
-                        // meals for the caller to spill / count as unplaced. You
-                        // cannot retroactively add meals to a submitted invoice.
+                    // DIRECTIVE K4 ITEM 2 — two DIFFERENT cases, kept distinct:
+                    if (!isset($headroom[$month])) {
+                        // Outside our window: these meals were never recorded in
+                        // this month anywhere, so the caller spills them forward /
+                        // counts them as unplaced. Spilling is CORRECT here.
+                        return;
+                    }
+                    if (!empty($finalized[$month])) {
+                        // Finalized (immutable, a submitted invoice): the meals
+                        // this delivery has here are ALREADY recorded in the
+                        // finalized row. The per-delivery loop has already
+                        // decremented them from the remaining totals (K4), so
+                        // there is nothing to place — and spilling the finalized
+                        // amount forward would double-count it. Do NOT place.
                         return;
                     }
                     $put_mains       = min($remaining_mains,                $headroom[$month]['mains']);
@@ -497,6 +526,12 @@ class MealsDB_Allocation_Rebuilder {
                 // EARLIEST month. VAC sides have no per-month count cap (the dollar
                 // ceiling is enforced later, at invoice time), so they always
                 // follow the placed mains and are never independently unplaced.
+                //
+                // K4: a finalized delivery month contributes 0 available mains
+                // here (as before), but $remaining_* was ALREADY decremented by
+                // what that finalized month holds for this order (shared block
+                // above), so only the genuine overflow reaches this split — it no
+                // longer double-counts the finalized meals into $mains_next.
                 $avail_del = (isset($headroom[$delivery_month]) && empty($finalized[$delivery_month]))
                     ? (int) $headroom[$delivery_month]['mains'] : 0;
                 $mains_del = min($remaining_mains, $avail_del);
@@ -958,6 +993,34 @@ class MealsDB_Allocation_Rebuilder {
             return strcmp($a['delivery_date'], $b['delivery_date']);
         });
         return $deliveries;
+    }
+
+    /**
+     * How many mains / taxable sides / non-taxable sides the given (already
+     * finalized) billing month currently holds for ONE order. Used by
+     * fill_months (K4) to treat a finalized delivery month's meals as already
+     * placed, so only genuine overflow spills forward instead of the whole
+     * delivery double-counting against the surviving finalized row.
+     *
+     * @return array{mains:int, tax_sides:int, nontax_sides:int}
+     */
+    private function finalized_held_for_delivery(int $client_id, string $billing_month, int $wc_order_id): array {
+        $alloc_table = MealsDB_DB::get_table_name(MealsDB_Tables::DELIVERY_ALLOCATIONS);
+        $row = $this->wpdb->get_row($this->wpdb->prepare(
+            "SELECT COALESCE(SUM(mains_count), 0)        AS mains,
+                    COALESCE(SUM(tax_sides_count), 0)    AS tax_sides,
+                    COALESCE(SUM(nontax_sides_count), 0) AS nontax_sides
+             FROM `{$alloc_table}`
+             WHERE client_id = %d AND billing_month = %s AND wc_order_id = %d",
+            $client_id,
+            $billing_month,
+            $wc_order_id
+        ), ARRAY_A);
+        return [
+            'mains'        => (int) ($row['mains'] ?? 0),
+            'tax_sides'    => (int) ($row['tax_sides'] ?? 0),
+            'nontax_sides' => (int) ($row['nontax_sides'] ?? 0),
+        ];
     }
 
     private function clear_dirty(int $client_id, string $billing_month): void {
