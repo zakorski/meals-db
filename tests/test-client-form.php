@@ -389,10 +389,53 @@ check($resK2['valid'] === true, 'K2.2: a phone with a trailing contact name vali
 check(($resK2['sanitized']['phone_primary'] ?? null) === '(506)-988-1777 Denise',
     'K2.2: the contact name is preserved, number normalised');
 
-// K2: a value with no real phone number is still rejected (fail-visible).
+// K9 ITEM 3 (supersedes the old K2.3 rejection): a phone the normaliser cannot
+// parse is now STORED VERBATIM, not rejected — format is none of the form's
+// business; only the length cap (100) guards it. This is the exact behaviour
+// change K9 makes (the pre-K9 code rejected this).
 $wpdb = fresh_wpdb();
-$resK3 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => 'call the office']));
-check($resK3['valid'] === false, 'K2.3: a value with no valid number is rejected');
+$resK9phone = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '229-5106']));
+check($resK9phone['valid'] === true, 'K9: a 7-digit local (no area code) validates — stored verbatim, not rejected');
+check(($resK9phone['sanitized']['phone_primary'] ?? null) === '229-5106', 'K9: unparseable phone stored verbatim');
+
+// K9: a multi-number legacy phone validates and is preserved.
+$wpdb = fresh_wpdb();
+$resK9multi = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '506-532-5087/899-1808 (Sylvie)']));
+check($resK9multi['valid'] === true, 'K9: a multi-number legacy phone validates');
+
+// K9 ITEM 4/5: an unrecognised province and a malformed email both save clean.
+$wpdb = fresh_wpdb();
+$resK9pv = MealsDB_Client_Form::validate(valid_private_payload(['address_province' => 'Onterio', 'client_email' => 'not-an-email']));
+check($resK9pv['valid'] === true, 'K9: unrecognised province + malformed email both validate (format is not an insert failure)');
+
+// K9 ITEM 1: an over-long postal is still REJECTED (VARCHAR(10) length cap),
+// with a named field error — not a generic DB error at insert.
+$wpdb = fresh_wpdb();
+$resK9postal = MealsDB_Client_Form::validate(valid_private_payload(['address_postal' => 'A1A1A1A1A1A1']));
+check($resK9postal['valid'] === false, 'K9.1: an over-long postal (>10 chars) is rejected by the length cap');
+check(isset($resK9postal['error_details']['invalid_format']['address_postal']), 'K9.1: over-long postal produces a named postal field error');
+
+// K9 ITEM 2: a clean postal still normalises to A1A1A1 on save.
+$wpdb = fresh_wpdb();
+$resK9norm = MealsDB_Client_Form::validate(valid_private_payload(['address_postal' => 'e1e 1e1']));
+check(($resK9norm['sanitized']['address_postal'] ?? null) === 'E1E1E1', 'K9.2: a clean postal is normalised to A1A1A1');
+
+// K9 ITEM 3: phone normalisation still runs for a parseable number.
+$wpdb = fresh_wpdb();
+$resK9pn = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '5068581234']));
+check(($resK9pn['sanitized']['phone_primary'] ?? null) === '(506)-858-1234', 'K9: bare 10-digit phone normalised to (###)-###-####');
+
+// K9 edit-path (directive test cases 1 & 2): on EDIT (positive $ignore_client_id)
+// a legacy multi-number phone validates, and CHANGING a phone to a
+// non-conforming value also validates. Pre-K9 the changed value was rejected —
+// these fail against v1.0.574. (K9 removed the create/edit format distinction:
+// both now block only on insert failures.)
+$wpdb = fresh_wpdb();
+$resEdit1 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '506-532-5087/899-1808 (Sylvie)']), 4242);
+check($resEdit1['valid'] === true, 'K9 edit: a legacy multi-number phone validates on edit');
+$wpdb = fresh_wpdb();
+$resEdit2 = MealsDB_Client_Form::validate(valid_private_payload(['phone_primary' => '229-5106']), 4242);
+check($resEdit2['valid'] === true, 'K9 edit: CHANGING a phone to a non-conforming value validates (fails vs v1.0.574)');
 
 // ---------------------------------------------------------------------------
 // Report
