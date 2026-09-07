@@ -959,6 +959,13 @@ class MealsDB_Admin_UI {
         }
 
         if ($is_data_ops_page) {
+            // DIRECTIVE K5 ITEM 3: the backfill confirmations in views/data-ops.php
+            // are INLINE <script> (no dependency chain), so the shared confirm
+            // helper — registered-not-enqueued by default (dependents pull it in) —
+            // must be enqueued explicitly here or window.MealsDBConfirm is undefined
+            // on this page.
+            wp_enqueue_script(self::register_confirm_script());
+
             // Schema-changes tool (H7): preview + typed-confirm apply of the
             // RISKY column drifts the version-bump path leaves for the operator.
             $sa_path = MEALS_DB_PLUGIN_DIR . 'assets/js/schema-alter-tool.js';
