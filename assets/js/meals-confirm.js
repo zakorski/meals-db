@@ -41,6 +41,21 @@
     var active = null;     // the currently-open request, or null
     var $lastTrigger = null;
 
+    // DIRECTIVE K6 ITEM 1: reliable focus restoration. document.activeElement at
+    // open time is not a dependable handle on the control that opened the dialog
+    // — a <button>/<a> clicked by mouse does NOT retain focus in every browser,
+    // leaving activeElement as <body>, so on close focus was dropped to the top
+    // of the document. Track the last element the user actually interacted with
+    // (mousedown / keydown, capture phase) and use it as the trigger when
+    // activeElement is unhelpful. Self-contained: no call site has to pass the
+    // trigger in.
+    var lastInteracted = null;
+    $(document).on('mousedown.mealsdbconfirm keydown.mealsdbconfirm', function (e) {
+        if (e && e.target && e.target !== document && e.target !== document.body) {
+            lastInteracted = e.target;
+        }
+    });
+
     function esc(s) {
         return $('<div>').text(s === undefined || s === null ? '' : String(s)).html();
     }
@@ -52,12 +67,27 @@
         return ($c && $c.length) ? $c : null;
     }
 
-    // Build the message body: a string becomes a <p>; an array becomes a <ul>
-    // (used for the coverage-warning list). Everything is text-escaped.
+    function listHtml(items) {
+        var lis = items.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('');
+        return '<ul class="mealsdb-confirm__list">' + lis + '</ul>';
+    }
+
+    // Build the message body. Accepts:
+    //   - a string            → a single <p>
+    //   - an array of strings → a single <ul> (the coverage-warning list)
+    //   - a MIXED array whose elements are themselves arrays (→ <ul>) or strings
+    //     (→ <p>) → blocks rendered in order. This lets a caller show a list of
+    //     warnings followed by a prose question that sits OUTSIDE the list
+    //     (K6 ITEM 4). Everything is text-escaped.
     function messageHtml(message) {
         if ($.isArray(message)) {
-            var items = message.map(function (m) { return '<li>' + esc(m) + '</li>'; }).join('');
-            return '<ul class="mealsdb-confirm__list">' + items + '</ul>';
+            var hasBlocks = message.some(function (m) { return $.isArray(m); });
+            if (hasBlocks) {
+                return message.map(function (m) {
+                    return $.isArray(m) ? listHtml(m) : '<p>' + esc(m) + '</p>';
+                }).join('');
+            }
+            return listHtml(message);
         }
         return '<p>' + esc(message) + '</p>';
     }
@@ -110,7 +140,12 @@
 
         active = req;
         req.id = 'm' + (Date.now()) + Math.floor(Math.random() * 1000);
-        $lastTrigger = $(document.activeElement && document.activeElement !== document.body ? document.activeElement : null);
+        // Prefer the genuinely-focused element; fall back to the last control the
+        // user interacted with (K6 ITEM 1) when a mouse click left focus on body.
+        var trigger = (document.activeElement && document.activeElement !== document.body)
+            ? document.activeElement
+            : lastInteracted;
+        $lastTrigger = trigger ? $(trigger) : null;
 
         var o = req.opts;
         var isPrompt = req.kind === 'prompt';

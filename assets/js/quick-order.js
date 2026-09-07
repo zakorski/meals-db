@@ -1894,13 +1894,18 @@
                 if (dateWarnings.length) {
                     window.MealsDBConfirm.confirm({
                         title: this.translate('Check the dates'),
-                        message: dateWarnings.concat([this.translate('Create this order anyway?')]),
+                        // K6 ITEM 4: the warnings render as a <ul>; the trailing
+                        // question is a SEPARATE prose block (nested-array form),
+                        // so it no longer appears as another bullet inside the list.
+                        message: [dateWarnings, this.translate('Create this order anyway?')],
                         confirmLabel: this.translate('Create anyway')
                     }).then((proceed) => {
                         if (!proceed) {
-                            // On cancel, focus the first offending field — the
-                            // empty Order Date is the usual culprit.
-                            if (!orderDate && this.$orderDate && this.$orderDate.length) {
+                            // K6 ITEM 2: on cancel, move focus to the Order Date
+                            // field the operator needs to correct — NOT the trigger
+                            // (#qo-create-order) the helper restores to. This .then
+                            // runs AFTER the helper's restore, so it wins.
+                            if (this.$orderDate && this.$orderDate.length) {
                                 this.$orderDate.trigger('focus');
                             }
                             this.clearCreateOrderLoading(createButton);
