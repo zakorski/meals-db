@@ -51,7 +51,16 @@ stop and re-open the design.
 7. **The real Nutridata page is server-rendered ASP.NET MVC** (HTTP/2 200, ~16KB, jQuery +
    Bootstrap, Cloudflare front, **no SPA framework**). All values are present in the raw
    `wp_remote_get` body. The `###`-heading description in the directive was a fetch-tool
-   markdown conversion, not the real markup. Real selectors are in §Parser below.
+   markdown conversion, not the real markup. Real selectors are in §Parser below. Confirmed
+   against the committed fixtures `tests/fixtures/apetito/12212.html` and `12217.html`.
+
+8. **An unknown code returns HTTP 500, not 404.** Verified against
+   `tests/fixtures/apetito/99999-notfound.html`: Apetito throws
+   `System.NullReferenceException` with a full ASP.NET stack trace (and an internal server
+   path) rather than a friendly not-found page. Consequences: the Fetcher must treat **any
+   non-200 as a structured failure and never parse the body**, and must emit **our own** clean
+   "no product found for {code}" message — never echo Apetito's stack trace to the operator.
+   The "clean not found" operator flow (verification #3) is just correct non-200 handling.
 
 ---
 
@@ -123,9 +132,10 @@ screen (the K10-ITEM-1 / K11-ITEM-2 silent-blank failure mode is forbidden).
 | `name_en` | `<span class="producttitle language_en">` (may carry `style="display:none;"` because the page defaults to French — hidden ≠ absent, parse it normally) |
 | `name_fr` | `<span class="producttitle language_fr">` |
 | `category` + `subcategory` | `<span class="product-cat">Individual Complete Meals \| Poultry</span>` (split on `\|`) |
-| `code_on_page` | `<span class="product-code">Code: 12212</span>` |
+| `code_on_page` | `<span class="product-code">Code: 12212</span>` (strip the `Code: ` prefix) |
 | `allergens[]` | `<div class="alergenslist">` **(one L — match exactly)** → `<ul class="allergens"><li title="Contains Eggs">Eggs</li>…` |
-| `serving_size`, `pack_size`, `portions_per_case` | **bare text nodes following** `<h3>Serving Size</h3>`, `<h3>Pack Size</h3>`, `<h3>Portions Per Case</h3>` |
+| `diet_tags[]` | `<ul class="dietrycodings">` **(misspelled `dietry` — match exactly)** → `<li>Vegan</li>…`. A class hook, **not** heading-anchored — as stable as allergens. |
+| `serving_size`, `pack_size`, `portions_per_case` | **bare text nodes following** `<h3>Serving Size</h3>`, `<h3>Pack Size</h3>`, `<h3>Portions Per Case</h3>`. Verified layout: the value is the text node between the `<h3>` and the next element (e.g. `<h3>Portions Per Case</h3>` then `12` immediately before `</div>`) — trim it. |
 
 ### Parser rules
 - Parse with `DOMDocument` under `libxml_use_internal_errors(true)`; DOM issues become per-field
@@ -134,10 +144,10 @@ screen (the K10-ITEM-1 / K11-ITEM-2 silent-blank failure mode is forbidden).
   otherwise names land mangled.
 - The two names are **cleanly separated by CSS class** — no concatenated-string split, no
   language detection. This retires the directive's ITEM 2 name-split concern.
-- Class-hook fields are the stable path. `serving_size` / `pack_size` / **`portions_per_case`**
-  are heading-anchored text nodes — the fragile three. `portions_per_case` gets the loudest
-  failure because it feeds `case_size` and the pallet optimiser (a stale value silently
-  mis-orders freight).
+- Class-hook fields (names, category, code, allergens, **diet tags**) are the stable path.
+  Only `serving_size` / `pack_size` / **`portions_per_case`** are heading-anchored text nodes —
+  the fragile three. `portions_per_case` gets the loudest failure because it feeds `case_size`
+  and the pallet optimiser (a stale value silently mis-orders freight).
 - **`code_on_page` cross-check** (beyond the directive): the parser reports the page's own code.
   If it differs from the operator's typed code, the preview surfaces it — a second line of
   defense on the 12111 case (Apetito's page reads "Spaghetti Bolognese / Code: 12111" no matter
@@ -240,7 +250,10 @@ freight.
 ## Error handling
 
 - **Fetcher / Parser never throw to the page.** Fetcher returns `{ok:false, reason}` on
-  non-200 / timeout / empty; Parser catches DOM issues into per-field `ok:false`.
+  non-200 / timeout / empty and **never parses a non-200 body** (an unknown code is a 500 with
+  a stack trace — premise 8). The `reason` is our own clean message ("no product found for
+  {code}"); Apetito's raw error body / server path is never surfaced to the operator. Parser
+  catches DOM issues into per-field `ok:false`.
 - **Create** wraps `\Throwable` → `WP_Error` / `wp_send_json_error`. If the product is created
   but a later step (thumbnail/meta) fails, the result is a reviewable Draft; log the outcome as
   `degraded` rather than reporting success (per the codebase's swallow-but-don't-pretend rule).
@@ -255,15 +268,19 @@ Fixtures live under `tests/fixtures/apetito/`. **No test hits the network** — 
 pass when Apetito is down or has redesigned.
 
 **Parser (pure — the core):**
-1. Parse `12212` fixture → names (en+fr), category+subcategory, `code_on_page` 12212, 4
-   allergens, diet tags, serving `330g`, pack `12 x 330g`, `portions_per_case` 12.
-2. Parse `12217` fixture (vegetarian; different allergen count; has a Vegan diet tag) → a second
-   page shape.
+1. Parse `12212` fixture → names (en+fr), category `Individual Complete Meals` +
+   subcategory `Poultry`, `code_on_page` 12212, 4 allergens (Eggs/Milk/Soy/Sulphites) from
+   `.alergenslist`, diet tags from `.dietrycodings`, serving `330g`, pack `12 x 330g`,
+   `portions_per_case` 12.
+2. Parse `12217` fixture (different allergen count; Vegan in `.dietrycodings`) → a second page
+   shape.
 3. Allergens block removed → `allergens` `ok:false` with reason, **no write**, no exception.
 4. Renamed heading (`Portions Per Case`) → `portions_per_case` `ok:false` with reason; other
    fields still `ok`.
-5. HTML-entity decode: French name with `&#xE9;` → `é`.
-6. `display:none` English span still parsed (hidden ≠ absent).
+5. HTML-entity decode: French name with `&#xE9;`/`&#xE0;` → `é`/`à` (12212's French name is
+   `Poulet à la sauce crémeuse aux champignons`).
+6. `display:none` English span still parsed (hidden ≠ absent) — 12212's EN span carries
+   `style="display:none;"`.
 7. `code_on_page` mismatch (page code ≠ requested code) is surfaced.
 
 **Duplicate guard:**
@@ -272,7 +289,9 @@ pass when Apetito is down or has redesigned.
 
 **Fetcher:**
 10. Code validation rejects `abc`, `1211`, `../etc/passwd`, `12111'` (`^[0-9]{5}$`).
-11. Non-200 → structured failure; form still usable for manual entry (mock `wp_remote_get`).
+11. Non-200 → structured failure; body is **not** parsed and Apetito's error text is not echoed;
+    form still usable for manual entry. Use the `99999-notfound.html` fixture served as HTTP
+    500 (the real unknown-code shape) with a mocked `wp_remote_get`.
 12. Cache hit → no second request (mock).
 
 **Creator:**
@@ -289,10 +308,11 @@ pass when Apetito is down or has redesigned.
 
 Baseline is **158 pass / 4 baseline fails** (2 dompdf-mbstring, 2 po-task).
 
-**Build prerequisite (blocking the parser build):** commit the real raw pages for **12212** and
-**12217** under `tests/fixtures/apetito/`, plus the two synthetic variants derived from them
-(allergens-block-removed, heading-renamed). The environment cannot reach the operator's local
-`/tmp`, so these must be added to the repo.
+**Fixtures (in place, 2026-09-09):** `tests/fixtures/apetito/12212.html` (16KB, full poultry
+meal), `12217.html` (15KB, Vegan diet tag, different allergen count), and `99999-notfound.html`
+(the real HTTP-500 unknown-code body) are committed and verified against the selectors above.
+The two synthetic variants (allergens-block-removed, heading-renamed) will be derived from
+`12212.html` during the build.
 
 ---
 
