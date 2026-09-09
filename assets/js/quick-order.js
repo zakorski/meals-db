@@ -235,6 +235,23 @@
                 { passive: false }
             );
 
+            // K11 ITEM 3: the field renders with "0" in it, so a click places a
+            // caret beside the zero instead of selecting it and typing "20"
+            // produces "020" or "200" — a plausible-looking wrong quantity that
+            // would reach a packer. Select on focus so typing replaces. No click
+            // handler: that would fight a user re-positioning the caret to edit a
+            // value mid-entry. `select()` is deferred because some browsers set
+            // the caret from the click AFTER the focus handler runs, which would
+            // undo it.
+            $(document).on('focus', '.mealsdb-quick-order__qty-input', (event) => {
+                const input = event.target;
+                window.setTimeout(() => {
+                    if (document.activeElement === input) {
+                        input.select();
+                    }
+                }, 0);
+            });
+
             if (this.$createOrder && this.$createOrder.length) {
                 this.$createOrder.on('click', (event) => {
                     event.preventDefault();

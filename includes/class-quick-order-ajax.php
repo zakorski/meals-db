@@ -1323,6 +1323,12 @@ class MealsDB_Quick_Order_Ajax {
             $order->set_billing_email((string) $client['client_email']);
         }
         $order->set_billing_address_1((string) ($client['street_name'] ?? ''));
+        // K11 ITEM 1: the delivery area (e.g. "Zone 1") belongs in address_2 —
+        // that is where the migration puts it (billing_address_2 <->
+        // delivery_area_name) and where WooCommerce renders it in the Ship-to
+        // column that staff scan daily. Orders created without it lose the zone.
+        // Billing has no second source, so no empty-string fallback here.
+        $order->set_billing_address_2((string) ($client['delivery_area_name'] ?? ''));
         $order->set_billing_city((string) ($client['city'] ?? ''));
         $order->set_billing_state($bill_province);
         $order->set_billing_postcode((string) ($client['postal_code'] ?? ''));
@@ -1331,16 +1337,32 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         // Shipping from the delivery address, falling back to billing.
+        // K11 ITEM 2: `??` only falls back on NULL. Delivery fields are usually
+        // '' (not NULL) for a client with a single address, so the intended
+        // fallback to the billing value never fired and the order shipped with
+        // an empty address — rendering as "No shipping address set." Compare
+        // against '' the way the province fallback directly below already does.
+        $first_non_empty = static function (...$values): string {
+            foreach ($values as $value) {
+                $value = trim((string) ($value ?? ''));
+                if ($value !== '') {
+                    return $value;
+                }
+            }
+            return '';
+        };
+
         $ship_province = trim((string) ($client['delivery_province'] ?? ''));
         if ($ship_province === '') { $ship_province = $bill_province; }
         $ship_country  = $ship_province !== '' ? 'CA' : '';
 
         $order->set_shipping_first_name((string) ($client['first_name'] ?? ''));
         $order->set_shipping_last_name((string) ($client['last_name'] ?? ''));
-        $order->set_shipping_address_1((string) ($client['delivery_street_name'] ?? $client['street_name'] ?? ''));
-        $order->set_shipping_city((string) ($client['delivery_city'] ?? $client['city'] ?? ''));
+        $order->set_shipping_address_1($first_non_empty($client['delivery_street_name'] ?? null, $client['street_name'] ?? null));
+        $order->set_shipping_address_2($first_non_empty($client['delivery_area_name'] ?? null));
+        $order->set_shipping_city($first_non_empty($client['delivery_city'] ?? null, $client['city'] ?? null));
         $order->set_shipping_state($ship_province);
-        $order->set_shipping_postcode((string) ($client['delivery_postal_code'] ?? $client['postal_code'] ?? ''));
+        $order->set_shipping_postcode($first_non_empty($client['delivery_postal_code'] ?? null, $client['postal_code'] ?? null));
         if ($ship_country !== '') {
             $order->set_shipping_country($ship_country);
         }
