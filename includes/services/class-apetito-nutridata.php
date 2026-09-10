@@ -62,6 +62,7 @@ class MealsDB_Apetito_Nutridata {
         $body = (string) wp_remote_retrieve_body($response);
         if (trim($body) === '') {
             return ['ok' => false, 'reason' => sprintf(
+                /* translators: %s: apetito item code */
                 __('Apetito returned an empty page for code %s.', 'meals-db'), $code)];
         }
 
