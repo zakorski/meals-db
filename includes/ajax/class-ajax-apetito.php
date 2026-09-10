@@ -42,6 +42,7 @@ class MealsDB_Ajax_Apetito {
     public static function init(): void {
         add_action('wp_ajax_mealsdb_apetito_fetch',  [self::class, 'fetch']);
         add_action('wp_ajax_mealsdb_apetito_create', [self::class, 'create']);
+        add_action('wp_ajax_mealsdb_apetito_audit',  [self::class, 'audit']);
     }
 
     // -----------------------------------------------------------------
@@ -177,6 +178,34 @@ class MealsDB_Ajax_Apetito {
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Apetito AJAX] create failed: ' . $e->getMessage());
             wp_send_json_error(['message' => __('Unable to create the product. Please contact an administrator.', 'meals-db')]);
+        }
+    }
+
+    /**
+     * Audit ONE code per call (resumable cursor). The client drives the walk at
+     * one request/second; the apetito_fetch bucket + 7-day cache keep this from
+     * ever bursting Apetito. Read-only — never writes.
+     */
+    public static function audit(): void {
+        if (!self::guard(self::NONCE_FETCH, 'apetito_fetch')) { return; }
+        try {
+            $codes  = MealsDB_Apetito_Audit::codes();
+            $total  = count($codes);
+            $offset = isset($_POST['offset']) ? max(0, (int) $_POST['offset']) : 0;
+            if ($offset >= $total) {
+                wp_send_json_success(['done' => true, 'offset' => $offset, 'total' => $total, 'result' => null]);
+                return;
+            }
+            $result = MealsDB_Apetito_Audit::audit_one($codes[$offset]);
+            wp_send_json_success([
+                'done'   => ($offset + 1) >= $total,
+                'offset' => $offset + 1,
+                'total'  => $total,
+                'result' => $result,
+            ]);
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Apetito AJAX] audit failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Audit step failed.', 'meals-db')]);
         }
     }
 

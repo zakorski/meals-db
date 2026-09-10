@@ -124,5 +124,35 @@
             $('#mealsdb-apetito-pull').prop('hidden', tab !== 'pull');
             $('#mealsdb-apetito-audit').prop('hidden', tab !== 'audit');
         });
+
+        var auditTimer = null;
+        function auditTick(offset) {
+            $.post(cfg.ajaxUrl, { action: 'mealsdb_apetito_audit', nonce: cfg.nonceAudit, offset: offset })
+                .done(function (r) {
+                    if (!r || !r.success) { $('#mealsdb-apetito-audit-progress').text('Audit failed.'); return; }
+                    var d = r.data;
+                    $('#mealsdb-apetito-audit-progress').text('Checked ' + d.offset + ' / ' + d.total + '…');
+                    if (d.result && d.result.ok && d.result.drift && d.result.drift.length) {
+                        var $tb = $('#mealsdb-apetito-audit-results').prop('hidden', false).find('tbody');
+                        d.result.drift.forEach(function (row) {
+                            $tb.append('<tr><td>' + esc(d.result.code) + '</td><td></td><td>' + esc(row.field) +
+                                '</td><td>' + esc([].concat(row.stored).join(', ')) + '</td><td>' +
+                                esc([].concat(row.apetito).join(', ')) + '</td></tr>');
+                        });
+                    }
+                    if (!d.done) {
+                        auditTimer = window.setTimeout(function () { auditTick(d.offset); }, 1000); // 1 req/sec
+                    } else {
+                        $('#mealsdb-apetito-audit-progress').append(' Done.');
+                    }
+                })
+                .fail(function () { $('#mealsdb-apetito-audit-progress').text('Audit request failed.'); });
+        }
+        $('#mealsdb-apetito-audit-start').on('click', function () {
+            if (auditTimer !== null) { window.clearTimeout(auditTimer); auditTimer = null; }
+            $('#mealsdb-apetito-audit-results').find('tbody').empty();
+            $('#mealsdb-apetito-audit-progress').text('Starting…');
+            auditTick(0);
+        });
     });
 }(jQuery));
