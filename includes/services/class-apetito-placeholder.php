@@ -43,6 +43,8 @@ class MealsDB_Apetito_Placeholder {
         if (is_wp_error($attach_id) || !$attach_id) { return 0; }
 
         if (function_exists('wp_generate_attachment_metadata')) {
+            // Required for wp_generate_attachment_metadata when running outside
+            // the admin context (this can be reached from an AJAX handler).
             require_once ABSPATH . 'wp-admin/includes/image.php';
             $meta = wp_generate_attachment_metadata($attach_id, $dest);
             wp_update_attachment_metadata($attach_id, $meta);
