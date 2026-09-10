@@ -55,7 +55,7 @@ class MealsDB_Ajax_Apetito {
      * the response lets the UI indicate a stale result.
      */
     public static function fetch(): void {
-        self::guard(self::NONCE_FETCH, 'apetito_fetch');
+        if (!self::guard(self::NONCE_FETCH, 'apetito_fetch')) { return; }
         try {
             $code = isset($_POST['code']) ? sanitize_text_field(wp_unslash((string) $_POST['code'])) : '';
             $res  = MealsDB_Apetito_Nutridata::fetch($code);
@@ -97,7 +97,7 @@ class MealsDB_Ajax_Apetito {
      * UI must surface this rather than treating ok alone as unconditional success.
      */
     public static function create(): void {
-        self::guard(self::NONCE_CREATE, 'settings_modify');
+        if (!self::guard(self::NONCE_CREATE, 'settings_modify')) { return; }
         try {
             $code = isset($_POST['code']) ? sanitize_text_field(wp_unslash((string) $_POST['code'])) : '';
 
@@ -116,7 +116,20 @@ class MealsDB_Ajax_Apetito {
             $parsed  = MealsDB_Apetito_Parser::parse($cached, $code);
             $reduced = self::reduce($parsed);
 
-            $price = isset($_POST['price']) && is_numeric($_POST['price']) ? (float) $_POST['price'] : null;
+            // Validate price as a plain non-negative decimal. FILTER_VALIDATE_FLOAT
+            // still accepts scientific notation, so reject anything that isn't a
+            // simple money string and clamp to a sane ceiling — a stray '1e5'
+            // must not become a $100,000 draft price.
+            $price = null;
+            if (isset($_POST['price']) && $_POST['price'] !== '') {
+                $raw_price = sanitize_text_field(wp_unslash((string) $_POST['price']));
+                if (preg_match('/^\d+(\.\d{1,2})?$/', $raw_price)) {
+                    $candidate = (float) $raw_price;
+                    if ($candidate >= 0 && $candidate <= 9999.99) {
+                        $price = $candidate;
+                    }
+                }
+            }
 
             $category_ids = [];
             if (isset($_POST['category_ids']) && is_array($_POST['category_ids'])) {
@@ -193,22 +206,30 @@ class MealsDB_Ajax_Apetito {
      * limit, in that order, each failing CLOSED with a JSON error and exit.
      * Uses two separate nonce actions because fetch and create have different
      * rate buckets.
+     *
+     * Returns bool so callers do `if (!self::guard(...)) { return; }` — matching
+     * MealsDB_Ajax_Order_Audit. In production each wp_send_json_error() calls
+     * wp_die() and never returns, so the `return false` lines are belt (and make
+     * the guard testable with a non-exiting stub without falling through to the
+     * handler body).
      */
-    private static function guard(string $nonce_action, string $bucket): void {
+    private static function guard(string $nonce_action, string $bucket): bool {
         $nonce = isset($_REQUEST['nonce']) ? sanitize_text_field(wp_unslash((string) $_REQUEST['nonce'])) : '';
         if ($nonce === '' || !wp_verify_nonce($nonce, $nonce_action)) {
             wp_send_json_error(['message' => __('Invalid request.', 'meals-db')], 400);
-            // wp_send_json_* calls wp_die() — execution stops here.
+            return false;
         }
         // Products capability: prefer edit_product (the narrower grant the task
         // actually requires), fall back to the plugin's configured baseline.
-        $cap = current_user_can('edit_product') ? 'edit_product'
-            : (class_exists('MealsDB_Permissions') ? MealsDB_Permissions::required_capability() : 'manage_woocommerce');
-        if (!current_user_can($cap)) {
+        $fallback = class_exists('MealsDB_Permissions') ? MealsDB_Permissions::required_capability() : 'manage_woocommerce';
+        if (!current_user_can('edit_product') && !current_user_can($fallback)) {
             wp_send_json_error(['message' => __('You are not allowed to do this.', 'meals-db')], 403);
+            return false;
         }
         if (class_exists('MealsDB_Rate_Limiter') && !MealsDB_Rate_Limiter::check_rate_limit($bucket)) {
             wp_send_json_error(['message' => __('Rate limit exceeded. Try again later.', 'meals-db')], 429);
+            return false;
         }
+        return true;
     }
 }
