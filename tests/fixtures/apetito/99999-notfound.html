@@ -1,0 +1,61 @@
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at myapetito.ca.uicore.ViewModelBuilder.Nutridata.NutridataDetailsViewModelBuilder.Build(App_Product product, IProductCategoriesRepository productCategoriesRepository) in D:\a\1\s\myapetito.ca.uicore\ViewModelBuilder\Nutridata\NutridataDetailsViewModelBuilder.cs:line 67
+   at lambda_method367(Closure, Object, Object[])
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.InvokeActionMethodAsync()
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.InvokeNextActionFilterAsync()
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Rethrow(ActionExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.InvokeInnerFilterAsync()
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeNextResourceFilter>g__Awaited|25_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResourceExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Next(State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.InvokeFilterPipelineAsync()
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Localization.RequestLocalizationMiddleware.Invoke(HttpContext context)
+   at myapetito.ca.uicore.Startup.<>c.<<Configure>b__11_1>d.MoveNext() in D:\a\1\s\myapetito.ca.uicore\Startup.cs:line 264
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Session.SessionMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Session.SessionMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Session.SessionMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Session.SessionMiddleware.Invoke(HttpContext context)
+   at Kentico.Content.Web.Mvc.ContentOutputMiddleware.InvokeAsync(HttpContext context)
+   at Kentico.Web.Mvc.KenticoRequestLocalizationMiddleware.InvokeAsync(HttpContext context)
+   at Kentico.Content.Web.Mvc.PageRedirectionContextMiddleware.InvokeAsync(HttpContext context)
+   at Kentico.Web.Mvc.KenticoRequestEventsMiddleware.InvokeAsync(HttpContext context)
+   at myapetito.ca.uicore.Startup.<>c.<<Configure>b__11_0>d.MoveNext() in D:\a\1\s\myapetito.ca.uicore\Startup.cs:line 239
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Diagnostics.StatusCodePagesMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.DeveloperExceptionPageMiddlewareImpl.Invoke(HttpContext context)
+
+HEADERS
+=======
+Accept: */*
+Accept-Encoding: gzip, br
+Host: my.apetito.ca
+Max-Forwards: 10
+User-Agent: Mozilla/5.0 (compatible; MealsAndMore/1.0)
+x-forwarded-for: 34.139.224.102, 104.22.56.111:46554
+cf-ray: a38886770a66be12-ATL
+X-Request-ID: 9a7413e5-733b-489e-889e-4b299ae3d6c0
+cdn-loop: cloudflare; loops=1
+CF-Connecting-IP: 34.139.224.102
+CF-IPCountry: US
+CF-Visitor: {"scheme":"https"}
+X-Forwarded-Proto: https
+X-ARR-LOG-ID: c678dd0f-6618-48f0-9f65-65e060a6fdea
+CLIENT-IP: 104.22.56.111:46554
+DISGUISED-HOST: my.apetito.ca
+X-SITE-DEPLOYMENT-ID: projecteagle-production-agent__36b2
+WAS-DEFAULT-HOSTNAME: projecteagle-production-agent.azurewebsites.net
+X-AppService-Proto: https
+X-ARR-SSL: 2048|256|CN=Microsoft TLS G2 RSA CA OCSP 16, O=Microsoft Corporation, C=US|CN=*.azurewebsites.net, O=Microsoft Corporation, L=Redmond, S=WA, C=US
+X-Forwarded-TlsVersion: 1.3
+X-Original-URL: /nutridata/details/99999
+X-WAWS-Unencoded-URL: /nutridata/details/99999

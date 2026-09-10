@@ -34,6 +34,10 @@ class MealsDB_Rate_Limiter {
         // 300/hr draft-edit sizing would 429 a normal session mid-audit.
         'order_audit_edit'       => 1000, // Weekly order-audit grid row edits
         'settings_modify'        => 20,   // Settings + bulk client backfills
+        // K12: external GET to Apetito's public site (fetch + each audit request).
+        // Fail CLOSED (below) so a cache outage can't let a runaway loop hammer
+        // a third party's website. 30/hr is generous for one-per-action use.
+        'apetito_fetch'          => 30,   // Apetito Nutridata fetches
         'migration_destructive'  => 5,    // Migration phases, cleanup, reset
         'schema_rebuild'         => 2,    // Catastrophic: drops every plugin table
         'default'                => 100,  // Default for unlisted actions
@@ -55,6 +59,7 @@ class MealsDB_Rate_Limiter {
         'po_draft_edit'         => true,
         'order_audit_edit'      => true,
         'settings_modify'       => true,
+        'apetito_fetch'         => true,
         'migration_destructive' => true,
         'schema_rebuild'        => true,
     ];

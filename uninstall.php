@@ -147,6 +147,8 @@ function mealsdb_uninstall_cleanup_current_site(): void {
     delete_option('mealsdb_event_digest_min_severity');
     // Directive DEFINITIONS-1 operator-editable program rates.
     delete_option('mealsdb_rate_definitions');
+    // K12: Apetito item-puller placeholder product ID.
+    delete_option('mealsdb_apetito_placeholder_id');
     // Directive ITEM1-DERIVED per-field auto-correct toggles.
     delete_option('mealsdb_derived_autocorrect');
     // Phase W daily-report recipient / anomaly settings (audit X5).
@@ -178,7 +180,9 @@ function mealsdb_uninstall_cleanup_current_site(): void {
             OR option_name LIKE '_transient_mealsdb_qo_%'
             OR option_name LIKE '_transient_timeout_mealsdb_qo_%'
             OR option_name LIKE '_transient_mealsdb_staff_%'
-            OR option_name LIKE '_transient_timeout_mealsdb_staff_%'"
+            OR option_name LIKE '_transient_timeout_mealsdb_staff_%'
+            OR option_name LIKE '_transient_mealsdb_apetito_%'
+            OR option_name LIKE '_transient_timeout_mealsdb_apetito_%'"
     );
 
     // Plugin-authored user-meta: the Quick Order per-customer scheduling cache
