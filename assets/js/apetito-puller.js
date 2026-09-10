@@ -132,13 +132,24 @@
                     if (!r || !r.success) { $('#mealsdb-apetito-audit-progress').text('Audit failed.'); return; }
                     var d = r.data;
                     $('#mealsdb-apetito-audit-progress').text('Checked ' + d.offset + ' / ' + d.total + '…');
-                    if (d.result && d.result.ok && d.result.drift && d.result.drift.length) {
+                    var res = d.result;
+                    if (res) {
                         var $tb = $('#mealsdb-apetito-audit-results').prop('hidden', false).find('tbody');
-                        d.result.drift.forEach(function (row) {
-                            $tb.append('<tr><td>' + esc(d.result.code) + '</td><td></td><td>' + esc(row.field) +
-                                '</td><td>' + esc([].concat(row.stored).join(', ')) + '</td><td>' +
-                                esc([].concat(row.apetito).join(', ')) + '</td></tr>');
-                        });
+                        if (!res.ok) {
+                            // Surface a per-code fetch failure rather than skipping it
+                            // silently — otherwise the progress counter advances over a
+                            // gap the operator never sees.
+                            $tb.append('<tr class="mealsdb-apetito-fetch-fail"><td>' + esc(res.code) +
+                                '</td><td></td><td>' + esc('fetch failed') + '</td><td></td><td>' +
+                                esc(res.reason || '') + '</td></tr>');
+                        } else if (res.drift && res.drift.length) {
+                            res.drift.forEach(function (row) {
+                                $tb.append('<tr><td>' + esc(res.code) + '</td><td>' + esc(res.product || '') +
+                                    '</td><td>' + esc(row.field) +
+                                    '</td><td>' + esc([].concat(row.stored).join(', ')) + '</td><td>' +
+                                    esc([].concat(row.apetito).join(', ')) + '</td></tr>');
+                            });
+                        }
                     }
                     if (!d.done) {
                         auditTimer = window.setTimeout(function () { auditTick(d.offset); }, 1000); // 1 req/sec
