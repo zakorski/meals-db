@@ -87,8 +87,11 @@ class MealsDB_Apetito_Product_Creator {
      * Quick Order and the PO forecast until the operator publishes.
      *
      * @param array $parsed  parser fields already reduced to values (name_en, subcategory, allergens, diet_tags, portions_per_case)
-     * @param array $input   ['code'=>string,'price'=>float,'category_ids'=>int[]]
-     * @return array ['ok'=>true,'product_id'=>int] | ['ok'=>false,'reason'=>string]
+     * @param array $input   ['code'=>string,'price'=>float,'category_ids'=>int[],'manual_fields'=>string[]]
+     *                       'manual_fields' is a list of FIELD NAMES the operator
+     *                       entered by hand (not values) — recorded for the audit
+     *                       trail, so it carries no PII.
+     * @return array ['ok'=>true,'product_id'=>int,'warning'=>?string] | ['ok'=>false,'reason'=>string]
      */
     public static function create(array $parsed, array $input): array {
         $code = (string) ($input['code'] ?? '');
@@ -135,25 +138,51 @@ class MealsDB_Apetito_Product_Creator {
 
             // Force the category-derivation deterministically (avoids any
             // save_post term-timing race), THEN read the row back so our payload
-            // preserves the derived product_type/taxable.
+            // preserves the derived product_type/taxable. Capture the return: a
+            // silent false here would leave product_type/taxable at defaults on a
+            // side product (recoverable on publish, but must not be hidden).
+            $derived_ok = true;
             if (class_exists('MealsDB_Product_Display_Sync')) {
-                MealsDB_Product_Display_Sync::sync_single_product($product);
+                $derived_ok = MealsDB_Product_Display_Sync::sync_single_product($product);
             }
             $existing = MealsDB_Products::get_product_data($product_id);
             $payload  = self::build_meals_products_payload($existing, $parsed);
-            MealsDB_Products::save_product_data($product_id, $payload);
+            // Do NOT discard this return. save_product_data returns false on a DB
+            // error or a failed capability check; the Draft would exist while its
+            // meals_products detail row (case_size/allergens/type) is unwritten —
+            // reporting a clean success on that path is the CLAUDE.md §7
+            // "pretend the work happened" anti-pattern. Surface it as degraded.
+            $saved = MealsDB_Products::save_product_data($product_id, $payload);
+
+            $warning = null;
+            if (!$saved || !$derived_ok) {
+                $warning = __('Product created as a Draft, but writing its details (case size, allergens, type) did not fully succeed. Open the product and re-save to complete it.', 'meals-db');
+                MealsDB_Logger::error(sprintf('[MealsDB Apetito] metadata write incomplete for product %d (saved=%s, derived=%s)',
+                    $product_id, $saved ? '1' : '0', $derived_ok ? '1' : '0'));
+                if (class_exists('MealsDB_Event_Log')) {
+                    MealsDB_Event_Log::record([
+                        'severity' => 'warning', 'category' => 'products', 'subsystem' => 'apetito_pull',
+                        'event' => 'apetito_pull.metadata_incomplete', 'outcome' => 'degraded',
+                        'message' => sprintf('Draft product %d created but meals_products detail not fully written', $product_id),
+                        'context' => ['product_id' => $product_id, 'code' => $code, 'saved' => $saved, 'derived' => $derived_ok],
+                        'entity_type' => 'product', 'entity_id' => $product_id,
+                    ]);
+                }
+            }
 
             if (class_exists('MealsDB_Event_Log')) {
                 MealsDB_Event_Log::record([
                     'severity' => 'info', 'category' => 'products', 'subsystem' => 'apetito_pull',
-                    'event' => 'apetito_pull.created', 'outcome' => 'succeeded',
+                    'event' => 'apetito_pull.created', 'outcome' => $warning === null ? 'succeeded' : 'degraded',
                     'message' => sprintf('Created draft product %d from Apetito code %s', $product_id, $code),
                     'context' => ['product_id' => $product_id, 'code' => $code,
                                   'manual_fields' => $input['manual_fields'] ?? []],
                     'entity_type' => 'product', 'entity_id' => $product_id,
                 ]);
             }
-            return ['ok' => true, 'product_id' => (int) $product_id];
+            // The Draft exists and is recoverable; return ok=true so the operator
+            // gets the product link, but carry the warning so the UI can show it.
+            return ['ok' => true, 'product_id' => (int) $product_id, 'warning' => $warning];
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Apetito] create failed: ' . $e->getMessage());
             if (class_exists('MealsDB_Event_Log')) {
