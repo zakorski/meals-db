@@ -47,12 +47,16 @@ class MealsDB_Apetito_Parser {
 
 	private static function load( string $html ): DOMDocument {
 		$doc = new DOMDocument();
-		libxml_use_internal_errors( true );
+		// Capture and RESTORE the internal-errors flag. Leaving it flipped to
+		// true would silently suppress libxml warnings for every other XML/HTML
+		// consumer in the same WP request (DOMPDF, simplexml, WC feeds).
+		$prev = libxml_use_internal_errors( true );
 		// Charset hint so loadHTML treats bytes as UTF-8 and decodes numeric
 		// entities to proper UTF-8 (avoids the classic ISO-8859-1 mangling)
 		// without any mb_* dependency.
 		$doc->loadHTML( '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">' . $html );
 		libxml_clear_errors();
+		libxml_use_internal_errors( $prev );
 		return $doc;
 	}
 
@@ -96,7 +100,9 @@ class MealsDB_Apetito_Parser {
 			return [ 'ok' => false, 'reason' => 'product-code not found' ];
 		}
 		$raw = self::clean( $nodes->item( 0 )->textContent );
-		$val = trim( preg_replace( '/^\s*Code:\s*/i', '', $raw ) );
+		// `?? $raw`: preg_replace returns null on a PCRE failure (e.g. bad UTF-8);
+		// keep the cleaned text rather than crashing trim() with null.
+		$val = trim( preg_replace( '/^\s*Code:\s*/i', '', $raw ) ?? $raw );
 		if ( $val === '' ) {
 			return [ 'ok' => false, 'reason' => 'product-code present but empty' ];
 		}
@@ -180,7 +186,10 @@ class MealsDB_Apetito_Parser {
 		// Use /u (unicode mode) for the whitespace collapse so multi-byte
 		// characters in the text aren't split. preg_replace with /u does not
 		// require mbstring — it uses PCRE's internal UTF-8 support.
-		$s = preg_replace( '/\s+/u', ' ', $s );
+		// `?? $s`: on a PCRE failure (invalid UTF-8 byte) preg_replace returns
+		// null; keep the pre-collapse text so one bad byte loses only whitespace
+		// normalisation rather than crashing trim() with null (TypeError on PHP 9).
+		$s = preg_replace( '/\s+/u', ' ', $s ) ?? $s;
 		return trim( $s );
 	}
 }
