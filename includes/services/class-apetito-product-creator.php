@@ -25,6 +25,8 @@ class MealsDB_Apetito_Product_Creator {
         if (!$wc_id) { return null; }
         $wc_id = (int) $wc_id;
         $name = ''; $status = '';
+        // Products still live in wp_posts — HPOS only moved ORDERS out — so
+        // get_the_title / get_post_status are the correct, HPOS-safe lookups here.
         if (function_exists('get_the_title')) { $name = (string) get_the_title($wc_id); }
         if (function_exists('get_post_status')) { $status = (string) get_post_status($wc_id); }
         return ['wc_product_id' => $wc_id, 'product_name' => $name, 'status' => $status];
@@ -36,15 +38,17 @@ class MealsDB_Apetito_Product_Creator {
      */
     public static function duplicate_message(?array $existing, string $code, string $apetito_name): string {
         if ($existing === null) { return ''; }
-        $existing_name = $existing['product_name'] !== '' ? $existing['product_name'] : sprintf('#%s', $code);
+        // `?? ''` on the reads: this method accepts an arbitrary ?array, so guard
+        // against a partial array (missing keys) rather than warning on it.
+        $existing_name = ($existing['product_name'] ?? '') !== '' ? $existing['product_name'] : sprintf('#%s', $code);
         return sprintf(
             /* translators: 1: apetito code, 2: apetito name, 3: existing product name, 4: product id, 5: status */
             __('Apetito lists %1$s as "%2$s". You already have "%3$s" (product %4$d, %5$s). Codes must be unique — the packing slip, the purchase order and the delivery slip all identify items by this number.', 'meals-db'),
             $code,
             $apetito_name,
             $existing_name,
-            (int) $existing['wc_product_id'],
-            $existing['status'] !== '' ? $existing['status'] : 'unknown'
+            (int) ($existing['wc_product_id'] ?? 0),
+            ($existing['status'] ?? '') !== '' ? $existing['status'] : 'unknown'
         );
     }
 }
