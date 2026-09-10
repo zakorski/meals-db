@@ -61,7 +61,11 @@
     }
 
     function doFetch() {
-        var code = $.trim($('#mealsdb-apetito-code').val());
+        var code = ($('#mealsdb-apetito-code').val() || '').trim();
+        if (!code) {
+            $('#mealsdb-apetito-status').text('Enter a 5-digit Apetito code.');
+            return;
+        }
         $('#mealsdb-apetito-status').text('Fetching…');
         $('#mealsdb-apetito-preview').prop('hidden', true).empty();
         $.post(cfg.ajaxUrl, { action: 'mealsdb_apetito_fetch', nonce: cfg.nonceFetch, code: code })
