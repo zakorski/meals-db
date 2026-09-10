@@ -79,4 +79,91 @@ class MealsDB_Apetito_Product_Creator {
             ($existing['status'] ?? '') !== '' ? $existing['status'] : 'unknown'
         );
     }
+
+    /**
+     * Create a Draft WC product from parsed data + operator inputs and write its
+     * meals_products row. Draft (never published): is_published lands 0 via
+     * class-product-display-sync (get_status() !== 'publish'), keeping it out of
+     * Quick Order and the PO forecast until the operator publishes.
+     *
+     * @param array $parsed  parser fields already reduced to values (name_en, subcategory, allergens, diet_tags, portions_per_case)
+     * @param array $input   ['code'=>string,'price'=>float,'category_ids'=>int[]]
+     * @return array ['ok'=>true,'product_id'=>int] | ['ok'=>false,'reason'=>string]
+     */
+    public static function create(array $parsed, array $input): array {
+        $code = (string) ($input['code'] ?? '');
+        if (!MealsDB_Apetito_Nutridata::is_valid_code($code)) {
+            return ['ok' => false, 'reason' => __('Invalid code.', 'meals-db')];
+        }
+
+        // Belt-and-braces: re-check the SKU guard (WC also rejects a dupe SKU).
+        $dupe = self::find_by_sku($code);
+        if ($dupe !== null) {
+            return ['ok' => false, 'reason' => self::duplicate_message($dupe, $code, (string) ($parsed['name_en'] ?? ''))];
+        }
+
+        if (!function_exists('wc_get_product') || !class_exists('WC_Product_Simple')) {
+            return ['ok' => false, 'reason' => __('WooCommerce is required.', 'meals-db')];
+        }
+
+        try {
+            $product = new WC_Product_Simple();
+            $name = trim((string) ($parsed['name_en'] ?? ''));
+            // Title convention: "{name} #{code}" (matches every existing product).
+            $product->set_name($name !== '' ? $name . ' #' . $code : '#' . $code);
+            $product->set_status('draft');
+            $product->set_sku($code); // SKU IS the Apetito code
+            if (isset($input['price']) && is_numeric($input['price'])) {
+                $product->set_regular_price((string) $input['price']);
+                $product->set_price((string) $input['price']);
+            }
+            if (!empty($input['category_ids']) && is_array($input['category_ids'])) {
+                $product->set_category_ids(array_map('intval', $input['category_ids']));
+            }
+            $placeholder_id = MealsDB_Apetito_Placeholder::get_or_create();
+            if ($placeholder_id > 0) {
+                $product->set_image_id($placeholder_id);
+            }
+            $product_id = $product->save();
+            if (!$product_id) {
+                return ['ok' => false, 'reason' => __('WooCommerce refused to create the product (possibly a duplicate SKU).', 'meals-db')];
+            }
+
+            if ($placeholder_id > 0) {
+                update_post_meta($product_id, '_mealsdb_placeholder_image', 1);
+            }
+
+            // Force the category-derivation deterministically (avoids any
+            // save_post term-timing race), THEN read the row back so our payload
+            // preserves the derived product_type/taxable.
+            if (class_exists('MealsDB_Product_Display_Sync')) {
+                MealsDB_Product_Display_Sync::sync_single_product($product);
+            }
+            $existing = MealsDB_Products::get_product_data($product_id);
+            $payload  = self::build_meals_products_payload($existing, $parsed);
+            MealsDB_Products::save_product_data($product_id, $payload);
+
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity' => 'info', 'category' => 'products', 'subsystem' => 'apetito_pull',
+                    'event' => 'apetito_pull.created', 'outcome' => 'succeeded',
+                    'message' => sprintf('Created draft product %d from Apetito code %s', $product_id, $code),
+                    'context' => ['product_id' => $product_id, 'code' => $code,
+                                  'manual_fields' => $input['manual_fields'] ?? []],
+                    'entity_type' => 'product', 'entity_id' => $product_id,
+                ]);
+            }
+            return ['ok' => true, 'product_id' => (int) $product_id];
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Apetito] create failed: ' . $e->getMessage());
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity' => 'error', 'category' => 'products', 'subsystem' => 'apetito_pull',
+                    'event' => 'apetito_pull.create_failed', 'outcome' => 'degraded',
+                    'message' => $e->getMessage(), 'context' => ['code' => $code],
+                ]);
+            }
+            return ['ok' => false, 'reason' => __('Could not create the product. See the event log.', 'meals-db')];
+        }
+    }
 }
