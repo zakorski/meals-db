@@ -1792,6 +1792,10 @@
                 quantity: entry.quantity,
             }));
 
+            // Defensive: callers already disable at the validation gate above
+            // (K14 ITEM 2), so this is redundant today. Kept so submit() stays
+            // self-contained if ever invoked from a path that didn't pre-disable;
+            // setCreateOrderBusy is idempotent so the double call is harmless.
             this.setCreateOrderBusy(true);
 
             $.ajax({
