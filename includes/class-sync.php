@@ -771,10 +771,6 @@ class MealsDB_Sync {
     }
 
     /**
-     * Pick wp_user_id / wordpress_user_id by inspecting INFORMATION_SCHEMA
-     * once. Cached for the request.
-     */
-    /**
      * K13 ITEM 4: walk the tracked-client population once WITHOUT writing and
      * tally per-field blank candidates. Returns the first field over threshold,
      * or null. Uses the SAME client_type filter and wp_user column the real
@@ -828,6 +824,10 @@ class MealsDB_Sync {
         return null;
     }
 
+    /**
+     * Pick wp_user_id / wordpress_user_id by inspecting INFORMATION_SCHEMA
+     * once. Cached for the request.
+     */
     private static function resolve_wp_user_column(wpdb $wpdb, string $clients_table): ?string {
         static $cache = [];
         if (array_key_exists($clients_table, $cache)) {
