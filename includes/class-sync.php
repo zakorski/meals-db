@@ -861,15 +861,15 @@ class MealsDB_Sync {
                 [$wp_value, $present] = self::read_wp_field_value_with_presence($user, $field_map[$field]);
                 $client_value = isset($client[$field]) ? (string) $client[$field] : '';
 
-                $action = self::decide_field_action($present, $wp_value, $client_value);
-                if ($action === 'skip_absent' || $action === 'noop') {
+                $decision = self::decide_field_action($present, $wp_value, $client_value);
+                if ($decision === 'skip_absent' || $decision === 'noop') {
                     continue;
                 }
-                if ($action === 'skip_blank') {
+                if ($decision === 'skip_blank') {
                     MealsDB_Event_Log::record([
                         'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
                         'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
-                        'message' => sprintf('%s: refused to blank a populated column for client %d (%s)', $field, $client_id, $action),
+                        'message' => sprintf('%s: refused to blank a populated column for client %d', $field, $client_id),
                         'context' => ['client_id' => $client_id, 'field' => $field],
                     ]);
                     continue;
