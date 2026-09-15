@@ -254,6 +254,23 @@ class MealsDB_Sync_Mutate {
 
         $existing_value = is_scalar($existing_value) ? (string) $existing_value : '';
 
+        // K13 ITEM 3: covers callers that reach this method WITHOUT the nightly
+        // loop's decide_field_action() pre-check - the real-time hooks and the
+        // conflict-resolution AJAX (direction=woocommerce). An empty incoming
+        // value must never blank a populated meals_clients column.
+        if (MealsDB_Sync::would_blank_value($new_value, $existing_value)) {
+            MealsDB_Event_Log::record([
+                'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+                'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
+                'message' => sprintf('WP->DB: refused to blank populated %s for client %d', $field, $client_id),
+                'context' => ['client_id' => $client_id, 'field' => $field],
+            ]);
+            return new WP_Error(
+                'mealsdb_sync_empty_overwrite_refused',
+                __('Refused to overwrite a populated field with an empty value.', 'meals-db')
+            );
+        }
+
         $update_success = $this->update_meals_client($client_id, [
             $column => $new_value,
         ]);
@@ -1048,6 +1065,24 @@ class MealsDB_Sync_Mutate {
                     }
 
                     $old_value = get_user_meta($woo_user_id, $meta_key, true);
+                    // K13 ITEM 3: never blank a populated WP meta value from a
+                    // sync push. street_name/delivery_street_name resolve here to
+                    // billing_address_1/shipping_address_1 (K13 ITEM 1) - the only
+                    // surviving copy of the client's address. An empty incoming
+                    // value means "no data", not "delete it". Deliberate operator
+                    // clears go through the client form, which does NOT route
+                    // through this mutator, so they are unaffected.
+                    if (MealsDB_Sync::would_blank_value($new_value, is_scalar($old_value) ? (string) $old_value : '')) {
+                        MealsDB_Event_Log::record([
+                            'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+                            'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
+                            'message' => sprintf('DB->WP: refused to blank populated %s for user %d', $meta_key, $woo_user_id),
+                            'context' => ['user_id' => $woo_user_id, 'field' => $field, 'meta_key' => $meta_key],
+                        ]);
+                        $error_code    = 'mealsdb_sync_empty_overwrite_refused';
+                        $error_message = __('Refused to overwrite a populated field with an empty value. Clear it via the client form if that is intended.', 'meals-db');
+                        break;
+                    }
                     $update_success = self::persist_user_meta($woo_user_id, $meta_key, is_scalar($old_value) ? (string) $old_value : '', $new_value);
                     if (!$update_success) {
                         $error_message = sprintf(

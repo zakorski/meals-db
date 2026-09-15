@@ -94,6 +94,37 @@ chk($val === '5 Elm St' && $present === true, 'ITEM2: present meta read (value+p
 [$val2, $present2] = $rmp->invoke(null, new WP_User(9), ['type'=>'meta','key'=>'mealsdb_street_name']);
 chk($val2 === '' && $present2 === false, 'ITEM2: absent meta read -> present=false');
 
+// ===== Task 3: ITEM 3 mutator guards =====
+$GLOBALS['wpdb'] = new wpdb();
+$mut = new MealsDB_Sync_Mutate();
+$rm = new ReflectionMethod('MealsDB_Sync_Mutate', 'apply_wp_user_update');
+$rm->setAccessible(true);
+
+// DB->WP (test 5): push empty over a populated billing_address_1 -> refused.
+$GLOBALS['meta_store']  = ['7|billing_address_1' => '5 Elm St'];
+$GLOBALS['meta_exists'] = ['7|billing_address_1' => true];
+MealsDB_Event_Log::$events = [];
+$res = $rm->invoke($mut, new WP_User(7), 'street_name', '');
+chk(is_wp_error($res), 'ITEM3 DB->WP: empty over real -> WP_Error (test 5)');
+chk($res->get_error_code() === 'mealsdb_sync_empty_overwrite_refused', 'ITEM3 DB->WP: refusal error code');
+chk(($GLOBALS['meta_store']['7|billing_address_1'] ?? '') === '5 Elm St', 'ITEM3 DB->WP: billing_address_1 unchanged (test 5)');
+$refused = array_filter(MealsDB_Event_Log::$events, fn($e) => ($e['event'] ?? '') === 'sync.empty_overwrite_refused');
+chk(count($refused) === 1, 'ITEM3 DB->WP: one empty_overwrite_refused event');
+
+// DB->WP (test 6): real over a different real value -> succeeds.
+$GLOBALS['meta_store']  = ['7|billing_address_1' => 'Old Rd'];
+$GLOBALS['meta_exists'] = ['7|billing_address_1' => true];
+$res = $rm->invoke($mut, new WP_User(7), 'street_name', '9 Oak Ave');
+chk($res === true, 'ITEM3 DB->WP: real over real -> success (test 6)');
+chk(($GLOBALS['meta_store']['7|billing_address_1'] ?? '') === '9 Oak Ave', 'ITEM3 DB->WP: real value persisted');
+
+// DB->WP: empty over ALREADY-empty is allowed (no refusal).
+$GLOBALS['meta_store']  = ['7|billing_address_1' => ''];
+$GLOBALS['meta_exists'] = ['7|billing_address_1' => true];
+MealsDB_Event_Log::$events = [];
+$res = $rm->invoke($mut, new WP_User(7), 'street_name', '');
+chk(!is_wp_error($res), 'ITEM3 DB->WP: empty over empty -> not refused');
+
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
 exit(empty($failures) ? 0 : 1);
