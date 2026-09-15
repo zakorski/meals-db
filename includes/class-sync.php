@@ -817,12 +817,22 @@ class MealsDB_Sync {
             if (!is_array($batch) || empty($batch)) {
                 break;
             }
-            $active += count($batch);
             $ids = [];
             foreach ($batch as $row) { $uid = (int) ($row[$wp_column] ?? 0); if ($uid > 0) { $ids[$uid] = $uid; } }
             if (!empty($ids)) {
                 if (function_exists('cache_users')) { cache_users(array_values($ids)); }
                 update_meta_cache('user', array_values($ids));
+            }
+            // Codex P2: the denominator must be the clients the sync could actually
+            // blank — those with a LOADABLE WP user. A deleted/unloadable account is
+            // skipped wholesale by the real sync (sync_nightly_missing_user),
+            // contributes to no field's tally, and must not dilute the ratio and
+            // suppress the breaker. get_userdata() is cache-primed above, so cheap.
+            foreach ($batch as $row) {
+                $uid = (int) ($row[$wp_column] ?? 0);
+                if ($uid > 0 && get_userdata($uid) instanceof WP_User) {
+                    $active++;
+                }
             }
             $batch_tally = self::tally_blank_candidates($batch, $wp_fields, $field_map, $read_raw, $wp_column);
             foreach ($batch_tally as $field => $count) { $tally[$field] = ($tally[$field] ?? 0) + $count; }
