@@ -29,6 +29,10 @@
                 // fetch against an out-of-order response overwriting a newer
                 // client's context/allowance/zone panel with an older one's.
                 allocationSeq: 0,
+                // K14 follow-up (Codex P2): guards fetchClientRates so a stale
+                // rates response for a previous client can't repopulate a
+                // deselected/cleared form. Rates had no seq guard before.
+                ratesSeq: 0,
                 cloneOrderId: null,
                 // Directive 1 (ITEM 2): the parked draft being completed in place.
                 // 0 = normal (new order) mode. Distinct from cloneOrderId, which
@@ -2233,6 +2237,12 @@
         fetchNextDates(userId, options = {}) {
             const skipDeliveryPrefill = !!options.skipDeliveryPrefill;
             if (!Number.isInteger(userId) || userId <= 0) {
+                // K14 follow-up (Codex P2): a deselect (null client) must INVALIDATE
+                // any in-flight fetch for the previous client — otherwise its late
+                // response still passes the seq check below and repopulates a
+                // cleared form. Bumping the seq without issuing a new request
+                // discards the stale one.
+                this.state.nextDatesSeq++;
                 $('#mealsdb-qo-next-dates').hide();
                 return;
             }
@@ -2408,9 +2418,19 @@
 
         fetchClientRates(userId, preselectRateId) {
             if (!Number.isInteger(userId) || userId <= 0) {
+                // K14 follow-up (Codex P2): invalidate any in-flight rates fetch
+                // for the previous client (bump the seq) so its late response
+                // can't repopulate the rate selector on a cleared form.
+                this.state.ratesSeq++;
                 this.clearClientRates();
                 return;
             }
+
+            // K14 follow-up (Codex P2): rates previously had NO staleness guard —
+            // a slow response for a superseded client would always win. Sequence
+            // it like fetchNextDates/fetchClientAllocation: only the most recently
+            // issued fetch may write the selector.
+            const seq = ++this.state.ratesSeq;
 
             $.ajax({
                 url: this.getAjaxUrl(),
@@ -2422,6 +2442,7 @@
                     user_id: userId,
                 },
             }).done((response) => {
+                if (seq !== this.state.ratesSeq) { return; } // superseded — discard
                 const payload = this.getResponsePayload(response);
 
                 if (!this.isSuccessfulResponse(response) || !payload) {
@@ -2437,6 +2458,7 @@
 
                 this.populateRateSelector(rates, preselectRateId || payload.default_rate_id);
             }).fail(() => {
+                if (seq !== this.state.ratesSeq) { return; } // superseded — discard
                 this.clearClientRates();
             });
         },
@@ -2676,6 +2698,10 @@
 
         fetchClientAllocation(userId) {
             if (!Number.isInteger(userId) || userId <= 0) {
+                // K14 follow-up (Codex P2): invalidate any in-flight allocation
+                // fetch for the previous client so its late response can't
+                // repopulate a deselected/cleared form.
+                this.state.allocationSeq++;
                 this.clearAllocationDisplay();
                 return;
             }
