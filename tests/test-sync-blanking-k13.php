@@ -125,6 +125,29 @@ MealsDB_Event_Log::$events = [];
 $res = $rm->invoke($mut, new WP_User(7), 'street_name', '');
 chk(!is_wp_error($res), 'ITEM3 DB->WP: empty over empty -> not refused');
 
+// ===== Task 4: ITEM 4 mass-blank breaker (pure helpers) =====
+// is_over_mass_blank_threshold(int $blank_count, int $active_count): bool â strictly > 20%.
+chk(MealsDB_Sync::is_over_mass_blank_threshold(21, 100) === true,  'ITEM4: 21/100 over threshold');
+chk(MealsDB_Sync::is_over_mass_blank_threshold(20, 100) === false, 'ITEM4: 20/100 NOT over (boundary)');
+chk(MealsDB_Sync::is_over_mass_blank_threshold(1, 100) === false,  'ITEM4: 1/100 under (test 8)');
+chk(MealsDB_Sync::is_over_mass_blank_threshold(1, 0) === false,    'ITEM4: guards divide-by-zero');
+
+// tally_blank_candidates: count per field where WP-side is empty but column is not.
+$rows = [];
+for ($i = 1; $i <= 100; $i++) { $rows[] = ['wp_user_id' => $i, 'street_name' => '123 Main St']; }
+$read_raw = function (int $uid, array $desc) { return ''; }; // every WP key empty/absent
+$tally = MealsDB_Sync::tally_blank_candidates($rows, ['street_name'], MealsDB_Sync::get_field_to_wp_meta_map(), $read_raw, 'wp_user_id');
+chk(($tally['street_name'] ?? 0) === 100, 'ITEM4: 100 blank candidates counted (test 7)');
+chk(MealsDB_Sync::is_over_mass_blank_threshold($tally['street_name'], count($rows)) === true, 'ITEM4: 100/100 -> abort (test 7)');
+
+// Under threshold: only 1 client would blank.
+$rows2 = [];
+for ($i = 1; $i <= 100; $i++) { $rows2[] = ['wp_user_id' => $i, 'street_name' => '123 Main St']; }
+$read_one_empty = function (int $uid, array $desc) { return $uid === 1 ? '' : '5 Elm St'; };
+$tally2 = MealsDB_Sync::tally_blank_candidates($rows2, ['street_name'], MealsDB_Sync::get_field_to_wp_meta_map(), $read_one_empty, 'wp_user_id');
+chk(($tally2['street_name'] ?? -1) === 1, 'ITEM4: 1 blank candidate (test 8)');
+chk(MealsDB_Sync::is_over_mass_blank_threshold($tally2['street_name'], count($rows2)) === false, 'ITEM4: 1/100 -> proceed (test 8)');
+
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
 exit(empty($failures) ? 0 : 1);

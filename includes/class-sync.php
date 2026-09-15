@@ -19,6 +19,15 @@ class MealsDB_Sync {
     private static bool $syncing = false;
 
     /**
+     * K13 ITEM 4: if a single nightly run would empty a currently-populated
+     * column on more than this percentage of tracked clients, the run is not a
+     * legitimate sync — it is a broken mapping, a bad usermeta migration, or a
+     * partial restore. Abort the WHOLE run and write nothing. No real nightly
+     * sync blanks the same field on hundreds of clients at once.
+     */
+    public const SYNC_MASS_BLANK_THRESHOLD_PCT = 20;
+
+    /**
      * Fields where WP/WC is the source of truth.
      * Changes flow WP -> meals_clients.
      *
@@ -78,6 +87,55 @@ class MealsDB_Sync {
             return 'skip_blank';
         }
         return 'write';
+    }
+
+    /**
+     * K13 ITEM 4: strictly-greater-than-threshold, integer-safe (no float,
+     * no divide-by-zero).
+     */
+    public static function is_over_mass_blank_threshold(int $blank_count, int $active_count): bool {
+        if ($active_count <= 0) {
+            return false;
+        }
+        return ($blank_count * 100) > ($active_count * self::SYNC_MASS_BLANK_THRESHOLD_PCT);
+    }
+
+    /**
+     * K13 ITEM 4: count, per field, how many rows have a currently-populated
+     * column that the WP side would set empty. Pure over injected data so it is
+     * unit-testable without $wpdb: $read_raw($wp_user_id, $descriptor) returns
+     * the raw WP value ('' when absent OR empty — deliberately, this measures
+     * total blanking PRESSURE, the systemic signal, not the post-guard result).
+     *
+     * @param array<int,array<string,mixed>> $rows       Client rows.
+     * @param string[]                       $wp_fields  WP-authoritative fields.
+     * @param array<string,array>            $field_map  Field -> descriptor.
+     * @param callable                       $read_raw   fn(int,$descriptor):string
+     * @param string                         $wp_column  wp_user id column name.
+     * @return array<string,int> field => blank-candidate count
+     */
+    public static function tally_blank_candidates(array $rows, array $wp_fields, array $field_map, callable $read_raw, string $wp_column): array {
+        $tally = [];
+        foreach ($rows as $row) {
+            $uid = (int) ($row[$wp_column] ?? 0);
+            if ($uid <= 0) {
+                continue;
+            }
+            foreach ($wp_fields as $field) {
+                if (!isset($field_map[$field])) {
+                    continue;
+                }
+                $client_value = isset($row[$field]) ? (string) $row[$field] : '';
+                if (trim($client_value) === '') {
+                    continue; // nothing to lose
+                }
+                $wp_value = (string) $read_raw($uid, $field_map[$field]);
+                if (trim($wp_value) === '') {
+                    $tally[$field] = ($tally[$field] ?? 0) + 1;
+                }
+            }
+        }
+        return $tally;
     }
 
     /**
@@ -518,6 +576,29 @@ class MealsDB_Sync {
 
         $escaped_column = str_replace('`', '``', $wp_column);
 
+        // K13 ITEM 4: whole-run circuit breaker. The nightly sync is a streaming
+        // write loop with no stage-then-commit phase, so "write nothing" on a
+        // mass blanking can only be honoured by a count-only pre-flight BEFORE
+        // any write. If any field is over threshold the whole run is suspect —
+        // a broken mapping casts doubt on every write this run, not just the
+        // offending field — so abort entirely.
+        $mass_blank = self::preflight_mass_blank_scan($wpdb, $escaped_table, $wp_column, $field_map, $wp_fields);
+        if ($mass_blank !== null) {
+            MealsDB_Event_Log::record([
+                'severity' => 'error', 'category' => 'sync', 'subsystem' => 'sync',
+                'event' => 'sync.mass_blank_refused', 'outcome' => 'degraded',
+                'message' => sprintf(
+                    'Nightly sync aborted: %d of %d tracked clients would have %s blanked (> %d%%). Wrote nothing.',
+                    $mass_blank['count'], $mass_blank['active'], $mass_blank['field'], self::SYNC_MASS_BLANK_THRESHOLD_PCT
+                ),
+                'context' => $mass_blank,
+            ]);
+            if ($log_id > 0 && class_exists('MealsDB_Job_Logger')) {
+                MealsDB_Job_Logger::fail($log_id, 'Mass-blank pre-flight refused the run: ' . $mass_blank['field']);
+            }
+            return; // write nothing
+        }
+
         // K13 ITEM 2: collect fields whose mapped key is absent for EVERY user
         // so we log ONE sync.meta_key_missing per field per run, not 992 rows.
         $missing_fields = []; // field => mapped key
@@ -693,6 +774,60 @@ class MealsDB_Sync {
      * Pick wp_user_id / wordpress_user_id by inspecting INFORMATION_SCHEMA
      * once. Cached for the request.
      */
+    /**
+     * K13 ITEM 4: walk the tracked-client population once WITHOUT writing and
+     * tally per-field blank candidates. Returns the first field over threshold,
+     * or null. Uses the SAME client_type filter and wp_user column the real
+     * sync walks, so the percentage measures against the real population.
+     *
+     * @return array{field: string, count: int, active: int}|null
+     */
+    private static function preflight_mass_blank_scan(wpdb $wpdb, string $escaped_table, string $wp_column, array $field_map, array $wp_fields): ?array {
+        $escaped_column = str_replace('`', '``', $wp_column);
+        $batch_size = 500;
+        $offset = 0;
+        $active = 0;
+        $tally = [];
+
+        $read_raw = static function (int $uid, array $descriptor): string {
+            $u = get_userdata($uid);
+            return $u instanceof WP_User ? self::read_wp_field_value($u, $descriptor) : '';
+        };
+
+        while (true) {
+            $batch = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT * FROM `{$escaped_table}` WHERE client_type IN ('SDNB', 'Veteran', 'Private') AND `{$escaped_column}` > 0 ORDER BY client_id ASC LIMIT %d OFFSET %d",
+                    $batch_size,
+                    $offset
+                ),
+                ARRAY_A
+            );
+            if (!is_array($batch) || empty($batch)) {
+                break;
+            }
+            $active += count($batch);
+            $ids = [];
+            foreach ($batch as $row) { $uid = (int) ($row[$wp_column] ?? 0); if ($uid > 0) { $ids[$uid] = $uid; } }
+            if (!empty($ids)) {
+                if (function_exists('cache_users')) { cache_users(array_values($ids)); }
+                update_meta_cache('user', array_values($ids));
+            }
+            $batch_tally = self::tally_blank_candidates($batch, $wp_fields, $field_map, $read_raw, $wp_column);
+            foreach ($batch_tally as $field => $count) { $tally[$field] = ($tally[$field] ?? 0) + $count; }
+
+            if (count($batch) < $batch_size) { break; }
+            $offset += $batch_size;
+        }
+
+        foreach ($tally as $field => $count) {
+            if (self::is_over_mass_blank_threshold((int) $count, $active)) {
+                return ['field' => $field, 'count' => (int) $count, 'active' => $active];
+            }
+        }
+        return null;
+    }
+
     private static function resolve_wp_user_column(wpdb $wpdb, string $clients_table): ?string {
         static $cache = [];
         if (array_key_exists($clients_table, $cache)) {
