@@ -536,6 +536,26 @@
             this.updateAllocationWithCart();
         },
 
+        // K14 ITEM 1: clear the whole form after a clean placed order — empty the
+        // basket AND deselect the client — so a second Create (a double-click or a
+        // stale open tab) cannot place a duplicate order for the same client. This
+        // mirrors the draft-completion branch (Directive C ITEM 5); both success
+        // paths now call this ONE method so they can't drift apart again — that
+        // drift is exactly what left the normal path un-cleared. Unlike clearCart()
+        // (which deliberately keeps the client), this also deselects: clearing
+        // #client_id and cascading handleClientSelectionChange resets the
+        // context/allowance/zone panels and the summary.
+        resetAfterOrderCreated() {
+            this.clearCart();
+            if (this.$clientSelect && this.$clientSelect.length) {
+                this.$clientSelect.val('').data('clientType', '').data('clientAllergens', []);
+            }
+            if (this.$clientSearch && this.$clientSearch.length) {
+                this.$clientSearch.val('');
+            }
+            this.handleClientSelectionChange();
+        },
+
         maybeLoadClonedOrder() {
             const cloneOrderId = this.getCloneOrderId();
             if (!Number.isInteger(cloneOrderId) || cloneOrderId <= 0) {
@@ -1754,6 +1774,15 @@
                 return;
             }
 
+            // K14 ITEM 2: disable Create NOW — synchronously, before the async
+            // date-sanity confirm — so a rapid double-click can't start a second
+            // submit while the confirm modal is open. In-flight disabling via
+            // setCreateOrderBusy(true) inside submit() leaves that async window
+            // uncovered. Re-enabled by .always() on the submit path and on the
+            // confirm-cancel path below. The validation-fail return above runs
+            // BEFORE this, so it can never leave the button stuck disabled (J1).
+            this.setCreateOrderBusy(true);
+
             // The actual submit, gated below behind the in-page date-sanity
             // confirm. Extracted into a closure so nothing is posted before the
             // (asynchronous) confirm resolves. Arrow fn preserves `this`.
@@ -1763,6 +1792,10 @@
                 quantity: entry.quantity,
             }));
 
+            // Defensive: callers already disable at the validation gate above
+            // (K14 ITEM 2), so this is redundant today. Kept so submit() stays
+            // self-contained if ever invoked from a path that didn't pre-disable;
+            // setCreateOrderBusy is idempotent so the double call is harmless.
             this.setCreateOrderBusy(true);
 
             $.ajax({
@@ -1817,25 +1850,14 @@
                     successMessage = this.translate('Draft completed — order placed.');
                     // The draft is now a placed order; a second Create must not
                     // try to reopen it. Drop reopen mode and restore the label.
+                    // The form-clear itself is the shared, dropped/clamped-gated
+                    // resetAfterOrderCreated() call below (K14 ITEM 1) — so a
+                    // completion that dropped/clamped items now keeps its context
+                    // on screen for review, exactly like a normal create does.
                     this.state.reopenOrderId = 0;
                     if (this.$createOrder && this.$createOrder.length) {
                         this.$createOrder.text(this.translate('Create Order'));
                     }
-                    // FOLLOW-UP DIRECTIVE C (ITEM 5): after a completion the form
-                    // clears fully — NO client and NO items — so pressing Create
-                    // again cannot place a second order for the same client.
-                    // clearCart() empties the basket (it deliberately keeps the
-                    // client), so also deselect the client: clearing #client_id and
-                    // firing change cascades through handleClientSelectionChange to
-                    // reset the context/allowance/zone panels and the summary.
-                    this.clearCart();
-                    if (this.$clientSelect && this.$clientSelect.length) {
-                        this.$clientSelect.val('').data('clientType', '').data('clientAllergens', []);
-                    }
-                    if (this.$clientSearch && this.$clientSearch.length) {
-                        this.$clientSearch.val('');
-                    }
-                    this.handleClientSelectionChange();
                 } else {
                     successMessage = this.getResponseMessage(response, 'Order created successfully!');
                 }
@@ -1866,6 +1888,16 @@
                     qoShowToast(`Order saved, but ${parts.join('; ')}. Review the order before delivery.`, 'warning');
                 } else {
                     qoShowToast(successMessage, 'success');
+                }
+
+                // K14 ITEM 1: clear the form ONLY on a clean placed order — not a
+                // draft (deliberately kept) and not a dropped/clamped result (the
+                // operator must review that order before delivery, so keep its
+                // context on screen). Covers BOTH the normal and reopen success
+                // paths via one call, so they can't diverge again. isDraftResp,
+                // hasDropped and hasClamped are all already computed above.
+                if (!isDraftResp && !hasDropped && !hasClamped) {
+                    this.resetAfterOrderCreated();
                 }
 
                 // The override is one-time-only: clear it after a
@@ -1921,6 +1953,9 @@
                             if (this.$orderDate && this.$orderDate.length) {
                                 this.$orderDate.trigger('focus');
                             }
+                            // K14 ITEM 2: operator cancelled the date confirm — re-enable
+                            // the Create button disabled after validation above.
+                            this.setCreateOrderBusy(false);
                             this.clearCreateOrderLoading(createButton);
                             return;
                         }
