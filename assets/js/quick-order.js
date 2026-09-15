@@ -1774,6 +1774,15 @@
                 return;
             }
 
+            // K14 ITEM 2: disable Create NOW — synchronously, before the async
+            // date-sanity confirm — so a rapid double-click can't start a second
+            // submit while the confirm modal is open. In-flight disabling via
+            // setCreateOrderBusy(true) inside submit() leaves that async window
+            // uncovered. Re-enabled by .always() on the submit path and on the
+            // confirm-cancel path below. The validation-fail return above runs
+            // BEFORE this, so it can never leave the button stuck disabled (J1).
+            this.setCreateOrderBusy(true);
+
             // The actual submit, gated below behind the in-page date-sanity
             // confirm. Extracted into a closure so nothing is posted before the
             // (asynchronous) confirm resolves. Arrow fn preserves `this`.
@@ -1940,6 +1949,9 @@
                             if (this.$orderDate && this.$orderDate.length) {
                                 this.$orderDate.trigger('focus');
                             }
+                            // K14 ITEM 2: operator cancelled the date confirm — re-enable
+                            // the Create button disabled after validation above.
+                            this.setCreateOrderBusy(false);
                             this.clearCreateOrderLoading(createButton);
                             return;
                         }
