@@ -129,14 +129,25 @@ class MealsDB_Sync {
             'delivery_province'             => ['type' => 'meta', 'key' => 'shipping_state'],
             'delivery_postal_code'          => ['type' => 'meta', 'key' => 'shipping_postcode'],
 
-            // Plugin-managed custom meta (no standard WC equivalent).
-            'client_phone_2'                => ['type' => 'meta', 'key' => 'mealsdb_client_phone_2'],
-            'street_name'                   => ['type' => 'meta', 'key' => 'mealsdb_street_name'],
-            'delivery_street_name'          => ['type' => 'meta', 'key' => 'mealsdb_delivery_street_name'],
-            'alternate_contact_name'        => ['type' => 'meta', 'key' => 'mealsdb_alternate_contact_name'],
-            'alternate_contact_phone_1'     => ['type' => 'meta', 'key' => 'mealsdb_alternate_contact_phone_1'],
-            'alternate_contact_phone_2'     => ['type' => 'meta', 'key' => 'mealsdb_alternate_contact_phone_2'],
-            'alternate_contact_email'       => ['type' => 'meta', 'key' => 'mealsdb_alternate_contact_email'],
+            // K13 ITEM 1: these were mapped to `mealsdb_*` keys that have NEVER
+            // existed on this install (0 usermeta rows, verified 2026-09-14).
+            // get_user_meta() returned '' and the nightly sync wrote that ''
+            // over the column, blanking all 992 clients. Each now points at the
+            // key the migration actually reads from (class-migration-consolidated
+            // .php) — the only path that populated these columns — so sync and
+            // migration finally agree. ITEM 2 makes a still-absent key harmless.
+            'client_phone_2'                => ['type' => 'meta', 'key' => 'billing_phone_2'],
+            'street_name'                   => ['type' => 'meta', 'key' => 'billing_address_1'],
+            'delivery_street_name'          => ['type' => 'meta', 'key' => 'shipping_address_1'],
+            'alternate_contact_name'        => ['type' => 'meta', 'key' => 'alternate_contact_name'],
+            'alternate_contact_phone_1'     => ['type' => 'meta', 'key' => 'alternate_contact_phone_1'],
+            'alternate_contact_phone_2'     => ['type' => 'meta', 'key' => 'alternate_contact_phone_2'],
+            'alternate_contact_email'       => ['type' => 'meta', 'key' => 'alternate_contact_email'],
+            // next_order_date / next_delivery_date are COMPUTED by the next-dates
+            // migration phase, not sourced from the WP user. They stay on their
+            // mealsdb_* keys (0-9 rows) deliberately — ITEM 2 skips an absent key
+            // so they can no longer blank. Whether they belong in this map at all
+            // is a K13 follow-up, not this change.
             'next_order_date'               => ['type' => 'meta', 'key' => 'mealsdb_next_order_date'],
             'next_delivery_date'            => ['type' => 'meta', 'key' => 'mealsdb_next_delivery_date'],
         ];
