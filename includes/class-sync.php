@@ -102,17 +102,25 @@ class MealsDB_Sync {
 
     /**
      * K13 ITEM 4: count, per field, how many rows have a currently-populated
-     * column that the WP side would set empty. Pure over injected data so it is
-     * unit-testable without $wpdb: $read_raw($wp_user_id, $descriptor) returns
-     * the raw WP value ('' when absent OR empty — deliberately, this measures
-     * total blanking PRESSURE, the systemic signal, not the post-guard result).
+     * column that the WP side would actually SET EMPTY — i.e. the mapped key is
+     * PRESENT but empty. An ABSENT key is deliberately NOT counted: the real
+     * write path skips it (ITEM 2 metadata_exists -> skip_absent) and never
+     * blanks the column, and ITEM 2 already alarms it via sync.meta_key_missing.
+     * Counting absent keys here (the old "blanking pressure" reading) would let a
+     * legitimately-optional field whose WP key is absent for >20% of clients trip
+     * the breaker and abort the whole nightly sync every night, even though those
+     * are safe skips (Codex P1). So the tally mirrors exactly what ITEM 3 refuses.
+     *
+     * Pure over injected data so it is unit-testable without $wpdb:
+     * $read_raw($wp_user_id, $descriptor) returns [value, present] — the same
+     * shape as read_wp_field_value_with_presence().
      *
      * @param array<int,array<string,mixed>> $rows       Client rows.
      * @param string[]                       $wp_fields  WP-authoritative fields.
      * @param array<string,array>            $field_map  Field -> descriptor.
-     * @param callable                       $read_raw   fn(int,$descriptor):string
+     * @param callable                       $read_raw   fn(int,$descriptor):array{0:string,1:bool}
      * @param string                         $wp_column  wp_user id column name.
-     * @return array<string,int> field => blank-candidate count
+     * @return array<string,int> field => present-but-empty count
      */
     public static function tally_blank_candidates(array $rows, array $wp_fields, array $field_map, callable $read_raw, string $wp_column): array {
         $tally = [];
@@ -129,8 +137,9 @@ class MealsDB_Sync {
                 if (trim($client_value) === '') {
                     continue; // nothing to lose
                 }
-                $wp_value = (string) $read_raw($uid, $field_map[$field]);
-                if (trim($wp_value) === '') {
+                [$wp_value, $present] = $read_raw($uid, $field_map[$field]);
+                // Absent key -> safe skip, never a blanking candidate (Codex P1).
+                if ((bool) $present && trim((string) $wp_value) === '') {
                     $tally[$field] = ($tally[$field] ?? 0) + 1;
                 }
             }
@@ -785,9 +794,15 @@ class MealsDB_Sync {
         $active = 0;
         $tally = [];
 
-        $read_raw = static function (int $uid, array $descriptor): string {
+        // Codex P1: return [value, present] so tally_blank_candidates counts only
+        // present-but-empty keys — an absent key is a safe ITEM 2 skip, not a
+        // blanking candidate, and must not be able to abort the whole run.
+        $read_raw = static function (int $uid, array $descriptor): array {
             $u = get_userdata($uid);
-            return $u instanceof WP_User ? self::read_wp_field_value($u, $descriptor) : '';
+            if (!$u instanceof WP_User) {
+                return ['', false];
+            }
+            return self::read_wp_field_value_with_presence($u, $descriptor);
         };
 
         while (true) {
@@ -802,12 +817,22 @@ class MealsDB_Sync {
             if (!is_array($batch) || empty($batch)) {
                 break;
             }
-            $active += count($batch);
             $ids = [];
             foreach ($batch as $row) { $uid = (int) ($row[$wp_column] ?? 0); if ($uid > 0) { $ids[$uid] = $uid; } }
             if (!empty($ids)) {
                 if (function_exists('cache_users')) { cache_users(array_values($ids)); }
                 update_meta_cache('user', array_values($ids));
+            }
+            // Codex P2: the denominator must be the clients the sync could actually
+            // blank — those with a LOADABLE WP user. A deleted/unloadable account is
+            // skipped wholesale by the real sync (sync_nightly_missing_user),
+            // contributes to no field's tally, and must not dilute the ratio and
+            // suppress the breaker. get_userdata() is cache-primed above, so cheap.
+            foreach ($batch as $row) {
+                $uid = (int) ($row[$wp_column] ?? 0);
+                if ($uid > 0 && get_userdata($uid) instanceof WP_User) {
+                    $active++;
+                }
             }
             $batch_tally = self::tally_blank_candidates($batch, $wp_fields, $field_map, $read_raw, $wp_column);
             foreach ($batch_tally as $field => $count) { $tally[$field] = ($tally[$field] ?? 0) + $count; }

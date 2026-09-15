@@ -132,20 +132,31 @@ chk(MealsDB_Sync::is_over_mass_blank_threshold(20, 100) === false, 'ITEM4: 20/10
 chk(MealsDB_Sync::is_over_mass_blank_threshold(1, 100) === false,  'ITEM4: 1/100 under (test 8)');
 chk(MealsDB_Sync::is_over_mass_blank_threshold(1, 0) === false,    'ITEM4: guards divide-by-zero');
 
-// tally_blank_candidates: count per field where WP-side is empty but column is not.
+// tally_blank_candidates: count ONLY present-but-empty. An absent key is skipped
+// by the real write path (ITEM 2 metadata_exists), so it must NOT trip the breaker.
+// $read_raw returns [value, present].
 $rows = [];
 for ($i = 1; $i <= 100; $i++) { $rows[] = ['wp_user_id' => $i, 'street_name' => '123 Main St']; }
-$read_raw = function (int $uid, array $desc) { return ''; }; // every WP key empty/absent
-$tally = MealsDB_Sync::tally_blank_candidates($rows, ['street_name'], MealsDB_Sync::get_field_to_wp_meta_map(), $read_raw, 'wp_user_id');
-chk(($tally['street_name'] ?? 0) === 100, 'ITEM4: 100 blank candidates counted (test 7)');
-chk(MealsDB_Sync::is_over_mass_blank_threshold($tally['street_name'], count($rows)) === true, 'ITEM4: 100/100 -> abort (test 7)');
 
-// Under threshold: only 1 client would blank.
+// Present-but-empty on every client -> counts -> over threshold.
+$read_present_empty = function (int $uid, array $desc) { return ['', true]; };
+$tally = MealsDB_Sync::tally_blank_candidates($rows, ['street_name'], MealsDB_Sync::get_field_to_wp_meta_map(), $read_present_empty, 'wp_user_id');
+chk(($tally['street_name'] ?? 0) === 100, 'ITEM4: 100 present-empty candidates counted (test 7)');
+chk(MealsDB_Sync::is_over_mass_blank_threshold($tally['street_name'], count($rows)) === true, 'ITEM4: 100/100 present-empty -> abort (test 7)');
+
+// Codex P1: ABSENT key on every client (populated column) is a SAFE skip (ITEM 2),
+// NOT a blanking candidate -> tally 0 -> run must proceed, not brick the nightly sync.
+$read_absent = function (int $uid, array $desc) { return ['', false]; };
+$tally_absent = MealsDB_Sync::tally_blank_candidates($rows, ['street_name'], MealsDB_Sync::get_field_to_wp_meta_map(), $read_absent, 'wp_user_id');
+chk(($tally_absent['street_name'] ?? 0) === 0, 'ITEM4: absent key is NOT a blank candidate (Codex P1)');
+chk(MealsDB_Sync::is_over_mass_blank_threshold($tally_absent['street_name'] ?? 0, count($rows)) === false, 'ITEM4: absent key -> run proceeds (Codex P1)');
+
+// Under threshold: only 1 client present-but-empty.
 $rows2 = [];
 for ($i = 1; $i <= 100; $i++) { $rows2[] = ['wp_user_id' => $i, 'street_name' => '123 Main St']; }
-$read_one_empty = function (int $uid, array $desc) { return $uid === 1 ? '' : '5 Elm St'; };
+$read_one_empty = function (int $uid, array $desc) { return $uid === 1 ? ['', true] : ['5 Elm St', true]; };
 $tally2 = MealsDB_Sync::tally_blank_candidates($rows2, ['street_name'], MealsDB_Sync::get_field_to_wp_meta_map(), $read_one_empty, 'wp_user_id');
-chk(($tally2['street_name'] ?? -1) === 1, 'ITEM4: 1 blank candidate (test 8)');
+chk(($tally2['street_name'] ?? -1) === 1, 'ITEM4: 1 present-empty candidate (test 8)');
 chk(MealsDB_Sync::is_over_mass_blank_threshold($tally2['street_name'], count($rows2)) === false, 'ITEM4: 1/100 -> proceed (test 8)');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
