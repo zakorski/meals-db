@@ -47,6 +47,54 @@ class MealsDB_Sync {
     }
 
     /**
+     * K13 ITEM 3: an empty incoming value means "no data", never "delete the
+     * data". Returns true only when we are about to overwrite a populated value
+     * with an empty one — the single hazard that destroyed 992 addresses.
+     */
+    public static function would_blank_value(string $new_value, string $existing_value): bool {
+        return trim($new_value) === '' && trim($existing_value) !== '';
+    }
+
+    /**
+     * K13 ITEM 2/3: the single per-field decision shared by both WP->meals_db
+     * loops. Kept pure so it is unit-testable without $wpdb.
+     *
+     * @param bool   $present      Does the mapped WP meta key EXIST for this user?
+     * @param string $wp_value     Value read from WP ('' when absent OR empty).
+     * @param string $client_value Current meals_clients column value.
+     * @return string skip_absent | skip_blank | noop | write
+     */
+    public static function decide_field_action(bool $present, string $wp_value, string $client_value): string {
+        // Absent wins first: get_user_meta() returns '' both for "set to empty"
+        // and "key absent". An absent key is "no opinion" — never touch the DB,
+        // and it is the case that blanked every client nightly (K13).
+        if (!$present) {
+            return 'skip_absent';
+        }
+        if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
+            return 'noop';
+        }
+        if (self::would_blank_value($wp_value, $client_value)) {
+            return 'skip_blank';
+        }
+        return 'write';
+    }
+
+    /**
+     * Presence-aware read: like read_wp_field_value() but also reports whether
+     * the mapped key EXISTS. For core fields presence is always true.
+     *
+     * @return array{0: string, 1: bool} [value, present]
+     */
+    private static function read_wp_field_value_with_presence(WP_User $user, array $descriptor): array {
+        if ($descriptor['type'] === 'core') {
+            return [self::read_wp_field_value($user, $descriptor), true];
+        }
+        $present = metadata_exists('user', (int) $user->ID, $descriptor['key']);
+        return [self::read_wp_field_value($user, $descriptor), (bool) $present];
+    }
+
+    /**
      * Fields that exist only in meals_clients and are never overwritten by WP data.
      *
      * @return string[]
@@ -470,6 +518,10 @@ class MealsDB_Sync {
 
         $escaped_column = str_replace('`', '``', $wp_column);
 
+        // K13 ITEM 2: collect fields whose mapped key is absent for EVERY user
+        // so we log ONE sync.meta_key_missing per field per run, not 992 rows.
+        $missing_fields = []; // field => mapped key
+
         while (true) {
             $batch = $wpdb->get_results(
                 $wpdb->prepare(
@@ -526,17 +578,31 @@ class MealsDB_Sync {
                         continue;
                     }
 
-                    $wp_value     = self::read_wp_field_value($user, $field_map[$field]);
+                    [$wp_value, $present] = self::read_wp_field_value_with_presence($user, $field_map[$field]);
                     $client_value = isset($client[$field]) ? (string) $client[$field] : '';
 
-                    if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
+                    $action = self::decide_field_action($present, $wp_value, $client_value);
+                    if ($action === 'skip_absent') {
+                        $missing_fields[$field] = $field_map[$field]['key'];
+                        continue;
+                    }
+                    if ($action === 'noop') {
+                        continue;
+                    }
+                    if ($action === 'skip_blank') {
+                        // K13 ITEM 3: present-but-empty over a populated column.
+                        // Refuse and surface it (bounded below the ITEM 4 mass
+                        // threshold, so this is a handful of rows, not 992).
+                        MealsDB_Event_Log::record([
+                            'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+                            'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
+                            'message' => sprintf('%s: refused to blank a populated column for client %d', $field, $client_id),
+                            'context' => ['client_id' => $client_id, 'field' => $field],
+                        ]);
                         continue;
                     }
 
-                    // Wrap in try/finally so an exception in push_to_meals_db
-                    // can't leave the global $syncing flag stuck on for the
-                    // rest of the worker (which would suppress every
-                    // subsequent sync hook silently).
+                    // action === 'write'
                     self::$syncing = true;
                     try {
                         $push_result = self::push_to_meals_db($client_id, $field, $wp_value);
@@ -548,9 +614,7 @@ class MealsDB_Sync {
                         $error_count++;
                         error_log(sprintf(
                             '[MealsDB Sync] Nightly sync error for client %d, field %s: %s',
-                            $client_id,
-                            $field,
-                            $push_result->get_error_message()
+                            $client_id, $field, $push_result->get_error_message()
                         ));
                     } else {
                         $pushed++;
@@ -567,6 +631,17 @@ class MealsDB_Sync {
             }
             $offset += $batch_size;
         }
+
+            // K13 ITEM 2: one row per absent field per run — the alarm that
+            // would have surfaced the blanking in a day instead of a week.
+            foreach ($missing_fields as $field => $key) {
+                MealsDB_Event_Log::record([
+                    'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+                    'event' => 'sync.meta_key_missing', 'outcome' => 'degraded',
+                    'message' => sprintf('%s -> %s absent for tracked users; column left unchanged', $field, $key),
+                    'context' => ['field' => $field, 'meta_key' => $key],
+                ]);
+            }
 
             $summary = wp_json_encode([
                 'synced'  => $synced_count,
@@ -783,10 +858,20 @@ class MealsDB_Sync {
                     continue;
                 }
 
-                $wp_value     = self::read_wp_field_value($user, $field_map[$field]);
+                [$wp_value, $present] = self::read_wp_field_value_with_presence($user, $field_map[$field]);
                 $client_value = isset($client[$field]) ? (string) $client[$field] : '';
 
-                if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
+                $action = self::decide_field_action($present, $wp_value, $client_value);
+                if ($action === 'skip_absent' || $action === 'noop') {
+                    continue;
+                }
+                if ($action === 'skip_blank') {
+                    MealsDB_Event_Log::record([
+                        'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+                        'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
+                        'message' => sprintf('%s: refused to blank a populated column for client %d (%s)', $field, $client_id, $action),
+                        'context' => ['client_id' => $client_id, 'field' => $field],
+                    ]);
                     continue;
                 }
 
@@ -795,10 +880,7 @@ class MealsDB_Sync {
                 if (is_wp_error($result)) {
                     error_log(sprintf(
                         '[MealsDB Sync] %s error for client %d, field %s: %s',
-                        $action,
-                        $client_id,
-                        $field,
-                        $result->get_error_message()
+                        $action, $client_id, $field, $result->get_error_message()
                     ));
                 }
             }

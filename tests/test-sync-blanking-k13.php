@@ -75,6 +75,25 @@ foreach (['street_name','delivery_street_name','client_phone_2','alternate_conta
     chk(strpos($map[$f]['key'] ?? '', 'mealsdb_') !== 0, "ITEM1: {$f} no longer mealsdb_ prefixed");
 }
 
+// ===== Task 2: ITEM 2 pure decision helper =====
+// decide_field_action(bool $present, string $wp_value, string $client_value): string
+chk(MealsDB_Sync::decide_field_action(false, '', '123 Main St') === 'skip_absent', 'ITEM2: absent key -> skip_absent (test 1)');
+chk(MealsDB_Sync::decide_field_action(false, '', '') === 'skip_absent', 'ITEM2: absent key wins even when column empty');
+chk(MealsDB_Sync::decide_field_action(true, '5 Elm St', '5 Elm St') === 'noop', 'ITEM2: equal -> noop');
+chk(MealsDB_Sync::decide_field_action(true, '5 Elm St', 'Old Rd') === 'write', 'ITEM2: real diff -> write (test 3)');
+chk(MealsDB_Sync::decide_field_action(true, '', '123 Main St') === 'skip_blank', 'ITEM2/3: present-empty over real -> skip_blank (test 2)');
+chk(MealsDB_Sync::decide_field_action(true, '', '') === 'noop', 'ITEM2: empty over empty -> noop');
+
+// presence-aware read helper
+$rmp = new ReflectionMethod('MealsDB_Sync', 'read_wp_field_value_with_presence');
+$rmp->setAccessible(true);
+$GLOBALS['meta_store']  = ['9|billing_address_1' => '5 Elm St'];
+$GLOBALS['meta_exists'] = ['9|billing_address_1' => true];
+[$val, $present] = $rmp->invoke(null, new WP_User(9), ['type'=>'meta','key'=>'billing_address_1']);
+chk($val === '5 Elm St' && $present === true, 'ITEM2: present meta read (value+present) (test 4)');
+[$val2, $present2] = $rmp->invoke(null, new WP_User(9), ['type'=>'meta','key'=>'mealsdb_street_name']);
+chk($val2 === '' && $present2 === false, 'ITEM2: absent meta read -> present=false');
+
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: {$f}\n"; }
 exit(empty($failures) ? 0 : 1);
