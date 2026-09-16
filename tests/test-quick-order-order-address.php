@@ -15,10 +15,16 @@ ini_set('error_log', '/dev/null');
 if (!class_exists('WC_Order')) {
     class WC_Order {
         public array $set = [];
+        public array $meta = [];
         public function __call($name, $args) {
             if (strpos($name, 'set_') === 0) { $this->set[substr($name, 4)] = $args[0] ?? null; }
             return null;
         }
+        // Declared explicitly (not via __call) so method_exists() returns true,
+        // mirroring real WC_Order (WooCommerce 5.6+) and exercising the K15
+        // set_shipping_phone() branch rather than the update_meta_data fallback.
+        public function set_shipping_phone($v) { $this->set['shipping_phone'] = $v; }
+        public function update_meta_data($key, $value) { $this->meta[$key] = $value; }
         public function get_id() { return 999; }
     }
 }
@@ -126,6 +132,71 @@ $order_blank_zone = new WC_Order();
 $m->invoke(null, $order_blank_zone, $client_blank_zone);
 addr_eq('K11-5 blank zone billing address_2 is empty string', '', $order_blank_zone->set['billing_address_2'] ?? null);
 addr_eq('K11-5 blank zone shipping address_2 is empty string', '', $order_blank_zone->set['shipping_address_2'] ?? null);
+
+// ---------------------------------------------------------------------------
+// DIRECTIVE K15 — orders must carry the client's phone (billing + shipping).
+// apply_client_address_to_order() set every WC address field except phone.
+// ---------------------------------------------------------------------------
+
+// K15 Test 1: billing AND shipping phone are set from client_phone_1.
+// FAILS against v1.0.580 (phone was never written).
+$client_phone = [
+    'first_name' => 'Maurice', 'last_name' => 'Bourque',
+    'street_name' => '5 Rue X', 'city' => 'Moncton', 'province' => 'NB', 'postal_code' => 'E1C 1A1',
+    'client_phone_1' => '506-555-0100',
+];
+$order_phone = new WC_Order();
+$m->invoke(null, $order_phone, $client_phone);
+addr_eq('K15-1 billing phone from client_phone_1', '506-555-0100', $order_phone->set['billing_phone'] ?? null);
+addr_eq('K15-1 shipping phone from client_phone_1', '506-555-0100', $order_phone->set['shipping_phone'] ?? null);
+
+// K15 Test 2: absent client_phone_1 → neither phone field is written (no '' persisted).
+$client_no_phone = [
+    'first_name' => 'A', 'last_name' => 'B',
+    'street_name' => '1 Y', 'city' => 'Moncton', 'province' => 'NB', 'postal_code' => 'E1C 1A1',
+];
+$order_no_phone = new WC_Order();
+$m->invoke(null, $order_no_phone, $client_no_phone);
+addr_eq('K15-2 no billing phone key when phone absent', false, array_key_exists('billing_phone', $order_no_phone->set));
+addr_eq('K15-2 no shipping phone key when phone absent', false, array_key_exists('shipping_phone', $order_no_phone->set));
+
+// K15 Test 3: do_not_call set, alternate_contact_phone_1 populated → that number both fields.
+$client_dnc1 = [
+    'first_name' => 'A', 'last_name' => 'B',
+    'street_name' => '1 Y', 'city' => 'Moncton', 'province' => 'NB', 'postal_code' => 'E1C 1A1',
+    'client_phone_1' => '506-555-0100', 'do_not_call_client_phone' => 1,
+    'alternate_contact_phone_1' => '506-555-0200',
+];
+$order_dnc1 = new WC_Order();
+$m->invoke(null, $order_dnc1, $client_dnc1);
+addr_eq('K15-3 billing phone is the alternate contact', '506-555-0200', $order_dnc1->set['billing_phone'] ?? null);
+addr_eq('K15-3 shipping phone is the alternate contact', '506-555-0200', $order_dnc1->set['shipping_phone'] ?? null);
+
+// K15 Test 4: do_not_call set, _1 empty, _2 populated → _2 used.
+$client_dnc2 = [
+    'first_name' => 'A', 'last_name' => 'B',
+    'street_name' => '1 Y', 'city' => 'Moncton', 'province' => 'NB', 'postal_code' => 'E1C 1A1',
+    'client_phone_1' => '506-555-0100', 'do_not_call_client_phone' => 1,
+    'alternate_contact_phone_1' => '', 'alternate_contact_phone_2' => '506-555-0300',
+];
+$order_dnc2 = new WC_Order();
+$m->invoke(null, $order_dnc2, $client_dnc2);
+addr_eq('K15-4 falls back to alternate_contact_phone_2', '506-555-0300', $order_dnc2->set['billing_phone'] ?? null);
+
+// K15 Test 5: do_not_call set, both alternates empty → NO phone written, and
+// client_phone_1 is NOT leaked onto the order. FAILS against v1.0.580.
+$client_dnc_empty = [
+    'first_name' => 'A', 'last_name' => 'B',
+    'street_name' => '1 Y', 'city' => 'Moncton', 'province' => 'NB', 'postal_code' => 'E1C 1A1',
+    'client_phone_1' => '506-555-0100', 'do_not_call_client_phone' => 1,
+];
+$order_dnc_empty = new WC_Order();
+$m->invoke(null, $order_dnc_empty, $client_dnc_empty);
+addr_eq('K15-5 no billing phone written when do_not_call + no alternates', false, array_key_exists('billing_phone', $order_dnc_empty->set));
+addr_eq('K15-5 no shipping phone written when do_not_call + no alternates', false, array_key_exists('shipping_phone', $order_dnc_empty->set));
+$rp = new ReflectionMethod('MealsDB_Quick_Order_Ajax', 'resolve_order_phone');
+$rp->setAccessible(true);
+addr_eq('K15-5 client_phone_1 not leaked via resolve', '', $rp->invoke(null, $client_dnc_empty));
 
 if ($failures) { echo implode("\n", $failures) . "\n"; echo "FAILED ({$passed} passed)\n"; exit(1); }
 echo "OK ({$passed} passed)\n";

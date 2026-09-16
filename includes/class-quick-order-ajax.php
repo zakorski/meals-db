@@ -1322,6 +1322,25 @@ class MealsDB_Quick_Order_Ajax {
         if (!empty($client['client_email'])) {
             $order->set_billing_email((string) $client['client_email']);
         }
+        // K15: phone was the one WC address field this method never set, so every
+        // Quick Order order showed a blank phone while the client record held one
+        // (client_phone_1 populated on 987/992). Same omission shape as the missing
+        // address_2 in K11. Resolve once and set both billing and shipping (the
+        // shipping/delivery phone is the driver contact and is what migrated orders
+        // carry). Guard against empty so an absent phone leaves the field untouched
+        // rather than blanking an existing value (same reasoning as K13 ITEM 3:
+        // empty means "no data", not "delete").
+        $client_phone = self::resolve_order_phone($client);
+        if ($client_phone !== '') {
+            $order->set_billing_phone($client_phone);
+            // set_shipping_phone() exists on WC_Order in WooCommerce 5.6+; fall
+            // back to the meta key rather than calling a method that may not exist.
+            if (method_exists($order, 'set_shipping_phone')) {
+                $order->set_shipping_phone($client_phone);
+            } else {
+                $order->update_meta_data('_shipping_phone', $client_phone);
+            }
+        }
         $order->set_billing_address_1((string) ($client['street_name'] ?? ''));
         // K11 ITEM 1: the delivery area (e.g. "Zone 1") belongs in address_2 —
         // that is where the migration puts it (billing_address_2 <->
@@ -1368,6 +1387,36 @@ class MealsDB_Quick_Order_Ajax {
         }
 
         return $bill_province;
+    }
+
+    /**
+     * K15: resolve which phone number an order should carry for a client row.
+     *
+     * A do-not-call client's own number must never reach an order a driver will
+     * call — that defeats the flag — so when do_not_call_client_phone is set we
+     * use the alternate contact instead, mirroring the slip generator's fallback
+     * order (alternate_contact_phone_1 then _2, see
+     * class-slip-pdf-generator.php::build_driver_block) so the order and the slip
+     * cannot disagree about which number is the contact.
+     *
+     * This do-not-call path is dormant today (0/992 clients set the flag and the
+     * alternate-contact usermeta keys do not yet exist, see K13) — it is built
+     * correctly so it works when that data arrives, not simplified away.
+     *
+     * Returns '' when no usable number exists; the caller then leaves the field
+     * unset rather than persisting an empty string.
+     */
+    private static function resolve_order_phone(array $client): string {
+        if (empty($client['do_not_call_client_phone'])) {
+            return trim((string) ($client['client_phone_1'] ?? ''));
+        }
+        foreach (['alternate_contact_phone_1', 'alternate_contact_phone_2'] as $key) {
+            $value = trim((string) ($client[$key] ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+        return '';
     }
 
     /**
