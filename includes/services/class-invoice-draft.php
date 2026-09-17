@@ -379,6 +379,30 @@ class MealsDB_Invoice_Draft {
             $set_ids = $cascade ? array_merge([$draft_id], $conflict_ids) : [$draft_id];
             $set_ids = array_values(array_unique(array_map('intval', $set_ids)));
 
+            // K17 ITEM 5: a payment recorded against an invoice being reopened is
+            // a real remittance — reversing the program charge beneath it would
+            // leave an unexplained credit. Block the reopen if ANY draft in the
+            // set has a payment (checked before any flip, so nothing half-applies).
+            if (class_exists('MealsDB_Ledger_Poster')) {
+                foreach ($set_ids as $sid) {
+                    $pays = MealsDB_Ledger_Poster::invoice_payments($sid);
+                    if (!empty($pays)) {
+                        if (class_exists('MealsDB_Event_Log')) {
+                            MealsDB_Event_Log::record([
+                                'severity'  => 'warning',
+                                'category'  => 'billing',
+                                'subsystem' => 'invoice_draft',
+                                'event'     => 'unfinalize.blocked_by_payment',
+                                'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                                'message'   => sprintf('Invoice draft #%d reopen blocked: %d payment(s) recorded against it.', $sid, count($pays)),
+                                'context'   => ['draft_id' => $sid, 'payments' => count($pays)],
+                            ]);
+                        }
+                        return false;
+                    }
+                }
+            }
+
             // Flip each draft finalized → draft via the guarded UPDATE. The
             // target MUST flip (else a concurrent change won the race → bail
             // before touching any lock, so we never half-apply).
@@ -445,6 +469,16 @@ class MealsDB_Invoice_Draft {
                         ? (string) $reason
                         : sprintf('%s [cascade: un-finalized with draft #%d]', (string) $reason, $draft_id);
                     MealsDB_Logger::log('invoice_draft_unfinalized', $sid, 'reason', 'finalized', $r);
+                }
+            }
+
+            // K17 ITEM 5: reverse each reopened draft's program charge with an
+            // offsetting adjustment (never a delete), so the receivables balance
+            // returns to its prior state with the history intact. Safe now that
+            // we know no payment blocks the reopen.
+            if (class_exists('MealsDB_Ledger_Poster')) {
+                foreach ($flipped as $sid) {
+                    MealsDB_Ledger_Poster::reverse_invoice_charges($sid, 'invoice reopened: ' . (string) $reason);
                 }
             }
 
@@ -760,6 +794,19 @@ class MealsDB_Invoice_Draft {
             // Step 6.5 — audit (committed artifact → audit log, STR-LOG).
             if (class_exists('MealsDB_Logger')) {
                 MealsDB_Logger::log('invoice_draft_finalized', $draft_id, 'status', 'draft', 'finalized');
+            }
+
+            // K17 ITEM 2b: post the single PROGRAM charge (SDNB/VAC) for the whole
+            // invoice at its exact billed grand total. Best-effort + idempotent
+            // (charge dedup) — a ledger hiccup must never unwind a finalized
+            // government invoice.
+            if (class_exists('MealsDB_Ledger_Poster')) {
+                $inv_period_end = (string) ($draft['period_end'] ?? '');
+                MealsDB_Ledger_Poster::post_invoice_charge($draft_id, [
+                    'pipeline'   => $pipeline,
+                    'current'    => $current,
+                    'entry_date' => $inv_period_end !== '' ? $inv_period_end : gmdate('Y-m-d'),
+                ]);
             }
 
             return $output;

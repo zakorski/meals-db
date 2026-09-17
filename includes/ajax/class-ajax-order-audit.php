@@ -40,6 +40,7 @@ class MealsDB_Ajax_Order_Audit {
         add_action('wp_ajax_mealsdb_order_audit_unfinalize', [__CLASS__, 'unfinalize']);
         add_action('wp_ajax_mealsdb_order_audit_delete',     [__CLASS__, 'delete_draft']);
         add_action('wp_ajax_mealsdb_order_audit_products',   [__CLASS__, 'products']);
+        add_action('wp_ajax_mealsdb_order_audit_collection', [__CLASS__, 'set_collection']);
     }
 
     // -----------------------------------------------------------------
@@ -152,6 +153,38 @@ class MealsDB_Ajax_Order_Audit {
             wp_send_json_success(self::progress($audit_id, ['status' => 'edited']));
         } catch (\Throwable $e) {
             MealsDB_Logger::error('[MealsDB Order_Audit AJAX] edit failed: ' . $e->getMessage());
+            wp_send_json_error(['message' => __('Unable to save. Please contact an administrator.', 'meals-db')]);
+        }
+    }
+
+    /**
+     * K17 ITEM 3: set a row's payment-collection review (unreviewed / collected
+     * / outstanding). The amount is passed in DOLLARS and converted to integer
+     * cents server-side (never float math downstream); it is cast, not absint'd,
+     * so a bad value surfaces rather than silently clamping. On finalize a
+     * collected row posts a payment to the receivables ledger.
+     */
+    public static function set_collection(): void {
+        if (!self::guard('order_audit_edit')) { return; }
+        try {
+            $audit_id = absint($_POST['audit_id'] ?? 0);
+            $order_id = absint($_POST['order_id'] ?? 0);
+            $state    = sanitize_text_field(wp_unslash($_POST['state'] ?? ''));
+            $method   = sanitize_text_field(wp_unslash($_POST['method'] ?? ''));
+            $amount_cents = null;
+            if ($state === 'collected' && isset($_POST['amount']) && $_POST['amount'] !== '') {
+                $amount_cents = class_exists('MealsDB_Money')
+                    ? MealsDB_Money::to_cents(sanitize_text_field(wp_unslash($_POST['amount'])))
+                    : (int) round((float) $_POST['amount'] * 100);
+            }
+            $result = MealsDB_Order_Audit::set_collection($audit_id, $order_id, $state, $amount_cents, $method);
+            if ($result instanceof WP_Error) {
+                wp_send_json_error(['message' => $result->get_error_message()]);
+                return;
+            }
+            wp_send_json_success(['collection_state' => $result]);
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Order_Audit AJAX] set_collection failed: ' . $e->getMessage());
             wp_send_json_error(['message' => __('Unable to save. Please contact an administrator.', 'meals-db')]);
         }
     }

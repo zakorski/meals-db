@@ -179,6 +179,77 @@ class MealsDB_Ledger_Poster {
     }
 
     // -----------------------------------------------------------------------
+    // Invoice side (K17 ITEM 2b): one PROGRAM charge per finalized invoice.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Post the single program charge for a finalized invoice draft: payer 'SDNB'
+     * or 'VAC' (from the pipeline), amount = the invoice grand total (the exact
+     * billed total, via the generator), source = the draft. One entry for the
+     * WHOLE invoice — SDNB remits against the invoice, so a per-client breakdown
+     * would only have to be re-aggregated to match a single payment. Idempotent
+     * (charge dedup), so a re-finalize never double-bills the program.
+     *
+     * @param array $ctx pipeline, current(rows), entry_date, [amount_cents], [draft_id]
+     * @return int entry_id, or 0
+     */
+    public static function post_invoice_charge(int $draft_id, array $ctx, array $deps = []): int {
+        try {
+            $pipeline = (string) ($ctx['pipeline'] ?? '');
+            $payer_id = self::invoice_payer_id($pipeline);
+            if ($payer_id === '') {
+                return 0; // unknown pipeline → nothing to post
+            }
+            $amount = isset($ctx['amount_cents'])
+                ? (int) $ctx['amount_cents']
+                : (class_exists('MealsDB_Invoice_Generator')
+                    ? MealsDB_Invoice_Generator::draft_grand_total_cents($pipeline, (array) ($ctx['current'] ?? []))
+                    : 0);
+            if ($amount <= 0) {
+                return 0;
+            }
+            $ledger = $deps['ledger'] ?? new MealsDB_Ledger();
+            $user = isset($deps['user']) ? (int) $deps['user']
+                : (function_exists('get_current_user_id') ? (int) get_current_user_id() : 0);
+            return $ledger->post_charge([
+                'payer_type'   => MealsDB_Ledger::PAYER_PROGRAM,
+                'payer_id'     => $payer_id,
+                'source_type'  => MealsDB_Ledger::SOURCE_INVOICE,
+                'source_id'    => $draft_id,
+                'entry_date'   => (string) ($ctx['entry_date'] ?? gmdate('Y-m-d')),
+                'amount_cents' => $amount,
+                'created_by'   => $user,
+            ]);
+        } catch (\Throwable $e) {
+            self::log_error('post_invoice_charge', $e);
+            return 0;
+        }
+    }
+
+    /** Non-voided payments against an invoice draft (unfinalize guard). */
+    public static function invoice_payments(int $draft_id, ?MealsDB_Ledger $ledger = null): array {
+        $ledger = $ledger ?? new MealsDB_Ledger();
+        return $ledger->payments_for_source(MealsDB_Ledger::SOURCE_INVOICE, $draft_id);
+    }
+
+    /** Reverse the program charge for a (reopened) invoice draft. */
+    public static function reverse_invoice_charges(int $draft_id, ?string $note = null, ?int $user = null, ?MealsDB_Ledger $ledger = null): int {
+        $ledger = $ledger ?? new MealsDB_Ledger();
+        $user   = $user ?? (function_exists('get_current_user_id') ? (int) get_current_user_id() : 0);
+        return $ledger->reverse_charges_for_source(MealsDB_Ledger::SOURCE_INVOICE, $draft_id, $note, $user);
+    }
+
+    private static function invoice_payer_id(string $pipeline): string {
+        if ($pipeline === 'vac') {
+            return 'VAC';
+        }
+        if ($pipeline === 'sdnb_legacy' || $pipeline === 'sdnb_new_portal') {
+            return 'SDNB';
+        }
+        return '';
+    }
+
+    // -----------------------------------------------------------------------
     // Production price/type resolution (WooCommerce). Injectable for tests.
     // -----------------------------------------------------------------------
 

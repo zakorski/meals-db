@@ -123,6 +123,27 @@
             editorRow(orderId).toggle();
         });
 
+        // --- K17: collection review (state / amount / method) ---
+        function postCollection($row) {
+            var orderId = $row.data('order-id');
+            var state = $row.find('.oa-collect-state').val();
+            var amount = $row.find('.oa-collect-amount').val();
+            var method = $row.find('.oa-collect-method').val();
+            post('mealsdb_order_audit_collection',
+                { audit_id: auditId(), order_id: orderId, state: state, amount: amount, method: method },
+                function () {});
+        }
+        // Show amount/method only when "collected"; persist on change.
+        $('#oa-grid').on('change', '.oa-collect-state', function () {
+            var $row = $(this).closest('.oa-row');
+            var collected = ($(this).val() === 'collected');
+            $row.find('.oa-collect-amount, .oa-collect-method').toggle(collected);
+            postCollection($row);
+        });
+        $('#oa-grid').on('change', '.oa-collect-amount, .oa-collect-method', function () {
+            postCollection($(this).closest('.oa-row'));
+        });
+
         // --- Save an edit: collect per-item qtys + note ---
         $('#oa-grid').on('click', '.oa-editor-save', function () {
             var $editor = $(this).closest('.oa-editor-row');
