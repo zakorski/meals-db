@@ -87,6 +87,31 @@ class LedgerWpdb extends wpdb {
     }
     public function get_results($sql, $o = ARRAY_A) {
         $sql = (string) $sql;
+        // balances_by_payer: GROUP BY payer_type, payer_id.
+        if (stripos($sql, 'GROUP BY payer_type') !== false) {
+            $sums = [];
+            foreach ($this->entries as $e) {
+                $k = ($e['payer_type'] ?? '') . '|' . ($e['payer_id'] ?? '');
+                $sums[$k] = ($sums[$k] ?? 0) + (int) $e['amount_cents'];
+            }
+            $out = [];
+            foreach ($sums as $k => $sum) {
+                if (stripos($sql, 'HAVING balance_cents <> 0') !== false && $sum === 0) { continue; }
+                [$pt, $pid] = explode('|', $k, 2);
+                $out[] = ['payer_type' => $pt, 'payer_id' => $pid, 'balance_cents' => $sum];
+            }
+            usort($out, static fn($a, $b) => $b['balance_cents'] <=> $a['balance_cents']);
+            return $out;
+        }
+        // entries_for_payer: filtered by payer, no source clause.
+        if (stripos($sql, 'ORDER BY entry_date') !== false
+            && preg_match("/payer_type = '([^']*)' AND payer_id = '([^']*)'/", $sql, $m)) {
+            $out = [];
+            foreach ($this->entries as $e) {
+                if (($e['payer_type'] ?? '') === $m[1] && ($e['payer_id'] ?? '') === $m[2]) { $out[] = $e; }
+            }
+            return $out;
+        }
         $type = null; $sid = null; $etype = null; $nonvoided = false;
         if (preg_match("/source_type = '([^']*)'/", $sql, $m)) { $type = $m[1]; }
         if (preg_match('/source_id = (\\d+)/', $sql, $m)) { $sid = (int) $m[1]; }
@@ -182,6 +207,29 @@ $pp = $ledger->record_payment(['payer_type' => 'program', 'payer_id' => 'SDNB', 
     'source_id' => 901, 'entry_date' => '2026-08-01', 'amount_cents' => 8100000, 'method' => 'remittance', 'created_by' => 7]);
 $found = $ledger->payments_for_source('invoice', 901);
 lc(count($found) === 1 && (int) $found[0]['amount_cents'] === -8100000, '8: payments_for_source returns the recorded payment');
+
+// --- Off-cycle reads (Part C): balances_by_payer + entries_for_payer --------
+$wb = lreset(); $ledger = new MealsDB_Ledger($wb);
+$ledger->post_charge(['payer_type' => 'client', 'payer_id' => '20', 'source_type' => 'order',
+    'source_id' => 1, 'entry_date' => '2026-07-01', 'amount_cents' => 3000]);
+$ledger->record_payment(['payer_type' => 'client', 'payer_id' => '20', 'source_type' => 'manual',
+    'entry_date' => '2026-07-05', 'amount_cents' => 1000, 'method' => 'etransfer']);
+$ledger->post_charge(['payer_type' => 'program', 'payer_id' => 'SDNB', 'source_type' => 'invoice',
+    'source_id' => 5, 'entry_date' => '2026-07-31', 'amount_cents' => 500000]);
+// A fully-paid client should be excluded from the non-zero balances view.
+$ledger->post_charge(['payer_type' => 'client', 'payer_id' => '21', 'source_type' => 'order',
+    'source_id' => 2, 'entry_date' => '2026-07-01', 'amount_cents' => 800]);
+$ledger->record_payment(['payer_type' => 'client', 'payer_id' => '21', 'source_type' => 'manual',
+    'entry_date' => '2026-07-02', 'amount_cents' => 800]);
+
+$bals = $ledger->balances_by_payer(true);
+$by = [];
+foreach ($bals as $b) { $by[$b['payer_type'] . ':' . $b['payer_id']] = $b['balance_cents']; }
+lc(($by['client:20'] ?? null) === 2000, 'balances: client 20 owes the 3000-1000 shortfall');
+lc(($by['program:SDNB'] ?? null) === 500000, 'balances: program SDNB carries its invoice charge');
+lc(!isset($by['client:21']), 'balances: a fully-paid client is excluded from the non-zero view');
+lc($bals[0]['payer_id'] === 'SDNB', 'balances: ordered biggest-first');
+lc(count($ledger->entries_for_payer('client', '20')) === 2, 'entries_for_payer: both of client 20\'s rows');
 
 // 12. No float arithmetic anywhere in the ledger source.
 $src = file_get_contents(__DIR__ . '/../includes/services/class-ledger.php');
