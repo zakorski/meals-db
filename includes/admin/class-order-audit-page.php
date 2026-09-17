@@ -271,11 +271,13 @@ class MealsDB_Order_Audit_Page {
         echo '<th>' . esc_html__('Sides', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Status', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Note', 'meals-db') . '</th>';
+        // K17 ITEM 3: payment collection review (client-side charge).
+        echo '<th>' . esc_html__('Collection', 'meals-db') . '</th>';
         echo '<th>' . esc_html__('Actions', 'meals-db') . '</th>';
         echo '</tr></thead><tbody>';
 
         if (empty($rows)) {
-            echo '<tr><td colspan="9"><em>'
+            echo '<tr><td colspan="10"><em>'
                 . esc_html__('No delivered orders were found for this week.', 'meals-db')
                 . '</em></td></tr>';
         }
@@ -364,6 +366,38 @@ class MealsDB_Order_Audit_Page {
             echo '<span class="dashicons dashicons-edit-page" title="' . esc_attr($note) . '"></span>';
         }
         echo '</td>';
+
+        // K17 ITEM 3: collection review. Three states — unreviewed is NOT unpaid.
+        // A collected row carries the amount (may be a partial) + method and posts
+        // a payment on finalize. Editable while draft; a read-only summary once
+        // finalized.
+        $cstate  = (string) ($row['collection_state'] ?? 'unreviewed');
+        $cmethod = (string) ($row['collection_method'] ?? '');
+        $camt_cents = isset($row['collected_amount_cents']) && $row['collected_amount_cents'] !== null
+            ? (int) $row['collected_amount_cents'] : null;
+        $camt_disp = $camt_cents !== null && class_exists('MealsDB_Money') ? MealsDB_Money::format($camt_cents) : '';
+        echo '<td class="oa-collection">';
+        if ($editable) {
+            echo '<select class="oa-collect-state">';
+            foreach (['unreviewed' => __('Unreviewed', 'meals-db'), 'collected' => __('Collected', 'meals-db'), 'outstanding' => __('Outstanding', 'meals-db')] as $val => $lbl) {
+                echo '<option value="' . esc_attr($val) . '"' . selected($cstate, $val, false) . '>' . esc_html($lbl) . '</option>';
+            }
+            echo '</select> ';
+            echo '<input type="text" class="oa-collect-amount small-text" style="width:70px;"'
+                . ' placeholder="' . esc_attr__('$ amt', 'meals-db') . '" value="' . esc_attr($camt_disp) . '"'
+                . ($cstate === 'collected' ? '' : ' style="display:none;width:70px;"') . ' /> ';
+            echo '<input type="text" class="oa-collect-method small-text" style="width:80px;"'
+                . ' placeholder="' . esc_attr__('method', 'meals-db') . '" value="' . esc_attr($cmethod) . '"'
+                . ($cstate === 'collected' ? '' : ' style="display:none;width:80px;"') . ' />';
+        } else {
+            $label = self::collection_label($cstate);
+            if ($cstate === 'collected') {
+                $label .= ' ' . $camt_disp . ($cmethod !== '' ? ' (' . $cmethod . ')' : '');
+            }
+            echo esc_html($label);
+        }
+        echo '</td>';
+
         echo '<td>';
         if ($editable) {
             $confirmed = ($rstatus === MealsDB_Order_Audit::ROW_CONFIRMED);
@@ -383,7 +417,7 @@ class MealsDB_Order_Audit_Page {
 
         // Editor row — one number input per item, a note field, and controls.
         echo '<tr class="oa-editor-row" data-order-id="' . esc_attr((string) $order_id)
-            . '" style="display:none;"><td colspan="9">';
+            . '" style="display:none;"><td colspan="10">';
         echo '<div class="oa-editor-items">';
         foreach ($items as $item) {
             if (!is_array($item)) {
@@ -481,6 +515,18 @@ class MealsDB_Order_Audit_Page {
                 return __('Edited', 'meals-db');
             default:
                 return __('Pending', 'meals-db');
+        }
+    }
+
+    /** K17: collection_state → display label. */
+    private static function collection_label(string $state): string {
+        switch ($state) {
+            case 'collected':
+                return __('Collected', 'meals-db');
+            case 'outstanding':
+                return __('Outstanding', 'meals-db');
+            default:
+                return __('Unreviewed', 'meals-db');
         }
     }
 

@@ -453,6 +453,40 @@ class MealsDB_Invoice_Generator {
     }
 
     /**
+     * K17: the invoice grand total in integer cents for a draft's `current`
+     * rows, reusing the EXACT per-row/per-line computations the serializers sum
+     * for the header — so the receivables-ledger program charge equals precisely
+     * what the finalized invoice bills. VAC = Σ vac_total_cents; SDNB = Σ
+     * line_total_cents (basic + tax − contribution) over both invoice lines.
+     *
+     * @param string $pipeline PIPELINE_VAC | PIPELINE_SDNB_LEGACY | PIPELINE_SDNB_NEW
+     * @param array<int|string, array<string,mixed>> $current
+     */
+    public static function draft_grand_total_cents(string $pipeline, array $current): int {
+        $total = 0;
+        if ($pipeline === 'vac') {
+            foreach ($current as $row) {
+                if (is_array($row)) {
+                    $total += (int) self::compute_vac_row_derived($row)['vac_total_cents'];
+                }
+            }
+            return $total;
+        }
+        // Both SDNB pipelines bill through the same line math (only the CSV
+        // shape differs); recompute_sdnb_legacy_lines is the single source of
+        // truth the serializer's header sum uses.
+        foreach ($current as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            foreach (self::recompute_sdnb_legacy_lines($row) as $line) {
+                $total += (int) ($line['line_total_cents'] ?? 0);
+            }
+        }
+        return $total;
+    }
+
+    /**
      * Validate a client row and return error messages.
      *
      * @param array  $client       Client row from meals_clients.

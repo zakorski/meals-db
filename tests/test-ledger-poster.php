@@ -232,6 +232,48 @@ pc(count($w->ledger) >= 6, '10: reversal APPENDS rows (charges+payment+voids+adj
 pc($ledger->balance_for('client', '11') === 0 && $ledger->balance_for('client', '12') === 0,
     '10: after voiding the payment and reversing charges, both client balances net to zero');
 
+// ---------------------------------------------------------------------------
+// 6: invoice finalize posts ONE program charge at the invoice total (not per
+// client), payer from the pipeline; idempotent; unfinalize blocks on a payment
+// and otherwise reverses.
+// ---------------------------------------------------------------------------
+$wi = new PosterWpdb(); $GLOBALS['wpdb'] = $wi;
+$li = new MealsDB_Ledger($wi);
+
+// SDNB draft #900, total $81,829.00 (amount injected — the grand total is
+// derived by the generator in production; here we assert the posting contract).
+$e1 = MealsDB_Ledger_Poster::post_invoice_charge(900,
+    ['pipeline' => 'sdnb_legacy', 'amount_cents' => 8182900, 'entry_date' => '2026-07-31'],
+    ['ledger' => $li, 'user' => 7]);
+pc($e1 > 0, '6: invoice charge posted');
+$prog_charges = array_filter($wi->ledger, static fn($x) => ($x['entry_type'] ?? '') === 'charge' && ($x['payer_type'] ?? '') === 'program');
+pc(count($prog_charges) === 1, '6: exactly ONE program charge for the whole invoice (not per client)');
+pc($li->balance_for('program', 'SDNB') === 8182900, '6: program balance = the invoice total');
+pc($wi->ledger[$e1]['payer_id'] === 'SDNB', '6: SDNB pipeline → SDNB payer');
+
+// Idempotent re-finalize.
+$e1b = MealsDB_Ledger_Poster::post_invoice_charge(900,
+    ['pipeline' => 'sdnb_legacy', 'amount_cents' => 8182900, 'entry_date' => '2026-07-31'],
+    ['ledger' => $li, 'user' => 7]);
+pc($e1b === $e1, '6: re-finalize is idempotent — same program charge, no double-bill');
+
+// VAC pipeline → VAC payer.
+$e2 = MealsDB_Ledger_Poster::post_invoice_charge(901,
+    ['pipeline' => 'vac', 'amount_cents' => 500000, 'entry_date' => '2026-07-31'],
+    ['ledger' => $li, 'user' => 7]);
+pc($wi->ledger[$e2]['payer_id'] === 'VAC', '6: VAC pipeline → VAC payer');
+
+// 7: a PARTIAL program remittance leaves the shortfall as the balance.
+$li->record_payment(['payer_type' => 'program', 'payer_id' => 'SDNB', 'source_type' => 'invoice',
+    'source_id' => 900, 'entry_date' => '2026-08-05', 'amount_cents' => 8100000, 'method' => 'remittance']);
+pc($li->balance_for('program', 'SDNB') === 8182900 - 8100000, '7: partial remittance leaves exactly the shortfall');
+
+// 9 (invoice): a payment against the draft blocks reverse; reverse otherwise nets.
+pc(count(MealsDB_Ledger_Poster::invoice_payments(900, $li)) === 1, '9: invoice_payments finds the remittance (unfinalize would block)');
+pc(count(MealsDB_Ledger_Poster::invoice_payments(901, $li)) === 0, '9: the VAC invoice has no payment (reopen allowed)');
+$rev = MealsDB_Ledger_Poster::reverse_invoice_charges(901, 'reopened', 7, $li);
+pc($rev === 1 && $li->balance_for('program', 'VAC') === 0, '10: reversing the VAC program charge nets it to zero');
+
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
 exit(empty($failures) ? 0 : 1);
