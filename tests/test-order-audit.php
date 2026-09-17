@@ -99,6 +99,9 @@ class OAWpdb extends wpdb {
         // keep the audit_log branch in case a future caller takes that path.
         if (stripos($table, 'audit_log') !== false) { $this->audit_log[] = $data; return 1; }
         if (stripos($table, 'event_log') !== false) { return 1; }
+        // K17 ledger table: the finalize wiring exercises the poster, but these
+        // service tests are not about ledger content — accept and ignore.
+        if (stripos($table, 'ledger_entries') !== false) { return 1; }
         if (self::is_rows_table($table)) {
             $rid = $this->next_row_id++;
             $this->audit_rows[$rid] = array_merge(['row_id' => $rid], $data);
@@ -173,6 +176,10 @@ class OAWpdb extends wpdb {
         return null;
     }
     public function get_results($sql, $output = ARRAY_A) {
+        // K17 ledger reads (poster's audit_payments / reverse) — empty ledger in
+        // these tests, so the unfinalize guard never false-blocks and reverse
+        // finds nothing to reverse.
+        if (stripos((string) $sql, 'ledger_entries') !== false) { return []; }
         // load_payload_from_rows: this audit's per-order rows, ordered by row_id.
         if (self::is_rows_table($sql) && preg_match('/audit_id = (\\d+)/', (string) $sql, $m)) {
             $aid = (int) $m[1]; $out = [];

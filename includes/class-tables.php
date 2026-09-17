@@ -86,6 +86,16 @@ class MealsDB_Tables
     public const ORDER_AUDIT_ROWS = 'meals_order_audit_rows';
 
     /**
+     * Receivables ledger (K17). One append-only, immutable row per financial
+     * event: a charge (positive cents), a payment (negative), or an adjustment.
+     * Balance for a payer = SUM(amount_cents). Charges post on finalize (audit →
+     * client, invoice → program); payments/adjustments are recorded against
+     * them. Corrections are new offsetting rows, never edits/deletes. Additive —
+     * schema-sync creates it; in all() so install/uninstall manage it.
+     */
+    public const LEDGER_ENTRIES = 'meals_ledger_entries';
+
+    /**
      * Retrieve all canonical table names.
      *
      * @return string[]
@@ -112,6 +122,7 @@ class MealsDB_Tables
             self::SLIP_BATCHES,
             self::ORDER_AUDITS,
             self::ORDER_AUDIT_ROWS,
+            self::LEDGER_ENTRIES,
         ];
     }
 }
