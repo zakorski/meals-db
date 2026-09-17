@@ -47,15 +47,23 @@ class OAWpdb extends wpdb {
     public $prefix = 'wp_';
     public $insert_id = 0;
     public $last_error = '';
-    public array $rows = [];       // audit_id => stored row (assoc)
-    public array $audit_log = [];  // captured MealsDB_Logger rows (raw SQL strings)
+    public array $rows = [];        // audit_id => stored header row (assoc)
+    public array $audit_rows = [];  // row_id => stored per-order row (assoc)
+    public array $audit_log = [];   // captured MealsDB_Logger rows (raw SQL strings)
     private $next_id = 1;
+    private $next_row_id = 1;
 
-    // TOCTOU simulation: when set, the NEXT update()/delete() flips the stored
-    // row's status BEFORE evaluating the WHERE — modelling a concurrent writer
-    // whose commit lands inside the service's get()-then-write window. The
-    // one-shot flag clears itself after firing.
+    // TOCTOU simulation: when set, the NEXT header update()/delete() flips the
+    // stored row's status BEFORE evaluating the WHERE — modelling a concurrent
+    // writer whose commit lands inside the service's get()-then-write window.
+    // The one-shot flag clears itself after firing.
     public $race_status_on_next_write = null;
+
+    // Table routing: the rows table name contains 'order_audit_rows', which the
+    // header table name ('order_audits') does not — check rows FIRST.
+    private static function is_rows_table($table): bool {
+        return stripos((string) $table, 'order_audit_rows') !== false;
+    }
 
     public function prepare($sql, ...$args) {
         if (count($args) === 1 && is_array($args[0])) { $args = $args[0]; }
@@ -64,6 +72,15 @@ class OAWpdb extends wpdb {
             $sql = preg_replace('/%[sdf]/', str_replace('$', '\\$', $repl), $sql, 1);
         }
         return $sql;
+    }
+    public function get_var($sql) {
+        // Only COUNT(*) of order_audit_rows for a given audit_id is queried.
+        if (self::is_rows_table($sql) && preg_match('/audit_id = (\\d+)/', (string) $sql, $m)) {
+            $aid = (int) $m[1]; $n = 0;
+            foreach ($this->audit_rows as $r) { if ((int) ($r['audit_id'] ?? 0) === $aid) { $n++; } }
+            return $n;
+        }
+        return 0;
     }
     /**
      * MealsDB_Logger::log() builds an INSERT via $wpdb->prepare() and then
@@ -82,12 +99,31 @@ class OAWpdb extends wpdb {
         // keep the audit_log branch in case a future caller takes that path.
         if (stripos($table, 'audit_log') !== false) { $this->audit_log[] = $data; return 1; }
         if (stripos($table, 'event_log') !== false) { return 1; }
+        if (self::is_rows_table($table)) {
+            $rid = $this->next_row_id++;
+            $this->audit_rows[$rid] = array_merge(['row_id' => $rid], $data);
+            return 1;
+        }
         $id = $this->next_id++;
         $this->insert_id = $id;
         $this->rows[$id] = array_merge(['audit_id' => $id], $data);
         return 1;
     }
     public function update($table, $data, $where, $f1 = null, $f2 = null) {
+        if (self::is_rows_table($table)) {
+            // Per-order row update, keyed by (audit_id, wc_order_id). No status
+            // guard here — the header write in mutate_row is the TOCTOU gate.
+            $aid = (int) ($where['audit_id'] ?? 0);
+            $oid = (int) ($where['wc_order_id'] ?? 0);
+            $hit = 0;
+            foreach ($this->audit_rows as $rid => $r) {
+                if ((int) ($r['audit_id'] ?? 0) === $aid && (int) ($r['wc_order_id'] ?? 0) === $oid) {
+                    $this->audit_rows[$rid] = array_merge($r, $data);
+                    $hit = 1;
+                }
+            }
+            return $hit;
+        }
         $id = (int) ($where['audit_id'] ?? 0);
         if (!isset($this->rows[$id])) { return 0; }
         if ($this->race_status_on_next_write !== null) {
@@ -104,6 +140,14 @@ class OAWpdb extends wpdb {
         return 1;
     }
     public function delete($table, $where, $formats = null) {
+        if (self::is_rows_table($table)) {
+            // delete_all_rows: drop every row for the audit_id (no status guard).
+            $aid = (int) ($where['audit_id'] ?? 0);
+            foreach ($this->audit_rows as $rid => $r) {
+                if ((int) ($r['audit_id'] ?? 0) === $aid) { unset($this->audit_rows[$rid]); }
+            }
+            return 1;
+        }
         $id = (int) ($where['audit_id'] ?? 0);
         if (!isset($this->rows[$id])) { return 0; }
         if ($this->race_status_on_next_write !== null) {
@@ -129,6 +173,16 @@ class OAWpdb extends wpdb {
         return null;
     }
     public function get_results($sql, $output = ARRAY_A) {
+        // load_payload_from_rows: this audit's per-order rows, ordered by row_id.
+        if (self::is_rows_table($sql) && preg_match('/audit_id = (\\d+)/', (string) $sql, $m)) {
+            $aid = (int) $m[1]; $out = [];
+            foreach ($this->audit_rows as $r) {
+                if ((int) ($r['audit_id'] ?? 0) === $aid) { $out[] = $r; }
+            }
+            usort($out, static fn($a, $b) => (int) $a['row_id'] <=> (int) $b['row_id']);
+            return $out;
+        }
+        // list_audits: header rows without the payload column.
         $out = [];
         foreach ($this->rows as $r) { $x = $r; unset($x['payload']); $out[] = $x; }
         return $out;
@@ -261,12 +315,14 @@ oa_chk(MealsDB_Order_Audit::find_by_week('2026-07-20') === 1, '3.3: find_by_week
 oa_chk(MealsDB_Order_Audit::find_by_week('2026-01-05') === 0, '3.3: find_by_week returns 0 when absent');
 
 // 4. Encryption failure → create returns 0 (fail closed, no plaintext row).
-//    Feed a payload json_encode cannot serialize (invalid UTF-8) so
-//    encode_payload returns false.
+//    Invalid UTF-8 in an ENCRYPTED column (client_name) makes json_encode —
+//    and thus encode_payload — fail, so encode_row_columns returns null and
+//    create aborts before inserting anything (header OR rows).
 $wpdb = oa_reset();
-$bad = [501 => ['broken' => "\xB1\x31"]];
+$bad = [501 => ['order_id' => 501, 'client_name' => "\xB1\x31", 'items' => []]];
 $audit_id = MealsDB_Order_Audit::create_for_week('2026-07-27', '2026-08-02', $bad);
-oa_chk($audit_id === 0 && empty($wpdb->rows), '3.4: unencodable payload → create fails closed, nothing stored');
+oa_chk($audit_id === 0 && empty($wpdb->rows) && empty($wpdb->audit_rows),
+    '3.4: unencodable row → create fails closed, nothing stored (header or rows)');
 
 // ---------------------------------------------------------------------------
 // Task 4 checks: confirm toggle / edit / revert
@@ -454,6 +510,56 @@ oa_chk(MealsDB_Order_Audit::unfinalize($id, 'found another slip') instanceof WP_
 $wpdb->race_status_on_next_write = 'finalized';
 oa_chk(MealsDB_Order_Audit::delete_draft($id) instanceof WP_Error, '6.4: delete_draft that loses the race → WP_Error, row survives');
 oa_chk(isset($GLOBALS['wpdb']->rows[$id]), '6.4: the finalized row was NOT deleted');
+
+// ---------------------------------------------------------------------------
+// Storage normalization checks: rows table + get() reconstruction + legacy
+// blob fallback + lazy materialization on a pre-refactor audit.
+// ---------------------------------------------------------------------------
+
+// N1: create writes one normalized row per order; PII encrypted at rest; the
+//     legacy payload column is left empty for new audits.
+[$wpdb, $id] = oa_make_audit();
+$aud_rows = array_values(array_filter($wpdb->audit_rows, static fn($r) => (int) $r['audit_id'] === $id));
+oa_chk(count($aud_rows) === 2, 'N1: one normalized row per order');
+oa_chk((int) ($aud_rows[0]['client_id'] ?? -1) === 9, 'N1: client_id stored plaintext/queryable');
+oa_chk(($aud_rows[0]['audit_status'] ?? '') === 'pending', 'N1: audit_status stored plaintext/queryable');
+oa_chk(strpos(json_encode($aud_rows), 'Pat Doe') === false, 'N1: client name NOT plaintext in the row (detail_enc encrypted)');
+oa_chk(($wpdb->rows[$id]['payload'] ?? 'x') === '', 'N1: legacy payload column left empty for new audits');
+oa_chk(($aud_rows[0]['delivery_date'] ?? '') === '2026-07-22', 'N1: delivery_date stored as queryable DATE');
+
+// N2: get() prefers the normalized rows over a STALE legacy blob on the header.
+[$wpdb, $id] = oa_make_audit();
+$wpdb->rows[$id]['payload'] = MealsDB_Encryption::encode_payload(
+    ['schema' => 1, 'generated' => [], 'current' => [999 => ['order_id' => 999, 'client_name' => 'STALE']]]
+);
+$a = MealsDB_Order_Audit::get($id);
+oa_chk(isset($a['payload']['current'][501]) && !isset($a['payload']['current'][999]),
+    'N2: get() reads the rows, never the stale blob, when rows exist');
+
+// N3: legacy fallback — a header with a blob, NO normalized rows, row_count>0
+//     (an audit from before the refactor) still reads via the blob.
+$wpdb = oa_reset();
+$entry700 = ['order_id' => 700, 'wp_user_id' => 0, 'client_id' => 0, 'client_name' => 'Legacy',
+    'client_last_name' => '', 'zone' => '', 'delivery_date' => '', 'items' => [],
+    'mains_count' => 0, 'sides_count' => 0, 'audit_status' => 'pending',
+    'edited_items' => [], 'added_items' => [], 'note' => '', 'audited_by' => 0, 'audited_at' => ''];
+$wpdb->rows[1] = [
+    'audit_id' => 1, 'week_start' => '2026-05-04', 'week_end' => '2026-05-10', 'status' => 'draft',
+    'payload' => MealsDB_Encryption::encode_payload(['schema' => 1, 'generated' => [700 => $entry700], 'current' => [700 => $entry700]]),
+    'rev' => 0, 'row_count' => 1, 'confirmed_count' => 0, 'edited_count' => 0,
+];
+$a = MealsDB_Order_Audit::get(1);
+oa_chk(isset($a['payload']['current'][700]) && $a['payload']['current'][700]['client_name'] === 'Legacy',
+    'N3: legacy blob is read when no rows exist and row_count > 0');
+
+// N4: mutating a legacy (blob-only) audit materializes its rows, then reads
+//     from them — the one-time-backfill safety net for a mid-deploy edit.
+oa_chk(MealsDB_Order_Audit::confirm_row(1, 700) === 'confirmed', 'N4: confirm on a legacy audit succeeds');
+$mat = array_values(array_filter($wpdb->audit_rows, static fn($r) => (int) $r['audit_id'] === 1));
+oa_chk(count($mat) === 1, 'N4: legacy audit materialized into a normalized row on first mutation');
+$a = MealsDB_Order_Audit::get(1);
+oa_chk(($a['payload']['current'][700]['audit_status'] ?? '') === 'confirmed',
+    'N4: subsequent get() reflects the row-stored change (now reading from rows)');
 
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }

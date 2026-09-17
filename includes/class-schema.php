@@ -865,7 +865,18 @@ class MealsDB_Schema {
                     'week_start'        => 'DATE NOT NULL',
                     'week_end'          => 'DATE NOT NULL',
                     'status'            => "ENUM('draft','finalized') NOT NULL DEFAULT 'draft'",
+                    // Legacy: the encrypted snapshot blob. Retired by the
+                    // audit-storage normalization (rows now live in
+                    // meals_order_audit_rows); retained (unused) so a mid-deploy
+                    // read can still fall back to it until a later manual drop.
                     'payload'           => 'LONGTEXT NOT NULL',
+                    // Write revision, bumped on every draft mutation. Forces the
+                    // status-guarded UPDATE to affect >=1 row on a genuine match
+                    // even when the denormalized counts are unchanged (a re-edit)
+                    // — the value used to always change because the old payload's
+                    // random IV differed every write; now `rev` provides that.
+                    // Doubles as a weak optimistic-lock counter.
+                    'rev'               => 'BIGINT UNSIGNED NOT NULL DEFAULT 0',
                     'row_count'         => 'INT UNSIGNED NOT NULL DEFAULT 0',
                     'confirmed_count'   => 'INT UNSIGNED NOT NULL DEFAULT 0',
                     'edited_count'      => 'INT UNSIGNED NOT NULL DEFAULT 0',
@@ -887,6 +898,67 @@ class MealsDB_Schema {
                         'name'    => 'idx_status',
                         'type'    => 'INDEX',
                         'columns' => ['status'],
+                    ],
+                ],
+            ],
+
+            // Per-order rows of a weekly order audit (audit-storage
+            // normalization, 2026-09). ONE row per (audit_id, wc_order_id).
+            // The base columns (client_id, delivery_date, counts, detail_enc) are
+            // the immutable snapshot — identical to what the old payload's
+            // `generated` held and never mutated after create. The mutable
+            // "current" review state (audit_status, edits_enc, audited_by/at) is
+            // what confirm/edit/revert change. get() rebuilds the old
+            // {generated, current} payload shape from these rows:
+            //   generated = base + pristine defaults (pending / [] / '' / 0)
+            //   current   = base + the stored mutable columns
+            // PII (client name, item text) is kept encrypted at rest in the
+            // *_enc columns (encode_payload, fail-closed) to preserve the old
+            // whole-payload posture; ids/dates/status stay plaintext + indexed.
+            MealsDB_Tables::ORDER_AUDIT_ROWS => [
+                'table'   => MealsDB_Tables::ORDER_AUDIT_ROWS,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'row_id'        => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'audit_id'      => 'BIGINT UNSIGNED NOT NULL',
+                    'wc_order_id'   => 'BIGINT UNSIGNED NOT NULL',
+                    'wp_user_id'    => 'BIGINT UNSIGNED NOT NULL DEFAULT 0',
+                    'client_id'     => 'BIGINT UNSIGNED NOT NULL DEFAULT 0',
+                    'zone'          => "VARCHAR(50) NOT NULL DEFAULT ''",
+                    // Nullable: the builder may yield '' when neither the
+                    // delivery occurrence nor a creation date is available.
+                    'delivery_date' => 'DATE NULL',
+                    'mains_count'   => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'sides_count'   => 'INT UNSIGNED NOT NULL DEFAULT 0',
+                    'audit_status'  => "ENUM('pending','confirmed','edited') NOT NULL DEFAULT 'pending'",
+                    'audited_by'    => 'BIGINT UNSIGNED NULL',
+                    'audited_at'    => 'DATETIME NULL',
+                    // Encrypted JSON: {client_name, client_last_name, items[]}.
+                    'detail_enc'    => 'LONGTEXT NULL',
+                    // Encrypted JSON: {edited_items{}, added_items[], note}.
+                    'edits_enc'     => 'LONGTEXT NULL',
+                    'created_at'    => 'DATETIME NOT NULL',
+                    'updated_at'    => 'DATETIME NOT NULL',
+                ],
+                'primary_key' => ['row_id'],
+                'indexes' => [
+                    // One row per order per audit; the mutation path UPDATEs on
+                    // this key and the backfill upserts against it (idempotent).
+                    [
+                        'name'    => 'uniq_audit_order',
+                        'type'    => 'UNIQUE',
+                        'columns' => ['audit_id', 'wc_order_id'],
+                    ],
+                    [
+                        'name'    => 'idx_audit',
+                        'type'    => 'INDEX',
+                        'columns' => ['audit_id'],
+                    ],
+                    // The receivables ledger (K17) charges per client.
+                    [
+                        'name'    => 'idx_client',
+                        'type'    => 'INDEX',
+                        'columns' => ['client_id'],
                     ],
                 ],
             ],

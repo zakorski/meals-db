@@ -227,6 +227,20 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
             <span id="mealsdb-private-enrich-result" style="margin-left:12px;"></span>
         </p>
 
+        <h2><?php echo esc_html__( 'Backfill Order-Audit Rows', 'meals-db' ); ?></h2>
+        <p class="description">
+            <?php echo esc_html__( 'One-time migration: convert existing weekly order audits from the legacy encrypted snapshot into the normalized per-order rows table (meals_order_audit_rows). Finalized audits are migrated exactly as stored and never change. Idempotent — audits already migrated are skipped, so this is safe to re-run. Dry Run reports what would change without writing.', 'meals-db' ); ?>
+        </p>
+        <p>
+            <button type="button" class="button" id="mealsdb-audit-rows-dry">
+                <?php echo esc_html__( 'Dry Run', 'meals-db' ); ?>
+            </button>
+            <button type="button" class="button button-primary" id="mealsdb-audit-rows-run">
+                <?php echo esc_html__( 'Backfill', 'meals-db' ); ?>
+            </button>
+            <span id="mealsdb-audit-rows-result" style="margin-left:12px;"></span>
+        </p>
+
         <h2><?php echo esc_html__( 'Sync Product Display Data', 'meals-db' ); ?></h2>
         <p class="description">
             <?php echo esc_html__( 'Rebuild the cached product display data (name, price, image, categories) used by the Quick Order page. This is done automatically when products are saved, but you can run a full sync here.', 'meals-db' ); ?>

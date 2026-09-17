@@ -75,6 +75,17 @@ class MealsDB_Tables
     public const ORDER_AUDITS = 'meals_order_audits';
 
     /**
+     * Per-order rows of a weekly order audit (audit-storage normalization,
+     * 2026-09). One row per (audit_id, wc_order_id): the immutable snapshot
+     * base plus the mutable "current" review state as queryable COLUMNS
+     * (audit_status now; expected-charge / collection state added by the
+     * receivables ledger, K17). Replaces the encrypted LONGTEXT payload blob
+     * on ORDER_AUDITS, which stays in place (unused) until a later manual drop.
+     * Additive — schema-sync creates it; in all() so install/uninstall manage it.
+     */
+    public const ORDER_AUDIT_ROWS = 'meals_order_audit_rows';
+
+    /**
      * Retrieve all canonical table names.
      *
      * @return string[]
@@ -100,6 +111,7 @@ class MealsDB_Tables
             self::INVOICE_DRAFTS,
             self::SLIP_BATCHES,
             self::ORDER_AUDITS,
+            self::ORDER_AUDIT_ROWS,
         ];
     }
 }

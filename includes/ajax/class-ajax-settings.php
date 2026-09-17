@@ -22,6 +22,7 @@ class MealsDB_Ajax_Settings {
         add_action( 'wp_ajax_mealsdb_preview_private_deactivation', [ self::class, 'preview_private_deactivation' ] );
         add_action( 'wp_ajax_mealsdb_run_private_deactivation', [ self::class, 'run_private_deactivation' ] );
         add_action( 'wp_ajax_mealsdb_enrich_private_skeletons', [ self::class, 'enrich_private_skeletons' ] );
+        add_action( 'wp_ajax_mealsdb_backfill_audit_rows', [ self::class, 'backfill_audit_rows' ] );
         add_action( 'wp_ajax_mealsdb_recalculate_allocations',  [ self::class, 'recalculate_allocations' ] );
         add_action( 'wp_ajax_mealsdb_resync_delivery_days', [ self::class, 'resync_delivery_days' ] );
     }
@@ -123,6 +124,27 @@ class MealsDB_Ajax_Settings {
 
         $dry_run = ! empty( $_POST['dry_run'] );
         $stats = MealsDB_Migration_Consolidated::enrich_existing( $dry_run );
+        wp_send_json_success( $stats );
+    }
+
+    /**
+     * One-time backfill for the order-audit storage normalization: materialise
+     * the normalized meals_order_audit_rows from every existing audit's legacy
+     * encrypted payload blob. Pass `dry_run=1` to count without writing.
+     * Idempotent — audits that already have rows are skipped.
+     */
+    public static function backfill_audit_rows(): void {
+        check_ajax_referer( 'mealsdb_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Unauthorized.', 'meals-db' ) ], 403 );
+        }
+        if ( class_exists( 'MealsDB_Rate_Limiter' )
+            && ! MealsDB_Rate_Limiter::check_rate_limit( 'settings_modify' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Rate limit exceeded. Please try again later.', 'meals-db' ) ], 429 );
+        }
+
+        $dry_run = ! empty( $_POST['dry_run'] );
+        $stats = MealsDB_Backfill_Audit_Rows::run( $dry_run );
         wp_send_json_success( $stats );
     }
 
