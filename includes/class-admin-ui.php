@@ -285,20 +285,18 @@ class MealsDB_Admin_UI {
         add_filter('manage_woocommerce_page_wc-orders_sortable_columns', [$this, 'register_delivery_date_sortable_column']);
         add_filter('woocommerce_order_list_table_prepare_items_query_args', [$this, 'sort_orders_by_delivery_date']);
 
-        // K16: surface the real order ENTRY time (_mealsdb_wallclock_created,
-        // stamped by Quick Order at creation) alongside the delivery date, on
-        // both the order-edit screen and the orders list. DISPLAY ONLY — this
-        // touches no billing surface and never writes date_created (which stays
-        // the operator-entered order date the allocation/billing engine reads).
-        // Mirrors the delivery-date column shape exactly so the two cannot drift.
-        // Registered AFTER the delivery-date column filter (both priority 20) so
-        // the Entered column, which inserts itself right after Order Date, lands
-        // between Order Date and Delivery Date — the intended reading order.
+        // K18: the order-edit box DISPLAYS and EDITS the real entry time
+        // (_mealsdb_wallclock_created) while date_created keeps ending in
+        // 00:00:00 — billing reads its UTC date. Core's own hour/minute inputs
+        // are hidden (they keep their prefilled 00:00 and post it unchanged, so
+        // date_created stays midnight byte-for-byte); a separate time field is
+        // bound to the wall-clock meta, and the meta is what the save handler
+        // writes — never date_created. Supersedes K16's read-only field + the
+        // separate Entered column (the merged Order Date column below renders
+        // date + entry time). NOTHING here calls set_date_created().
         add_action('woocommerce_admin_order_data_after_order_details', [$this, 'render_entered_time_field']);
-        add_filter('manage_woocommerce_page_wc-orders_columns', [$this, 'add_entered_time_order_column'], 20);
-        add_action('woocommerce_shop_order_list_table_custom_column', [$this, 'render_entered_time_order_column'], 10, 2);
-        add_filter('manage_woocommerce_page_wc-orders_sortable_columns', [$this, 'register_entered_time_sortable_column']);
-        add_filter('woocommerce_order_list_table_prepare_items_query_args', [$this, 'sort_orders_by_entered_time']);
+        add_action('woocommerce_process_shop_order_meta', [$this, 'save_entered_time_field'], 20, 2);
+        add_action('admin_head', [$this, 'hide_core_order_time_inputs']);
     }
 
     /**
@@ -784,13 +782,20 @@ class MealsDB_Admin_UI {
         $out = [];
         foreach ($columns as $key => $label) {
             if ($key === 'order_date' || $key === 'date') {
-                $out[$key] = __('Order Date', 'meals-db');
+                // K18 ITEM 3: REPLACE core's Date column (renders an
+                // uninformative "10 hours ago" off midnight date_created) with
+                // our own, in the SAME position — date from date_created + time
+                // from the wall-clock meta. Then Delivery Date after it.
+                $out['mealsdb_order_date']    = __('Order Date', 'meals-db');
                 $out['mealsdb_delivery_date'] = __('Delivery Date', 'meals-db');
                 continue;
             }
             $out[$key] = $label;
         }
-        // If WC ever renames the date column, still surface Delivery Date.
+        // If WC ever renames the date column, still surface both.
+        if (!isset($out['mealsdb_order_date'])) {
+            $out['mealsdb_order_date'] = __('Order Date', 'meals-db');
+        }
         if (!isset($out['mealsdb_delivery_date'])) {
             $out['mealsdb_delivery_date'] = __('Delivery Date', 'meals-db');
         }
@@ -807,6 +812,26 @@ class MealsDB_Admin_UI {
      */
     public function render_delivery_date_order_column(string $column, $order): void
     {
+        // K18 ITEM 3: the replacement Order Date column — date from
+        // date_created (the operator-chosen order date, in site time) + the
+        // entry time from _mealsdb_wallclock_created (site time). An order with
+        // no stamp renders date only — no fabricated time, no em dash, and NO
+        // relative "10 hours ago" string (Katie's complaint).
+        if ($column === 'mealsdb_order_date') {
+            if (!is_object($order) || !method_exists($order, 'get_date_created')) {
+                return;
+            }
+            $created = $order->get_date_created();
+            if (!$created) {
+                return;
+            }
+            $date_str = date_i18n(get_option('date_format'), $created->getTimestamp());
+            $time_str = method_exists($order, 'get_meta')
+                ? $this->format_entered_time_for_display((string) $order->get_meta('_mealsdb_wallclock_created', true), true)
+                : '';
+            echo esc_html($time_str !== '' ? $date_str . ' ' . $time_str : $date_str);
+            return;
+        }
         if ($column !== 'mealsdb_delivery_date') {
             return;
         }
@@ -836,6 +861,11 @@ class MealsDB_Admin_UI {
     public function register_delivery_date_sortable_column(array $columns): array
     {
         $columns['mealsdb_delivery_date'] = 'mealsdb_delivery_date';
+        // K18 ITEM 3: the Order Date column sorts on date_created (WC's own
+        // 'date' orderby) — NOT the wall-clock meta, which is absent on legacy
+        // orders and would scatter them. Ordering behaviour is unchanged from
+        // core's date column.
+        $columns['mealsdb_order_date'] = 'date';
         return $columns;
     }
 
@@ -874,13 +904,16 @@ class MealsDB_Admin_UI {
     }
 
     // =========================================================================
-    // K16 — order ENTRY time (display only)
+    // K18 — order ENTRY time (display AND edit). Supersedes K16.
     //
     // _mealsdb_wallclock_created is stamped by Quick Order (create_wc_order, K6
-    // ITEM 5) with gmdate() at creation, so it is UTC and is the true wall-clock
-    // entry time Katie asked for. date_created deliberately stays midnight of the
-    // operator-entered order date (allocation/billing window on it) — see
-    // class-quick-order-ajax.php:~1268 — so NOTHING here writes date_created.
+    // ITEM 5) with gmdate() at creation — UTC, the true wall-clock entry time.
+    // date_created deliberately stays midnight of the operator-entered order
+    // date (allocation/billing window + contribution month read its UTC date) —
+    // so NOTHING in this section writes date_created / calls set_date_created().
+    // The order-edit box now EDITS the entry time via a field bound to this meta
+    // (core's own hour/minute inputs are hidden), and the orders-list Order Date
+    // column shows date_created's date + this meta's time.
     // =========================================================================
 
     /**
@@ -889,7 +922,7 @@ class MealsDB_Admin_UI {
      * '' for an absent/unparseable stamp so callers can render nothing rather than
      * an em dash or a misleading fallback. Pure (WP funcs only), for unit testing.
      */
-    private function format_entered_time_for_display(string $utc_stamp): string
+    private function format_entered_time_for_display(string $utc_stamp, bool $time_only = false): string
     {
         $utc_stamp = trim($utc_stamp);
         if ($utc_stamp === '') {
@@ -902,35 +935,37 @@ class MealsDB_Admin_UI {
         if ($ts === false) {
             return '';
         }
-        $format = trim(get_option('date_format') . ' ' . get_option('time_format'));
+        // $time_only: just the wp-admin time format (the Order Date list column
+        // renders the date separately from date_created). Otherwise date + time.
+        $format = $time_only
+            ? (string) get_option('time_format')
+            : trim(get_option('date_format') . ' ' . get_option('time_format'));
         if ($format === '') {
-            $format = 'Y-m-d H:i';
+            $format = $time_only ? 'H:i' : 'Y-m-d H:i';
         }
         return wp_date($format, $ts);
     }
 
     /**
-     * Build the read-only "Entered (Meals DB)" field markup for the order-edit
-     * screen, or '' when the order carries no wall-clock stamp (legacy / non-QO
-     * orders — a row of empty labels on those is noise). Labelled distinctly so it
-     * never reads as an editable alternative to WooCommerce's own Date created.
-     * Pure (no permission / wc_get_order gating), for unit testing.
+     * K18 ITEM 1: the wall-clock entry time as an 'HH:MM' value for the
+     * <input type="time"> field, converted UTC → site time. '' when the order
+     * carries no stamp (the field renders empty; no fabricated time).
      */
-    private function build_entered_time_field_html(WC_Order $order): string
+    private function entered_time_value_for_input(WC_Order $order): string
     {
-        $display = $this->format_entered_time_for_display((string) $order->get_meta('_mealsdb_wallclock_created', true));
-        if ($display === '') {
+        $utc = trim((string) $order->get_meta('_mealsdb_wallclock_created', true));
+        if ($utc === '') {
             return '';
         }
-        return '<p class="form-field form-field-wide mealsdb-entered-time">'
-            . '<label>' . esc_html__('Entered (Meals DB)', 'meals-db') . '</label>'
-            . '<span class="mealsdb-entered-time-value">' . esc_html($display) . '</span>'
-            . '</p>';
+        $ts = strtotime($utc . ' UTC');
+        return $ts !== false ? wp_date('H:i', $ts) : '';
     }
 
     /**
-     * Render the entry-time field on the WC order-edit screen, beside the
-     * delivery-date field. Read-only; absent stamp renders nothing at all.
+     * K18 ITEM 1: render the EDITABLE entry-time field on the order-edit screen,
+     * beside the delivery-date field. Bound to _mealsdb_wallclock_created (UTC),
+     * shown in site time. Absent stamp → empty field (no fabricated time, no
+     * fallback to date_created). The paired save handler writes ONLY the meta.
      *
      * @param WC_Order|int $order Order instance (HPOS) or ID.
      */
@@ -944,100 +979,135 @@ class MealsDB_Admin_UI {
         if (!$wc_order) {
             return;
         }
-        echo $this->build_entered_time_field_html($wc_order); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built with esc_html/esc_html__ above
+        $time_val = $this->entered_time_value_for_input($wc_order);
+        wp_nonce_field('mealsdb_entered_time_save', 'mealsdb_entered_time_nonce');
+        ?>
+        <p class="form-field form-field-wide mealsdb-entered-time">
+            <label for="mealsdb_entered_time"><?php esc_html_e('Order time (entered)', 'meals-db'); ?></label>
+            <input type="time" name="mealsdb_entered_time" id="mealsdb_entered_time" value="<?php echo esc_attr($time_val); ?>" />
+            <span class="description">
+                <?php esc_html_e('The time this order was placed. Display only — it does not change the order date used for billing.', 'meals-db'); ?>
+            </span>
+        </p>
+        <?php
     }
 
     /**
-     * Insert the "Entered" column immediately after Order Date on the HPOS orders
-     * list. Registered after add_delivery_date_order_column (which relabels the
-     * date column and inserts Delivery Date after it), so the resulting reading
-     * order is Order Date -> Entered -> Delivery Date.
+     * K18 ITEM 2: persist the entered time to _mealsdb_wallclock_created ONLY.
+     * Combines the posted HH:MM with the order's date_created DATE (its UTC date
+     * = the operator's intended order date) in site time, converts to UTC, and
+     * writes the meta. NEVER calls set_date_created / touches date_created.
      *
-     * @param array<string,string> $columns
-     * @return array<string,string>
+     * Guarded by nonce + edit_shop_orders; audit-logged (committed record
+     * change — Pattern 6). Empty or malformed input leaves the meta alone
+     * (empty means "not specified", not "clear"); a blank/absent nonce means
+     * another save context and touches nothing.
+     *
+     * @param int   $order_id WC order ID.
+     * @param mixed $posted   Unused; the time comes from $_POST.
      */
-    public function add_entered_time_order_column(array $columns): array
+    public function save_entered_time_field($order_id, $posted = null): void
     {
-        $out = [];
-        foreach ($columns as $key => $label) {
-            $out[$key] = $label;
-            if ($key === 'order_date' || $key === 'date') {
-                $out['mealsdb_entered_time'] = __('Entered', 'meals-db');
+        $nonce = isset($_POST['mealsdb_entered_time_nonce'])
+            ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_entered_time_nonce']))
+            : '';
+        if ($nonce === '' || !wp_verify_nonce($nonce, 'mealsdb_entered_time_save')) {
+            return;
+        }
+        if (!current_user_can('edit_shop_orders') || !MealsDB_Permissions::can_access_plugin()) {
+            return;
+        }
+        $order_id = (int) $order_id;
+        $wc_order = $order_id > 0 && function_exists('wc_get_order') ? wc_get_order($order_id) : null;
+        if (!$wc_order) {
+            return;
+        }
+
+        $raw = array_key_exists('mealsdb_entered_time', $_POST)
+            ? sanitize_text_field(wp_unslash((string) $_POST['mealsdb_entered_time']))
+            : '';
+        // Empty → not specified; leave the existing meta. Malformed → same.
+        if ($raw === '' || !preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $raw)) {
+            return;
+        }
+
+        $created = $wc_order->get_date_created();
+        // The DATE component from date_created's absolute (UTC) timestamp equals
+        // the operator's intended order date (date_created is stored at midnight
+        // UTC). Rebuild from date_created so the time and date can never disagree
+        // — and if the operator just changed the date, core has already moved
+        // date_created (this handler runs at priority 20, after core's save).
+        $date_part = $created ? gmdate('Y-m-d', $created->getTimestamp()) : gmdate('Y-m-d');
+
+        try {
+            $site_tz = function_exists('wp_timezone') ? wp_timezone() : new DateTimeZone('UTC');
+            $local   = new DateTimeImmutable($date_part . ' ' . $raw . ':00', $site_tz);
+            $utc     = $local->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+        } catch (\Throwable $e) {
+            return; // unparseable — leave the meta alone
+        }
+
+        $existing = (string) $wc_order->get_meta('_mealsdb_wallclock_created', true);
+        if ($existing === $utc) {
+            return; // no-op
+        }
+
+        try {
+            $wc_order->update_meta_data('_mealsdb_wallclock_created', $utc);
+            $wc_order->save();
+            if (class_exists('MealsDB_Logger')) {
+                MealsDB_Logger::log(
+                    'order_entered_time',
+                    $order_id,
+                    '_mealsdb_wallclock_created',
+                    $existing !== '' ? $existing : null,
+                    $utc
+                );
+            }
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Admin UI] entered-time save failed: ' . $e->getMessage());
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'error',
+                    'category'    => 'quick_order',
+                    'subsystem'   => 'admin_ui',
+                    'event'       => 'entered_time.save_failed',
+                    'outcome'     => 'degraded',
+                    'message'     => $e->getMessage(),
+                    'entity_type' => 'wc_order',
+                    'entity_id'   => $order_id,
+                ]);
             }
         }
-        // If WC ever renames the date column, still surface the Entered column.
-        if (!isset($out['mealsdb_entered_time'])) {
-            $out['mealsdb_entered_time'] = __('Entered', 'meals-db');
-        }
-        return $out;
     }
 
     /**
-     * Render the Entered cell — the order's wall-clock stamp in site time, or an
-     * empty cell. Never falls back to date_created: distinguishing "entered at a
-     * known time" from "no stamp" is the whole point (a date_created fallback
-     * would show every legacy order as entered at midnight).
-     *
-     * @param string $column
-     * @param mixed  $order   WC_Order (HPOS passes the order object).
+     * K18 ITEM 1: hide WooCommerce core's hour/minute inputs on the order-edit
+     * screen (CSS only, scoped to that screen). The inputs stay in the DOM and
+     * post their prefilled 00:00, so core's save sets date_created to the date
+     * at midnight exactly as today — our separate time field owns the entry
+     * time. Leaving them in the DOM is deliberate: date_created behaviour is
+     * preserved byte for byte.
      */
-    public function render_entered_time_order_column(string $column, $order): void
+    public function hide_core_order_time_inputs(): void
     {
-        if ($column !== 'mealsdb_entered_time') {
+        if (!function_exists('get_current_screen')) {
             return;
         }
-        if (!is_object($order) || !method_exists($order, 'get_meta')) {
+        $screen = get_current_screen();
+        $is_order_edit = $screen && (
+            ($screen->id === 'woocommerce_page_wc-orders' && (($_GET['action'] ?? '') === 'edit'))
+            || $screen->id === 'shop_order'
+        );
+        if (!$is_order_edit) {
             return;
         }
-        $display = $this->format_entered_time_for_display((string) $order->get_meta('_mealsdb_wallclock_created', true));
-        if ($display !== '') {
-            echo esc_html($display);
-        }
+        echo '<style id="mealsdb-hide-core-order-time">'
+            . 'input#order_date_hour, input#order_date_minute,'
+            . '.order_data_column input.hour, .order_data_column input.minute { display:none !important; }'
+            . '</style>';
     }
 
-    /**
-     * Mark the Entered column sortable.
-     *
-     * @param array<string,string> $columns
-     * @return array<string,string>
-     */
-    public function register_entered_time_sortable_column(array $columns): array
-    {
-        $columns['mealsdb_entered_time'] = 'mealsdb_entered_time';
-        return $columns;
-    }
-
-    /**
-     * Sort the HPOS orders list by _mealsdb_wallclock_created. The stamp is a
-     * zero-padded 'Y-m-d H:i:s' string, so a lexical meta_value sort is
-     * chronologically correct — do NOT cast to a date type. meta_key +
-     * orderby=meta_value (NOT an EXISTS meta_query) keeps unstamped orders in the
-     * list rather than inner-joining them away, mirroring the delivery-date sort.
-     *
-     * NOTE: like the delivery-date sort, the placement of unstamped (NULL) rows
-     * is left to the DB and must be confirmed on staging; a plain meta_value
-     * orderby collates empties at one end, so "unstamped last in both directions"
-     * is not guaranteed without a DB-side COALESCE. Nothing is dropped either way.
-     *
-     * @param array<string,mixed> $query_args
-     * @return array<string,mixed>
-     */
-    public function sort_orders_by_entered_time(array $query_args): array
-    {
-        $orderby = isset($_GET['orderby']) ? sanitize_key(wp_unslash((string) $_GET['orderby'])) : '';
-        if ($orderby !== 'mealsdb_entered_time') {
-            return $query_args;
-        }
-        $order = 'DESC';
-        if (isset($_GET['order'])) {
-            $requested = strtoupper(sanitize_key(wp_unslash((string) $_GET['order'])));
-            $order = $requested === 'ASC' ? 'ASC' : 'DESC';
-        }
-        $query_args['meta_key'] = '_mealsdb_wallclock_created';
-        $query_args['orderby']  = 'meta_value';
-        $query_args['order']    = $order;
-        return $query_args;
-    }
 
     /**
      * Build a Quick Order clone URL for the provided order ID.
