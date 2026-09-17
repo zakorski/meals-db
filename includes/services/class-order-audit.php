@@ -545,6 +545,73 @@ class MealsDB_Order_Audit {
         return true;
     }
 
+    /**
+     * K17 ITEM 3: set the payment-collection review on a row (draft only). The
+     * three states are unreviewed / collected / outstanding — a row not yet
+     * reviewed must NOT read as unpaid. A collected row carries the amount
+     * (which may be a partial, less than expected — not an error) and a method;
+     * on finalize it posts a payment to the ledger. Non-collected states clear
+     * the amount/method. Returns the new state string, or WP_Error.
+     *
+     * Not part of the confirmed/edited progress counts — collection is an
+     * independent axis from the confirm/edit review.
+     *
+     * @param string   $state         unreviewed | collected | outstanding
+     * @param int|null $amount_cents  collected amount (ignored unless collected)
+     * @param string   $method        cash | cheque | etransfer | ... (collected only)
+     * @return string|WP_Error
+     */
+    public static function set_collection(int $audit_id, int $order_id, string $state, ?int $amount_cents, string $method = '') {
+        try {
+            $valid = ['unreviewed', 'collected', 'outstanding'];
+            if (!in_array($state, $valid, true)) {
+                return new WP_Error('bad_state', __('Invalid collection state.', 'meals-db'));
+            }
+            $audit = self::get($audit_id);
+            if ($audit === null) {
+                return new WP_Error('not_found', __('Audit not found.', 'meals-db'));
+            }
+            if ($audit['status'] !== self::STATUS_DRAFT) {
+                return new WP_Error('finalized', __('This audit is finalized and read-only.', 'meals-db'));
+            }
+            if (!isset($audit['payload']['current'][$order_id])) {
+                return new WP_Error('row_not_found', __('Order not found in this audit.', 'meals-db'));
+            }
+
+            self::ensure_rows_materialized($audit_id, $audit['payload']['current']);
+
+            global $wpdb;
+            $audits = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            // Same TOCTOU status-guard + rev bump as mutate_row (collection is a
+            // draft-only change; a concurrent finalize must make this lose).
+            $ok = $wpdb->update($audits,
+                ['rev' => (int) ($audit['rev'] ?? 0) + 1],
+                ['audit_id' => $audit_id, 'status' => self::STATUS_DRAFT], ['%d'], ['%d', '%s']);
+            if ($ok === false) {
+                return new WP_Error('db', __('Could not save the change.', 'meals-db'));
+            }
+            if ($ok === 0) {
+                return new WP_Error('conflict', __('This audit changed in another window; reload and try again.', 'meals-db'));
+            }
+
+            $collected = ($state === 'collected');
+            $rows_table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDIT_ROWS);
+            $rok = $wpdb->update($rows_table, [
+                'collection_state'       => $state,
+                'collected_amount_cents' => ($collected && $amount_cents !== null && $amount_cents > 0) ? (int) $amount_cents : null,
+                'collection_method'      => $collected ? (function_exists('mb_substr') ? mb_substr(trim($method), 0, 30) : substr(trim($method), 0, 30)) : null,
+                'updated_at'             => gmdate('Y-m-d H:i:s'),
+            ], ['audit_id' => $audit_id, 'wc_order_id' => $order_id], ['%s', '%d', '%s', '%s'], ['%d', '%d']);
+            if ($rok === false) {
+                return new WP_Error('db', __('Could not save the change.', 'meals-db'));
+            }
+            return $state;
+        } catch (\Throwable $e) {
+            self::log_error('set_collection', $e);
+            return new WP_Error('internal', __('Could not save the change.', 'meals-db'));
+        }
+    }
+
     /** Discard an edit (or a confirm) back to pristine pending. @return true|WP_Error */
     public static function revert_row(int $audit_id, int $order_id) {
         $result = self::mutate_row($audit_id, $order_id, static function (array $row) {
@@ -687,6 +754,14 @@ class MealsDB_Order_Audit {
                 return new WP_Error('conflict', __('This audit changed in another window; reload and try again.', 'meals-db'));
             }
             self::log_lifecycle('order_audit_finalized', $audit_id, 'status', self::STATUS_DRAFT, self::STATUS_FINALIZED);
+
+            // K17: post the client charges (+ payments for collected rows) to the
+            // receivables ledger. Isolated + best-effort — the audit IS finalized
+            // and the charge side is idempotent (dedup), so a ledger hiccup must
+            // never unwind a completed finalize; it can be re-driven.
+            if (class_exists('MealsDB_Ledger_Poster')) {
+                MealsDB_Ledger_Poster::post_audit_charges($audit_id);
+            }
             return true;
         } catch (\Throwable $e) {
             self::log_error('finalize', $e);
@@ -715,6 +790,22 @@ class MealsDB_Order_Audit {
             if ($audit['status'] !== self::STATUS_FINALIZED) {
                 return new WP_Error('not_finalized', __('Only a finalized audit can be reopened.', 'meals-db'));
             }
+
+            // K17 ITEM 5: a payment recorded against any of this audit's orders is
+            // a real-world event — reversing the charge beneath it would leave an
+            // unexplained credit. BLOCK the reopen and name the count. (Checked
+            // before the status flip so a blocked audit stays finalized.)
+            if (class_exists('MealsDB_Ledger_Poster')) {
+                $payments = MealsDB_Ledger_Poster::audit_payments($audit_id);
+                if (!empty($payments)) {
+                    return new WP_Error('has_payments', sprintf(
+                        /* translators: %d = number of payments */
+                        __('Cannot reopen: %d payment(s) are recorded against this audit\'s orders. Void them first.', 'meals-db'),
+                        count($payments)
+                    ));
+                }
+            }
+
             global $wpdb;
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
             // TOCTOU guard: only a still-finalized row may reopen ($ok === 0 = a
@@ -731,6 +822,13 @@ class MealsDB_Order_Audit {
                 return new WP_Error('conflict', __('This audit changed in another window; reload and try again.', 'meals-db'));
             }
             self::log_lifecycle('order_audit_unfinalized', $audit_id, 'reason', null, $reason);
+
+            // K17 ITEM 5: reverse the posted charges with offsetting adjustments
+            // (never a delete) so the balance returns to its prior state with the
+            // history intact. Safe now that we know no payments block the reopen.
+            if (class_exists('MealsDB_Ledger_Poster')) {
+                MealsDB_Ledger_Poster::reverse_audit_charges($audit_id, 'audit reopened: ' . $reason);
+            }
             return true;
         } catch (\Throwable $e) {
             self::log_error('unfinalize', $e);
@@ -947,7 +1045,8 @@ class MealsDB_Order_Audit {
         $rows  = $wpdb->get_results($wpdb->prepare(
             "SELECT wc_order_id, wp_user_id, client_id, zone, delivery_date,
                     mains_count, sides_count, audit_status, audited_by, audited_at,
-                    detail_enc, edits_enc
+                    detail_enc, edits_enc,
+                    expected_charge_cents, collection_state, collected_amount_cents, collection_method
              FROM `{$table}` WHERE audit_id = %d ORDER BY row_id ASC",
             $audit_id
         ), ARRAY_A);
@@ -1019,6 +1118,20 @@ class MealsDB_Order_Audit {
             'note'         => (string) ($edits['note'] ?? ''),
             'audited_by'   => (int) ($r['audited_by'] ?? 0),
             'audited_at'   => (string) ($r['audited_at'] ?? ''),
+            // K17 receivables: per-order charge + collection review state.
+            'expected_charge_cents'  => isset($r['expected_charge_cents']) && $r['expected_charge_cents'] !== null
+                ? (int) $r['expected_charge_cents'] : null,
+            'collection_state'       => (string) ($r['collection_state'] ?? 'unreviewed'),
+            'collected_amount_cents' => isset($r['collected_amount_cents']) && $r['collected_amount_cents'] !== null
+                ? (int) $r['collected_amount_cents'] : null,
+            'collection_method'      => (string) ($r['collection_method'] ?? ''),
+        ];
+        // The generated snapshot carries the pristine collection defaults.
+        $generated += [
+            'expected_charge_cents'  => null,
+            'collection_state'       => 'unreviewed',
+            'collected_amount_cents' => null,
+            'collection_method'      => '',
         ];
         return ['generated' => $generated, 'current' => $current];
     }

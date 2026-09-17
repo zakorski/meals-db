@@ -937,6 +937,21 @@ class MealsDB_Schema {
                     'detail_enc'    => 'LONGTEXT NULL',
                     // Encrypted JSON: {edited_items{}, added_items[], note}.
                     'edits_enc'     => 'LONGTEXT NULL',
+                    // Receivables ledger (K17): the per-order client-side charge
+                    // and the operator's collection review. expected_charge_cents
+                    // is the computed amount owed (Private = order total at
+                    // audit-adjusted qty; SDNB/Veteran = contribution + delivery
+                    // fee); recomputed on edit, NULL until known. collection_state
+                    // is the three-way review: unreviewed (not yet looked at) vs
+                    // collected vs outstanding — "we haven't asked" is NOT unpaid.
+                    // On finalize a collected row posts a payment to the ledger;
+                    // the ledger is the durable record, these columns are review
+                    // state. collected_amount_cents may be < expected (a partial
+                    // collection is normal, not an error).
+                    'expected_charge_cents'  => 'BIGINT NULL',
+                    'collection_state'       => "ENUM('unreviewed','collected','outstanding') NOT NULL DEFAULT 'unreviewed'",
+                    'collected_amount_cents' => 'BIGINT NULL',
+                    'collection_method'      => 'VARCHAR(30) NULL',
                     'created_at'    => 'DATETIME NOT NULL',
                     'updated_at'    => 'DATETIME NOT NULL',
                 ],
@@ -959,6 +974,64 @@ class MealsDB_Schema {
                         'name'    => 'idx_client',
                         'type'    => 'INDEX',
                         'columns' => ['client_id'],
+                    ],
+                ],
+            ],
+
+            // Receivables ledger (K17). Append-only, immutable financial events:
+            // charge (+cents) / payment (-cents) / adjustment. Balance for a
+            // payer = SUM(amount_cents). Money is integer cents throughout
+            // (MealsDB_Money) — never DECIMAL/float. No row is ever UPDATEd
+            // except to stamp voided_by_entry_id on a corrected entry;
+            // corrections are new offsetting rows.
+            MealsDB_Tables::LEDGER_ENTRIES => [
+                'table'   => MealsDB_Tables::LEDGER_ENTRIES,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'entry_id'           => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    'payer_type'         => "ENUM('client','program') NOT NULL",
+                    // client_id as a string, or 'SDNB' / 'VAC'.
+                    'payer_id'           => 'VARCHAR(40) NOT NULL',
+                    'entry_type'         => "ENUM('charge','payment','adjustment') NOT NULL",
+                    'source_type'        => "ENUM('order','invoice','manual') NOT NULL",
+                    // wc_order_id or invoice draft_id; NULL for a manual payment.
+                    'source_id'          => 'BIGINT UNSIGNED NULL',
+                    // When it happened (delivery date / payment date), not keyed.
+                    'entry_date'         => 'DATE NOT NULL',
+                    // SIGNED: charge positive, payment negative.
+                    'amount_cents'       => 'BIGINT NOT NULL',
+                    'method'             => 'VARCHAR(30) NULL',
+                    'reference'          => 'VARCHAR(100) NULL',
+                    'note'               => 'VARCHAR(500) NULL',
+                    // Idempotency for CHARGES only. MySQL has no partial UNIQUE,
+                    // so this holds "source_type:source_id:payer_type:payer_id"
+                    // for a charge and NULL for payments/adjustments (many NULLs
+                    // don't collide, so partial payments are unconstrained). The
+                    // UNIQUE below makes a repeated finalize a no-op, not a
+                    // double-bill — exactly the directive's per-charge UNIQUE.
+                    'charge_dedup'       => 'VARCHAR(150) NULL',
+                    'created_by'         => 'BIGINT UNSIGNED NULL',
+                    'created_at'         => 'DATETIME NOT NULL',
+                    // Set on the ORIGINAL entry when a later offsetting row voids
+                    // it (the only permitted UPDATE — a link, not the amount).
+                    'voided_by_entry_id' => 'BIGINT UNSIGNED NULL',
+                ],
+                'primary_key' => ['entry_id'],
+                'indexes' => [
+                    [
+                        'name'    => 'idx_payer',
+                        'type'    => 'INDEX',
+                        'columns' => ['payer_type', 'payer_id', 'entry_date'],
+                    ],
+                    [
+                        'name'    => 'idx_source',
+                        'type'    => 'INDEX',
+                        'columns' => ['source_type', 'source_id'],
+                    ],
+                    [
+                        'name'    => 'uniq_charge',
+                        'type'    => 'UNIQUE',
+                        'columns' => ['charge_dedup'],
                     ],
                 ],
             ],
