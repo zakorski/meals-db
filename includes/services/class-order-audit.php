@@ -240,41 +240,53 @@ class MealsDB_Order_Audit {
      */
     public static function create_for_week(string $week_start, string $week_end, array $rows): int {
         try {
-            $payload = [
-                'schema'    => self::PAYLOAD_SCHEMA,
-                'generated' => $rows,   // immutable snapshot of what the system produced
-                'current'   => $rows,   // editable working copy — starts identical
-            ];
-
-            $encoded = MealsDB_Encryption::encode_payload($payload);
-            if ($encoded === false) {
-                // QW-2 fail-closed: refuse to store PII as plaintext. Surface
-                // as a degraded event on the operational trunk (STR-LOG: this
-                // is an attempt/failure, NOT a committed artifact change).
-                self::record_degraded('create.encrypt_failed', 'Order audit not created: payload encryption failed.');
-                return 0;
+            // Pre-encode every row's PII columns up front, so a single encryption
+            // failure aborts the whole create (QW-2 fail-closed) BEFORE any write
+            // — never a partially-stored audit, never plaintext. encode_row_columns
+            // returns null iff detail/edits encryption failed.
+            $db_rows = [];
+            foreach ($rows as $entry) {
+                $encoded = self::encode_row_columns((array) $entry);
+                if ($encoded === null) {
+                    self::record_degraded('create.encrypt_failed', 'Order audit not created: row encryption failed.');
+                    return 0;
+                }
+                $db_rows[] = $encoded;
             }
 
             global $wpdb;
-            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            $audits = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
 
-            $ok = $wpdb->insert($table, [
+            // The legacy `payload` column is retired but still NOT NULL — write
+            // '' (get() reconstructs from rows and never reads it again). rev
+            // starts at 0; it is bumped on every draft mutation (see mutate_row).
+            $ok = $wpdb->insert($audits, [
                 'week_start'      => $week_start,
                 'week_end'        => $week_end,
                 'status'          => self::STATUS_DRAFT,
-                'payload'         => $encoded,
+                'payload'         => '',
+                'rev'             => 0,
                 'row_count'       => count($rows),
                 'confirmed_count' => 0,
                 'edited_count'    => 0,
                 'created_by'      => function_exists('get_current_user_id') ? (int) get_current_user_id() : null,
                 'created_at'      => gmdate('Y-m-d H:i:s'),
-            ], ['%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d', '%s']);
+            ], ['%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d', '%d', '%s']);
 
             if ($ok === false) {
                 return 0;
             }
 
             $audit_id = (int) $wpdb->insert_id;
+
+            if (!self::insert_rows($audit_id, $db_rows)) {
+                // Roll back a partially-created audit so a retry (find_by_week
+                // returns 0) starts clean rather than resurrecting a half-row set.
+                self::delete_all_rows($audit_id);
+                $wpdb->delete($audits, ['audit_id' => $audit_id], ['%d']);
+                self::record_degraded('create.rows_insert_failed', 'Order audit not created: row insert failed.');
+                return 0;
+            }
 
             // Audit: a new audit record was created (committed artifact → audit
             // log, NOT the operational trunk — STR-LOG boundary). log_lifecycle
@@ -332,7 +344,7 @@ class MealsDB_Order_Audit {
             $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
 
             $row = $wpdb->get_row($wpdb->prepare(
-                "SELECT audit_id, week_start, week_end, status, payload,
+                "SELECT audit_id, week_start, week_end, status, payload, rev,
                         row_count, confirmed_count, edited_count,
                         created_by, created_at, finalized_by, finalized_at,
                         unfinalized_at, unfinalize_reason
@@ -344,11 +356,28 @@ class MealsDB_Order_Audit {
                 return null;
             }
 
-            $payload = MealsDB_Encryption::decode_payload((string) ($row['payload'] ?? ''));
-            if (!is_array($payload)) {
-                // Undecryptable / corrupt — return null rather than handing
-                // back raw ciphertext or a partial array.
-                return null;
+            // Rebuild the {schema, generated, current} payload shape from the
+            // normalized rows so every existing caller (grid, AJAX, finalize)
+            // keeps working unchanged.
+            $payload = self::load_payload_from_rows($audit_id);
+            if ($payload === null) {
+                if ((int) ($row['row_count'] ?? 0) === 0) {
+                    // A legitimately EMPTY audit (0 delivered orders) has no rows
+                    // — that is correct, not a missing-backfill. Reconstruct the
+                    // empty payload rather than falling through to the blob.
+                    $payload = ['schema' => self::PAYLOAD_SCHEMA, 'generated' => [], 'current' => []];
+                } else {
+                    // row_count > 0 but no normalized rows: an audit created
+                    // before this refactor that has not been backfilled yet — fall
+                    // back to the legacy encrypted blob so a mid-deploy read still
+                    // works. Undecodable → null, exactly as before (never raw
+                    // ciphertext, never a partial array).
+                    $legacy = MealsDB_Encryption::decode_payload((string) ($row['payload'] ?? ''));
+                    if (!is_array($legacy)) {
+                        return null;
+                    }
+                    $payload = $legacy;
+                }
             }
 
             $row['payload'] = $payload;
@@ -560,32 +589,54 @@ class MealsDB_Order_Audit {
                 if (($r['audit_status'] ?? '') === self::ROW_EDITED)    { $edited++; }
             }
 
-            $encoded = MealsDB_Encryption::encode_payload($payload);
-            if ($encoded === false) {
-                // QW-2 fail closed: refuse the mutation rather than store plaintext.
-                self::record_degraded('mutate.encrypt_failed', 'Order-audit row change dropped: payload encryption failed.');
+            // QW-2 fail closed: encode the changed row's mutable PII column BEFORE
+            // any write; refuse the mutation rather than store plaintext.
+            $edits_enc = MealsDB_Encryption::encode_payload(self::edits_payload($new_row));
+            if ($edits_enc === false) {
+                self::record_degraded('mutate.encrypt_failed', 'Order-audit row change dropped: row encryption failed.');
                 return new WP_Error('encrypt_failed', __('Could not save the change (encryption unavailable).', 'meals-db'));
             }
 
+            // A legacy audit read via the blob fallback has no normalized rows
+            // yet — materialise them from the current set before we UPDATE one.
+            // No-op (a single COUNT) once the rows exist, which is the steady state.
+            self::ensure_rows_materialized($audit_id, $payload['current']);
+
             global $wpdb;
-            $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
-            // TOCTOU guard: constrain the UPDATE to a still-draft row. Between
-            // the get() above and this write another request could finalize the
-            // audit; without status in the WHERE we'd silently mutate a
-            // finalized (read-only) record. $ok === 0 means the row is no longer
-            // a draft — reliable here because encode_payload's random IV makes
-            // the payload differ every call, so a genuine match always changes
-            // >=1 row (affected-rows==0 iff the WHERE no longer selects).
-            $ok = $wpdb->update($table, [
-                'payload'         => $encoded,
+            $audits = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            // TOCTOU guard: constrain the header UPDATE to a still-draft row.
+            // Between the get() above and this write another request could
+            // finalize the audit; without status in the WHERE we'd mutate a
+            // finalized (read-only) record. `rev = rev + 1` guarantees the value
+            // changes even when the denormalized counts don't (a re-edit leaves
+            // edited_count identical), so a genuine match always affects 1 row —
+            // affected-rows==0 iff the WHERE no longer selects (a finalize won
+            // the race). This restores the guarantee the random-IV payload used
+            // to provide for free.
+            $ok = $wpdb->update($audits, [
+                'rev'             => (int) ($audit['rev'] ?? 0) + 1,
                 'confirmed_count' => $confirmed,
                 'edited_count'    => $edited,
-            ], ['audit_id' => $audit_id, 'status' => self::STATUS_DRAFT], ['%s', '%d', '%d'], ['%d', '%s']);
+            ], ['audit_id' => $audit_id, 'status' => self::STATUS_DRAFT], ['%d', '%d', '%d'], ['%d', '%s']);
             if ($ok === false) {
                 return new WP_Error('db', __('Could not save the change.', 'meals-db'));
             }
             if ($ok === 0) {
                 return new WP_Error('conflict', __('This audit changed in another window; reload and try again.', 'meals-db'));
+            }
+
+            // Persist the single changed row's mutable columns. Reached only
+            // after the header write confirmed the audit was draft this instant.
+            $rows_table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDIT_ROWS);
+            $rok = $wpdb->update($rows_table, [
+                'audit_status' => (string) $new_row['audit_status'],
+                'edits_enc'    => $edits_enc,
+                'audited_by'   => ((int) ($new_row['audited_by'] ?? 0)) ?: null,
+                'audited_at'   => ((string) ($new_row['audited_at'] ?? '')) !== '' ? (string) $new_row['audited_at'] : null,
+                'updated_at'   => gmdate('Y-m-d H:i:s'),
+            ], ['audit_id' => $audit_id, 'wc_order_id' => $order_id], ['%s', '%s', '%d', '%s', '%s'], ['%d', '%d']);
+            if ($rok === false) {
+                return new WP_Error('db', __('Could not save the change.', 'meals-db'));
             }
             return (string) $new_row['audit_status'];
         } catch (\Throwable $e) {
@@ -688,6 +739,77 @@ class MealsDB_Order_Audit {
     }
 
     /**
+     * One-time migration (audit-storage normalization): materialise the
+     * normalized rows for ONE audit from its legacy encrypted payload blob.
+     *
+     * Idempotent — an audit that already has rows is skipped, so re-running the
+     * backfill is safe. Finalized audits migrate BYTE-FAITHFULLY: the frozen
+     * `current` entries (their confirmed/edited state) are copied verbatim into
+     * rows, so get() reconstructs identical data and no finalized record changes
+     * value. Fail-closed per audit: an encryption failure aborts THIS audit
+     * (no partial row set) rather than storing plaintext.
+     *
+     * @return array{status:string, rows:int} status ∈
+     *   skipped_has_rows | migrated | empty | undecodable | error
+     */
+    public static function backfill_rows_for(int $audit_id, bool $dry_run = false): array {
+        try {
+            if ($audit_id <= 0) {
+                return ['status' => 'error', 'rows' => 0];
+            }
+            global $wpdb;
+            $audits     = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDITS);
+            $rows_table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDIT_ROWS);
+
+            // Idempotent: never touch an audit that already has rows.
+            $existing = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM `{$rows_table}` WHERE audit_id = %d", $audit_id
+            ));
+            if ($existing > 0) {
+                return ['status' => 'skipped_has_rows', 'rows' => 0];
+            }
+
+            $hdr = $wpdb->get_row($wpdb->prepare(
+                "SELECT payload, row_count FROM `{$audits}` WHERE audit_id = %d LIMIT 1", $audit_id
+            ), ARRAY_A);
+            if (!is_array($hdr)) {
+                return ['status' => 'error', 'rows' => 0];
+            }
+            if ((int) ($hdr['row_count'] ?? 0) === 0) {
+                // Empty audit (0 delivered orders) — nothing to materialise; get()
+                // already reconstructs the empty payload from row_count.
+                return ['status' => 'empty', 'rows' => 0];
+            }
+
+            $payload = MealsDB_Encryption::decode_payload((string) ($hdr['payload'] ?? ''));
+            if (!is_array($payload) || !isset($payload['current']) || !is_array($payload['current'])) {
+                return ['status' => 'undecodable', 'rows' => 0];
+            }
+
+            $db_rows = [];
+            foreach ($payload['current'] as $entry) {
+                $encoded = self::encode_row_columns((array) $entry);
+                if ($encoded === null) {
+                    return ['status' => 'error', 'rows' => 0];
+                }
+                $db_rows[] = $encoded;
+            }
+
+            if ($dry_run) {
+                return ['status' => 'migrated', 'rows' => count($db_rows)];
+            }
+            if (!self::insert_rows($audit_id, $db_rows)) {
+                self::delete_all_rows($audit_id);
+                return ['status' => 'error', 'rows' => 0];
+            }
+            return ['status' => 'migrated', 'rows' => count($db_rows)];
+        } catch (\Throwable $e) {
+            self::log_error('backfill_rows_for', $e);
+            return ['status' => 'error', 'rows' => 0];
+        }
+    }
+
+    /**
      * Delete a DRAFT (never a finalized record) so a bad pull can be redone —
      * find_by_week() otherwise blocks regenerating the week. @return true|WP_Error
      */
@@ -710,6 +832,10 @@ class MealsDB_Order_Audit {
             if ($ok === false || $ok === 0) {
                 return new WP_Error('db', __('Could not delete the audit draft.', 'meals-db'));
             }
+            // Header gone (draft-guarded) — now drop its normalized rows. Order
+            // matters: if the header delete lost a finalize race ($ok===0 above)
+            // we return before touching the rows, so a finalized audit keeps them.
+            self::delete_all_rows($audit_id);
             self::log_lifecycle('order_audit_draft_deleted', $audit_id, 'week_start', (string) $audit['week_start'], null);
             return true;
         } catch (\Throwable $e) {
@@ -719,7 +845,215 @@ class MealsDB_Order_Audit {
     }
 
     // -----------------------------------------------------------------------
-    // Private helpers
+    // Private helpers — normalized row storage
+    // -----------------------------------------------------------------------
+
+    /**
+     * The immutable snapshot fields kept encrypted at rest (PII: client name +
+     * item text). Wrapped so encode_payload's fail-closed contract covers them.
+     */
+    private static function detail_payload(array $entry): array {
+        return [
+            'client_name'      => (string) ($entry['client_name'] ?? ''),
+            'client_last_name' => (string) ($entry['client_last_name'] ?? ''),
+            'items'            => array_values((array) ($entry['items'] ?? [])),
+        ];
+    }
+
+    /**
+     * The mutable "current" review fields kept encrypted at rest. edited_items
+     * is a map (item_key => qty) — its keys must be preserved, so NOT
+     * array_values(); added_items is a plain list.
+     */
+    private static function edits_payload(array $entry): array {
+        return [
+            'edited_items' => (array) ($entry['edited_items'] ?? []),
+            'added_items'  => array_values((array) ($entry['added_items'] ?? [])),
+            'note'         => (string) ($entry['note'] ?? ''),
+        ];
+    }
+
+    /**
+     * Map one in-memory audit entry to its DB column set (sans audit_id /
+     * timestamps, which insert_rows adds). Returns null iff encrypting either
+     * PII column failed (QW-2 fail-closed) — the caller must then abort.
+     *
+     * @return array<string, mixed>|null
+     */
+    private static function encode_row_columns(array $entry): ?array {
+        $detail = MealsDB_Encryption::encode_payload(self::detail_payload($entry));
+        $edits  = MealsDB_Encryption::encode_payload(self::edits_payload($entry));
+        if ($detail === false || $edits === false) {
+            return null;
+        }
+        $delivery   = (string) ($entry['delivery_date'] ?? '');
+        $audited_at = (string) ($entry['audited_at'] ?? '');
+        return [
+            'wc_order_id'   => (int) ($entry['order_id'] ?? 0),
+            'wp_user_id'    => (int) ($entry['wp_user_id'] ?? 0),
+            'client_id'     => (int) ($entry['client_id'] ?? 0),
+            'zone'          => (string) ($entry['zone'] ?? ''),
+            // DATE column: store NULL for a non-Y-m-d value ('' from the builder).
+            'delivery_date' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $delivery) ? $delivery : null,
+            'mains_count'   => (int) ($entry['mains_count'] ?? 0),
+            'sides_count'   => (int) ($entry['sides_count'] ?? 0),
+            'audit_status'  => (string) ($entry['audit_status'] ?? self::ROW_PENDING),
+            'audited_by'    => ((int) ($entry['audited_by'] ?? 0)) ?: null,
+            'audited_at'    => $audited_at !== '' ? $audited_at : null,
+            'detail_enc'    => $detail,
+            'edits_enc'     => $edits,
+        ];
+    }
+
+    /**
+     * Insert a pre-encoded row set for an audit. Returns false on the first
+     * failed insert (caller rolls back). $db_rows come from encode_row_columns().
+     */
+    private static function insert_rows(int $audit_id, array $db_rows): bool {
+        global $wpdb;
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDIT_ROWS);
+        $now   = gmdate('Y-m-d H:i:s');
+        foreach ($db_rows as $r) {
+            $r['audit_id']   = $audit_id;
+            $r['created_at'] = $now;
+            $r['updated_at'] = $now;
+            if ($wpdb->insert($table, $r) === false) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Delete every normalized row for an audit (create rollback / delete_draft). */
+    private static function delete_all_rows(int $audit_id): void {
+        global $wpdb;
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDIT_ROWS);
+        $wpdb->delete($table, ['audit_id' => $audit_id], ['%d']);
+    }
+
+    /**
+     * Rebuild the {schema, generated, current} payload from the normalized rows.
+     * Returns null when the audit has NO rows (caller falls back to the legacy
+     * blob) or when a row's PII columns won't decode (treated as undecodable, as
+     * the old whole-payload path did — never a partial set).
+     *
+     * generated = base + pristine defaults; current = base + stored mutable cols.
+     * The base fields (client, items, counts) are identical in both because an
+     * edit only ever touches the mutable fields, never the snapshot.
+     */
+    private static function load_payload_from_rows(int $audit_id): ?array {
+        global $wpdb;
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDIT_ROWS);
+        $rows  = $wpdb->get_results($wpdb->prepare(
+            "SELECT wc_order_id, wp_user_id, client_id, zone, delivery_date,
+                    mains_count, sides_count, audit_status, audited_by, audited_at,
+                    detail_enc, edits_enc
+             FROM `{$table}` WHERE audit_id = %d ORDER BY row_id ASC",
+            $audit_id
+        ), ARRAY_A);
+
+        if (!is_array($rows) || count($rows) === 0) {
+            return null;
+        }
+
+        $generated = [];
+        $current   = [];
+        foreach ($rows as $r) {
+            $oid = (int) ($r['wc_order_id'] ?? 0);
+            if ($oid <= 0) {
+                continue;
+            }
+            $entry = self::entry_from_row($r);
+            if ($entry === null) {
+                return null;
+            }
+            $generated[$oid] = $entry['generated'];
+            $current[$oid]   = $entry['current'];
+        }
+
+        return [
+            'schema'    => self::PAYLOAD_SCHEMA,
+            'generated' => $generated,
+            'current'   => $current,
+        ];
+    }
+
+    /**
+     * Reconstruct the generated + current in-memory entries from one DB row.
+     * Returns null iff a PII column won't decode. Shapes match exactly what
+     * build_rows_from_orders() produced, so every caller sees identical data.
+     *
+     * @return array{generated: array<string,mixed>, current: array<string,mixed>}|null
+     */
+    private static function entry_from_row(array $r): ?array {
+        $detail = MealsDB_Encryption::decode_payload((string) ($r['detail_enc'] ?? ''));
+        $edits  = MealsDB_Encryption::decode_payload((string) ($r['edits_enc'] ?? ''));
+        if (!is_array($detail) || !is_array($edits)) {
+            return null;
+        }
+        // Shared, immutable base (never mutated after the snapshot).
+        $base = [
+            'order_id'         => (int) ($r['wc_order_id'] ?? 0),
+            'wp_user_id'       => (int) ($r['wp_user_id'] ?? 0),
+            'client_id'        => (int) ($r['client_id'] ?? 0),
+            'client_name'      => (string) ($detail['client_name'] ?? ''),
+            'client_last_name' => (string) ($detail['client_last_name'] ?? ''),
+            'zone'             => (string) ($r['zone'] ?? ''),
+            'delivery_date'    => (string) ($r['delivery_date'] ?? ''),
+            'items'            => array_values((array) ($detail['items'] ?? [])),
+            'mains_count'      => (int) ($r['mains_count'] ?? 0),
+            'sides_count'      => (int) ($r['sides_count'] ?? 0),
+        ];
+        $generated = $base + [
+            'audit_status' => self::ROW_PENDING,
+            'edited_items' => [],
+            'added_items'  => [],
+            'note'         => '',
+            'audited_by'   => 0,
+            'audited_at'   => '',
+        ];
+        $current = $base + [
+            'audit_status' => (string) ($r['audit_status'] ?? self::ROW_PENDING),
+            'edited_items' => (array) ($edits['edited_items'] ?? []),
+            'added_items'  => array_values((array) ($edits['added_items'] ?? [])),
+            'note'         => (string) ($edits['note'] ?? ''),
+            'audited_by'   => (int) ($r['audited_by'] ?? 0),
+            'audited_at'   => (string) ($r['audited_at'] ?? ''),
+        ];
+        return ['generated' => $generated, 'current' => $current];
+    }
+
+    /**
+     * Materialise normalized rows for an audit that has none yet (created before
+     * this refactor, read via the legacy-blob fallback, now being edited before
+     * the one-time backfill ran). Idempotent: a single COUNT short-circuits once
+     * rows exist, which is the steady state for every audit created after deploy.
+     */
+    private static function ensure_rows_materialized(int $audit_id, array $current): void {
+        global $wpdb;
+        $table = MealsDB_DB::get_table_name(MealsDB_Tables::ORDER_AUDIT_ROWS);
+        $count = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM `{$table}` WHERE audit_id = %d", $audit_id
+        ));
+        if ($count > 0) {
+            return;
+        }
+        $db_rows = [];
+        foreach ($current as $entry) {
+            $encoded = self::encode_row_columns((array) $entry);
+            if ($encoded === null) {
+                // Can't materialise; the guarded header write still targets the
+                // (missing) row set and the row UPDATE simply affects 0 — no
+                // plaintext is written. Leave it to the operator to re-run backfill.
+                return;
+            }
+            $db_rows[] = $encoded;
+        }
+        self::insert_rows($audit_id, $db_rows);
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers — logging
     // -----------------------------------------------------------------------
 
     /**

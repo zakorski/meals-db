@@ -395,6 +395,42 @@
     $('#mealsdb-private-enrich-dry').on('click', function () { runEnrichSkeletons(true); });
     $('#mealsdb-private-enrich-run').on('click', function () { runEnrichSkeletons(false); });
 
+    // Backfill order-audit rows (storage normalization). Dry Run and live use
+    // the same endpoint with a dry_run flag. Idempotent — safe to re-run.
+    function runAuditRowsBackfill(dryRun) {
+        var $dry    = $('#mealsdb-audit-rows-dry');
+        var $run    = $('#mealsdb-audit-rows-run');
+        var $result = $('#mealsdb-audit-rows-result');
+        runTool({
+            action: 'mealsdb_backfill_audit_rows',
+            nonce: nonces.general || '',
+            data: dryRun ? { dry_run: 1 } : {},
+            confirm: dryRun ? null : 'Migrate all existing order audits into the normalized rows table? Finalized audits are copied exactly and unchanged; already-migrated audits are skipped.',
+            buttons: [$dry, $run],
+            $result: $result,
+            running: dryRun ? 'Running dry run...' : 'Backfilling audit rows...',
+            done: function (resp) {
+                if (resp && resp.success) {
+                    var d = resp.data || {};
+                    var prefix = dryRun ? 'Dry run: would migrate ' : 'Migrated ';
+                    $result.text(
+                        prefix + (d.migrated || 0) + ' of ' + (d.audits || 0) + ' audits (' +
+                        (d.rows || 0) + ' rows; skipped: ' + (d.skipped || 0) +
+                        ', empty: ' + (d.empty || 0) + ', undecodable: ' + (d.undecodable || 0) +
+                        ', errors: ' + (d.errors || 0) + ').'
+                    );
+                    tint($result, '#46b450');
+                } else {
+                    $result.text((resp && resp.data && resp.data.message) || 'Backfill failed.');
+                    tint($result, '#dc3232');
+                }
+            }
+        });
+    }
+
+    $('#mealsdb-audit-rows-dry').on('click', function () { runAuditRowsBackfill(true); });
+    $('#mealsdb-audit-rows-run').on('click', function () { runAuditRowsBackfill(false); });
+
     // Sync product display data. NOTE: this endpoint returns a FLAT
     // { success, message } (wp_send_json), not the nested { data: {...} }
     // shape wp_send_json_success produces — so success/error text reads
