@@ -27,6 +27,7 @@ class MealsDB_Admin_UI {
         'mealsdb-packing-slips',
         'mealsdb-purchase-orders',
         'mealsdb-invoices',
+        'mealsdb-receivables',
         'mealsdb-reports',
         'meals-db-staff',
         'mealsdb_cron_status',

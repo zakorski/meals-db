@@ -323,6 +323,66 @@ class MealsDB_Ledger {
         }
     }
 
+    /**
+     * Every payer's balance = SUM(amount_cents), grouped. By default only payers
+     * with a non-zero balance (the receivables/credits worth showing). Ordered
+     * biggest-balance first.
+     *
+     * @return array<int, array{payer_type:string, payer_id:string, balance_cents:int}>
+     */
+    public function balances_by_payer(bool $nonzero_only = true): array {
+        try {
+            $having = $nonzero_only ? 'HAVING balance_cents <> 0' : '';
+            $rows = $this->wpdb->get_results(
+                "SELECT payer_type, payer_id, COALESCE(SUM(amount_cents), 0) AS balance_cents
+                 FROM `{$this->table()}`
+                 GROUP BY payer_type, payer_id
+                 {$having}
+                 ORDER BY balance_cents DESC",
+                ARRAY_A
+            );
+            if (!is_array($rows)) {
+                return [];
+            }
+            return array_map(static function ($r) {
+                return [
+                    'payer_type'    => (string) ($r['payer_type'] ?? ''),
+                    'payer_id'      => (string) ($r['payer_id'] ?? ''),
+                    'balance_cents' => (int) ($r['balance_cents'] ?? 0),
+                ];
+            }, $rows);
+        } catch (\Throwable $e) {
+            $this->log_error('balances_by_payer', $e);
+            return [];
+        }
+    }
+
+    /**
+     * Recent entries for one payer, newest first (a mini statement for the
+     * receivables screen). FIFO application of payments to charges is a
+     * reporting concern, deferred — this is a chronological list.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function entries_for_payer(string $payer_type, string $payer_id, int $limit = 100): array {
+        try {
+            $limit = max(1, min(500, $limit));
+            $rows = $this->wpdb->get_results($this->wpdb->prepare(
+                "SELECT entry_id, entry_type, source_type, source_id, entry_date,
+                        amount_cents, method, reference, note, voided_by_entry_id, created_at
+                 FROM `{$this->table()}`
+                 WHERE payer_type = %s AND payer_id = %s
+                 ORDER BY entry_date DESC, entry_id DESC
+                 LIMIT %d",
+                $payer_type, $payer_id, $limit
+            ), ARRAY_A);
+            return is_array($rows) ? $rows : [];
+        } catch (\Throwable $e) {
+            $this->log_error('entries_for_payer', $e);
+            return [];
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Private
     // -----------------------------------------------------------------------
