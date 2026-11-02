@@ -251,7 +251,18 @@ class MealsDB_Sync {
             // key the migration actually reads from (class-migration-consolidated
             // .php) — the only path that populated these columns — so sync and
             // migration finally agree. ITEM 2 makes a still-absent key harmless.
-            'client_phone_2'                => ['type' => 'meta', 'key' => 'billing_phone_2'],
+            // K19 ITEM 1: was `billing_phone_2`, a key with 0 usermeta rows, so
+            // the column could never populate. WP/Enzebra's second phone is the
+            // delivery phone `shipping_phone` (1,015 non-empty; differs from
+            // billing_phone for 193 clients). Stored verbatim even when it
+            // equals client_phone_1 — the column mirrors the WP field; hiding
+            // the duplicate is a display concern (MealsDB_Phone::is_same_number).
+            // NOTE: the first nightly run after this change fills the column
+            // for every linked client (~1,000 writes, one audit row each) —
+            // that IS the backfill, not an incident. From then on this field
+            // is WP-owned: an operator edit to "Second Phone Number" that
+            // differs from shipping_phone is overwritten nightly.
+            'client_phone_2'                => ['type' => 'meta', 'key' => 'shipping_phone'],
             'street_name'                   => ['type' => 'meta', 'key' => 'billing_address_1'],
             'delivery_street_name'          => ['type' => 'meta', 'key' => 'shipping_address_1'],
             'alternate_contact_name'        => ['type' => 'meta', 'key' => 'alternate_contact_name'],

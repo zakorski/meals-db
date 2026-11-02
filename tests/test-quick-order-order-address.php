@@ -194,9 +194,78 @@ $order_dnc_empty = new WC_Order();
 $m->invoke(null, $order_dnc_empty, $client_dnc_empty);
 addr_eq('K15-5 no billing phone written when do_not_call + no alternates', false, array_key_exists('billing_phone', $order_dnc_empty->set));
 addr_eq('K15-5 no shipping phone written when do_not_call + no alternates', false, array_key_exists('shipping_phone', $order_dnc_empty->set));
-$rp = new ReflectionMethod('MealsDB_Quick_Order_Ajax', 'resolve_order_phone');
+// K19 ITEM 3 split resolve_order_phone() into resolve_order_phones() returning
+// both destinations; the K15-5 no-leak check now covers each side.
+$rp = new ReflectionMethod('MealsDB_Quick_Order_Ajax', 'resolve_order_phones');
 $rp->setAccessible(true);
-addr_eq('K15-5 client_phone_1 not leaked via resolve', '', $rp->invoke(null, $client_dnc_empty));
+addr_eq('K15-5 client_phone_1 not leaked via resolve', ['billing' => '', 'shipping' => ''], $rp->invoke(null, $client_dnc_empty));
+
+// ---------------------------------------------------------------------------
+// DIRECTIVE K19 ITEM 3 — the order's shipping phone is client_phone_2 (WP
+// shipping_phone, the delivery contact) when populated; billing stays
+// client_phone_1.
+// ---------------------------------------------------------------------------
+
+// K19 Test 5: distinct delivery number → shipping = client_phone_2, billing = client_phone_1.
+$client_k19_split = [
+    'first_name' => 'A', 'last_name' => 'B',
+    'street_name' => '1 Y', 'city' => 'Moncton', 'province' => 'NB', 'postal_code' => 'E1C 1A1',
+    'client_phone_1' => '506-555-0100', 'client_phone_2' => '506-555-0900',
+];
+$order_k19_split = new WC_Order();
+$m->invoke(null, $order_k19_split, $client_k19_split);
+addr_eq('K19-5 billing phone stays client_phone_1', '506-555-0100', $order_k19_split->set['billing_phone'] ?? null);
+addr_eq('K19-5 shipping phone is client_phone_2', '506-555-0900', $order_k19_split->set['shipping_phone'] ?? null);
+
+// K19 Test 6: empty client_phone_2 → shipping falls back to client_phone_1.
+$client_k19_fallback = $client_k19_split;
+$client_k19_fallback['client_phone_2'] = '   ';
+$order_k19_fallback = new WC_Order();
+$m->invoke(null, $order_k19_fallback, $client_k19_fallback);
+addr_eq('K19-6 shipping falls back to client_phone_1', '506-555-0100', $order_k19_fallback->set['shipping_phone'] ?? null);
+addr_eq('K19-6 billing unchanged', '506-555-0100', $order_k19_fallback->set['billing_phone'] ?? null);
+
+// K19 Test 6b: client_phone_1 empty, client_phone_2 populated → shipping is
+// written, billing is left unset (billing never borrows the delivery number).
+$client_k19_only2 = $client_k19_split;
+$client_k19_only2['client_phone_1'] = '';
+$order_k19_only2 = new WC_Order();
+$m->invoke(null, $order_k19_only2, $client_k19_only2);
+addr_eq('K19-6b no billing phone when client_phone_1 empty', false, array_key_exists('billing_phone', $order_k19_only2->set));
+addr_eq('K19-6b shipping phone is client_phone_2', '506-555-0900', $order_k19_only2->set['shipping_phone'] ?? null);
+
+// K19 Test 7: do_not_call → neither client_phone_1 nor client_phone_2 reaches
+// the order on either side; both use the alternate contact.
+$client_k19_dnc = $client_k19_split;
+$client_k19_dnc['do_not_call_client_phone'] = 1;
+$client_k19_dnc['alternate_contact_phone_1'] = '506-555-0200';
+$order_k19_dnc = new WC_Order();
+$m->invoke(null, $order_k19_dnc, $client_k19_dnc);
+addr_eq('K19-7 do_not_call billing is alternate contact', '506-555-0200', $order_k19_dnc->set['billing_phone'] ?? null);
+addr_eq('K19-7 do_not_call shipping is alternate contact (not client_phone_2)', '506-555-0200', $order_k19_dnc->set['shipping_phone'] ?? null);
+
+// K19 Test 7b: do_not_call + no alternates → nothing written, and client_phone_2
+// is not leaked either.
+unset($client_k19_dnc['alternate_contact_phone_1']);
+$order_k19_dnc_empty = new WC_Order();
+$m->invoke(null, $order_k19_dnc_empty, $client_k19_dnc);
+addr_eq('K19-7b no billing phone (do_not_call, no alternates)', false, array_key_exists('billing_phone', $order_k19_dnc_empty->set));
+addr_eq('K19-7b no shipping phone (do_not_call, no alternates)', false, array_key_exists('shipping_phone', $order_k19_dnc_empty->set));
+addr_eq('K19-7b client_phone_2 not leaked via resolve', ['billing' => '', 'shipping' => ''], $rp->invoke(null, $client_k19_dnc));
+
+// ---------------------------------------------------------------------------
+// K19 — Quick Order client-context panel: Phone 2 is blanked when it is the
+// same number as Phone 1 (the JS addRow() skips empty values).
+// ---------------------------------------------------------------------------
+$cs = new ReflectionMethod('MealsDB_Quick_Order_Ajax', 'context_secondary_phone');
+$cs->setAccessible(true);
+addr_eq('K19-QO same number blanked', '', $cs->invoke(null, '506-858-1234', '506-858-1234'));
+addr_eq('K19-QO formatting-only difference blanked', '', $cs->invoke(null, '506-858-1234', '(506)-858-1234'));
+addr_eq('K19-QO leading country code blanked', '', $cs->invoke(null, '506-858-1234', '1-506-858-1234'));
+addr_eq('K19-QO different number kept', '506-858-9999', $cs->invoke(null, '506-858-1234', '506-858-9999'));
+addr_eq('K19-QO multi-number field kept', '506-111-2222 / 506-858-1234', $cs->invoke(null, '506-858-1234', '506-111-2222 / 506-858-1234'));
+addr_eq('K19-QO phone_2 kept when phone_1 empty', '506-858-1234', $cs->invoke(null, '', '506-858-1234'));
+addr_eq('K19-QO empty phone_2 stays empty', '', $cs->invoke(null, '506-858-1234', ''));
 
 if ($failures) { echo implode("\n", $failures) . "\n"; echo "FAILED ({$passed} passed)\n"; exit(1); }
 echo "OK ({$passed} passed)\n";

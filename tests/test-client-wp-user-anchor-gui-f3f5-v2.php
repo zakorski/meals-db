@@ -300,6 +300,16 @@ check(($got['phone_primary'] ?? '') === '(506)-555-0000', 'mapper: sparse user m
 check(!array_key_exists('address_city', $got), 'mapper: empty fields are omitted entirely');
 check(($got['first_name'] ?? '') === 'Solo', 'mapper: display name splits into first when no billing/account name');
 
+// K19: Pull Data reads the second phone from shipping_phone (the key the
+// nightly sync maps client_phone_2 to), not the 0-row billing_phone_2.
+seed_user(620, ['display_name' => 'Ship Phone'], [
+    'billing_phone'   => '5065551111',
+    'shipping_phone'  => '5065552222',
+    'billing_phone_2' => '5065559999', // must be IGNORED
+]);
+$got = MealsDB_WP_User_Mapper::map_usermeta_to_client_fields(620);
+check(($got['phone_secondary'] ?? '') === '(506)-555-2222', 'K19 mapper: phone_secondary from shipping_phone');
+
 // ---------------------------------------------------------------------------
 if (!empty($failures)) {
     echo implode("\n", $failures) . "\n";

@@ -90,11 +90,12 @@ class MealsDB_WP_User_Mapper {
 
         // Contact -----------------------------------------------------------
         $phone1 = self::normalize_phone($get('billing_phone'));
-        $phone2 = $get('mealsdb_client_phone_2');
-        if ($phone2 === '') {
-            $phone2 = $get('billing_phone_2');
-        }
-        $phone2 = self::normalize_phone($phone2);
+        // K19: the second phone is WP/Enzebra's delivery phone `shipping_phone`
+        // — the same key the nightly sync now maps client_phone_2 to. This used
+        // to read `mealsdb_client_phone_2` then `billing_phone_2`, neither of
+        // which has a single usermeta row, so Pull Data always left Phone #2
+        // empty and then disagreed with what the sync wrote that night.
+        $phone2 = self::normalize_phone($get('shipping_phone'));
 
         // Billing address ---------------------------------------------------
         $b_street = $get('billing_address_1');

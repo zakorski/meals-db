@@ -65,7 +65,7 @@ function chk($cond, string $l): void {
 $map = MealsDB_Sync::get_field_to_wp_meta_map();
 chk(($map['street_name']['key'] ?? '') === 'billing_address_1', 'ITEM1: street_name -> billing_address_1');
 chk(($map['delivery_street_name']['key'] ?? '') === 'shipping_address_1', 'ITEM1: delivery_street_name -> shipping_address_1');
-chk(($map['client_phone_2']['key'] ?? '') === 'billing_phone_2', 'ITEM1: client_phone_2 -> billing_phone_2');
+chk(($map['client_phone_2']['key'] ?? '') === 'shipping_phone', 'ITEM1 (K19): client_phone_2 -> shipping_phone');
 chk(($map['alternate_contact_name']['key'] ?? '') === 'alternate_contact_name', 'ITEM1: alt_contact_name unprefixed');
 chk(($map['alternate_contact_phone_1']['key'] ?? '') === 'alternate_contact_phone_1', 'ITEM1: alt_phone_1 unprefixed');
 chk(($map['alternate_contact_phone_2']['key'] ?? '') === 'alternate_contact_phone_2', 'ITEM1: alt_phone_2 unprefixed');

@@ -135,4 +135,37 @@ class MealsDB_Phone {
         );
         return $rest === '' ? $formatted : $formatted . ' ' . $rest;
     }
+
+    /**
+     * DIRECTIVE K19: do two phone fields hold the SAME single number?
+     *
+     * Used to SUPPRESS a duplicate display line (client_phone_2 now mirrors
+     * WP shipping_phone, which equals billing_phone / client_phone_1 for most
+     * clients). Because a `true` here hides a number from a driver or an
+     * order-taker, the rule errs towards "different": hiding a real second
+     * number is worse than printing one twice.
+     *
+     * Two deliberate differences from canonical():
+     *   - NO last-10 truncation. canonical() keeps the last 10 digits, so a
+     *     multi-number field ("506-111-2222 / 506-333-4444" — 32 such clients
+     *     per the K9 staging query) would collapse onto its LAST number and
+     *     compare equal to a phone_1 of 506-333-4444, hiding 506-111-2222.
+     *     Here the full digit string must match (after dropping a leading NANP
+     *     country-code 1, so "1-506-…" and "506-…" are the same number).
+     *   - Letters must match too. Phone fields legitimately carry a contact
+     *     name ("506-988-1777 Denise", DIRECTIVE K2 ITEM 2) or an extension
+     *     marker; if the second field's text differs it carries information
+     *     the first does not, so it is not a duplicate.
+     *
+     * An empty value is never "the same" as anything (nothing to suppress).
+     */
+    public static function is_same_number(string $a, string $b): bool {
+        $digits_a = self::digits_dropping_country_code($a);
+        $digits_b = self::digits_dropping_country_code($b);
+        if ($digits_a === '' || $digits_a !== $digits_b) {
+            return false;
+        }
+        $letters = static fn (string $v): string => strtolower(preg_replace('/[^A-Za-z]+/', '', $v) ?? '');
+        return $letters($a) === $letters($b);
+    }
 }
