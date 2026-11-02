@@ -267,5 +267,60 @@ addr_eq('K19-QO multi-number field kept', '506-111-2222 / 506-858-1234', $cs->in
 addr_eq('K19-QO phone_2 kept when phone_1 empty', '506-858-1234', $cs->invoke(null, '', '506-858-1234'));
 addr_eq('K19-QO empty phone_2 stays empty', '', $cs->invoke(null, '506-858-1234', ''));
 
+// ---------------------------------------------------------------------------
+// DIRECTIVE K20 — a phone value with no real number in it (`0`, the Enzebra
+// placeholder in 157 clients' shipping_phone) is empty.
+// ---------------------------------------------------------------------------
+
+// K20 Test 5: client_phone_2 = '0' → shipping phone falls back to client_phone_1.
+$client_k20_zero2 = [
+    'first_name' => 'A', 'last_name' => 'B',
+    'street_name' => '1 Y', 'city' => 'Moncton', 'province' => 'NB', 'postal_code' => 'E1C 1A1',
+    'client_phone_1' => '506-555-0100', 'client_phone_2' => '0',
+];
+$order_k20_zero2 = new WC_Order();
+$m->invoke(null, $order_k20_zero2, $client_k20_zero2);
+addr_eq('K20-5 shipping phone is client_phone_1 when client_phone_2 is 0', '506-555-0100', $order_k20_zero2->set['shipping_phone'] ?? null);
+addr_eq('K20-5 billing phone unchanged', '506-555-0100', $order_k20_zero2->set['billing_phone'] ?? null);
+
+// client_phone_1 = '0' → billing left unset; shipping takes the real client_phone_2.
+$client_k20_zero1 = $client_k20_zero2;
+$client_k20_zero1['client_phone_1'] = '0';
+$client_k20_zero1['client_phone_2'] = '506-555-0900';
+$order_k20_zero1 = new WC_Order();
+$m->invoke(null, $order_k20_zero1, $client_k20_zero1);
+addr_eq('K20 no billing phone when client_phone_1 is 0', false, array_key_exists('billing_phone', $order_k20_zero1->set));
+addr_eq('K20 shipping phone is the real client_phone_2', '506-555-0900', $order_k20_zero1->set['shipping_phone'] ?? null);
+
+// Both placeholders → neither field written.
+$client_k20_both = $client_k20_zero2;
+$client_k20_both['client_phone_1'] = '-';
+$order_k20_both = new WC_Order();
+$m->invoke(null, $order_k20_both, $client_k20_both);
+addr_eq('K20 no billing phone when both are placeholders', false, array_key_exists('billing_phone', $order_k20_both->set));
+addr_eq('K20 no shipping phone when both are placeholders', false, array_key_exists('shipping_phone', $order_k20_both->set));
+
+// do_not_call: a placeholder alternate_contact_phone_1 falls through to a real _2.
+$client_k20_dnc = $client_k20_zero2;
+$client_k20_dnc['do_not_call_client_phone'] = 1;
+$client_k20_dnc['alternate_contact_phone_1'] = '0';
+$client_k20_dnc['alternate_contact_phone_2'] = '506-555-0300';
+addr_eq('K20 do_not_call skips a placeholder alternate', ['billing' => '506-555-0300', 'shipping' => '506-555-0300'], $rp->invoke(null, $client_k20_dnc));
+$client_k20_dnc['alternate_contact_phone_2'] = '0';
+addr_eq('K20 do_not_call with only placeholder alternates writes nothing', ['billing' => '', 'shipping' => ''], $rp->invoke(null, $client_k20_dnc));
+
+// K20 Test 6: multi-number and 7-digit values reach the order unchanged.
+$client_k20_multi = $client_k20_zero2;
+$client_k20_multi['client_phone_1'] = '204-7570 (Joyce)';
+$client_k20_multi['client_phone_2'] = '506-204-7747 or 1-506-345-0237 (sister Diane)';
+$order_k20_multi = new WC_Order();
+$m->invoke(null, $order_k20_multi, $client_k20_multi);
+addr_eq('K20-6 7-digit billing phone unchanged', '204-7570 (Joyce)', $order_k20_multi->set['billing_phone'] ?? null);
+addr_eq('K20-6 multi-number shipping phone unchanged', '506-204-7747 or 1-506-345-0237 (sister Diane)', $order_k20_multi->set['shipping_phone'] ?? null);
+
+// Quick Order panel: placeholders never show; a `0` primary cannot hide a real Phone 2.
+addr_eq('K20-QO phone_2 placeholder blanked', '', $cs->invoke(null, '506-858-1234', '0'));
+addr_eq('K20-QO real phone_2 kept when phone_1 is a placeholder', '506-858-1234', $cs->invoke(null, '0', '506-858-1234'));
+
 if ($failures) { echo implode("\n", $failures) . "\n"; echo "FAILED ({$passed} passed)\n"; exit(1); }
 echo "OK ({$passed} passed)\n";

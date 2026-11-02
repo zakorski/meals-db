@@ -471,9 +471,12 @@ class MealsDB_Slip_PDF_Generator {
         // renderer skips empties so a blank field never prints a stray label.
         // The existing daily driver slip ignores these extra keys, so adding
         // them here is non-breaking.
-        $contact_phone = (string) ($client['alternate_contact_phone_1'] ?? '');
+        // K20: a placeholder in _1 must not shadow a real number in _2 — the
+        // same fallback rule resolve_order_phones() uses, so the slip and the
+        // order agree on the contact.
+        $contact_phone = MealsDB_Phone::dialable_or_empty((string) ($client['alternate_contact_phone_1'] ?? ''));
         if ($contact_phone === '') {
-            $contact_phone = (string) ($client['alternate_contact_phone_2'] ?? '');
+            $contact_phone = MealsDB_Phone::dialable_or_empty((string) ($client['alternate_contact_phone_2'] ?? ''));
         }
 
         return [
@@ -815,7 +818,15 @@ HTML;
         $name   = $this->h($driver['client_name']);
         $street = $this->h($driver['street']);
         $city   = $this->h($driver['city']);
-        $phone  = $this->h($driver['phone']);
+        // K20 ITEM 2: never print a placeholder (`0`) as the driver's phone.
+        // This slip shows ONE number, so when the primary is a placeholder fall
+        // back to the secondary (client_phone_2 / shipping_phone) if that one is
+        // real — otherwise the line prints blank, as it did for an empty phone.
+        $phone_raw = MealsDB_Phone::dialable_or_empty((string) ($driver['phone'] ?? ''));
+        if ($phone_raw === '') {
+            $phone_raw = MealsDB_Phone::dialable_or_empty((string) ($driver['phone_secondary'] ?? ''));
+        }
+        $phone  = $this->h($phone_raw);
 
         $rows = '';
         foreach ($driver['breakdown'] as $row) {
@@ -1420,10 +1431,15 @@ HTML;
 
         // Phone(s): primary; secondary if present; alternate contact
         // "(Name) phone" if present — each only when populated.
-        $phone     = trim((string) ($order['phone'] ?? ''));
-        $phone2    = trim((string) ($order['phone_secondary'] ?? ''));
+        // K20 ITEM 2: a placeholder (`0` — 157 clients' shipping_phone) is not
+        // a phone. Blank it BEFORE the K19 is_same_number() dedupe below, so a
+        // placeholder primary can never cause a real secondary to be hidden,
+        // and a placeholder secondary never prints as a second line. The
+        // contact phone gets the same guard so no line with <7 digits prints.
+        $phone     = MealsDB_Phone::dialable_or_empty((string) ($order['phone'] ?? ''));
+        $phone2    = MealsDB_Phone::dialable_or_empty((string) ($order['phone_secondary'] ?? ''));
         $c_name    = trim((string) ($order['contact_name'] ?? ''));
-        $c_phone   = trim((string) ($order['contact_phone'] ?? ''));
+        $c_phone   = MealsDB_Phone::dialable_or_empty((string) ($order['contact_phone'] ?? ''));
         if ($phone !== '') {
             $lines .= '<div class="d4-phone">' . self::esc($phone) . '</div>';
         }

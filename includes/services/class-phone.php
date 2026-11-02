@@ -168,4 +168,34 @@ class MealsDB_Phone {
         $letters = static fn (string $v): string => strtolower(preg_replace('/[^A-Za-z]+/', '', $v) ?? '');
         return $letters($a) === $letters($b);
     }
+
+    /**
+     * DIRECTIVE K20: true when the value contains something a person could dial.
+     *
+     * Enzebra stores the literal `0` as a "no phone" placeholder in
+     * shipping_phone (157 clients, 2026-11-02), and K19 mirrors it verbatim
+     * into client_phone_2. A data cleanup would not hold — the nightly sync
+     * rewrites the column every run — so every CONSUMER of a phone (slips,
+     * order phones, the Quick Order panel, Pull Data) treats a value failing
+     * this check as empty. Stored values are never changed.
+     *
+     * Fewer than 7 digits means a placeholder (`0`, `-`, `n/a`), not a phone.
+     * 7 is the shortest real value in production (local numbers missing an
+     * area code, e.g. "204-7570 (Joyce)"), so those still count. Do NOT raise
+     * this to 10: the 99 multi-number/annotated values
+     * ("506-204-7747 or 1-506-345-0237 (sister Diane)") and the 4 seven-digit
+     * locals are real contact data and must keep printing.
+     */
+    public static function has_number(string $value): bool {
+        return strlen(preg_replace('/\D+/', '', $value) ?? '') >= 7;
+    }
+
+    /**
+     * DIRECTIVE K20: the value trimmed, or '' when it fails has_number().
+     * Convenience for consumers that treat a placeholder as "no phone".
+     */
+    public static function dialable_or_empty(string $value): string {
+        $value = trim($value);
+        return self::has_number($value) ? $value : '';
+    }
 }

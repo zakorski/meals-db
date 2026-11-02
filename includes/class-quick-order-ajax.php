@@ -1419,16 +1419,20 @@ class MealsDB_Quick_Order_Ajax {
      * @return array{billing: string, shipping: string}
      */
     private static function resolve_order_phones(array $client): array {
+        // K20 ITEM 3: every source is read through dialable_or_empty(), so a
+        // placeholder (`0`, 157 clients' shipping_phone) counts as empty: a
+        // client_phone_2 of `0` falls back to client_phone_1 on the shipping
+        // side, and a placeholder alternate falls through to the next one.
         if (empty($client['do_not_call_client_phone'])) {
-            $billing  = trim((string) ($client['client_phone_1'] ?? ''));
-            $shipping = trim((string) ($client['client_phone_2'] ?? ''));
+            $billing  = MealsDB_Phone::dialable_or_empty((string) ($client['client_phone_1'] ?? ''));
+            $shipping = MealsDB_Phone::dialable_or_empty((string) ($client['client_phone_2'] ?? ''));
             return [
                 'billing'  => $billing,
                 'shipping' => $shipping !== '' ? $shipping : $billing,
             ];
         }
         foreach (['alternate_contact_phone_1', 'alternate_contact_phone_2'] as $key) {
-            $value = trim((string) ($client[$key] ?? ''));
+            $value = MealsDB_Phone::dialable_or_empty((string) ($client[$key] ?? ''));
             if ($value !== '') {
                 return ['billing' => $value, 'shipping' => $value];
             }
@@ -1445,7 +1449,11 @@ class MealsDB_Quick_Order_Ajax {
      * second normaliser in quick-order.js.
      */
     private static function context_secondary_phone(string $phone_1, string $phone_2): string {
-        if (trim($phone_2) === '' || MealsDB_Phone::is_same_number($phone_1, $phone_2)) {
+        // K20: placeholders are blanked FIRST, so a `0` primary cannot hide a
+        // real secondary and a `0` secondary never shows as "Phone 2: 0".
+        $phone_1 = MealsDB_Phone::dialable_or_empty($phone_1);
+        $phone_2 = MealsDB_Phone::dialable_or_empty($phone_2);
+        if ($phone_2 === '' || MealsDB_Phone::is_same_number($phone_1, $phone_2)) {
             return '';
         }
         return $phone_2;
@@ -1809,13 +1817,15 @@ class MealsDB_Quick_Order_Ajax {
             'notes'             => $decrypt($client['customer_comments'] ?? ''),
             'notes_to_provider' => (string) ($client['notes_to_service_provider'] ?? ''),
             'dietary'           => $decrypt($client['diet_concerns'] ?? ''),
-            'phone_1'           => (string) ($client['client_phone_1'] ?? ''),
+            // K20: placeholder phones (`0`) are blanked so the panel never
+            // shows one; quick-order.js addRow() skips empty values.
+            'phone_1'           => MealsDB_Phone::dialable_or_empty((string) ($client['client_phone_1'] ?? '')),
             'phone_2'           => self::context_secondary_phone(
                 (string) ($client['client_phone_1'] ?? ''),
                 (string) ($client['client_phone_2'] ?? '')
             ),
-            'alt_phone_1'       => (string) ($client['alternate_contact_phone_1'] ?? ''),
-            'alt_phone_2'       => (string) ($client['alternate_contact_phone_2'] ?? ''),
+            'alt_phone_1'       => MealsDB_Phone::dialable_or_empty((string) ($client['alternate_contact_phone_1'] ?? '')),
+            'alt_phone_2'       => MealsDB_Phone::dialable_or_empty((string) ($client['alternate_contact_phone_2'] ?? '')),
             'do_not_call'       => !empty($client['do_not_call_client_phone']),
             'payment_method'    => (string) ($client['payment_method'] ?? ''),
             'province'          => (string) ($client['province'] ?? ''),
