@@ -71,6 +71,27 @@ eq(MealsDB_Phone::format_with_optional_contact('   506-536-1236   '), '(506)-536
 eq(MealsDB_Phone::format_with_optional_contact('call the front desk'), 'call the front desk', 'contact: no number → trimmed original (validate() will reject)');
 eq(MealsDB_Phone::format_with_optional_contact('506-1236 Denise'), '506-1236 Denise', 'contact: too-few digits in token → original (not a phone)');
 
+// -- is_same_number(): DIRECTIVE K19 duplicate-suppression rule ----------------
+// A `true` HIDES a number from a driver / order-taker, so the rule errs towards
+// "different". Equal only when the full digit string matches (after dropping a
+// leading NANP 1) AND any letters match.
+eq(MealsDB_Phone::is_same_number('506-858-1234', '506-858-1234'), true, 'same: identical');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '(506)-858-1234'), true, 'same: formatting-only difference');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '5068581234'), true, 'same: bare digits vs dashed');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '1-506-858-1234'), true, 'same: leading country-code 1 (the directive lambda got this wrong)');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '+1 506 858 1234'), true, 'same: +1 international form');
+eq(MealsDB_Phone::is_same_number('506-988-1777 Denise', '(506) 988-1777 denise'), true, 'same: same number + same name (case-insensitive)');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '506-858-9999'), false, 'different: different number');
+// The canonical() last-10 trap: a multi-number field must NOT collapse onto its
+// last number and hide the first.
+eq(MealsDB_Phone::is_same_number('506-333-4444', '506-111-2222 / 506-333-4444'), false, 'different: multi-number field is never hidden');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '506-858-1234 Denise'), false, 'different: second carries a contact name');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '506-858-1234 x12'), false, 'different: extension is information');
+eq(MealsDB_Phone::is_same_number('506-858-1234', '858-1234'), false, 'different: 7-digit local (errs to printing both)');
+eq(MealsDB_Phone::is_same_number('', ''), false, 'different: empty is never "the same"');
+eq(MealsDB_Phone::is_same_number('', '506-858-1234'), false, 'different: empty primary never hides the secondary');
+eq(MealsDB_Phone::is_same_number('n/a', 'N/A'), false, 'different: no digits is never "the same"');
+
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
 exit(empty($failures) ? 0 : 1);

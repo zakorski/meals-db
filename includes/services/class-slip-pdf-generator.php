@@ -1427,7 +1427,15 @@ HTML;
         if ($phone !== '') {
             $lines .= '<div class="d4-phone">' . self::esc($phone) . '</div>';
         }
-        if ($phone2 !== '') {
+        // K19 ITEM 2: client_phone_2 now mirrors WP shipping_phone, which
+        // equals billing_phone (client_phone_1) for most clients. Print the
+        // secondary line only when it is genuinely a different number.
+        // MealsDB_Phone::is_same_number() ignores formatting and a leading
+        // country-code 1, but does NOT truncate and does compare any contact
+        // name — so a multi-number or annotated field is never hidden.
+        // Evaluated at render time, so it also applies to batches persisted
+        // before K19.
+        if ($phone2 !== '' && !MealsDB_Phone::is_same_number($phone, $phone2)) {
             $lines .= '<div class="d4-phone">' . self::esc($phone2) . '</div>';
         }
         if ($c_name !== '' || $c_phone !== '') {

@@ -2313,7 +2313,14 @@ class MealsDB_Admin_UI {
                 ?>
                 <tr data-client-type="sdnb,veteran,private">
                     <th><label for="phone_secondary"><?php esc_html_e('Second Phone Number', 'meals-db'); ?></label></th>
-                    <td><input type="text" name="phone_secondary" id="phone_secondary" class="regular-text phone-mask" placeholder="(555)-555-5555" value="<?php echo esc_attr($client['phone_secondary'] ?? ''); ?>" /></td>
+                    <td><input type="text" name="phone_secondary" id="phone_secondary" class="regular-text phone-mask" placeholder="(555)-555-5555" value="<?php echo esc_attr($client['phone_secondary'] ?? ''); ?>" />
+                        <?php
+                        // K19: client_phone_2 now mirrors WP shipping_phone and
+                        // is WP-authoritative, so for a linked client the nightly
+                        // sync replaces a value entered here. Say so at the point
+                        // of edit rather than let the change silently revert.
+                        ?>
+                        <p class="description"><?php esc_html_e('Delivery phone. For a client linked to a WordPress account this is synced nightly from the account\'s shipping phone — change it there, or a different value entered here will be replaced on the next sync.', 'meals-db'); ?></p></td>
                 </tr>
                 <?php
             },

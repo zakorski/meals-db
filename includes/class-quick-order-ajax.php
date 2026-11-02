@@ -1325,20 +1325,24 @@ class MealsDB_Quick_Order_Ajax {
         // K15: phone was the one WC address field this method never set, so every
         // Quick Order order showed a blank phone while the client record held one
         // (client_phone_1 populated on 987/992). Same omission shape as the missing
-        // address_2 in K11. Resolve once and set both billing and shipping (the
-        // shipping/delivery phone is the driver contact and is what migrated orders
-        // carry). Guard against empty so an absent phone leaves the field untouched
-        // rather than blanking an existing value (same reasoning as K13 ITEM 3:
-        // empty means "no data", not "delete").
-        $client_phone = self::resolve_order_phone($client);
-        if ($client_phone !== '') {
-            $order->set_billing_phone($client_phone);
+        // address_2 in K11. Guard each side against empty so an absent phone leaves
+        // the field untouched rather than blanking an existing value (same
+        // reasoning as K13 ITEM 3: empty means "no data", not "delete").
+        // K19 ITEM 3: billing and shipping are resolved separately. K15 wrote
+        // client_phone_1 into both, which put the billing number in the delivery
+        // slot for the 193 clients whose shipping_phone (now client_phone_2) is a
+        // distinct delivery number.
+        $phones = self::resolve_order_phones($client);
+        if ($phones['billing'] !== '') {
+            $order->set_billing_phone($phones['billing']);
+        }
+        if ($phones['shipping'] !== '') {
             // set_shipping_phone() exists on WC_Order in WooCommerce 5.6+; fall
             // back to the meta key rather than calling a method that may not exist.
             if (method_exists($order, 'set_shipping_phone')) {
-                $order->set_shipping_phone($client_phone);
+                $order->set_shipping_phone($phones['shipping']);
             } else {
-                $order->update_meta_data('_shipping_phone', $client_phone);
+                $order->update_meta_data('_shipping_phone', $phones['shipping']);
             }
         }
         $order->set_billing_address_1((string) ($client['street_name'] ?? ''));
@@ -1390,33 +1394,61 @@ class MealsDB_Quick_Order_Ajax {
     }
 
     /**
-     * K15: resolve which phone number an order should carry for a client row.
+     * K15 / K19 ITEM 3: resolve which phone numbers an order should carry for a
+     * client row, split by destination.
      *
-     * A do-not-call client's own number must never reach an order a driver will
-     * call — that defeats the flag — so when do_not_call_client_phone is set we
-     * use the alternate contact instead, mirroring the slip generator's fallback
-     * order (alternate_contact_phone_1 then _2, see
-     * class-slip-pdf-generator.php::build_driver_block) so the order and the slip
-     * cannot disagree about which number is the contact.
+     *   - billing  → client_phone_1 (mirrors WP billing_phone).
+     *   - shipping → client_phone_2 (mirrors WP shipping_phone, the delivery
+     *                contact) when non-empty, otherwise client_phone_1.
+     *
+     * A do-not-call client's own numbers must never reach an order a driver will
+     * call — that defeats the flag — so when do_not_call_client_phone is set BOTH
+     * sides use the alternate contact instead, and neither client_phone_1 nor
+     * client_phone_2 is consulted. The fallback order (alternate_contact_phone_1
+     * then _2) mirrors the slip generator's (class-slip-pdf-generator.php
+     * ::build_driver_block) so the order and the slip cannot disagree about which
+     * number is the contact.
      *
      * This do-not-call path is dormant today (0/992 clients set the flag and the
      * alternate-contact usermeta keys do not yet exist, see K13) — it is built
      * correctly so it works when that data arrives, not simplified away.
      *
-     * Returns '' when no usable number exists; the caller then leaves the field
-     * unset rather than persisting an empty string.
+     * Either value is '' when no usable number exists; the caller then leaves
+     * that field unset rather than persisting an empty string.
+     *
+     * @return array{billing: string, shipping: string}
      */
-    private static function resolve_order_phone(array $client): string {
+    private static function resolve_order_phones(array $client): array {
         if (empty($client['do_not_call_client_phone'])) {
-            return trim((string) ($client['client_phone_1'] ?? ''));
+            $billing  = trim((string) ($client['client_phone_1'] ?? ''));
+            $shipping = trim((string) ($client['client_phone_2'] ?? ''));
+            return [
+                'billing'  => $billing,
+                'shipping' => $shipping !== '' ? $shipping : $billing,
+            ];
         }
         foreach (['alternate_contact_phone_1', 'alternate_contact_phone_2'] as $key) {
             $value = trim((string) ($client[$key] ?? ''));
             if ($value !== '') {
-                return $value;
+                return ['billing' => $value, 'shipping' => $value];
             }
         }
-        return '';
+        return ['billing' => '', 'shipping' => ''];
+    }
+
+    /**
+     * K19: the Quick Order client-context panel's "Phone 2" value. Blanked when
+     * it is the same number as Phone 1 so the panel does not show the 820
+     * clients whose shipping_phone equals billing_phone twice (the JS addRow()
+     * already skips empty values). Done server-side so the slip and the panel
+     * share ONE comparison rule (MealsDB_Phone::is_same_number) rather than a
+     * second normaliser in quick-order.js.
+     */
+    private static function context_secondary_phone(string $phone_1, string $phone_2): string {
+        if (trim($phone_2) === '' || MealsDB_Phone::is_same_number($phone_1, $phone_2)) {
+            return '';
+        }
+        return $phone_2;
     }
 
     /**
@@ -1778,7 +1810,10 @@ class MealsDB_Quick_Order_Ajax {
             'notes_to_provider' => (string) ($client['notes_to_service_provider'] ?? ''),
             'dietary'           => $decrypt($client['diet_concerns'] ?? ''),
             'phone_1'           => (string) ($client['client_phone_1'] ?? ''),
-            'phone_2'           => (string) ($client['client_phone_2'] ?? ''),
+            'phone_2'           => self::context_secondary_phone(
+                (string) ($client['client_phone_1'] ?? ''),
+                (string) ($client['client_phone_2'] ?? '')
+            ),
             'alt_phone_1'       => (string) ($client['alternate_contact_phone_1'] ?? ''),
             'alt_phone_2'       => (string) ($client['alternate_contact_phone_2'] ?? ''),
             'do_not_call'       => !empty($client['do_not_call_client_phone']),

@@ -437,7 +437,10 @@ class MealsDB_Migration_Consolidated {
 
             $email      = $user['user_email'] ?? null;
             $phone1     = !empty($meta['billing_phone']) ? $meta['billing_phone'] : null;
-            $phone2     = $meta['mealsdb_client_phone_2'] ?? $meta['billing_phone_2'] ?? null;
+            // K19: shipping_phone is the client's second (delivery) phone — the
+            // key the nightly sync maps client_phone_2 to. The previous
+            // mealsdb_client_phone_2 / billing_phone_2 keys have 0 usermeta rows.
+            $phone2     = !empty($meta['shipping_phone']) ? $meta['shipping_phone'] : null;
             $payment    = $meta['payment_method'] ?? null;
             $service_id = $meta['service_id'] ?? null;
             $req_period = $meta['service'] ?? null;
