@@ -197,6 +197,19 @@ chk_true(strpos($pdf_html, '3.19') !== false, 'T-B2: PDF "(includes HST)" cell =
 chk_true(strpos($pdf_html, '$141.54') !== false, 'T-B2: PDF total = vac_total');
 
 // ===========================================================================
+// K20 — the VAC CSV Billing Phone column (index 6) is blank for a placeholder
+// phone, verbatim for a real one. Operator decision 2026-11-02.
+// ===========================================================================
+foreach (['0', '-', 'n/a', '00'] as $placeholder) {
+    $ph_row = csv_row_with(MealsDB_Invoice_Generator::serialize_vac_csv([700 => vac_vet(['client_phone_1' => $placeholder])]), 'K123');
+    chk($ph_row[6] ?? null, '', "K20: placeholder phone '{$placeholder}' exports blank");
+}
+$ph_row = csv_row_with(MealsDB_Invoice_Generator::serialize_vac_csv([700 => vac_vet()]), 'K123');
+chk($ph_row[6] ?? null, '5065550000', 'K20: real phone exports verbatim');
+$ph_row = csv_row_with(MealsDB_Invoice_Generator::serialize_vac_csv([700 => vac_vet(['client_phone_1' => '204-7570 (Joyce)'])]), 'K123');
+chk($ph_row[6] ?? null, '204-7570 (Joyce)', 'K20: 7-digit local with name exports verbatim');
+
+// ===========================================================================
 // T-B4 — rates from Definitions.
 // ===========================================================================
 // (a) SDNB side-rate override flows through the serializer's HST. With a
