@@ -42,8 +42,43 @@ if (!function_exists('is_user_logged_in')) { function is_user_logged_in() { retu
 if (!function_exists('current_user_can')) { function current_user_can($cap) { return (bool) ($GLOBALS['cap_ok'] ?? true); } }
 if (!function_exists('apply_filters')) { function apply_filters($tag, $value, ...$args) { return $value; } }
 function update_meta_cache($type, $ids) { return true; }
-function update_user_meta($id, $k, $v) { $GLOBALS['wp_writes'][] = ['meta', $id, $k, $v]; return true; }
-function wp_update_user($d) { $GLOBALS['wp_writes'][] = ['user', $d]; return $d['ID']; }
+function update_user_meta($id, $k, $v) {
+    $GLOBALS['wp_writes'][] = ['meta', $id, $k, $v];
+    $GLOBALS['meta']["$id|$k"] = $v;
+    return true;
+}
+// $GLOBALS['emails_taken']: addresses another user already owns, so a
+// user_email change collides the way WordPress's uniqueness check does.
+$GLOBALS['emails_taken'] = [];
+function wp_update_user($d) {
+    $GLOBALS['wp_writes'][] = ['user', $d];
+    $GLOBALS['email_filter_active_during_update'] = has_filter('send_email_change_email');
+    // K21 Test 28: a resolution write must run with the sync hooks suppressed.
+    $GLOBALS['syncing_during_update'] = class_exists('MealsDB_Sync', false) ? MealsDB_Sync::is_syncing() : null;
+    if (isset($d['user_email']) && in_array(strtolower($d['user_email']), $GLOBALS['emails_taken'], true)) {
+        return new WP_Error('existing_user_email', 'Sorry, that email address is already used!');
+    }
+    $u = $GLOBALS['users'][(int) $d['ID']] ?? null;
+    if ($u) {
+        foreach ($d as $k => $v) { if ($k !== 'ID') { $u->$k = $v; } }
+    }
+    return $d['ID'];
+}
+$GLOBALS['filters'] = [];
+function add_filter($tag, $cb, $prio = 10, $args = 1) { $GLOBALS['filters'][$tag][] = $cb; return true; }
+function remove_filter($tag, $cb, $prio = 10) {
+    $GLOBALS['filters'][$tag] = array_values(array_filter($GLOBALS['filters'][$tag] ?? [], static fn ($x) => $x !== $cb));
+    return true;
+}
+function has_filter($tag) { return !empty($GLOBALS['filters'][$tag]); }
+// Options: shadow mode explicitly OFF unless a test flips it; date/time
+// formats for the template; the zone delivery schedule for delivery_day.
+$GLOBALS['options'] = [
+    'mealsdb_settings' => ['shadow_mode' => '0'],
+    'date_format' => 'Y-m-d', 'time_format' => 'H:i',
+    'mealsdb_zone_delivery_schedule' => ['Zone 1' => ['day' => 'Tuesday'], 'Zone 3' => ['day' => 'Thursday']],
+];
+if (!function_exists('get_option')) { function get_option($k, $d = false) { return $GLOBALS['options'][$k] ?? $d; } }
 
 // --- Fake wpdb ---------------------------------------------------------------
 class wpdb {
@@ -55,6 +90,8 @@ class wpdb {
     public array $ignored = [];     // legacy ignore rows
     public array $events = [];
     public array $client_writes = [];
+    public array $audit = [];
+    public bool $fail_client_update = false;
     public bool $fail_live = false;
     private int $next_id = 1;
 
@@ -127,6 +164,11 @@ class wpdb {
             if ($this->fail_live) { $this->last_error = 'table missing'; return null; }
             return array_values(array_filter($this->conflicts, static fn ($r) => in_array($r['status'], ['open', 'dismissed'], true)));
         }
+        if (strpos($sql, 'SHOW COLUMNS') !== false && strpos($sql, 'meals_clients') !== false) {
+            $cols = ['client_id' => true];
+            foreach ($this->clients as $r) { foreach (array_keys($r) as $c) { $cols[$c] = true; } }
+            return array_map(static fn ($c) => ['Field' => $c], array_keys($cols));
+        }
         if (strpos($sql, 'SHOW COLUMNS') !== false && strpos($sql, 'meals_staff') !== false) {
             return [['Field' => 'wordpress_user_id']];
         }
@@ -183,6 +225,25 @@ class wpdb {
                 }
             }
             return $n;
+        }
+        if (strpos($sql, 'meals_audit_log') !== false) {
+            // MealsDB_Logger::log(): user_id, action, target_id, field, old, new, source, created_at.
+            $this->audit[] = ['action' => $args[1], 'target_id' => $args[2], 'field' => $args[3],
+                'old' => $args[4], 'new' => $args[5], 'source' => $args[6]];
+            return 1;
+        }
+        if (preg_match('/^UPDATE `[^`]*meals_clients` SET (.+) WHERE `client_id` = %d$/s', trim($sql), $m)) {
+            if ($this->fail_client_update) { $this->last_error = 'forced failure'; return false; }
+            preg_match_all('/`([a-z0-9_]+)` = %s/', $m[1], $cols);
+            $id = (int) end($args);
+            foreach ($this->clients as &$row) {
+                if ((int) $row['client_id'] === $id) {
+                    foreach ($cols[1] as $i => $col) { $row[$col] = $args[$i]; }
+                }
+            }
+            unset($row);
+            $this->client_writes[] = ['update', $id, array_combine($cols[1], array_slice($args, 0, count($cols[1])))];
+            return 1;
         }
         if (preg_match('/^\s*(UPDATE|INSERT|DELETE|REPLACE)/i', $sql) && strpos($sql, 'meals_event_log') === false) {
             $this->client_writes[] = ['query', $sql];

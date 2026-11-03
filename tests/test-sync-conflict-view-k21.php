@@ -142,9 +142,10 @@ $stats = MealsDB_Sync_Reconciler::run_detection();
 chk($db->conflicts[$id200]['status'] === 'dismissed' && ($stats['conflicts']['still_dismissed'] ?? 0) === 1,
     'dismissal made on the page survives the next detection run');
 
-// Keep is not available yet.
+// Keep without a side is refused (ITEM 10 resolution is covered in
+// test-sync-resolver-k21.php).
 $r = $V::apply_choices(100, [['conflict_id' => $id100, 'values_hash' => $hash100, 'action' => 'keep']], 7);
-chk($r['results'][0]['ok'] === false && $r['results'][0]['code'] === 'not_available', 'keep: refused until ITEM 10');
+chk($r['results'][0]['ok'] === false && $r['results'][0]['code'] === 'invalid_side', 'keep without a side: refused');
 
 // Stale page: WP changes after the page was rendered.
 $GLOBALS['users'][100]->last_name = 'Smithe';
@@ -264,7 +265,9 @@ chk(strpos($html, '&lt;script&gt;alert(1)&lt;/script&gt;') !== false, 'template:
 // account 100 (reopened by the hostile-value change).
 chk(substr_count($html, 'class="mealsdb-conflict-card"') === 1 && strpos($html, 'data-wp-user-id="100"') !== false,
     'template: one card per open account');
-chk(strpos($html, 'value="keep:wp" disabled="disabled"') !== false, 'template: Keep choices rendered disabled');
+chk(strpos($html, 'value="keep:wp" />') !== false && strpos($html, 'value="keep:client:10" />') !== false,
+    'template: Keep choices enabled for valid, non-blank sides');
+chk(strpos($html, 'class="button mealsdb-conflict-use-all" data-side="wp"') !== false, 'template: Use all WordPress shortcut rendered');
 chk(strpos($html, 'value="dismiss"') !== false, 'template: Leave both offered');
 chk(strpos($html, 'id="mealsdb-sync-conflicts-data"') !== false && strpos($html, 'nonce-mealsdb_sync_conflicts') !== false,
     'template: data island carries the conflict nonce');

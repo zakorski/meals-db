@@ -28,6 +28,33 @@ class MealsDB_Sync {
     public const SYNC_MASS_BLANK_THRESHOLD_PCT = 20;
 
     /**
+     * Run $fn with the sync hooks suppressed (K21 ITEM 10). A resolution
+     * write calls wp_update_user() / update_user_meta(), which fire
+     * profile_update / woocommerce_customer_save_address; without this the
+     * real-time hooks would re-enter the sync mid-resolution. Restores the
+     * previous flag in finally, so a throw can never leave every later sync
+     * hook silently disabled for the rest of the request.
+     *
+     * @template T
+     * @param callable(): T $fn
+     * @return T
+     */
+    public static function without_sync_hooks(callable $fn) {
+        $previous      = self::$syncing;
+        self::$syncing = true;
+        try {
+            return $fn();
+        } finally {
+            self::$syncing = $previous;
+        }
+    }
+
+    /** Whether a sync write is in progress (hooks must not re-enter). */
+    public static function is_syncing(): bool {
+        return self::$syncing;
+    }
+
+    /**
      * Fields the pre-K21 nightly syncs WP -> meals_clients (WP wins).
      *
      * K21 ITEM 1: a thin accessor over MealsDB_Sync_Registry — the field list

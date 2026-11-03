@@ -303,40 +303,10 @@ jQuery(document).ready(function($) {
         });
     });
 
-    // -----------------------------
-    // 🔁 Sync One Field
-    // -----------------------------
-    $('.sync-field').on('click', function () {
-        const $row = $(this).closest('tr');
-        const selected = $row.find('input[type=radio]:checked').val();
-        const field = $row.data('field');
-        const woo_id = $row.data('woo');
-        const clientIdRaw = $row.data('client');
-        const client_id = Number.isInteger(clientIdRaw) ? clientIdRaw : parseInt(clientIdRaw, 10);
-        const source = $row.find('.mealsdb-a');
-        const target = $row.find('.mealsdb-b');
-        const direction = selected === 'woocommerce' ? 'woocommerce' : 'meals_db';
-        const value = (selected === 'meals_db')
-            ? (source.data('value') ?? source.text())
-            : (target.data('value') ?? target.text());
-
-        $.post(ajaxurl, {
-            action: 'mealsdb_sync_field',
-            nonce: mealsdb.nonce,
-            woo_user_id: woo_id,
-            field: field,
-            client_id: Number.isNaN(client_id) ? 0 : client_id,
-            direction: direction,
-            value: value
-        }, function (res) {
-            if (res.success) {
-                MealsDBNotice('success', 'Synced: ' + field);
-                $row.fadeOut();
-            } else {
-                MealsDBNotice('error', 'Sync failed.');
-            }
-        });
-    });
+    // K21 ITEM 10: the "Sync One Field" / "Sync All Selected Fields"
+    // handlers were removed with the mealsdb_sync_field endpoint they called
+    // (it wrote a browser-supplied value over populated data). Linked-pair
+    // differences are resolved in the conflict view (sync-conflicts.js).
 
     // -----------------------------
     // 🔗 Link Meals DB Client to WordPress User
@@ -397,64 +367,6 @@ jQuery(document).ready(function($) {
             }).always(function () {
                 $button.prop('disabled', false);
             });
-        });
-    });
-
-    // -----------------------------
-    // 🔁 Sync All Selected Fields
-    // -----------------------------
-    $('#mealsdb-sync-all').on('click', function () {
-        // Double-submit guard: a rapid second click while the first
-        // batch of POSTs is still in flight would issue every sync_field
-        // request twice. Each is rate-limited server-side, but the
-        // duplicate noise blows the per-user quota for no reason and
-        // obscures real failures in the audit log. Disable the button
-        // until every in-flight request resolves.
-        const $btn = $(this);
-        if ($btn.prop('disabled')) {
-            return;
-        }
-        $btn.prop('disabled', true);
-
-        const pending = [];
-        $('.mealsdb-mismatch-row').each(function () {
-            const $row = $(this);
-            const selected = $row.find('input[type=radio]:checked').val();
-            if (!selected) return;
-
-            const field = $row.data('field');
-            const woo_id = $row.data('woo');
-            const clientIdRaw = $row.data('client');
-            const client_id = Number.isInteger(clientIdRaw) ? clientIdRaw : parseInt(clientIdRaw, 10);
-            const source = $row.find('.mealsdb-a');
-            const target = $row.find('.mealsdb-b');
-            const direction = selected === 'woocommerce' ? 'woocommerce' : 'meals_db';
-            const value = (selected === 'meals_db')
-                ? (source.data('value') ?? source.text())
-                : (target.data('value') ?? target.text());
-
-            pending.push($.post(ajaxurl, {
-                action: 'mealsdb_sync_field',
-                nonce: mealsdb.nonce,
-                woo_user_id: woo_id,
-                field: field,
-                client_id: Number.isNaN(client_id) ? 0 : client_id,
-                direction: direction,
-                value: value
-            }, function (res) {
-                if (res.success) {
-                    $row.fadeOut();
-                }
-            }));
-        });
-
-        if (pending.length === 0) {
-            $btn.prop('disabled', false);
-            return;
-        }
-
-        $.when.apply($, pending).always(function () {
-            $btn.prop('disabled', false);
         });
     });
 

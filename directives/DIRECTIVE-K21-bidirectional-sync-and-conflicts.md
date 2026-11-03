@@ -566,6 +566,25 @@ conflict** ("changed since you loaded this page — reload") if the hash differs
 value it just read from the chosen side. Other conflicts in the same batch still apply; the response
 reports each one.
 
+> **APPLIED (2026-11-03).** `MealsDB_Sync_Resolver`, reached through the conflict view's per-account
+> endpoint (`action: keep`, `side: wp | client:<id>`). The browser sends only WHICH side; the value
+> is read server-side after the stale-page check. Refuses a blank or unparseable chosen value. Writes
+> only sides that differ from the chosen value after normalisation (this is what keeps
+> `sdnb rural`), WordPress first so a refusal there leaves MealsDB untouched, then the other clients
+> through `MealsDB_Sync_Mutate::update_meals_client()` (encrypt-and-fail-closed path), all inside
+> `MealsDB_Sync::without_sync_hooks()`. Derived fields are recomputed for every client in the account
+> and may be overwritten; a null computed value never writes. Every write is audit-logged
+> (`sync_resolve_wp` / `sync_resolve_client` / `sync_derived_recompute`, source
+> `resolution:<side>`). The conflict closes `resolved` only if a fresh re-read shows the account now
+> agrees; otherwise it stays open with the reason. Later choices in the same batch see the values the
+> earlier ones wrote. Implementation choice: the **Use all** shortcuts only pre-select options and
+> **skip Client Type** (it decides billing); nothing is written until the operator confirms. **Legacy
+> overwrite path removed:** the old dashboard no longer reports linked-pair field mismatches
+> (`MealsDB_Sync_Compare::compare_fields()` deleted) and the `mealsdb_sync_field` endpoint and its
+> admin.js handlers are gone — it wrote a browser-supplied value over populated data. The dashboard
+> keeps the WordPress-only / Meals-DB-only linking cards and their ignore toggles. Test:
+> `tests/test-sync-resolver-k21.php`.
+
 ---
 
 ## ITEM 11 — WordPress-side write safety
@@ -581,6 +600,13 @@ reports each one.
   password-reset destination. The resolution confirm dialog for `client_email` → WordPress must say
   so.
 
+> **APPLIED (2026-11-03)** in `MealsDB_Sync_Resolver::write_wp()`: `send_email_change_email` is
+> filtered to false for the one `wp_update_user()` call and removed in `finally`; a `WP_Error`
+> (e.g. `existing_user_email`) stops the resolution before MealsDB is touched and leaves the
+> conflict open with WordPress's message. The confirm dialog warns that the email is also the login
+> and password-reset address. These cover resolution writes; the nightly MealsDB -> WP fill path
+> (ITEM 7) must reuse `write_wp()` or the same guard.
+
 ---
 
 ## ITEM 12 — Shadow mode
@@ -594,6 +620,11 @@ so this item is a safeguard rather than live behaviour. When on:
   WordPress rather than letting it appear to succeed.
 
 Do not change shadow mode's default or setting.
+
+> **APPLIED for resolution (2026-11-03):** the resolver refuses any choice that would write
+> WordPress while shadow mode is on (nothing is written), and the view disables exactly those Keep
+> options with the reason; keeping the WordPress value (a MealsDB-only write) still works. The
+> per-run `sync.shadow_suppressed` count belongs to the nightly WP fills (ITEM 7).
 
 ---
 

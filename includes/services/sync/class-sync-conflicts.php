@@ -263,6 +263,23 @@ final class MealsDB_Sync_Conflicts {
     }
 
     /**
+     * Operator resolution (K21 ITEM 10): the chosen value was written to
+     * every other side and the account now agrees. Closes the row.
+     *
+     * @param array<string, mixed> $live
+     * @param string $resolution 'wp' | 'client:<id>'
+     */
+    public function resolve(array $live, string $resolution, int $user_id, string $now): bool {
+        return $this->update((int) $live['conflict_id'], [
+            'status'      => self::STATUS_RESOLVED,
+            'resolution'  => $resolution,
+            'resolved_by' => $user_id > 0 ? $user_id : null,
+            'resolved_at' => $now,
+            'open_dedup'  => null,
+        ]);
+    }
+
+    /**
      * Undo a dismissal: the row is open again and the next run treats it as
      * an ordinary conflict.
      *

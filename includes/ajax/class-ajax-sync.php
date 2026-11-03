@@ -16,7 +16,6 @@ class MealsDB_Ajax_Sync {
      * Register the AJAX actions for synchronization events.
      */
     public static function init(): void {
-        add_action('wp_ajax_mealsdb_sync_field', [self::class, 'sync_field']);
         add_action('wp_ajax_mealsdb_toggle_ignore', [self::class, 'toggle_ignore']);
         add_action('wp_ajax_mealsdb_sync_conflicts_apply', [self::class, 'apply_conflict_choices']);
         add_action('wp_ajax_mealsdb_check_updates', [self::class, 'check_updates']);
@@ -25,61 +24,12 @@ class MealsDB_Ajax_Sync {
         add_action('wp_ajax_mealsdb_fetch_products', [self::class, 'fetch_products']);
     }
 
-    /**
-     * Sync one field from Meals DB to WooCommerce.
-     */
-    public static function sync_field(): void {
-        check_ajax_referer('mealsdb_nonce', 'nonce');
-
-        if (!MealsDB_Permissions::can_access_plugin()) {
-            wp_send_json_error(['message' => 'Unauthorized']);
-        }
-
-        if (class_exists('MealsDB_Rate_Limiter')
-            && !MealsDB_Rate_Limiter::check_rate_limit('sync_operations')) {
-            wp_send_json_error(['message' => __('Rate limit exceeded. Please try again later.', 'meals-db')], 429);
-        }
-
-        $woo_user_id = intval($_POST['woo_user_id'] ?? 0);
-        $client_id = intval($_POST['client_id'] ?? 0);
-        $field = sanitize_text_field(wp_unslash($_POST['field'] ?? ''));
-        $value = sanitize_text_field(wp_unslash($_POST['value'] ?? ''));
-        $direction = sanitize_key(wp_unslash($_POST['direction'] ?? 'meals_db'));
-
-        if (!$field) {
-            wp_send_json_error(['message' => 'Missing data.']);
-        }
-
-        switch ($direction) {
-            case 'meals_db':
-                if (!$woo_user_id) {
-                    wp_send_json_error(['message' => 'Missing data.']);
-                }
-
-                $result = MealsDB_Sync::push_to_woocommerce($woo_user_id, $field, $value);
-                break;
-            case 'woocommerce':
-                if (!$client_id) {
-                    wp_send_json_error(['message' => 'Missing data.']);
-                }
-
-                $result = MealsDB_Sync::push_to_meals_db($client_id, $field, $value);
-                break;
-            default:
-                wp_send_json_error(['message' => 'Invalid sync direction.']);
-        }
-
-        if (is_wp_error($result)) {
-            $message = $result->get_error_message();
-            if (empty($message)) {
-                $message = 'Failed to sync field.';
-            }
-
-            wp_send_json_error(['message' => $message]);
-        }
-
-        wp_send_json_success(['message' => 'Synced successfully.']);
-    }
+    // K21 ITEM 10: the legacy mealsdb_sync_field endpoint was removed. It
+    // wrote a VALUE posted by the browser over a populated field in either
+    // system, with no stale-page check — exactly what K21 forbids outside the
+    // conflict resolution path. Linked-pair differences are now resolved in
+    // the conflict view (mealsdb_sync_conflicts_apply), which reads the
+    // chosen value server-side.
 
     /**
      * K21 ITEM 9: apply an operator's choices for ONE account's conflicts in
@@ -87,7 +37,8 @@ class MealsDB_Ajax_Sync {
      * field, so working a large queue does not hit the 100/hour limit).
      *
      * POST: nonce, wp_user_id, choices = JSON list of
-     *   {conflict_id: int, values_hash: 64-hex, action: dismiss|undismiss|keep}
+     *   {conflict_id: int, values_hash: 64-hex, action: dismiss|undismiss|keep,
+     *    side: wp|client:<id> (keep only)}
      *
      * Own nonce context (mealsdb_sync_conflicts), not the general
      * mealsdb_nonce: ITEM 10 adds value-overwriting "keep" choices to this
@@ -129,14 +80,18 @@ class MealsDB_Ajax_Sync {
             }
             $hash   = strtolower((string) ($item['values_hash'] ?? ''));
             $action = (string) ($item['action'] ?? '');
-            if (!preg_match('/^[0-9a-f]{64}$/', $hash) || !in_array($action, MealsDB_Sync_Conflict_View::ACTIONS, true)) {
+            $side   = (string) ($item['side'] ?? '');
+            if (!preg_match('/^[0-9a-f]{64}$/', $hash) || !in_array($action, MealsDB_Sync_Conflict_View::ACTIONS, true)
+                || ($action === MealsDB_Sync_Conflict_View::ACTION_KEEP && !preg_match('/^(wp|client:[1-9]\d*)$/', $side))) {
                 wp_send_json_error(['message' => __('Invalid request.', 'meals-db')], 400);
                 return;
             }
+            // Only WHICH side to keep travels from the browser — never a value.
             $choices[] = [
                 'conflict_id' => absint($item['conflict_id'] ?? 0),
                 'values_hash' => $hash,
                 'action'      => $action,
+                'side'        => $action === MealsDB_Sync_Conflict_View::ACTION_KEEP ? $side : '',
             ];
         }
 

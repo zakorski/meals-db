@@ -7,9 +7,11 @@
  * Choices are collected per card and applied in one request per account by
  * assets/js/sync-conflicts.js (through MealsDBConfirm, focus on Cancel).
  *
- * This stage enables "Leave both" (dismiss) and its undo only. The Keep
- * choices and the Use-all shortcuts render disabled until ITEM 10 ships the
- * resolution writes — they are shown so the operator sees the final layout.
+ * Keep writes the chosen side's value (read server-side) to every other side
+ * of the account (ITEM 10). A Keep option is disabled, with the reason, when
+ * the side is blank, its value is not valid for the field, or shadow mode
+ * blocks the WordPress write it would need. The Use-all shortcuts skip
+ * client_type (it decides billing; choose it explicitly).
  */
 defined('ABSPATH') || exit;
 
@@ -57,6 +59,10 @@ $mealsdb_island = [
         'confirmLabel'  => __('Apply', 'meals-db'),
         'cancelLabel'   => __('Cancel', 'meals-db'),
         'dismiss'       => __('Leave both', 'meals-db'),
+        'keepWp'        => __('Keep WordPress', 'meals-db'),
+        'keepClient'    => __('Keep client #', 'meals-db'),
+        'emailWarning'  => __('Changing a WordPress email also changes the address the client logs in with and receives password resets at.', 'meals-db'),
+        'typeWarning'   => __('Changing Client Type changes which program the client is billed under.', 'meals-db'),
         'undismiss'     => __('Undo dismissal', 'meals-db'),
         'applying'      => __('Applying…', 'meals-db'),
         'failed'        => __('The choices could not be applied.', 'meals-db'),
@@ -83,7 +89,7 @@ $mealsdb_island = [
     </p>
 
     <div class="notice notice-info inline">
-        <p><?php esc_html_e('Choosing which value to keep is not switched on yet. You can review every conflict now and use "Leave both" for differences that are expected (for example, a client in two programs).', 'meals-db'); ?></p>
+        <p><?php esc_html_e('"Keep" writes the chosen value to every other record in the card and is audit-logged. Use "Leave both" for differences that are expected (for example, a client in two programs).', 'meals-db'); ?></p>
     </div>
 
     <?php if (MealsDB_Shadow_Mode::is_enabled()) : ?>
@@ -198,6 +204,7 @@ $mealsdb_island = [
                     <tr class="mealsdb-conflict-row<?php echo $mealsdb_c['stale'] ? ' is-stale' : ''; ?>"
                         data-conflict-id="<?php echo esc_attr((string) $mealsdb_c['id']); ?>"
                         data-values-hash="<?php echo esc_attr($mealsdb_c['hash']); ?>"
+                        data-field="<?php echo esc_attr($mealsdb_row['column']); ?>"
                         data-field-label="<?php echo esc_attr($mealsdb_row['label']); ?>">
                         <th scope="row">
                             <?php echo esc_html($mealsdb_row['label']); ?>
@@ -219,9 +226,16 @@ $mealsdb_island = [
                                 <em><?php esc_html_e('Changed since the last scan. It will update on the next nightly run.', 'meals-db'); ?></em>
                             <?php else : ?>
                                 <label><input type="radio" name="<?php echo esc_attr($mealsdb_name); ?>" value="" checked="checked" /> <?php esc_html_e('Decide later', 'meals-db'); ?></label><br />
-                                <label class="is-disabled" title="<?php esc_attr_e('Not switched on yet', 'meals-db'); ?>"><input type="radio" name="<?php echo esc_attr($mealsdb_name); ?>" value="keep:wp" disabled="disabled" /> <?php esc_html_e('Keep WordPress', 'meals-db'); ?></label><br />
-                                <?php foreach ($mealsdb_client_ids as $mealsdb_cid) : ?>
-                                    <label class="is-disabled" title="<?php esc_attr_e('Not switched on yet', 'meals-db'); ?>"><input type="radio" name="<?php echo esc_attr($mealsdb_name); ?>" value="<?php echo esc_attr('keep:client:' . (int) $mealsdb_cid); ?>" disabled="disabled" /> <?php echo esc_html(sprintf(__('Keep client #%d', 'meals-db'), (int) $mealsdb_cid)); ?></label><br />
+                                <?php
+                                $mealsdb_keep_sides = ['wp' => __('Keep WordPress', 'meals-db')];
+                                foreach ($mealsdb_client_ids as $mealsdb_cid) {
+                                    /* translators: %d: client ID */
+                                    $mealsdb_keep_sides['client:' . (int) $mealsdb_cid] = sprintf(__('Keep client #%d', 'meals-db'), (int) $mealsdb_cid);
+                                }
+                                foreach ($mealsdb_keep_sides as $mealsdb_side => $mealsdb_side_label) :
+                                    $mealsdb_opt = $mealsdb_c['keep'][$mealsdb_side] ?? ['enabled' => false, 'reason' => ''];
+                                    ?>
+                                    <label<?php echo $mealsdb_opt['enabled'] ? '' : ' class="is-disabled" title="' . esc_attr($mealsdb_opt['reason']) . '"'; ?>><input type="radio" name="<?php echo esc_attr($mealsdb_name); ?>" value="<?php echo esc_attr('keep:' . $mealsdb_side); ?>"<?php echo $mealsdb_opt['enabled'] ? '' : ' disabled="disabled"'; ?> /> <?php echo esc_html($mealsdb_side_label); ?></label><br />
                                 <?php endforeach; ?>
                                 <?php if ($mealsdb_c['status'] === 'dismissed') : ?>
                                     <label><input type="radio" name="<?php echo esc_attr($mealsdb_name); ?>" value="undismiss" /> <?php esc_html_e('Undo dismissal', 'meals-db'); ?></label>
@@ -274,9 +288,14 @@ $mealsdb_island = [
             <?php endif; ?>
 
             <div class="mealsdb-conflict-card__actions">
-                <button type="button" class="button" disabled="disabled" title="<?php esc_attr_e('Not switched on yet', 'meals-db'); ?>"><?php esc_html_e('Use all WordPress', 'meals-db'); ?></button>
+                <?php
+                // Shortcuts only PRE-SELECT the Keep option on each row (where
+                // that option is enabled, and never on Client Type). Nothing is
+                // written until "Apply choices", which confirms first.
+                ?>
+                <button type="button" class="button mealsdb-conflict-use-all" data-side="wp"><?php esc_html_e('Use all WordPress', 'meals-db'); ?></button>
                 <?php if (count($mealsdb_client_ids) === 1) : ?>
-                    <button type="button" class="button" disabled="disabled" title="<?php esc_attr_e('Not switched on yet', 'meals-db'); ?>"><?php esc_html_e('Use all Meals DB', 'meals-db'); ?></button>
+                    <button type="button" class="button mealsdb-conflict-use-all" data-side="<?php echo esc_attr('client:' . (int) $mealsdb_client_ids[0]); ?>"><?php esc_html_e('Use all Meals DB', 'meals-db'); ?></button>
                 <?php endif; ?>
                 <button type="button" class="button button-primary mealsdb-conflict-apply"><?php esc_html_e('Apply choices for this account', 'meals-db'); ?></button>
                 <span class="mealsdb-conflict-status" role="status" aria-live="polite"></span>

@@ -1,8 +1,8 @@
 /**
  * A/B sync conflict view (directive K21 ITEM 9) — views/sync-conflicts.php.
  *
- * Collects one card's per-field choices and applies them in ONE request per
- * account (Rev 2 batching: one rate-limit token per account, not per field).
+ * Collects one card's per-field choices (Keep a side, Leave both, Undo
+ * dismissal) and applies them in ONE request per account (Rev 2 batching: one rate-limit token per account, not per field).
  * Every apply goes through MealsDBConfirm, which focuses Cancel (K10 ITEM 4).
  *
  * Each choice carries the values_hash the page rendered; the server re-reads
@@ -21,30 +21,49 @@
     var msg = data.messages || {};
     var ajaxUrl = data.ajaxUrl || window.ajaxurl;
 
-    function actionLabel(action) {
+    function actionLabel(action, side) {
         if (action === 'dismiss') { return msg.dismiss || 'Leave both'; }
         if (action === 'undismiss') { return msg.undismiss || 'Undo dismissal'; }
+        if (action === 'keep') {
+            return side === 'wp'
+                ? (msg.keepWp || 'Keep WordPress')
+                : (msg.keepClient || 'Keep client #') + side.replace('client:', '');
+        }
         return action;
     }
 
     function collect($card) {
         var choices = [];
         var lines = [];
+        var warnings = {};
         $card.find('tr.mealsdb-conflict-row').not('.is-stale').not('.is-applied').each(function () {
             var $row = $(this);
             var value = String($row.find('input[type="radio"]:checked').val() || '');
             if (value === '') {
                 return;
             }
-            var action = value.indexOf('keep:') === 0 ? 'keep' : value;
-            choices.push({
+            var isKeep = value.indexOf('keep:') === 0;
+            var action = isKeep ? 'keep' : value;
+            var side = isKeep ? value.slice(5) : '';
+            var choice = {
                 conflict_id: parseInt($row.data('conflict-id'), 10),
                 values_hash: String($row.data('values-hash')),
                 action: action
-            });
-            lines.push(String($row.data('field-label')) + ': ' + actionLabel(action));
+            };
+            if (isKeep) {
+                // Only WHICH side travels; the server reads the value itself.
+                choice.side = side;
+                var field = String($row.data('field'));
+                if (field === 'client_email' && side !== 'wp') { warnings.email = true; }
+                if (field === 'client_type') { warnings.type = true; }
+            }
+            choices.push(choice);
+            lines.push(String($row.data('field-label')) + ': ' + actionLabel(action, side));
         });
-        return { choices: choices, lines: lines };
+        var notes = [];
+        if (warnings.email) { notes.push(msg.emailWarning || ''); }
+        if (warnings.type) { notes.push(msg.typeWarning || ''); }
+        return { choices: choices, lines: lines, notes: notes };
     }
 
     function setStatus($card, text, isError) {
@@ -70,6 +89,25 @@
         }
     }
 
+    // Shortcuts only pre-select; "Apply choices" (with its confirm) writes.
+    // Client Type is skipped: it decides billing and is chosen explicitly.
+    $(document).on('click', '.mealsdb-conflict-use-all', function () {
+        var side = String($(this).data('side'));
+        var $card = $(this).closest('.mealsdb-conflict-card');
+        $card.find('tr.mealsdb-conflict-row').not('.is-stale').not('.is-applied').each(function () {
+            var $row = $(this);
+            if (String($row.data('field')) === 'client_type') {
+                return;
+            }
+            var $opt = $row.find('input[type="radio"]').filter(function () {
+                return this.value === 'keep:' + side;
+            });
+            if ($opt.length && !$opt.prop('disabled')) {
+                $opt.prop('checked', true);
+            }
+        });
+    });
+
     $(document).on('click', '.mealsdb-conflict-apply', function () {
         var $btn = $(this);
         var $card = $btn.closest('.mealsdb-conflict-card');
@@ -82,7 +120,8 @@
 
         window.MealsDBConfirm.confirm({
             title: msg.confirmTitle || 'Apply choices?',
-            message: (msg.confirmIntro || '') + ' ' + picked.lines.join('; '),
+            message: (msg.confirmIntro || '') + ' ' + picked.lines.join('; ') +
+                (picked.notes.length ? ' ' + picked.notes.join(' ') : ''),
             confirmLabel: msg.confirmLabel || 'Apply',
             cancelLabel: msg.cancelLabel || 'Cancel'
         }).then(function (ok) {

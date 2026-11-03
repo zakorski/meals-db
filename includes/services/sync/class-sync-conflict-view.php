@@ -10,10 +10,10 @@
  * computed exactly the way detection computes it. A conflict that has
  * converged since the last scan is shown as changed and is not actionable.
  *
- * Choices are applied PER ACCOUNT in one request (Rev 2 batching). This stage
- * supports only "Leave both" (dismiss) and its undo — they write the conflict
- * store, never client data. "Keep" choices are refused as not yet available;
- * ITEM 10 adds them to the same entry point.
+ * Choices are applied PER ACCOUNT in one request (Rev 2 batching): "Leave
+ * both" (dismiss) and its undo write the conflict store only; "Keep" hands
+ * off to MealsDB_Sync_Resolver (ITEM 10), the one path allowed to overwrite a
+ * populated value.
  *
  * Every applied choice is checked against freshly read values: the request
  * carries the values_hash the page rendered, and a mismatch refuses that
@@ -198,6 +198,7 @@ final class MealsDB_Sync_Conflict_View {
                     'hash'          => MealsDB_Sync_Conflicts::values_hash($column, $wp, $meals),
                     // Converged (or a client relinked) since the last scan.
                     'stale'         => $eval['outcome'] !== MealsDB_Sync_Reconciler::O_CONFLICT,
+                    'keep'          => self::keep_options($column, $wp, $meals),
                 ];
                 $card['conflicts'][] = $row;
             } else {
@@ -215,6 +216,37 @@ final class MealsDB_Sync_Conflict_View {
         }
 
         return $card;
+    }
+
+    /**
+     * For each side of a conflict, whether "Keep" may be chosen, and why not
+     * otherwise. Mirrors MealsDB_Sync_Resolver's refusals so the page never
+     * offers a choice the server will reject.
+     *
+     * @param array<int, string> $meals
+     * @return array<string, array{enabled: bool, reason: string}>
+     */
+    public static function keep_options(string $column, string $wp, array $meals): array {
+        $field = MealsDB_Sync_Registry::get($column);
+        $sides = ['wp' => $wp];
+        foreach ($meals as $client_id => $value) {
+            $sides['client:' . $client_id] = (string) $value;
+        }
+        $shadow = MealsDB_Shadow_Mode::is_enabled();
+
+        $out = [];
+        foreach ($sides as $side => $value) {
+            $reason = '';
+            if (MealsDB_Sync_Registry::is_blank($column, $side === 'wp' ? 'wp' : 'meals', $value)) {
+                $reason = __('This side is blank.', 'meals-db');
+            } elseif ($field === null || !MealsDB_Sync_Comparator::parses($field['comparator'], $value)) {
+                $reason = __('This value is not valid for this field.', 'meals-db');
+            } elseif ($shadow && MealsDB_Sync_Resolver::writes_wp($column, $side, $wp, $meals)) {
+                $reason = __('Shadow mode is on: WordPress cannot be changed.', 'meals-db');
+            }
+            $out[$side] = ['enabled' => $reason === '', 'reason' => $reason];
+        }
+        return $out;
     }
 
     // ------------------------------------------------------------------
@@ -258,8 +290,17 @@ final class MealsDB_Sync_Conflict_View {
             $id     = (int) ($choice['conflict_id'] ?? 0);
             $hash   = (string) ($choice['values_hash'] ?? '');
             $action = (string) ($choice['action'] ?? '');
+            $side   = (string) ($choice['side'] ?? '');
             $results[] = ['conflict_id' => $id]
-                + self::apply_one($store, $by_id[$id] ?? null, $hash, $action, $user, $clients, $user_id, $now);
+                + self::apply_one($store, $by_id[$id] ?? null, $hash, $action, $side, $user, $clients, $user_id, $now);
+            if ($action === self::ACTION_KEEP) {
+                // A resolution changed client data: later choices in this
+                // batch must see the new values, not the pre-batch read.
+                $refetched = MealsDB_Sync_Reconciler::fetch_clients([$wp_user_id]);
+                $clients   = $refetched[$wp_user_id] ?? [];
+                $user      = get_userdata($wp_user_id);
+                $user      = $user instanceof WP_User ? $user : null;
+            }
         }
 
         return ['error' => null, 'results' => $results];
@@ -270,7 +311,7 @@ final class MealsDB_Sync_Conflict_View {
      * @param array<int, array<string, mixed>> $clients
      * @return array{ok: bool, code: string, message: string}
      */
-    private static function apply_one(MealsDB_Sync_Conflicts $store, ?array $row, string $hash, string $action, ?WP_User $user, array $clients, int $user_id, string $now): array {
+    private static function apply_one(MealsDB_Sync_Conflicts $store, ?array $row, string $hash, string $action, string $side, ?WP_User $user, array $clients, int $user_id, string $now): array {
         if ($row === null) {
             // Closed since the page loaded, or not this account's conflict.
             return self::result(false, 'not_found', __('This conflict is no longer open. Reload the page.', 'meals-db'));
@@ -278,7 +319,12 @@ final class MealsDB_Sync_Conflict_View {
 
         switch ($action) {
             case self::ACTION_KEEP:
-                return self::result(false, 'not_available', __('Keeping a value is not available yet.', 'meals-db'));
+                $stale = self::stale_check($row, $hash, $user, $clients);
+                if ($stale !== null) {
+                    return $stale;
+                }
+                // $user is non-null here: stale_check refuses a missing user.
+                return MealsDB_Sync_Resolver::resolve($store, $row, $side, $user, $clients, $user_id, $now);
 
             case self::ACTION_UNDISMISS:
                 if ($row['status'] !== MealsDB_Sync_Conflicts::STATUS_DISMISSED) {
@@ -291,19 +337,15 @@ final class MealsDB_Sync_Conflict_View {
                 return self::result(true, 'undismissed', __('Dismissal undone.', 'meals-db'));
 
             case self::ACTION_DISMISS:
+                $stale = self::stale_check($row, $hash, $user, $clients);
+                if ($stale !== null) {
+                    return $stale;
+                }
                 $column = (string) $row['field'];
                 $field  = MealsDB_Sync_Registry::get($column);
-                if ($field === null || $user === null) {
-                    return self::result(false, 'stale', __('These records changed since the page loaded. Reload the page.', 'meals-db'));
-                }
-                $wp    = MealsDB_Sync_Reconciler::read_wp_value($user, $field['wp']);
-                $meals = MealsDB_Sync_Reconciler::meals_values_for($clients, $column);
-                $live_hash = MealsDB_Sync_Conflicts::values_hash($column, $wp, $meals);
-                if (!preg_match('/^[0-9a-f]{64}$/', $hash) || !hash_equals($live_hash, $hash)
-                    || MealsDB_Sync_Reconciler::evaluate_field($column, $wp, $meals)['outcome'] !== MealsDB_Sync_Reconciler::O_CONFLICT) {
-                    return self::result(false, 'stale', __('These records changed since the page loaded. Reload the page.', 'meals-db'));
-                }
-                if (!$store->dismiss($row, $wp, $meals, $live_hash, $user_id, $now)) {
+                $wp     = MealsDB_Sync_Reconciler::read_wp_value($user, $field['wp']);
+                $meals  = MealsDB_Sync_Reconciler::meals_values_for($clients, $column);
+                if (!$store->dismiss($row, $wp, $meals, $hash, $user_id, $now)) {
                     return self::result(false, 'error', __('Could not update the conflict.', 'meals-db'));
                 }
                 self::log_choice('sync.conflict_dismissed', $row, $user_id);
@@ -311,6 +353,32 @@ final class MealsDB_Sync_Conflict_View {
         }
 
         return self::result(false, 'invalid_action', __('Invalid request.', 'meals-db'));
+    }
+
+    /**
+     * Stale-page guard shared by every choice that acts on values: re-read
+     * both systems, recompute the hash, and require that it equals the hash
+     * the page rendered AND that the values still conflict. Returns null when
+     * the choice may proceed.
+     *
+     * @param array<string, mixed>             $row
+     * @param array<int, array<string, mixed>> $clients
+     * @return array{ok: bool, code: string, message: string}|null
+     */
+    private static function stale_check(array $row, string $hash, ?WP_User $user, array $clients): ?array {
+        $stale  = self::result(false, 'stale', __('These records changed since the page loaded. Reload the page.', 'meals-db'));
+        $column = (string) $row['field'];
+        $field  = MealsDB_Sync_Registry::get($column);
+        if ($field === null || $user === null || !preg_match('/^[0-9a-f]{64}$/', $hash)) {
+            return $stale;
+        }
+        $wp    = MealsDB_Sync_Reconciler::read_wp_value($user, $field['wp']);
+        $meals = MealsDB_Sync_Reconciler::meals_values_for($clients, $column);
+        if (!hash_equals(MealsDB_Sync_Conflicts::values_hash($column, $wp, $meals), $hash)
+            || MealsDB_Sync_Reconciler::evaluate_field($column, $wp, $meals)['outcome'] !== MealsDB_Sync_Reconciler::O_CONFLICT) {
+            return $stale;
+        }
+        return null;
     }
 
     /** @param array<string, mixed> $row */

@@ -133,7 +133,7 @@ $field_labels = [
         </div>
     <?php elseif (!empty($mismatches)) : ?>
         <p class="description">
-            <?php esc_html_e('Review each field below, choose which value to keep, and sync the selected data to WooCommerce. You can also ignore a mismatch when the difference is expected.', 'meals-db'); ?>
+            <?php esc_html_e('These records are not linked: a WordPress user with no Meals DB client, or a Meals DB client with no WordPress user. Link them below, or ignore a row when that is expected. Field differences between LINKED records are resolved under "Review sync conflicts".', 'meals-db'); ?>
         </p>
         <?php
         // $success and $errors are unconditionally initialized at the top of
@@ -149,14 +149,12 @@ $field_labels = [
                     <input type="checkbox" id="mealsdb-show-only-diffs" checked="checked" />
                     <?php esc_html_e('Show only unresolved mismatches', 'meals-db'); ?>
                 </label>
-                <button type="button" class="button button-primary" id="mealsdb-sync-all"><?php esc_html_e('Sync selected rows', 'meals-db'); ?></button>
             </div>
 
             <?php foreach ($mismatches as $index => $mismatch) :
                 $fields      = $mismatch['fields'] ?? [];
                 $woo_user_id = isset($mismatch['woo_user_id']) ? (int) $mismatch['woo_user_id'] : 0;
                 $client_id   = isset($mismatch['client_id']) ? (int) $mismatch['client_id'] : 0;
-                $allow_sync  = isset($mismatch['allow_sync']) ? (bool) $mismatch['allow_sync'] : true;
                 $notice_text = isset($mismatch['notice']) ? $mismatch['notice'] : '';
                 $client_data = is_array($mismatch['meals_client'] ?? null) ? $mismatch['meals_client'] : [];
                 $user_data   = is_array($mismatch['wp_user'] ?? null) ? $mismatch['wp_user'] : [];
@@ -216,7 +214,6 @@ $field_labels = [
                                 $label      = $field_labels[$field_key] ?? ucwords(str_replace('_', ' ', $field_key));
                                 $meals_val  = $values['meals_db'] ?? '';
                                 $woo_val    = $values['woocommerce'] ?? '';
-                                $radio_name = $row_id . '-choice';
                             ?>
                                 <tr
                                     class="mealsdb-mismatch-row"
@@ -228,31 +225,16 @@ $field_labels = [
                                         <strong><?php echo esc_html($label); ?></strong>
                                     </td>
                                     <td class="column-meals">
-                                        <label>
-                                            <input type="radio" name="<?php echo esc_attr($radio_name); ?>" value="meals_db" checked="checked" />
-                                            <span class="mealsdb-a" data-value="<?php echo esc_attr($meals_val); ?>">
-                                                <?php echo $meals_val !== '' ? esc_html($meals_val) : esc_html__('(empty)', 'meals-db'); ?>
-                                            </span>
-                                        </label>
+                                        <span class="mealsdb-a" data-value="<?php echo esc_attr($meals_val); ?>">
+                                            <?php echo $meals_val !== '' ? esc_html($meals_val) : esc_html__('(empty)', 'meals-db'); ?>
+                                        </span>
                                     </td>
                                     <td class="column-woo">
-                                        <label>
-                                            <input type="radio" name="<?php echo esc_attr($radio_name); ?>" value="woocommerce" />
-                                            <span class="mealsdb-b" data-value="<?php echo esc_attr($woo_val); ?>">
-                                                <?php echo $woo_val !== '' ? esc_html($woo_val) : esc_html__('(empty)', 'meals-db'); ?>
-                                            </span>
-                                        </label>
+                                        <span class="mealsdb-b" data-value="<?php echo esc_attr($woo_val); ?>">
+                                            <?php echo $woo_val !== '' ? esc_html($woo_val) : esc_html__('(empty)', 'meals-db'); ?>
+                                        </span>
                                     </td>
                                     <td class="column-actions">
-                                        <?php if ($allow_sync) : ?>
-                                            <button type="button" class="button button-secondary sync-field">
-                                                <?php esc_html_e('Sync selected value', 'meals-db'); ?>
-                                            </button>
-                                        <?php else : ?>
-                                            <span class="description">
-                                                <?php esc_html_e('Sync is unavailable for this conflict.', 'meals-db'); ?>
-                                            </span>
-                                        <?php endif; ?>
                                         <label class="mealsdb-ignore-option">
                                             <input type="checkbox" class="mealsdb-ignore-toggle" />
                                             <?php esc_html_e('Ignore mismatch', 'meals-db'); ?>
