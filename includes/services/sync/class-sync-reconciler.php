@@ -33,17 +33,15 @@
  * (ITEM 12). delivery_initials is never written; only nickname is pushed
  * (ITEM 5).
  *
- * Breakers (K13, restated for fill-blank — Rev 2 keeps only this one):
- * literal blanking is impossible here (a fill writes a non-blank value into
- * a blank side), so the danger is a comparator or mapping bug that makes
- * REAL values read as blank and get filled over. Before any write, per
- * field, count the planned fills whose target still holds non-empty raw text
- * (legitimately only placeholders such as shipping_phone '0' or a long
- * nickname). Over 20% of evaluated accounts aborts the whole apply pass and
- * writes nothing (sync.mass_blank_refused). Separately, a meta key that is
- * absent for EVERY evaluated user is alarmed (sync.meta_key_missing, K13
- * ITEM 2) and WordPress fills for that field are skipped, so a mistyped key
- * in the registry can never be stamped onto every user.
+ * No runtime breakers (operator decision 2026-11-03). The K13 mass-blank
+ * breaker existed because the old sync OVERWROTE: a bad mapping could blank
+ * hundreds of clients in one run. A fill-blank sync never overwrites a
+ * populated value, so there is nothing for a breaker to stop; it could only
+ * refuse a correct run. The guarantee is enforced before release instead, by
+ * the no-overwrite invariant (tests/test-sync-invariant-k21.php, K21 Test
+ * 32). A meta key absent for EVERY evaluated user is still reported
+ * (sync.meta_key_missing, K13 ITEM 2) as an alarm only — it usually means a
+ * mistyped registry key — but nothing is skipped.
  *
  * Accounts are reconciled as a SET (K21 ITEM 7a): WordPress plus every active
  * linked client. Staff accounts (meals_staff links and administrators) are
@@ -215,8 +213,8 @@ final class MealsDB_Sync_Reconciler {
         $log_id = class_exists('MealsDB_Job_Logger') ? MealsDB_Job_Logger::start($apply ? self::JOB_APPLY : self::JOB_DETECT) : 0;
         $stats  = self::empty_stats();
         $stats['mode'] = $apply ? 'apply' : 'detect';
-        // Pass-1 plan: which accounts have fills, and the breaker inputs.
-        $plan = ['accounts' => [], 'replacing' => [], 'present' => [], 'meta_fields' => []];
+        // Pass-1 plan: which accounts have fills, and meta-key presence.
+        $plan = ['accounts' => [], 'present' => [], 'meta_fields' => []];
 
         try {
             global $wpdb;
@@ -311,10 +309,7 @@ final class MealsDB_Sync_Reconciler {
             }
 
             if ($apply) {
-                $refused = self::breaker($plan, $stats);
-                if ($refused !== null) {
-                    return self::fail_run($log_id, $stats, $refused);
-                }
+                self::meta_key_alarm($plan, $stats);
                 self::apply_pass($plan, $staff, $stats);
             }
 
@@ -371,19 +366,6 @@ final class MealsDB_Sync_Reconciler {
             }
             if ($eval['outcome'] === self::O_FILL) {
                 $plan['accounts'][$wp_user_id] = true;
-                // Breaker input: a fill whose target still holds raw text.
-                $replacing = 0;
-                if ($eval['fill_wp'] && trim($wp_value) !== '') {
-                    $replacing++;
-                }
-                foreach ($eval['fill_clients'] as $client_id) {
-                    if (trim((string) ($meals_values[$client_id] ?? '')) !== '') {
-                        $replacing++;
-                    }
-                }
-                if ($replacing > 0) {
-                    $plan['replacing'][$column] = ($plan['replacing'][$column] ?? 0) + $replacing;
-                }
             }
 
             foreach ($eval['unrecognised'] as $value) {
@@ -441,10 +423,8 @@ final class MealsDB_Sync_Reconciler {
      * value, and never writes delivery_initials.
      *
      * Deliberately one-directional: the real-time path NEVER writes
-     * WordPress. Filling WordPress blanks stays with the nightly, whose
-     * breaker and missing-key guard need the whole population and cannot run
-     * on a single save — and a save should not write back into the record
-     * being saved. Never throws.
+     * WordPress. Filling WordPress blanks stays with the nightly, and a save
+     * should not write back into the record being saved. Never throws.
      *
      * @return array{outcome: string, reason?: string, stats?: array<string, mixed>}
      */
@@ -493,13 +473,13 @@ final class MealsDB_Sync_Reconciler {
             $legacy_ignored = is_array($legacy_ignored) ? $legacy_ignored : [];
 
             $stats = self::empty_stats();
-            $plan  = ['accounts' => [], 'replacing' => [], 'present' => [], 'meta_fields' => []];
+            $plan  = ['accounts' => [], 'present' => [], 'meta_fields' => []];
             self::detect_account($user, $clients, $store, $live, $legacy_ignored, gmdate('Y-m-d H:i:s'), $stats, $plan);
 
             if (isset($plan['accounts'][$wp_user_id])) {
                 $mutate = new MealsDB_Sync_Mutate();
                 MealsDB_Sync::without_sync_hooks(static function () use ($user, $clients, $mutate, &$stats): void {
-                    self::apply_account($user, $clients, [], false, $mutate, $stats, false, 'realtime');
+                    self::apply_account($user, $clients, false, $mutate, $stats, false, 'realtime');
                 });
             }
 
@@ -519,48 +499,30 @@ final class MealsDB_Sync_Reconciler {
     }
 
     /**
-     * K13 mass-blank breaker, restated for fill-blank (see class docblock).
-     * Returns the refusal message, or null to proceed. Also flags meta keys
-     * absent for every evaluated user (K13 ITEM 2) so their WordPress fills
-     * are skipped.
+     * K13 ITEM 2 alarm, kept as an alarm only: a meta key absent for EVERY
+     * evaluated user usually means a mistyped registry key. Reported once per
+     * field per run; the run proceeds and fills as usual (a fill into an
+     * absent key creates it and overwrites nothing).
      *
      * @param array<string, mixed> $plan
      * @param array<string, mixed> $stats
      */
-    private static function breaker(array &$plan, array &$stats): ?string {
-        $active = (int) $stats['accounts_evaluated'];
-
-        foreach ($plan['replacing'] as $column => $count) {
-            if (MealsDB_Sync::is_over_mass_blank_threshold((int) $count, $active)) {
-                MealsDB_Event_Log::record([
-                    'severity'  => 'error', 'category' => 'sync', 'subsystem' => 'sync_reconcile',
-                    'event'     => 'sync.mass_blank_refused', 'outcome' => MealsDB_Event_Log::OUTCOME_FAILED,
-                    'message'   => sprintf(
-                        'Nightly fill refused: %d of %d accounts would have a non-empty %s value filled over (> %d%%). This points to a comparator or mapping bug. Wrote nothing.',
-                        $count, $active, $column, MealsDB_Sync::SYNC_MASS_BLANK_THRESHOLD_PCT
-                    ),
-                    'context'   => ['field' => $column, 'count' => (int) $count, 'active' => $active],
-                ]);
-                return sprintf('Mass-blank breaker: %s would fill over %d non-empty values; apply pass refused.', $column, $count);
-            }
+    private static function meta_key_alarm(array $plan, array $stats): void {
+        if ((int) $stats['accounts_evaluated'] === 0) {
+            return;
         }
-
-        $plan['skip_wp'] = [];
-        if ($active > 0) {
-            foreach (array_keys($plan['meta_fields']) as $column) {
-                if (($plan['present'][$column] ?? 0) === 0) {
-                    $plan['skip_wp'][$column] = true;
-                    $field = MealsDB_Sync_Registry::get($column);
-                    MealsDB_Event_Log::record([
-                        'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync_reconcile',
-                        'event' => 'sync.meta_key_missing', 'outcome' => MealsDB_Event_Log::OUTCOME_DEGRADED,
-                        'message' => sprintf('%s -> %s is absent for every tracked user; WordPress fills for it skipped.', $column, (string) ($field['wp']['key'] ?? '')),
-                        'context' => ['field' => $column, 'meta_key' => (string) ($field['wp']['key'] ?? '')],
-                    ]);
-                }
+        foreach (array_keys($plan['meta_fields']) as $column) {
+            if (($plan['present'][$column] ?? 0) > 0) {
+                continue;
             }
+            $key = (string) (MealsDB_Sync_Registry::get($column)['wp']['key'] ?? '');
+            MealsDB_Event_Log::record([
+                'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync_reconcile',
+                'event' => 'sync.meta_key_missing', 'outcome' => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message' => sprintf('%s -> %s is absent for every tracked user (check the registry key). Fills proceed.', $column, $key),
+                'context' => ['field' => 'field:' . $column, 'meta_key' => $key],
+            ]);
         }
-        return null;
     }
 
     /**
@@ -594,7 +556,7 @@ final class MealsDB_Sync_Reconciler {
                     continue;
                 }
                 MealsDB_Sync::without_sync_hooks(static function () use ($user, $clients, $plan, $shadow, $mutate, &$stats): void {
-                    self::apply_account($user, $clients, $plan['skip_wp'] ?? [], $shadow, $mutate, $stats);
+                    self::apply_account($user, $clients, $shadow, $mutate, $stats);
                 });
             }
         }
@@ -605,13 +567,12 @@ final class MealsDB_Sync_Reconciler {
      * evaluation says "fill"; a conflict or anything else is left alone.
      *
      * @param array<int, array<string, mixed>> $clients
-     * @param array<string, bool>              $skip_wp
      * @param array<string, mixed>             $stats
      * @param bool   $fill_wp      false on the real-time path (ITEM 13): WordPress
      *                             blanks are left for the nightly and counted.
      * @param string $source_label audit source: nightly | realtime
      */
-    private static function apply_account(WP_User $user, array $clients, array $skip_wp, bool $shadow, MealsDB_Sync_Mutate $mutate, array &$stats, bool $fill_wp = true, string $source_label = 'nightly'): void {
+    private static function apply_account(WP_User $user, array $clients, bool $shadow, MealsDB_Sync_Mutate $mutate, array &$stats, bool $fill_wp = true, string $source_label = 'nightly'): void {
         $wp_user_id = (int) $user->ID;
 
         foreach (MealsDB_Sync_Registry::fields() as $column => $field) {
@@ -647,8 +608,6 @@ final class MealsDB_Sync_Reconciler {
             if ($eval['fill_wp']) {
                 if (!$fill_wp) {
                     $tally['wp_deferred_to_nightly'] = ($tally['wp_deferred_to_nightly'] ?? 0) + 1;
-                } elseif (isset($skip_wp[$column])) {
-                    $tally['wp_skipped_missing_key'] = ($tally['wp_skipped_missing_key'] ?? 0) + 1;
                 } elseif ($shadow) {
                     // ITEM 12: counted, reported once per run, never written.
                     $stats['shadow_suppressed'][$column] = ($stats['shadow_suppressed'][$column] ?? 0) + 1;

@@ -2,11 +2,12 @@
 /**
  * Tests for directive K21 ITEM 7: the nightly fill-blank reconcile
  * (MealsDB_Sync_Reconciler::run_reconcile, reached via
- * MealsDB_Sync::run_nightly_sync) and its restated K13 breakers.
+ * MealsDB_Sync::run_nightly_sync). It has no runtime breakers (removed by
+ * operator decision; the no-overwrite invariant test is the release gate).
  *
  * K21 Tests covered: 2, 3, 4, 7, 9, 12, 14, 15, 16, 19, 24, 25, 26, 28, 29,
- * 30, 33, 37, 40 (fill half), 42, 43, plus the mass-blank breaker, the
- * missing-key guard and second-run idempotency.
+ * 30, 33, 37, 40 (fill half), 42, 43, plus placeholder-heavy runs proceeding,
+ * the missing-key alarm and second-run idempotency.
  *
  * Run: php tests/test-sync-nightly-k21.php
  */
@@ -219,39 +220,38 @@ chk(client($db, 60)['city'] === 'Sussex', 'T26: MealsDB fills still happen');
 $GLOBALS['options']['mealsdb_settings'] = ['shadow_mode' => '0'];
 
 // ---------------------------------------------------------------------------
-// Breaker: fills over non-empty raw values on > 20% of accounts
+// No breakers: a placeholder-heavy run (30% of accounts filling over
+// shipping_phone '0') is a correct run and proceeds.
 // ---------------------------------------------------------------------------
 $make = static function (int $placeholders): array {
     $accounts = [];
     for ($i = 1; $i <= 10; $i++) {
         $uid = 700 + $i;
-        $accounts[$uid] = ['clients' => [7000 + $i => ['client_phone_2' => '506-555-' . str_pad((string) $i, 4, '0', STR_PAD_LEFT), 'city' => '']],
-            'meta' => ['shipping_phone' => $i <= $placeholders ? '0' : '506-555-' . str_pad((string) $i, 4, '0', STR_PAD_LEFT), 'billing_city' => 'Moncton']];
+        $phone = '506-555-' . str_pad((string) $i, 4, '0', STR_PAD_LEFT);
+        $accounts[$uid] = ['clients' => [7000 + $i => ['client_phone_2' => $phone, 'city' => '']],
+            'meta' => ['shipping_phone' => $i <= $placeholders ? '0' : $phone, 'billing_city' => 'Moncton']];
     }
     return $accounts;
 };
 $db = world($make(3), 0);
 $stats = MealsDB_Sync_Reconciler::run_reconcile();
-chk(isset($stats['failed']) && in_array('sync.mass_blank_refused', $db->event_names(), true), 'breaker: 3/10 non-empty fill targets (30%) -> refused');
-chk($db->client_writes === [] && $GLOBALS['wp_writes'] === [], 'breaker: refused run wrote nothing at all (not even unrelated fills)');
-chk(in_array('sync.reconcile_failed', $db->event_names(), true), 'breaker: run recorded as failed');
-
-$db = world($make(2), 0);
-$stats = MealsDB_Sync_Reconciler::run_reconcile();
-chk(!isset($stats['failed']) && $GLOBALS['meta']['701|shipping_phone'] === '506-555-0001', 'breaker: 2/10 (20%, not over) -> proceeds');
+chk(!isset($stats['failed']) && !in_array('sync.mass_blank_refused', $db->event_names(), true), 'no breaker: 3/10 placeholder fills proceed');
+chk($GLOBALS['meta']['701|shipping_phone'] === '506-555-0001' && $GLOBALS['meta']['704|shipping_phone'] === '506-555-0004',
+    'no breaker: placeholders filled, real values untouched');
+chk(client($db, 7005)['city'] === 'Moncton', 'no breaker: unrelated fills happen in the same run');
 
 // ---------------------------------------------------------------------------
-// Missing key: absent for every user -> WP fills for that field skipped
+// Missing key: absent for every user -> alarmed, fills still proceed
 // ---------------------------------------------------------------------------
 $db = world([
     800 => ['clients' => [80 => ['payment_method' => 'Cheque', 'city' => '']], 'meta' => ['billing_city' => 'Moncton']],
     801 => ['clients' => [81 => ['payment_method' => 'Cash']]],
 ]);
 $stats = MealsDB_Sync_Reconciler::run_reconcile();
-chk(!isset($GLOBALS['meta']['800|payment_method']) && !isset($GLOBALS['meta']['801|payment_method']), 'missing key: never stamped onto every user');
-chk(in_array('sync.meta_key_missing', $db->event_names(), true) && ($stats['applied']['payment_method']['wp_skipped_missing_key'] ?? 0) === 2,
-    'missing key: alarmed and counted');
-chk(client($db, 80)['city'] === 'Moncton', 'missing key: other fields still filled');
+chk(in_array('sync.meta_key_missing', $db->event_names(), true), 'missing key: alarmed');
+chk(($GLOBALS['meta']['800|payment_method'] ?? '') === 'Cheque' && ($GLOBALS['meta']['801|payment_method'] ?? '') === 'Cash',
+    'missing key: fills proceed (creating a key overwrites nothing)');
+chk(client($db, 80)['city'] === 'Moncton', 'missing key: other fields filled');
 
 // ---------------------------------------------------------------------------
 // Detection-only mode still writes nothing

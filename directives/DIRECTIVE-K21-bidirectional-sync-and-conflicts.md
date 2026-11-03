@@ -19,9 +19,10 @@ This revision supersedes the original text wherever they differ. Changes:
    `wp_user_id` must agree on all 26 fields. `client_type` is the one legitimate exception
    (dual-program people); it is handled by the operator's manual dismissal — **nothing is built for
    it** (ITEM 3).
-3. **Breakers:** only K13's mass-blank pre-flight remains. The mass-conflict breaker and the
-   mass-write breaker are **removed** (ITEM 7). Confidence comes from the no-overwrite invariant test
-   (Test 32), not a runtime breaker. A large first run of fills and conflicts is expected and
+3. **Breakers:** **none.** The mass-conflict and mass-write breakers were removed (ITEM 7), and
+   the K13 mass-blank breaker was removed too once no automated path overwrites data (operator
+   decision 2026-11-03). Confidence comes from the no-overwrite invariant test (Test 32), not a
+   runtime breaker. A large first run of fills and conflicts is expected and
    accepted.
 4. **One open conflict per `(wp_user_id, field)`**, replaced by the newest observation on every run
    (ITEM 8).
@@ -416,7 +417,8 @@ Preserve every K13 guard:
 - `metadata_exists()` still separates absent from empty. WP → MealsDB: an absent key is "no
   opinion". MealsDB → WP: an absent key counts as blank, so the field may be created.
 - Empty-over-real refusal applies in **both** directions.
-- **The mass-blank pre-flight breaker stays. It is the only breaker.**
+- ~~The mass-blank pre-flight breaker stays.~~ **Removed (2026-11-03):** with no overwrite there is
+  nothing for it to stop. No runtime breaker exists.
 
 **Rev 2 — no mass-conflict breaker and no mass-write breaker.** Conflicts write nothing, and fills
 only ever write into blanks, so a large first run is the intended clean-up, not an incident. The
@@ -443,18 +445,15 @@ the value back into WordPress, and `push_to_woocommerce()` writes WordPress and 
 > counting (`sync.shadow_suppressed`) are in. Job name `wp_to_mealsdb_sync` kept for the daily
 > report; summary event `sync.reconcile_applied`.
 >
-> **Breaker, restated for fill-blank (implementation decision — review).** The K13 pre-flight
-> counted WP keys present-but-empty over a populated column; under fill-blank that is a fill of
-> WordPress, so it would have aborted every run once a field was commonly blank in WordPress. It was
-> removed with the loop (`tally_blank_candidates()` deleted). Literal blanking is now impossible, so
-> the breaker guards the K13 *failure class* instead: per field, planned fills whose target still
-> holds non-empty raw text (legitimately only placeholders — `shipping_phone '0'`, a long nickname)
-> over 20% of evaluated accounts refuse the whole apply pass (`sync.mass_blank_refused`, job failed,
-> nothing written). Caveat: on a tiny install (staging with a handful of clients) a single
-> placeholder can exceed 20%. The K13 ITEM 2 alarm is kept with teeth: a meta key absent for every
-> evaluated user raises `sync.meta_key_missing` and its WordPress fills are skipped, so a mistyped
-> registry key is never stamped onto every user (side effect: a key Enzebra never set for anyone is
-> not created by the sync either; the event says which).
+> **Breakers: none (operator decision 2026-11-03).** The K13 pre-flight (WP keys present-but-empty
+> over a populated column) was removed with the loop (`tally_blank_candidates()` deleted): under
+> fill-blank that is a fill of WordPress. A restated breaker (refuse the run when >20% of a field's
+> fills land on non-empty placeholder text) and a missing-key skip were briefly added, then removed:
+> a fill-blank sync never overwrites a populated value, so a breaker could only refuse a correct
+> run; `is_over_mass_blank_threshold()` / `SYNC_MASS_BLANK_THRESHOLD_PCT` are deleted. Test 32 is
+> the gate, and it catches the failures the breaker was meant for directly (a comparator that reads
+> real values as blank shows up as overwrites). `sync.meta_key_missing` remains as an **alarm
+> only** — a key absent for every user usually means a mistyped registry key — and fills proceed.
 >
 > **Not yet changed:** the real-time hooks (`on_wp_user_updated`, `on_wc_address_saved`,
 > `on_wc_customer_created`) still run the pre-K21 WP-wins logic on the 17 k13 fields — ITEM 13.
@@ -682,8 +681,7 @@ arbitrary row, and skip staff accounts.
 > accounts are skipped (fail closed if the staff list is unreadable); a hook fired during a K21
 > write is skipped via the recursion guard. **Implementation decision — review:** the real-time
 > path never writes WordPress. WordPress blanks are counted (`wp_deferred_to_nightly`) and left to
-> the nightly, whose breaker and missing-key guard need the whole population and cannot run on a
-> single save; a save also should not write back into the record being saved.
+> the nightly; a save should not write back into the record being saved.
 >
 > Removed as dead after this change: `decide_field_action()`, `read_wp_field_value_with_presence()`,
 > `read_wp_field_value()`, `normalize_for_comparison()`, `sync_wp_fields_to_meals_db()`,
@@ -820,6 +818,6 @@ No test may hit the network or require a live cron.
 - Conflicts persist, keep one row per `(wp_user_id, field)` with the newest values, auto-close on
   convergence, honour dismissal until values change, and are superseded on relink.
 - Resolution is batched per account and refuses stale submissions.
-- Only K13's mass-blank breaker remains.
+- No runtime breaker remains; Test 32 is the release gate.
 - Shadow mode is reported, never silently obeyed.
 - Tests 3, 4 and 17 each fail against v1.0.591.

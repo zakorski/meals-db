@@ -121,18 +121,12 @@ MealsDB_Event_Log::$events = [];
 $res = $W(7, 'street_name', '');
 chk(!is_wp_error($res), 'ITEM3 DB->WP: empty over empty -> not refused');
 
-// ===== Task 4: ITEM 4 mass-blank breaker (pure helpers) =====
-// is_over_mass_blank_threshold(int $blank_count, int $active_count): bool â strictly > 20%.
-chk(MealsDB_Sync::is_over_mass_blank_threshold(21, 100) === true,  'ITEM4: 21/100 over threshold');
-chk(MealsDB_Sync::is_over_mass_blank_threshold(20, 100) === false, 'ITEM4: 20/100 NOT over (boundary)');
-chk(MealsDB_Sync::is_over_mass_blank_threshold(1, 100) === false,  'ITEM4: 1/100 under (test 8)');
-chk(MealsDB_Sync::is_over_mass_blank_threshold(1, 0) === false,    'ITEM4: guards divide-by-zero');
-
-// tally_blank_candidates() and the nightly pre-flight it fed were retired
-// with the WP-wins nightly loop (K21 ITEM 7): under fill-blank a WP key that
-// is present-but-empty over a populated column is a fill of WordPress, not a
-// blanking. The breaker is restated in MealsDB_Sync_Reconciler::breaker() and
-// tested in tests/test-sync-nightly-k21.php (same threshold helper as above).
+// ===== Task 4: ITEM 4 mass-blank breaker — retired =====
+// The breaker (and is_over_mass_blank_threshold()) existed because the old
+// sync overwrote populated values. The K21 sync is fill-blank and never does,
+// so the breaker was removed (operator decision 2026-11-03); the guarantee is
+// enforced before release by tests/test-sync-invariant-k21.php instead.
+chk(!method_exists('MealsDB_Sync', 'is_over_mass_blank_threshold'), 'ITEM4: runtime breaker retired');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: {$f}\n"; }

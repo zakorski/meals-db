@@ -2,8 +2,9 @@
 /**
  * K21 Test 32 — THE NO-OVERWRITE INVARIANT. Release gate for the K21 sync.
  *
- * Rev 2 removed the mass-conflict and mass-write breakers; this test is what
- * replaces them. It must pass before K21 ships:
+ * The K21 sync has NO runtime breakers (the mass-conflict, mass-write and
+ * mass-blank breakers were all removed); this test is what replaces them. It
+ * must pass before any sync change ships:
  *
  *   Across every AUTOMATED sync path — the nightly reconcile, every real-time
  *   hook, detection — no value that was non-blank before a stage is different
@@ -53,9 +54,8 @@ $SEED = (int) ($argv[1] ?? 20261103);
 mt_srand($SEED);
 
 // ---------------------------------------------------------------------------
-// Value pools. Placeholders appear once per pool so a field's placeholder
-// fill rate stays under the 20% breaker — the test must exercise real fills,
-// not a refused run.
+// Value pools. Placeholders appear about once per pool, mirroring production
+// rates (there is no breaker to keep them under any more).
 // ---------------------------------------------------------------------------
 $pick = static fn (array $pool) => $pool[mt_rand(0, count($pool) - 1)];
 
@@ -289,7 +289,7 @@ $audit_count = static function (string $action, ?string $source = null) use ($db
 $s0 = $snapshot();
 $stats = MealsDB_Sync_Reconciler::run_reconcile();
 $s1 = $snapshot();
-chk(!isset($stats['failed']), 'stage 1 nightly ran (breaker did not refuse): ' . (string) ($stats['failed'] ?? ''));
+chk(!isset($stats['failed']), 'stage 1 nightly ran: ' . (string) ($stats['failed'] ?? ''));
 chk($audit_count('sync_fill_client') > 50 && $audit_count('sync_fill_wp') > 50,
     sprintf('stage 1 actually filled both sides (%d MealsDB, %d WordPress writes) — not vacuous', $audit_count('sync_fill_client'), $audit_count('sync_fill_wp')));
 chk(count($db->live()) > 50, 'stage 1 recorded conflicts (' . count($db->live()) . ')');

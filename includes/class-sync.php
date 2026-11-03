@@ -18,16 +18,6 @@ class MealsDB_Sync {
      */
     private static bool $syncing = false;
 
-    /**
-     * K13 ITEM 4, restated for K21 fill-blank: if a single nightly run would
-     * fill over a NON-EMPTY raw value in one field on more than this
-     * percentage of tracked accounts, the run is not a legitimate sync — it
-     * is a comparator or mapping bug making real values read as blank (the
-     * K13 failure class). The apply pass is refused and writes nothing. See
-     * MealsDB_Sync_Reconciler::breaker(). The only legitimate non-empty fill
-     * targets are placeholders (shipping_phone '0': 157 of ~1,031, ~15%).
-     */
-    public const SYNC_MASS_BLANK_THRESHOLD_PCT = 20;
 
     /**
      * Run $fn with the sync hooks suppressed (K21 ITEM 10). A resolution
@@ -77,17 +67,6 @@ class MealsDB_Sync {
      */
     public static function would_blank_value(string $new_value, string $existing_value): bool {
         return trim($new_value) === '' && trim($existing_value) !== '';
-    }
-
-    /**
-     * K13 ITEM 4: strictly-greater-than-threshold, integer-safe (no float,
-     * no divide-by-zero).
-     */
-    public static function is_over_mass_blank_threshold(int $blank_count, int $active_count): bool {
-        if ($active_count <= 0) {
-            return false;
-        }
-        return ($blank_count * 100) > ($active_count * self::SYNC_MASS_BLANK_THRESHOLD_PCT);
     }
 
     /**
@@ -351,7 +330,7 @@ class MealsDB_Sync {
     /**
      * Nightly cron sweep (K21 ITEM 7): fill-blank reconcile in both
      * directions for every tracked account, recording conflicts for the
-     * operator. See MealsDB_Sync_Reconciler for the rules and breakers.
+     * operator. See MealsDB_Sync_Reconciler for the rules.
      *
      * This replaced the pre-K21 loop, which synced 17 fields WP -> MealsDB
      * and let WordPress WIN whenever both sides were populated and differed —
@@ -360,8 +339,9 @@ class MealsDB_Sync {
      * loop's K13 pre-flight (count WP keys present-but-empty over a populated
      * column) went with it: in a fill-blank sync that situation is a fill of
      * WordPress, not a blanking, and counting it would abort every run once a
-     * field is commonly blank in WordPress. The breaker is restated in the
-     * reconciler for fill-blank.
+     * field is commonly blank in WordPress. No runtime breaker replaced it
+     * (operator decision): a fill-blank sync has nothing to break on; the
+     * no-overwrite invariant test is the release gate instead.
      *
      * The job name ('wp_to_mealsdb_sync') is unchanged so the daily report
      * keeps monitoring it. run_reconcile() never throws; the guard below only
