@@ -149,6 +149,15 @@ chk(client($db, 70)['city'] === '' && (hook_row($db, 'profile_update')['ctx']['r
 MealsDB_Sync::on_wp_user_updated(999, null);
 chk((hook_row($db, 'profile_update')['ctx']['reason'] ?? '') === 'no_userdata', 'unknown user: skipped');
 
+// Staff list unreadable -> the hook skips instead of syncing a possibly
+// staff-linked account (PR review finding).
+$db = world([800 => ['clients' => [80 => ['city' => '']], 'meta' => ['billing_city' => 'Moncton']]]);
+$db->staff = [800];
+$db->fail_staff = true;
+MealsDB_Sync::on_wp_user_updated(800, null);
+chk(client($db, 80)['city'] === '' && (hook_row($db, 'profile_update')['ctx']['reason'] ?? '') === 'staff_lookup_failed',
+    'staff query failure: hook skipped (fail closed), nothing written');
+
 chk($GLOBALS['wp_writes'] === [], 'no hook in this file wrote WordPress');
 
 echo "Ran " . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";

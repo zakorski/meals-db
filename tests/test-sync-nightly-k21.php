@@ -254,6 +254,18 @@ chk(($GLOBALS['meta']['800|payment_method'] ?? '') === 'Cheque' && ($GLOBALS['me
 chk(client($db, 80)['city'] === 'Moncton', 'missing key: other fields filled');
 
 // ---------------------------------------------------------------------------
+// Staff list unreadable -> fail closed (PR review: a failed staff query used
+// to come back as an empty list, i.e. "nobody is staff")
+// ---------------------------------------------------------------------------
+$db = world([950 => ['clients' => [95 => ['city' => '']], 'meta' => ['billing_city' => 'Moncton']]]);
+$db->staff = [950];
+$db->fail_staff = true;
+$stats = MealsDB_Sync_Reconciler::run_reconcile();
+chk(isset($stats['failed']) && in_array('sync.reconcile_failed', $db->event_names(), true), 'staff query failure: nightly fails closed');
+chk($db->client_writes === [] && $GLOBALS['wp_writes'] === [] && client($db, 95)['city'] === '', 'staff query failure: nothing written');
+$db->fail_staff = false;
+
+// ---------------------------------------------------------------------------
 // Detection-only mode still writes nothing
 // ---------------------------------------------------------------------------
 $db = world([900 => ['clients' => [90 => ['city' => '']], 'meta' => ['billing_city' => 'Moncton']]]);

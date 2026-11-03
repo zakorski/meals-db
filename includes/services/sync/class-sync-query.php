@@ -237,8 +237,17 @@ class MealsDB_Sync_Query {
         $available_columns = $this->get_table_columns($table_name);
         $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
 
+        // K21: an unreadable staff list must be an ERROR, never an empty
+        // list. Callers fail closed on WP_Error (the sync skips its run
+        // rather than reconcile staff-linked clients; the dashboard shows the
+        // error), but an empty array reads as "nobody is staff". A missing
+        // table or user-ID column (get_table_columns() returns [] when SHOW
+        // COLUMNS fails) and a failed SELECT both used to return [].
         if ($wp_column === null) {
-            return $staff_ids;
+            return new WP_Error(
+                'mealsdb_staff_lookup_failed',
+                __('The staff list could not be read (staff table or its user ID column is missing).', 'meals-db')
+            );
         }
 
         $escaped_table = str_replace('`', '``', $table_name);
@@ -247,6 +256,13 @@ class MealsDB_Sync_Query {
 
         $sql = "SELECT `{$escaped_column}` AS wordpress_user_id FROM {$table} WHERE `{$escaped_column}` IS NOT NULL AND `{$escaped_column}` > 0";
         $results = $connection->get_results($sql, ARRAY_A);
+
+        if (!is_array($results)) {
+            return new WP_Error(
+                'mealsdb_staff_lookup_failed',
+                __('The staff list could not be read.', 'meals-db')
+            );
+        }
 
         if (is_array($results)) {
             foreach ($results as $row) {

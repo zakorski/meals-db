@@ -94,6 +94,7 @@ class wpdb {
     public array $client_writes = [];
     public array $audit = [];
     public bool $fail_client_update = false;
+    public bool $fail_staff = false;
     public bool $fail_live = false;
     private int $next_id = 1;
 
@@ -175,6 +176,7 @@ class wpdb {
             return [['Field' => 'wordpress_user_id']];
         }
         if (strpos($sql, 'AS wordpress_user_id FROM') !== false) {
+            if ($this->fail_staff) { $this->last_error = 'staff query failed'; return null; }
             return array_map(static fn ($id) => ['wordpress_user_id' => $id], $this->staff);
         }
         if (strpos($sql, 'field_name, source_value, target_value') !== false) {
