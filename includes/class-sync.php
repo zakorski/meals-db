@@ -28,31 +28,17 @@ class MealsDB_Sync {
     public const SYNC_MASS_BLANK_THRESHOLD_PCT = 20;
 
     /**
-     * Fields where WP/WC is the source of truth.
-     * Changes flow WP -> meals_clients.
+     * Fields the pre-K21 nightly syncs WP -> meals_clients (WP wins).
+     *
+     * K21 ITEM 1: a thin accessor over MealsDB_Sync_Registry — the field list
+     * is no longer defined here. Returns the registry's transitional `k13`
+     * subset (the same 17 columns, same order) so existing callers behave
+     * exactly as before until ITEM 7 replaces the nightly.
      *
      * @return string[]
      */
     public static function get_wp_authoritative_fields(): array {
-        return [
-            'first_name',
-            'last_name',
-            'client_email',
-            'client_phone_1',
-            'client_phone_2',
-            'street_name',
-            'city',
-            'province',
-            'postal_code',
-            'delivery_street_name',
-            'delivery_city',
-            'delivery_province',
-            'delivery_postal_code',
-            'alternate_contact_name',
-            'alternate_contact_phone_1',
-            'alternate_contact_phone_2',
-            'alternate_contact_email',
-        ];
+        return MealsDB_Sync_Registry::k13_columns();
     }
 
     /**
@@ -224,59 +210,25 @@ class MealsDB_Sync {
      *   - type "core": read from WP_User property (key = property name)
      *   - type "meta": read via get_user_meta (key = meta_key)
      *
+     * K21 ITEM 1: a thin accessor over MealsDB_Sync_Registry — mappings are
+     * no longer defined here (the K13/K19 history of each key now lives on
+     * the registry entry). Scoped to the same 17 columns as
+     * get_wp_authoritative_fields(), in the historical shape, because
+     * MealsDB_Sync_Mutate derives its usermeta write allowlist from it.
+     *
+     * The old next_order_date / next_delivery_date entries (pointing at
+     * mealsdb_* keys with 0-9 rows) are gone: those columns are COMPUTED,
+     * K21 excludes them, and they were never in the synced field list, so
+     * no sync path read or wrote them.
+     *
      * @return array<string, array{type: string, key: string}>
      */
     public static function get_field_to_wp_meta_map(): array {
-        return [
-            // Core WP user fields.
-            'first_name'                    => ['type' => 'core', 'key' => 'first_name'],
-            'last_name'                     => ['type' => 'core', 'key' => 'last_name'],
-            'client_email'                  => ['type' => 'core', 'key' => 'user_email'],
-
-            // Standard WC billing meta.
-            'client_phone_1'                => ['type' => 'meta', 'key' => 'billing_phone'],
-            'city'                          => ['type' => 'meta', 'key' => 'billing_city'],
-            'province'                      => ['type' => 'meta', 'key' => 'billing_state'],
-            'postal_code'                   => ['type' => 'meta', 'key' => 'billing_postcode'],
-
-            // Standard WC shipping meta.
-            'delivery_city'                 => ['type' => 'meta', 'key' => 'shipping_city'],
-            'delivery_province'             => ['type' => 'meta', 'key' => 'shipping_state'],
-            'delivery_postal_code'          => ['type' => 'meta', 'key' => 'shipping_postcode'],
-
-            // K13 ITEM 1: these were mapped to `mealsdb_*` keys that have NEVER
-            // existed on this install (0 usermeta rows, verified 2026-09-14).
-            // get_user_meta() returned '' and the nightly sync wrote that ''
-            // over the column, blanking all 992 clients. Each now points at the
-            // key the migration actually reads from (class-migration-consolidated
-            // .php) — the only path that populated these columns — so sync and
-            // migration finally agree. ITEM 2 makes a still-absent key harmless.
-            // K19 ITEM 1: was `billing_phone_2`, a key with 0 usermeta rows, so
-            // the column could never populate. WP/Enzebra's second phone is the
-            // delivery phone `shipping_phone` (1,015 non-empty; differs from
-            // billing_phone for 193 clients). Stored verbatim even when it
-            // equals client_phone_1 — the column mirrors the WP field; hiding
-            // the duplicate is a display concern (MealsDB_Phone::is_same_number).
-            // NOTE: the first nightly run after this change fills the column
-            // for every linked client (~1,000 writes, one audit row each) —
-            // that IS the backfill, not an incident. From then on this field
-            // is WP-owned: an operator edit to "Second Phone Number" that
-            // differs from shipping_phone is overwritten nightly.
-            'client_phone_2'                => ['type' => 'meta', 'key' => 'shipping_phone'],
-            'street_name'                   => ['type' => 'meta', 'key' => 'billing_address_1'],
-            'delivery_street_name'          => ['type' => 'meta', 'key' => 'shipping_address_1'],
-            'alternate_contact_name'        => ['type' => 'meta', 'key' => 'alternate_contact_name'],
-            'alternate_contact_phone_1'     => ['type' => 'meta', 'key' => 'alternate_contact_phone_1'],
-            'alternate_contact_phone_2'     => ['type' => 'meta', 'key' => 'alternate_contact_phone_2'],
-            'alternate_contact_email'       => ['type' => 'meta', 'key' => 'alternate_contact_email'],
-            // next_order_date / next_delivery_date are COMPUTED by the next-dates
-            // migration phase, not sourced from the WP user. They stay on their
-            // mealsdb_* keys (0-9 rows) deliberately — ITEM 2 skips an absent key
-            // so they can no longer blank. Whether they belong in this map at all
-            // is a K13 follow-up, not this change.
-            'next_order_date'               => ['type' => 'meta', 'key' => 'mealsdb_next_order_date'],
-            'next_delivery_date'            => ['type' => 'meta', 'key' => 'mealsdb_next_delivery_date'],
-        ];
+        $map = [];
+        foreach (MealsDB_Sync_Registry::k13_columns() as $column) {
+            $map[$column] = MealsDB_Sync_Registry::wp_read_descriptor($column);
+        }
+        return $map;
     }
 
     /**

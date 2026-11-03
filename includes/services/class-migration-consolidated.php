@@ -102,8 +102,32 @@ class MealsDB_Migration_Consolidated {
     private static $type_map = [
         'sdnb'        => 'SDNB',
         'sdnb rural'  => 'SDNB',
+        // Extra Mural is PROVISIONALLY SDNB (operator decision 2026-11-02,
+        // pending confirmation). This map is the one place that decision
+        // lives — K21 ITEM 3. Production also carries the unspaced spelling
+        // (1 user, 2026-11-02).
         'extra mural' => 'SDNB',
+        'extramural'  => 'SDNB',
         'veterans'    => 'Veteran',
+        // K21 ITEM 3 compares client_type by CLASS, so Private is a class
+        // like the others. customer_group_to_client_type() still returns
+        // null for it (its callers rely on that); customer_group_class()
+        // returns 'Private'.
+        'private'     => 'Private',
+    ];
+
+    /**
+     * K21 ITEM 3: the canonical customer_group written when the sync FILLS a
+     * blank WordPress value from a MealsDB class. Canonical = the most common
+     * production spelling for each class (sdnb 562, veterans 69, private 421).
+     * The mapping is lossy toward MealsDB, so a fill never "corrects" an
+     * existing, more specific value such as 'sdnb rural' — that rule is
+     * enforced by the writer, not here.
+     */
+    private const CLASS_TO_CANONICAL_GROUP = [
+        'SDNB'    => 'sdnb',
+        'Veteran' => 'veterans',
+        'Private' => 'private',
     ];
 
     /**
@@ -123,8 +147,27 @@ class MealsDB_Migration_Consolidated {
      * @return string|null 'SDNB' | 'Veteran', or null when not a gov mapping.
      */
     public static function customer_group_to_client_type(?string $customer_group): ?string {
-        $group = strtolower(trim((string) $customer_group));
+        $class = self::customer_group_class($customer_group);
+        return ($class === 'SDNB' || $class === 'Veteran') ? $class : null;
+    }
+
+    /**
+     * K21 ITEM 3: the client-type CLASS ('SDNB' | 'Veteran' | 'Private') of a
+     * customer_group, or null when blank or unrecognised. Same map and the
+     * same normalisation as customer_group_to_client_type(), plus internal
+     * whitespace collapsed ('sdnb  rural'); unlike it, 'private' is a class.
+     */
+    public static function customer_group_class(?string $customer_group): ?string {
+        $group = (string) preg_replace('/\s+/', ' ', strtolower(trim((string) $customer_group)));
         return self::$type_map[$group] ?? null;
+    }
+
+    /**
+     * K21 ITEM 3: canonical customer_group for a class, or null for an
+     * unknown class. See CLASS_TO_CANONICAL_GROUP.
+     */
+    public static function client_type_to_customer_group(?string $class): ?string {
+        return self::CLASS_TO_CANONICAL_GROUP[(string) $class] ?? null;
     }
 
     /**

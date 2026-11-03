@@ -514,8 +514,9 @@ class MealsDB_Sync_Mutate {
             $row[$column_map[$field]] = $value;
         }
 
-        // client_type is not an identity field in build_identity_column_map,
-        // but it is a NOT-NULL discriminator column: pass it through verbatim
+        // client_type is a NOT-NULL discriminator column. Since K21 it is also
+        // a registry column (so the map above already carries it); this
+        // explicit pass-through is kept so it never depends on that: pass it through verbatim
         // when the caller supplied it, so a created row records whether it is
         // SDNB / Veteran / Private instead of being dropped silently.
         if (isset($fields['client_type']) && is_string($fields['client_type']) && isset($available_columns['client_type'])) {
@@ -900,29 +901,14 @@ class MealsDB_Sync_Mutate {
             }
         }
 
-        // WP-authoritative fields where the field name matches the column name directly.
-        $direct_fields = [
-            'client_phone_1',
-            'client_phone_2',
-            'street_number',
-            'street_name',
-            'apartment_number',
-            'city',
-            'province',
-            'postal_code',
-            'delivery_street_number',
-            'delivery_street_name',
-            'delivery_apartment_number',
-            'delivery_city',
-            'delivery_province',
-            'delivery_postal_code',
-            'alternate_contact_name',
-            'alternate_contact_phone_1',
-            'alternate_contact_phone_2',
-            'alternate_contact_email',
-        ];
-
-        foreach ($direct_fields as $field) {
+        // Synced fields: the field name IS the column name. K21 ITEM 1: taken
+        // from MealsDB_Sync_Registry instead of a local list. The old list also
+        // named street_number / apartment_number / delivery_street_number /
+        // delivery_apartment_number — columns that do not exist in
+        // MealsDB_Schema, so the isset() below never matched them. One-way
+        // fields (delivery_initials) are deliberately excluded: no sync path
+        // may write that column (K21 ITEM 5).
+        foreach (MealsDB_Sync_Registry::two_way_columns() as $field) {
             if (!isset($map[$field]) && isset($available_columns[$field])) {
                 $map[$field] = $field;
             }
@@ -1011,78 +997,71 @@ class MealsDB_Sync_Mutate {
         $meta_map = MealsDB_Sync::get_field_to_wp_meta_map();
         $descriptor = $meta_map[$field] ?? null;
 
-        switch ($field) {
-            case 'first_name':
-            case 'last_name':
-                $old_value = $field === 'first_name' ? $user->first_name : $user->last_name;
+        // K21 ITEM 1: route on the registry descriptor, not a hardcoded field
+        // switch. Core user fields go through wp_update_user(); usermeta
+        // through persist_user_meta(). The old switch also accepted the alias
+        // 'phone_primary', but every caller gates on
+        // get_wp_authoritative_fields() first, so it was unreachable.
+        if ($descriptor === null) {
+            $error_code = 'mealsdb_sync_unsupported_field';
+            $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
+        } elseif ($descriptor['type'] === 'core') {
+            $core_key  = $descriptor['key'];
+            $old_value = isset($user->$core_key) ? (string) $user->$core_key : '';
+            // K13 ITEM 3, now applied to core fields too: never blank a
+            // populated first_name / last_name / user_email from a sync push.
+            // Previously only the usermeta branch had this guard.
+            if (MealsDB_Sync::would_blank_value($new_value, $old_value)) {
+                MealsDB_Event_Log::record([
+                    'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+                    'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
+                    'message' => sprintf('DB->WP: refused to blank populated %s for user %d', $core_key, $woo_user_id),
+                    'context' => ['user_id' => $woo_user_id, 'field' => $field, 'core_key' => $core_key],
+                ]);
+                $error_code    = 'mealsdb_sync_empty_overwrite_refused';
+                $error_message = __('Refused to overwrite a populated field with an empty value. Clear it via the client form if that is intended.', 'meals-db');
+            } else {
                 $result = wp_update_user([
-                    'ID'    => $woo_user_id,
-                    $field  => $new_value,
+                    'ID'      => $woo_user_id,
+                    $core_key => $new_value,
                 ]);
                 if (!is_wp_error($result)) {
                     $update_success = true;
                 } else {
                     $error_message = $result->get_error_message();
-                    error_log('[MealsDB Sync] Failed to sync ' . $field . ' for user ' . $woo_user_id . ': ' . $error_message);
+                    error_log('[MealsDB Sync] Failed to sync ' . $core_key . ' for user ' . $woo_user_id . ': ' . $error_message);
                 }
-                break;
-            case 'client_email':
-                $old_value = $user->user_email;
-                $result = wp_update_user([
-                    'ID'         => $woo_user_id,
-                    'user_email' => $new_value,
-                ]);
-                if (!is_wp_error($result)) {
-                    $update_success = true;
+            }
+        } elseif ($descriptor['type'] === 'meta') {
+            $meta_key = $descriptor['key'];
+
+            // Defence-in-depth meta_key allowlist. The descriptor map is
+            // hardcoded in MealsDB_Sync_Registry, but a future expansion that
+            // drew from filterable input would let a caller rewrite arbitrary
+            // user meta. Restrict to the keys referenced by the canonical map.
+            if (!self::is_allowed_user_meta_key($meta_key)) {
+                $error_code    = 'mealsdb_sync_unsupported_field';
+                $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
+            } else {
+                $old_value = get_user_meta($woo_user_id, $meta_key, true);
+                // K13 ITEM 3: never blank a populated WP meta value from a
+                // sync push. street_name/delivery_street_name resolve here to
+                // billing_address_1/shipping_address_1 (K13 ITEM 1) - the only
+                // surviving copy of the client's address. An empty incoming
+                // value means "no data", not "delete it". Deliberate operator
+                // clears go through the client form, which does NOT route
+                // through this mutator, so they are unaffected. (billing_phone
+                // used to bypass this guard via its own switch case.)
+                if (MealsDB_Sync::would_blank_value($new_value, is_scalar($old_value) ? (string) $old_value : '')) {
+                    MealsDB_Event_Log::record([
+                        'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+                        'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
+                        'message' => sprintf('DB->WP: refused to blank populated %s for user %d', $meta_key, $woo_user_id),
+                        'context' => ['user_id' => $woo_user_id, 'field' => $field, 'meta_key' => $meta_key],
+                    ]);
+                    $error_code    = 'mealsdb_sync_empty_overwrite_refused';
+                    $error_message = __('Refused to overwrite a populated field with an empty value. Clear it via the client form if that is intended.', 'meals-db');
                 } else {
-                    $error_message = $result->get_error_message();
-                    error_log('[MealsDB Sync] Failed to sync email for user ' . $woo_user_id . ': ' . $error_message);
-                }
-                break;
-            case 'phone_primary':
-            case 'client_phone_1':
-                $old_value = get_user_meta($woo_user_id, 'billing_phone', true);
-                $update_success = self::persist_user_meta($woo_user_id, 'billing_phone', is_scalar($old_value) ? (string) $old_value : '', $new_value);
-                if (!$update_success) {
-                    $error_message = __('Unable to update the customer phone number.', 'meals-db');
-                    error_log('[MealsDB Sync] Failed to sync phone for user ' . $woo_user_id . '.');
-                }
-                break;
-            default:
-                // Handle any WP-authoritative field that maps to user meta.
-                if ($descriptor !== null && $descriptor['type'] === 'meta') {
-                    $meta_key = $descriptor['key'];
-
-                    // Defence-in-depth meta_key allowlist. Today the
-                    // descriptor map is hardcoded, but a future expansion
-                    // that drew from filterable input would let a caller
-                    // rewrite arbitrary user meta. Restrict to the keys
-                    // referenced by the canonical WP-side map.
-                    if (!self::is_allowed_user_meta_key($meta_key)) {
-                        $error_code    = 'mealsdb_sync_unsupported_field';
-                        $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
-                        break;
-                    }
-
-                    $old_value = get_user_meta($woo_user_id, $meta_key, true);
-                    // K13 ITEM 3: never blank a populated WP meta value from a
-                    // sync push. street_name/delivery_street_name resolve here to
-                    // billing_address_1/shipping_address_1 (K13 ITEM 1) - the only
-                    // surviving copy of the client's address. An empty incoming
-                    // value means "no data", not "delete it". Deliberate operator
-                    // clears go through the client form, which does NOT route
-                    // through this mutator, so they are unaffected.
-                    if (MealsDB_Sync::would_blank_value($new_value, is_scalar($old_value) ? (string) $old_value : '')) {
-                        MealsDB_Event_Log::record([
-                            'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
-                            'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
-                            'message' => sprintf('DB->WP: refused to blank populated %s for user %d', $meta_key, $woo_user_id),
-                            'context' => ['user_id' => $woo_user_id, 'field' => $field, 'meta_key' => $meta_key],
-                        ]);
-                        $error_code    = 'mealsdb_sync_empty_overwrite_refused';
-                        $error_message = __('Refused to overwrite a populated field with an empty value. Clear it via the client form if that is intended.', 'meals-db');
-                        break;
-                    }
                     $update_success = self::persist_user_meta($woo_user_id, $meta_key, is_scalar($old_value) ? (string) $old_value : '', $new_value);
                     if (!$update_success) {
                         $error_message = sprintf(
@@ -1091,11 +1070,11 @@ class MealsDB_Sync_Mutate {
                         );
                         error_log('[MealsDB Sync] Failed to sync meta ' . $meta_key . ' for user ' . $woo_user_id . '.');
                     }
-                } else {
-                    $error_code = 'mealsdb_sync_unsupported_field';
-                    $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
                 }
-                break;
+            }
+        } else {
+            $error_code = 'mealsdb_sync_unsupported_field';
+            $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
         }
 
         if (!$update_success) {

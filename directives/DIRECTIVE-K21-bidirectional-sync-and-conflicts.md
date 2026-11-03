@@ -177,6 +177,23 @@ Existing public accessors may remain as thin wrappers over the registry for exis
 
 ---
 
+> **APPLIED (2026-11-03) — ITEMS 1–3, registry and comparators only; no sync behaviour changed.**
+> `MealsDB_Sync_Registry` (`includes/services/sync/class-sync-registry.php`) holds the 27 fields;
+> `MealsDB_Sync_Comparator` (`class-sync-comparator.php`) implements ITEM 2's table and ITEM 3's
+> class comparison. Absorbed so far: maps 1, 2 and 4 of the list above
+> (`get_field_to_wp_meta_map()` / `get_wp_authoritative_fields()` are now thin accessors returning
+> the transitional `k13` subset — byte-identical output; the mutator's column map and its
+> `apply_wp_user_update()` switch are registry-driven). **Still to absorb:** map 3
+> (`get_mealsdb_authoritative_fields()`, the ignore allowlist) goes with ITEM 8's ignore
+> integration; map 5 (`compare_fields()` / the sync-query identity columns) is replaced wholesale
+> by ITEMs 8–9 — changing it earlier would orphan existing `meals_ignored_conflicts` rows, which
+> are keyed on the old `phone_primary` field name. ITEM 3's mapping extended in
+> `MealsDB_Migration_Consolidated` (`extramural`, `private`, `customer_group_class()`,
+> `client_type_to_customer_group()`). Side effects: `customer_group_to_client_type('extramural')`
+> now returns SDNB, which changes private-intake promotion for that 1 user from Private to SDNB; and
+> the mutator now refuses to blank core fields and `billing_phone` (previously unguarded). Tests:
+> `tests/test-sync-registry-k21.php`, `tests/test-sync-mutate-registry-k21.php`.
+
 ## ITEM 2 — Equality and blankness, per comparator
 
 Comparison is normalised, or formatting differences flood the conflict queue. The production
@@ -191,7 +208,7 @@ normalisation.
 | postal | uppercase, spaces removed, equal | trimmed empty |
 | code | uppercase/trim equal | trimmed empty |
 | integer | parsed integers equal | trimmed empty or `0` |
-| date | parsed `Y-m-d` equal | trimmed empty |
+| date | parsed `Y-m-d` equal | trimmed empty, `0`, or `0000-00-00` |
 | client-type class | ITEM 3 class equal | blank or unrecognised |
 
 **Phone:** K20's rule — under 7 digits is not a phone. The 157 `shipping_phone = '0'` placeholders
@@ -245,8 +262,11 @@ the two-maps problem ITEM 1 forbids.
   choosing MealsDB for this field writes only when the classes differ, and then the canonical value
   for MealsDB's class.
 
-An unrecognised value is treated as blank **and** logged once per run with the value, so a new
-Enzebra group surfaces rather than silently defaulting.
+An unrecognised value is **not blank** (Rev 2 — changed during implementation): treating it as
+blank would let a fill overwrite it, which breaks the strict fill-blank rule and Test 32. It is
+handled like any unparseable value — never filled over, never a fill source, so it surfaces as a
+conflict — **and** it is logged once per run with the value, so a new Enzebra group surfaces rather
+than silently defaulting. (`MealsDB_Sync_Comparator::is_unrecognised()` finds them.)
 
 **Dual-program people (Rev 2):** `client_type` is the one field where linked clients legitimately
 differ (an SDNB recipient who is also a Veteran). This is rare. **Build nothing special for it.** It
@@ -603,7 +623,7 @@ arbitrary row, and skip staff accounts.
 28. Resolution write does not re-enter the sync.
 29. Encrypted and excluded fields are never read or written by any sync path.
 30. Staff accounts, including `wp_user_id` 1, are never synced — nightly and hooks.
-31. Unrecognised `customer_group` → treated as blank, logged with the value.
+31. Unrecognised `customer_group` → not blank (conflict, never overwritten), logged with the value.
 
 Added in Rev 2:
 
