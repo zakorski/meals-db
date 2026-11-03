@@ -152,6 +152,29 @@ class MealsDB_Operational_Constants {
      */
     const SDNB_RURAL_ZONE_CODES = ['S'];
 
+    /**
+     * Service centre (WP usermeta `service_centre_charged` /
+     * meals_clients.service_center_charged) -> delivery_area_zone code.
+     *
+     * Keys are LOWERCASE; look up only through zone_for_service_centre(),
+     * which trims and lowercases the input. The migration used to hold its
+     * own case-SENSITIVE copy (['Moncton' => 'M', ...]), so a stored
+     * 'moncton' missed and the zone came out NULL — 19 derive_zone.unmatched
+     * events after the 2026-09-07 rebuild, 15 SDNB legacy clients' zones
+     * blanked and restored by hand (directive K21 ITEM 6). This is now the
+     * one map; the K21 sync uses it too.
+     *
+     * 'veterans' maps to null deliberately: VAC clients have no SDNB zone.
+     * The zone drives both the M/S legacy SDNB draft scoping and the
+     * rural-vs-urban rate (is_rural_zone()), so adding or changing an entry
+     * moves clients between invoices and prices.
+     */
+    const SERVICE_CENTRE_ZONE_MAP = [
+        'moncton'  => 'M',
+        'sussex'   => 'S',
+        'veterans' => null,
+    ];
+
     // -------------------------------------------------------------
     // VAC billing rates (CAD dollars)
     // -------------------------------------------------------------
@@ -352,5 +375,38 @@ class MealsDB_Operational_Constants {
             return false;
         }
         return in_array(strtoupper(trim($zone)), self::SDNB_RURAL_ZONE_CODES, true);
+    }
+
+    /**
+     * Derive delivery_area_zone from a service centre name (K21 ITEM 6).
+     *
+     * Case-insensitive, surrounding whitespace trimmed: 'Moncton', 'moncton'
+     * and ' MONCTON ' all resolve to 'M'. Returns null both for 'veterans'
+     * (no SDNB zone, by design) and for an unrecognised or blank value —
+     * callers that must tell those apart (e.g. to log an unmatched value)
+     * use is_known_service_centre().
+     *
+     * @param string|null $service_centre Raw service centre value.
+     * @return string|null Zone code ('M', 'S') or null.
+     */
+    public static function zone_for_service_centre(?string $service_centre): ?string {
+        $key = self::service_centre_key($service_centre);
+        return self::SERVICE_CENTRE_ZONE_MAP[$key] ?? null;
+    }
+
+    /**
+     * Whether a service centre value is one SERVICE_CENTRE_ZONE_MAP
+     * recognises (including 'veterans', whose zone is null). Lets a caller
+     * distinguish "deliberately no zone" from "value we don't know", which
+     * zone_for_service_centre()'s null return cannot.
+     */
+    public static function is_known_service_centre(?string $service_centre): bool {
+        return array_key_exists(self::service_centre_key($service_centre), self::SERVICE_CENTRE_ZONE_MAP);
+    }
+
+    /** Normalised lookup key for SERVICE_CENTRE_ZONE_MAP. */
+    private static function service_centre_key(?string $service_centre): string {
+        $value = trim((string) $service_centre);
+        return function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
     }
 }

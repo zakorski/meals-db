@@ -96,6 +96,14 @@ class MealsDB_Tables
     public const LEDGER_ENTRIES = 'meals_ledger_entries';
 
     /**
+     * Sync conflict store (directive K21 ITEM 8). One open row per
+     * (wp_user_id, field) where the linked WordPress account and its active
+     * MealsDB client(s) hold different non-blank values. The sync writes
+     * nothing for a field in conflict; an operator resolves it.
+     */
+    public const SYNC_CONFLICTS = 'meals_sync_conflicts';
+
+    /**
      * Retrieve all canonical table names.
      *
      * @return string[]
@@ -123,6 +131,7 @@ class MealsDB_Tables
             self::ORDER_AUDITS,
             self::ORDER_AUDIT_ROWS,
             self::LEDGER_ENTRIES,
+            self::SYNC_CONFLICTS,
         ];
     }
 }

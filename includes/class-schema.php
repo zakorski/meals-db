@@ -1035,6 +1035,63 @@ class MealsDB_Schema {
                     ],
                 ],
             ],
+            // K21 ITEM 8: sync conflict store. Holds copies of the conflicting
+            // values (names, phones, addresses — the same plaintext PII that
+            // meals_clients and wp_usermeta already hold; no encrypted column
+            // is ever synced, so none lands here).
+            MealsDB_Tables::SYNC_CONFLICTS => [
+                'table'   => MealsDB_Tables::SYNC_CONFLICTS,
+                'engine'  => 'InnoDB',
+                'columns' => [
+                    'conflict_id'         => 'BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+                    // The conflict key is the ACCOUNT, not the client: all
+                    // active clients linked to one wp_user_id are reconciled
+                    // as one set (K21 ITEM 7a).
+                    'wp_user_id'          => 'BIGINT UNSIGNED NOT NULL',
+                    // MealsDB_Sync_Registry column.
+                    'field'               => 'VARCHAR(64) NOT NULL',
+                    // Raw values as last observed (not normalised).
+                    'wp_value'            => 'TEXT NULL',
+                    // JSON object: client_id => raw value, every active
+                    // linked client.
+                    'meals_values'        => 'LONGTEXT NULL',
+                    // sha256 of field + wp_value + meals_values. Dismissal
+                    // holds while it is unchanged; ITEM 10's stale-page guard
+                    // compares against it.
+                    'values_hash'         => 'CHAR(64) NOT NULL',
+                    'status'              => "ENUM('open','resolved','dismissed','auto_resolved','superseded') NOT NULL DEFAULT 'open'",
+                    'first_seen_at'       => 'DATETIME NOT NULL',
+                    'last_seen_at'        => 'DATETIME NOT NULL',
+                    'resolved_by'         => 'BIGINT UNSIGNED NULL',
+                    'resolved_at'         => 'DATETIME NULL',
+                    // wp | client:<id> | dismissed | auto | relinked
+                    'resolution'          => 'VARCHAR(32) NULL',
+                    'dismissed_pair_hash' => 'CHAR(64) NULL',
+                    // "<wp_user_id>|<field>" while open or dismissed, NULL once
+                    // closed. MySQL has no partial UNIQUE, so this (as with
+                    // K17's charge_dedup) is what enforces ONE live row per
+                    // account and field; closed rows (NULL) never collide.
+                    'open_dedup'          => 'VARCHAR(100) NULL',
+                ],
+                'primary_key' => ['conflict_id'],
+                'indexes' => [
+                    [
+                        'name'    => 'uniq_open',
+                        'type'    => 'UNIQUE',
+                        'columns' => ['open_dedup'],
+                    ],
+                    [
+                        'name'    => 'idx_account',
+                        'type'    => 'INDEX',
+                        'columns' => ['wp_user_id', 'status'],
+                    ],
+                    [
+                        'name'    => 'idx_status_field',
+                        'type'    => 'INDEX',
+                        'columns' => ['status', 'field'],
+                    ],
+                ],
+            ],
         ];
     }
 

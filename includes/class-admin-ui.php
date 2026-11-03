@@ -230,6 +230,10 @@ class MealsDB_Admin_UI {
             case 'ignored':
                 $enqueue('ignored');
                 break;
+            case 'sync_conflicts':
+                // K21 ITEM 9: per-account choice batching for the A/B view.
+                $enqueue('sync-conflicts');
+                break;
             case 'po_admin':
                 // report-utils supplies csvRow/exportCsv for the detail-page
                 // CSV export (Pattern 14 injection guard lives there).
@@ -1372,7 +1376,13 @@ class MealsDB_Admin_UI {
                 // keep 'add'
             } elseif ($tab === 'sync') {
                 $view = isset($_GET['view']) ? sanitize_key(wp_unslash((string) $_GET['view'])) : '';
-                $tab  = ($view === 'ignored') ? 'ignored' : 'sync';
+                if ($view === 'ignored') {
+                    $tab = 'ignored';
+                } elseif ($view === 'conflicts') {
+                    $tab = 'sync_conflicts';
+                } else {
+                    $tab = 'sync';
+                }
             } else {
                 $tab = 'clients'; // list (default) + action=edit
             }
@@ -1842,6 +1852,9 @@ class MealsDB_Admin_UI {
                 $view = isset($_GET['view']) ? sanitize_key(wp_unslash((string) $_GET['view'])) : '';
                 if ($view === 'ignored') {
                     include MealsDB_Plugin::path('views/ignored.php');
+                } elseif ($view === 'conflicts') {
+                    // K21 ITEM 9: A/B conflict view.
+                    include MealsDB_Plugin::path('views/sync-conflicts.php');
                 } else {
                     include MealsDB_Plugin::path('views/dashboard.php');
                 }

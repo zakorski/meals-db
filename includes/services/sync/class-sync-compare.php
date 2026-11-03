@@ -86,23 +86,11 @@ class MealsDB_Sync_Compare {
             $wp_id = (int) $woo_user->ID;
 
             if (isset($remaining_clients[$wp_id])) {
-                foreach ($remaining_clients[$wp_id] as $client) {
-                    $diffs = $this->compare_fields($client, $woo_user);
-
-                    if (!empty($diffs)) {
-                        $mismatches[] = [
-                            'type'         => 'field_mismatch',
-                            'client_id'    => $client['client_id'] ?? 0,
-                            'woo_user_id'  => $wp_id,
-                            'fields'       => $diffs,
-                            'allow_sync'   => true,
-                            'notice'       => '',
-                            'meals_client' => $client,
-                            'wp_user'      => $this->extract_user_snapshot($woo_user),
-                        ];
-                    }
-                }
-
+                // K21 ITEM 10: field differences on a LINKED pair are no
+                // longer reported here. The nightly reconcile records them in
+                // meals_sync_conflicts and the conflict view resolves them,
+                // reading the chosen value server-side. This dashboard keeps
+                // only the WordPress-only / Meals-DB-only (linking) cases.
                 unset($remaining_clients[$wp_id]);
             } elseif (!isset($staff_wp_ids[$wp_id])) {
                 $conflict = $this->build_wordpress_only_conflict($woo_user);
@@ -270,52 +258,6 @@ class MealsDB_Sync_Compare {
         }
 
         return $this->find_probable_matches($client, self::$wp_users_cache[$key]);
-    }
-
-    /**
-     * Compare Meals DB record and Woo user fields.
-     *
-     * @param array<string, mixed> $client
-     * @return array<string, array<string, mixed>>
-     */
-    private function compare_fields(array $client, WP_User $woo_user): array {
-        $mismatches = [];
-
-        $map = [
-            'first_name'    => $woo_user->first_name,
-            'last_name'     => $woo_user->last_name,
-            'client_email'  => $woo_user->user_email,
-            'phone_primary' => get_user_meta($woo_user->ID, 'billing_phone', true),
-        ];
-
-        foreach ($map as $field => $woo_value) {
-            $plugin_value = $client[$field] ?? '';
-
-            if ($field === 'phone_primary') {
-                // Phone comparison was previously just mb_strtolower +
-                // trim, which would flag every (506) 555-0100 vs
-                // 5065550100 pair as a mismatch even though they're
-                // the same number. Route through normalize_phone() to
-                // strip formatting, drop a leading NANP '1', and
-                // compare by the last 10 digits.
-                $plugin_norm = $this->normalize_phone((string) $plugin_value);
-                $woo_norm    = $this->normalize_phone((string) $woo_value);
-            } else {
-                // Use mb_strtolower so non-ASCII names (Î, é, etc.)
-                // compare by Unicode case rather than byte-equality.
-                $plugin_norm = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $plugin_value, 'UTF-8') : strtolower((string) $plugin_value));
-                $woo_norm    = trim(function_exists('mb_strtolower') ? mb_strtolower((string) $woo_value, 'UTF-8') : strtolower((string) $woo_value));
-            }
-
-            if ($plugin_norm !== $woo_norm) {
-                $mismatches[$field] = [
-                    'meals_db'    => $plugin_value,
-                    'woocommerce' => $woo_value,
-                ];
-            }
-        }
-
-        return $mismatches;
     }
 
     /**

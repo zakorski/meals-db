@@ -102,8 +102,32 @@ class MealsDB_Migration_Consolidated {
     private static $type_map = [
         'sdnb'        => 'SDNB',
         'sdnb rural'  => 'SDNB',
+        // Extra Mural is PROVISIONALLY SDNB (operator decision 2026-11-02,
+        // pending confirmation). This map is the one place that decision
+        // lives — K21 ITEM 3. Production also carries the unspaced spelling
+        // (1 user, 2026-11-02).
         'extra mural' => 'SDNB',
+        'extramural'  => 'SDNB',
         'veterans'    => 'Veteran',
+        // K21 ITEM 3 compares client_type by CLASS, so Private is a class
+        // like the others. customer_group_to_client_type() still returns
+        // null for it (its callers rely on that); customer_group_class()
+        // returns 'Private'.
+        'private'     => 'Private',
+    ];
+
+    /**
+     * K21 ITEM 3: the canonical customer_group written when the sync FILLS a
+     * blank WordPress value from a MealsDB class. Canonical = the most common
+     * production spelling for each class (sdnb 562, veterans 69, private 421).
+     * The mapping is lossy toward MealsDB, so a fill never "corrects" an
+     * existing, more specific value such as 'sdnb rural' — that rule is
+     * enforced by the writer, not here.
+     */
+    private const CLASS_TO_CANONICAL_GROUP = [
+        'SDNB'    => 'sdnb',
+        'Veteran' => 'veterans',
+        'Private' => 'private',
     ];
 
     /**
@@ -123,8 +147,58 @@ class MealsDB_Migration_Consolidated {
      * @return string|null 'SDNB' | 'Veteran', or null when not a gov mapping.
      */
     public static function customer_group_to_client_type(?string $customer_group): ?string {
-        $group = strtolower(trim((string) $customer_group));
+        $class = self::customer_group_class($customer_group);
+        return ($class === 'SDNB' || $class === 'Veteran') ? $class : null;
+    }
+
+    /**
+     * K21 ITEM 3: the client-type CLASS ('SDNB' | 'Veteran' | 'Private') of a
+     * customer_group, or null when blank or unrecognised. Same map and the
+     * same normalisation as customer_group_to_client_type(), plus internal
+     * whitespace collapsed ('sdnb  rural'); unlike it, 'private' is a class.
+     */
+    public static function customer_group_class(?string $customer_group): ?string {
+        $group = (string) preg_replace('/\s+/', ' ', strtolower(trim((string) $customer_group)));
         return self::$type_map[$group] ?? null;
+    }
+
+    /**
+     * K21 ITEM 4: the delivery area (zone) from a user's usermeta.
+     *
+     * The zone lives in WooCommerce address_2. shipping_address_2 is the
+     * source of truth — it is what the K21 sync compares against (and, in
+     * the one production disagreement, what MealsDB already matched) — with
+     * billing_address_2 as a fallback ONLY when shipping is blank. This used
+     * to read billing_address_2 alone, so every rebuild contradicted the
+     * sync for any user whose two keys differ, and the nightly then raised a
+     * conflict for a value the migration had just written.
+     *
+     * Key names come from the sync registry entry for delivery_area_name
+     * (its read key and its consistency key), so the migration and the sync
+     * cannot drift apart again.
+     *
+     * @param array<string, mixed> $meta usermeta key => value for one user
+     * @return string|null the raw value, or null when both are blank
+     */
+    public static function delivery_area_from_meta(array $meta): ?string {
+        $field     = MealsDB_Sync_Registry::get('delivery_area_name');
+        $primary   = (string) ($field['wp']['key'] ?? 'shipping_address_2');
+        $secondary = (string) ($field['wp']['consistency'] ?? 'billing_address_2');
+        foreach ([$primary, $secondary] as $key) {
+            $value = isset($meta[$key]) && is_scalar($meta[$key]) ? (string) $meta[$key] : '';
+            if (trim($value) !== '') {
+                return $value;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * K21 ITEM 3: canonical customer_group for a class, or null for an
+     * unknown class. See CLASS_TO_CANONICAL_GROUP.
+     */
+    public static function client_type_to_customer_group(?string $class): ?string {
+        return self::CLASS_TO_CANONICAL_GROUP[(string) $class] ?? null;
     }
 
     /**
@@ -340,6 +414,14 @@ class MealsDB_Migration_Consolidated {
                 continue;
             }
 
+            // Directive 7 moved the client_type lookup into
+            // customer_group_to_client_type() and dropped the local $group
+            // assignment, but these two checks still read $group — undefined,
+            // so neither ever matched: 'sdnb rural' users lost
+            // service_name_zone='rural' and Extra Mural users lost their note.
+            // Normalised the same way the shared mapper normalises.
+            $group = strtolower(trim((string) ($meta['customer_group'] ?? '')));
+
             $notes = '';
             if ($group === 'extra mural') {
                 $notes = 'Migrated from Extra Mural program.';
@@ -349,11 +431,16 @@ class MealsDB_Migration_Consolidated {
                 $service_name_zone = 'rural';
             }
 
-            $zone_map = ['Moncton' => 'M', 'Sussex' => 'S', 'veterans' => null];
+            // K21 ITEM 6: the zone lookup used to be a local case-SENSITIVE
+            // map (['Moncton' => 'M', ...]), so 'moncton' missed and the zone
+            // silently came out NULL — wrong invoice scope and wrong rate. It
+            // now goes through the one shared, case-insensitive helper the
+            // sync also uses. $sc_raw is still stored verbatim below.
             $sc_raw   = $meta['service_centre_charged'] ?? '';
-            $zone     = $zone_map[$sc_raw] ?? null;
+            $zone     = MealsDB_Operational_Constants::zone_for_service_centre((string) $sc_raw);
 
-            $delivery_area_name = $meta['billing_address_2'] ?? null;
+            // K21 ITEM 4: shipping_address_2 first (was billing_address_2 only).
+            $delivery_area_name = self::delivery_area_from_meta($meta);
 
             $open_date = null;
             if (!empty($meta['commence_date']) && $meta['commence_date'] !== '0') {
@@ -379,7 +466,7 @@ class MealsDB_Migration_Consolidated {
             // does, naming the user and the unmatched source value, so a
             // migrated-but-wrong client is visible instead of silently billed
             // at the wrong rate. Veterans intentionally map to a null zone
-            // (zone_map['veterans'] => null), so they are excluded.
+            // (SERVICE_CENTRE_ZONE_MAP['veterans'] => null), so they are excluded.
             //
             // U03-migration-11: emit these BEFORE the dry-run short-circuit so a
             // dry run surfaces mis-derived clients BEFORE anything is committed
@@ -396,7 +483,7 @@ class MealsDB_Migration_Consolidated {
                         'event'       => 'derive_zone.unmatched',
                         'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
                         'message'     => sprintf(
-                            'service_centre_charged "%s" did not match zone_map; delivery_area_zone left NULL (wrong rate/route risk).',
+                            'service_centre_charged "%s" did not resolve to a zone (MealsDB_Operational_Constants::SERVICE_CENTRE_ZONE_MAP); delivery_area_zone left NULL (wrong rate/route risk).',
                             (string) $sc_raw
                         ),
                         'entity_type' => 'user',
@@ -411,7 +498,7 @@ class MealsDB_Migration_Consolidated {
                         'subsystem'   => 'migration_consolidated',
                         'event'       => 'derive_area.missing',
                         'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
-                        'message'     => 'billing_address_2 (delivery_area_name) was empty; no delivery area -> no derivable delivery day.',
+                        'message'     => 'shipping_address_2 and billing_address_2 (delivery_area_name) were both empty; no delivery area -> no derivable delivery day.',
                         'entity_type' => 'user',
                         'entity_id'   => (int) $uid,
                         'context'     => ['dry_run' => $dry_run],
@@ -1005,7 +1092,7 @@ class MealsDB_Migration_Consolidated {
         $meta_lookup = [];
         if (!empty($wp_user_ids)) {
             $placeholders  = implode(',', array_fill(0, count($wp_user_ids), '%d'));
-            $meta_keys     = ['billing_address_1', 'billing_address_2', 'shipping_address_1'];
+            $meta_keys     = ['billing_address_1', 'billing_address_2', 'shipping_address_1', 'shipping_address_2'];
             $meta_keys_sql = implode(',', array_map(function ($k) use ($wpdb) {
                 return $wpdb->prepare('%s', $k);
             }, $meta_keys));
@@ -1030,10 +1117,13 @@ class MealsDB_Migration_Consolidated {
             $bind_values = [];
             $changes     = [];
 
-            $billing_address_2 = $meta['billing_address_2'] ?? '';
-            if (empty($client['delivery_area_name']) && $billing_address_2 !== '') {
+            // K21 ITEM 4: same source as phase 1 and the sync —
+            // shipping_address_2, billing_address_2 only as a fallback.
+            // Fill-only, as before.
+            $delivery_area = self::delivery_area_from_meta($meta);
+            if (empty($client['delivery_area_name']) && $delivery_area !== null) {
                 $set_clauses[] = 'delivery_area_name = %s';
-                $bind_values[] = $billing_address_2;
+                $bind_values[] = $delivery_area;
                 $changes[]     = 'delivery_area_name';
             }
 

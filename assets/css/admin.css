@@ -419,3 +419,24 @@ tr.mealsdb-required-disabled {
     padding: 2px 8px;
     border-radius: 3px;
 }
+
+/* K21 ITEM 9: A/B sync conflict view (views/sync-conflicts.php). */
+.mealsdb-conflict-filters { margin: 12px 0; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.mealsdb-conflict-card { background: #fff; border: 1px solid #c3c4c7; border-radius: 4px; padding: 12px 16px; margin: 0 0 16px; }
+.mealsdb-conflict-card__head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 8px; }
+.mealsdb-conflict-card__client { color: #50575e; }
+.mealsdb-conflict-table { margin: 8px 0; }
+.mealsdb-conflict-table th[scope="row"] { width: 18%; }
+.mealsdb-conflict-value { white-space: pre-wrap; word-break: break-word; font-family: Consolas, Monaco, monospace; }
+.mealsdb-conflict-blank { color: #8c8f94; font-style: italic; font-family: inherit; }
+.mealsdb-conflict-row > * { background: #fcf9e8; }
+.mealsdb-conflict-row.is-stale > * { background: #f6f7f7; }
+.mealsdb-conflict-row.is-applied > * { background: #edfaef; }
+.mealsdb-conflict-choice label { white-space: nowrap; }
+.mealsdb-conflict-choice label.is-disabled { color: #8c8f94; }
+.mealsdb-conflict-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 3px; background: #dcdcde; font-size: 11px; font-weight: normal; }
+.mealsdb-conflict-derived th, .mealsdb-conflict-derived td { color: #50575e; }
+.mealsdb-conflict-others summary { cursor: pointer; margin: 4px 0; }
+.mealsdb-conflict-card__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.mealsdb-conflict-status.is-error { color: #b32d2e; }
+.mealsdb-conflict-pages { display: flex; gap: 8px; align-items: center; }

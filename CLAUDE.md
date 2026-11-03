@@ -224,11 +224,11 @@ For data backfills (one-time data corrections, not schema changes), put them in 
 ### 10. Cron jobs
 
 Plugin-scheduled cron hooks and their **actual** scheduled times (verified against the code):
-- `mealsdb_nightly_sync` — **02:00** — sync engine (`class-sync.php`).
+- `mealsdb_nightly_sync` — **02:00** — sync engine (`class-sync.php`). Since K21 ITEM 7 this is a two-way **fill-blank** reconcile (`MealsDB_Sync_Reconciler::run_reconcile`): it never overwrites a populated value; differences become conflicts resolved under Clients → WooCommerce Sync → Review sync conflicts. **Release gate:** `tests/test-sync-invariant-k21.php` (K21 Test 32, the no-overwrite invariant) must pass before any change to the sync ships — the sync has no runtime breakers (mass-write, mass-conflict and mass-blank were all removed; a fill-blank sync has nothing to break on).
 - `mealsdb_nightly_allocation_sync` — **03:00** — allocation engine (`class-allocation-hooks.php`). **NOT 02:00.**
 - `mealsdb_nightly_task_sync` — **02:00** (design) — task engine (`class-task-cron.php`).
 - `mealsdb_daily_report` — **04:00** — Phase W health report.
-- `mealsdb_log_retention` — **04:30** — Phase W log pruning (hook_log 90d, job_log 365d; does NOT prune `meals_allocation_errors`).
+- `mealsdb_log_retention` — **04:30** — log pruning (`MealsDB_Log_Retention`): the event-log trunk by severity band (90/180/365d; degraded/failed 365d; never `running`), `meals_allocation_errors` by `last_seen_at` (365d), and CLOSED `meals_sync_conflicts` rows 90 days after `resolved_at` (K21; open/dismissed never pruned). Never touches the audit log.
 
 > **FIXED (directive LB-1):** the nightly allocation sync now **materialises dirty client-months before re-summing.** `MealsDB_Allocation_Hooks::nightly_sync()` calls `MealsDB_Allocation_Rebuilder::rebuild_all_dirty()` (the same proven path used by invoice generation and the manual Data-Ops button) and then runs the existing `bulk_recalculate_month` re-sum as a belt-and-suspenders consistency pass. The rebuild stats are recorded in the job-logger `finish()` payload (`dirty_rebuild_stats`). This was previously the single highest-impact bug — a dirty-but-unbuilt month stayed empty while the job logged success, cascading into billing, reporting, driver cash collection, and the Quick Order allowance preview. It depended on LB-3 (below): the rebuilder now skips finalized months, so running it nightly is safe.
 
@@ -270,6 +270,7 @@ Don't introduce a new nonce context unless the action is meaningfully distinct f
 - `mealsdb_invoice_nonce` — invoice generation
 - `mealsdb_quick_order_create_order` — QO order creation (stricter)
 - `mealsdb_generate_initials` / `mealsdb_validate_initials` — initials AJAX
+- `mealsdb_sync_conflicts` — K21 conflict choices (per-account batch; will carry value-overwriting resolutions, hence its own context)
 - Plus form-specific ones (`mealsdb_force_rebuild`, delete-users, etc.)
 
 If you're tempted to add a new nonce: ask whether the action category warrants it. Generally, "destructive" gets its own nonce; "read-only with rate limit" doesn't.
