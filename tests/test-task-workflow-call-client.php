@@ -171,6 +171,31 @@ $engine->complete_task($t4, ['outcome' => 'no_answer'], 42);
 $after = $count_call_tasks();
 assert_equals($after, $before, 'no_answer does not spawn follow-up');
 
+// --- K20: the reorder strategy blanks a placeholder client_phone_1 (`0`) so
+// the seeded {{client_phone_1}} template never fills the task's Phone with it;
+// real numbers (including 7-digit locals) pass through verbatim. ---
+class CallClientStrategyWpdb extends wpdb {
+    public array $rows = [];
+    public function __construct() {}
+    public function get_results($q, $o = 'OBJECT') { return $this->rows; }
+}
+$strategy_db = new CallClientStrategyWpdb();
+$strategy_db->rows = [
+    ['client_id' => 1, 'client_phone_1' => '0'],
+    ['client_id' => 2, 'client_phone_1' => '506-858-1234'],
+    ['client_id' => 3, 'client_phone_1' => '204-7570 (Joyce)'],
+    ['client_id' => 4, 'client_phone_1' => null],
+];
+$saved_wpdb = $GLOBALS['wpdb'] ?? null;
+$GLOBALS['wpdb'] = $strategy_db;
+$due = MealsDB_Task_Type_Call_Client::clients_due_to_reorder_strategy([], []);
+$GLOBALS['wpdb'] = $saved_wpdb;
+assert_equals($due[0]['client_phone_1'] ?? null, '', 'K20 placeholder client_phone_1 blanked for the task');
+assert_equals($due[1]['client_phone_1'] ?? null, '506-858-1234', 'K20 real client_phone_1 passes through');
+assert_equals($due[2]['client_phone_1'] ?? null, '204-7570 (Joyce)', 'K20 7-digit local passes through verbatim');
+assert_equals($due[3]['client_phone_1'] ?? null, '', 'K20 NULL client_phone_1 becomes empty string');
+assert_equals($due[0]['__related_entity_id'] ?? null, 1, 'K20 related-entity tagging unchanged');
+
 echo "Ran " . ($passed + count($failures)) . " checks: $passed passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo "FAIL: $f\n"; }
 exit(empty($failures) ? 0 : 1);

@@ -1347,7 +1347,13 @@ class MealsDB_Invoice_Generator {
             $billing_address  = trim((string) ($vet['street_name'] ?? ''));
             $billing_city     = $vet['city'] ?? '';
             $billing_postcode = $vet['postal_code'] ?? '';
-            $billing_phone    = $vet['client_phone_1'] ?? '';
+            // K20: a placeholder phone (fewer than 7 digits, e.g. `-`, `n/a`)
+            // exports as blank, not as junk in the government CSV. A bare `0`
+            // was already blanked by accident — `'0' ?: ''` is '' because PHP
+            // treats the string '0' as falsy — but no other placeholder was.
+            // The guard makes the rule explicit and shared with slips/orders.
+            // Operator decision 2026-11-02: blank, not `0`.
+            $billing_phone    = MealsDB_Phone::dialable_or_empty((string) ($vet['client_phone_1'] ?? ''));
             $service          = strtolower((string) ($vet['requisition_period'] ?? '') ?: 'week');
 
             // The two operator-editable billing fields on the grid (Directive 5:

@@ -89,13 +89,13 @@ class MealsDB_WP_User_Mapper {
         }
 
         // Contact -----------------------------------------------------------
-        $phone1 = self::normalize_phone($get('billing_phone'));
+        $phone1 = self::pull_phone($get('billing_phone'));
         // K19: the second phone is WP/Enzebra's delivery phone `shipping_phone`
         // — the same key the nightly sync now maps client_phone_2 to. This used
         // to read `mealsdb_client_phone_2` then `billing_phone_2`, neither of
         // which has a single usermeta row, so Pull Data always left Phone #2
         // empty and then disagreed with what the sync wrote that night.
-        $phone2 = self::normalize_phone($get('shipping_phone'));
+        $phone2 = self::pull_phone($get('shipping_phone'));
 
         // Billing address ---------------------------------------------------
         $b_street = $get('billing_address_1');
@@ -193,6 +193,28 @@ class MealsDB_WP_User_Mapper {
      */
     public static function normalize_phone(string $value): string {
         return MealsDB_Phone::format($value);
+    }
+
+    /**
+     * Pull-Data phone shaping for client_phone_1 / client_phone_2.
+     *
+     * Uses format_with_optional_contact(), NOT normalize_phone()/format():
+     * format() strips every non-digit, so "506-988-1777 Denise" came back as
+     * "(506)-988-1777" and the contact name was lost on the next form save
+     * (Codex review on #558; Phone 1 had the same loss since GUI-F3F5-v2).
+     * This is the same formatter MealsDB_Client_Form::validate() applies on
+     * save, so Pull Data and the form agree.
+     *
+     * K20: a placeholder (`0`, fewer than 7 digits) maps to '' so Pull Data
+     * leaves the field empty rather than filling it with a non-number. The
+     * mapper omits empty fields, so the form keeps whatever it already has.
+     *
+     * normalize_phone() is left unchanged: MealsDB_Private_Intake also calls
+     * it and is outside this change.
+     */
+    private static function pull_phone(string $value): string {
+        $value = MealsDB_Phone::dialable_or_empty($value);
+        return $value === '' ? '' : MealsDB_Phone::format_with_optional_contact($value);
     }
 
     /**

@@ -92,6 +92,19 @@ eq(MealsDB_Phone::is_same_number('', ''), false, 'different: empty is never "the
 eq(MealsDB_Phone::is_same_number('', '506-858-1234'), false, 'different: empty primary never hides the secondary');
 eq(MealsDB_Phone::is_same_number('n/a', 'N/A'), false, 'different: no digits is never "the same"');
 
+// -- has_number() / dialable_or_empty(): DIRECTIVE K20 placeholder rule --------
+// Fewer than 7 digits is a placeholder (Enzebra stores `0` for 157 clients).
+eq(MealsDB_Phone::has_number('0'), false, 'K20-1 has_number: "0" placeholder');
+eq(MealsDB_Phone::has_number(''), false, 'K20-1 has_number: empty');
+eq(MealsDB_Phone::has_number('-'), false, 'K20-1 has_number: "-"');
+eq(MealsDB_Phone::has_number('n/a'), false, 'K20-1 has_number: "n/a"');
+eq(MealsDB_Phone::has_number('858-123'), false, 'K20-1 has_number: 6 digits is below the floor');
+eq(MealsDB_Phone::has_number('204-7570 (Joyce)'), true, 'K20-2 has_number: 7-digit local with name');
+eq(MealsDB_Phone::has_number('506-204-7747 or 1-506-345-0237 (sister Diane)'), true, 'K20-2 has_number: multi-number annotated value');
+eq(MealsDB_Phone::has_number('+1 506 858 1234'), true, 'K20-2 has_number: 11-digit international form');
+eq(MealsDB_Phone::dialable_or_empty('  0  '), '', 'K20 dialable_or_empty: placeholder -> empty');
+eq(MealsDB_Phone::dialable_or_empty('  506-858-1234  '), '506-858-1234', 'K20 dialable_or_empty: real number trimmed, otherwise verbatim');
+
 echo 'Ran ' . ($passed + count($failures)) . " checks: {$passed} passed, " . count($failures) . " failed\n";
 foreach ($failures as $f) { echo $f . "\n"; }
 exit(empty($failures) ? 0 : 1);

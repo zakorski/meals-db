@@ -310,6 +310,25 @@ seed_user(620, ['display_name' => 'Ship Phone'], [
 $got = MealsDB_WP_User_Mapper::map_usermeta_to_client_fields(620);
 check(($got['phone_secondary'] ?? '') === '(506)-555-2222', 'K19 mapper: phone_secondary from shipping_phone');
 
+// Codex review on #558: Pull Data must keep a trailing contact name on BOTH
+// phones (format() used to strip it; the form's formatter keeps it).
+seed_user(630, ['display_name' => 'Named Phones'], [
+    'billing_phone'  => '506-988-1777 Denise',
+    'shipping_phone' => '5065552222 back door',
+]);
+$got = MealsDB_WP_User_Mapper::map_usermeta_to_client_fields(630);
+check(($got['phone_primary'] ?? '') === '(506)-988-1777 Denise', 'Codex#558 mapper: phone_primary keeps contact name');
+check(($got['phone_secondary'] ?? '') === '(506)-555-2222 back door', 'Codex#558 mapper: phone_secondary keeps contact name');
+
+// K20: a placeholder shipping_phone (`0`) is not pulled into Phone #2.
+seed_user(640, ['display_name' => 'Zero Ship'], [
+    'billing_phone'  => '5065551111',
+    'shipping_phone' => '0',
+]);
+$got = MealsDB_WP_User_Mapper::map_usermeta_to_client_fields(640);
+check(!array_key_exists('phone_secondary', $got), 'K20 mapper: placeholder shipping_phone is omitted');
+check(($got['phone_primary'] ?? '') === '(506)-555-1111', 'K20 mapper: real billing_phone still pulled');
+
 // ---------------------------------------------------------------------------
 if (!empty($failures)) {
     echo implode("\n", $failures) . "\n";

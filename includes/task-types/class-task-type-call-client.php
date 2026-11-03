@@ -131,6 +131,13 @@ class MealsDB_Task_Type_Call_Client {
 
         // Tag each row with the related-entity hint used by spawn_from_rule.
         return array_map(static function($row) {
+            // K20: the seeded rule fills the task's read-only Phone field from
+            // {{client_phone_1}}. A placeholder (`0`, fewer than 7 digits — see
+            // MealsDB_Phone::has_number) is not a number the caller can dial, so
+            // the task shows an empty Phone rather than `0`. The stored column
+            // is untouched; this is the consumption-side guard K20 applies to
+            // every phone consumer (Codex review on #559).
+            $row['client_phone_1'] = MealsDB_Phone::dialable_or_empty((string) ($row['client_phone_1'] ?? ''));
             $row['__related_entity_type'] = 'client';
             $row['__related_entity_id']   = (int) ($row['client_id'] ?? 0);
             return $row;
