@@ -228,7 +228,7 @@ Plugin-scheduled cron hooks and their **actual** scheduled times (verified again
 - `mealsdb_nightly_allocation_sync` — **03:00** — allocation engine (`class-allocation-hooks.php`). **NOT 02:00.**
 - `mealsdb_nightly_task_sync` — **02:00** (design) — task engine (`class-task-cron.php`).
 - `mealsdb_daily_report` — **04:00** — Phase W health report.
-- `mealsdb_log_retention` — **04:30** — Phase W log pruning (hook_log 90d, job_log 365d; does NOT prune `meals_allocation_errors`).
+- `mealsdb_log_retention` — **04:30** — log pruning (`MealsDB_Log_Retention`): the event-log trunk by severity band (90/180/365d; degraded/failed 365d; never `running`), `meals_allocation_errors` by `last_seen_at` (365d), and CLOSED `meals_sync_conflicts` rows 90 days after `resolved_at` (K21; open/dismissed never pruned). Never touches the audit log.
 
 > **FIXED (directive LB-1):** the nightly allocation sync now **materialises dirty client-months before re-summing.** `MealsDB_Allocation_Hooks::nightly_sync()` calls `MealsDB_Allocation_Rebuilder::rebuild_all_dirty()` (the same proven path used by invoice generation and the manual Data-Ops button) and then runs the existing `bulk_recalculate_month` re-sum as a belt-and-suspenders consistency pass. The rebuild stats are recorded in the job-logger `finish()` payload (`dirty_rebuild_stats`). This was previously the single highest-impact bug — a dirty-but-unbuilt month stayed empty while the job logged success, cascading into billing, reporting, driver cash collection, and the Quick Order allowance preview. It depended on LB-3 (below): the rebuilder now skips finalized months, so running it nightly is safe.
 

@@ -111,7 +111,7 @@ try {
 // STR-LOG trunk: retention prunes the trunk (meals_event_log) in 4 passes
 // — three severity bands plus the aged degraded/failed pass. Directive
 // MAJ-2 adds ONE MORE pass for meals_allocation_errors, for 5 total.
-assert_equal(5, count($wpdb->deletes), 'retention issued 5 DELETEs (3 severity bands + unresolved + allocation_errors)');
+assert_equal(6, count($wpdb->deletes), 'retention issued 6 DELETEs (3 severity bands + unresolved + allocation_errors + sync_conflicts)');
 
 // Every pass must be bounded by LIMIT (a giant backlog could otherwise
 // lock the table for seconds) and target one of the two pruned tables.
@@ -122,8 +122,9 @@ foreach ($wpdb->deletes as $i => $sql) {
     );
     assert_true(
         stripos($sql, 'meals_event_log') !== false
-            || stripos($sql, 'meals_allocation_errors') !== false,
-        sprintf('DELETE #%d targets the event_log trunk or allocation_errors', $i)
+            || stripos($sql, 'meals_allocation_errors') !== false
+            || stripos($sql, 'meals_sync_conflicts') !== false,
+        sprintf('DELETE #%d targets the event_log trunk, allocation_errors or sync_conflicts', $i)
     );
 }
 
@@ -146,6 +147,26 @@ assert_true(
     stripos($alloc_sql, 'first_seen_at') === false,
     'allocation_errors prune does NOT key on first_seen_at (recurring errors stay active)'
 );
+
+// K21: exactly one pass prunes sync conflicts — closed statuses only, never
+// open or dismissed (live), keyed on resolved_at, with a ~90-day UTC cutoff.
+$conflict_deletes = array_values(array_filter($wpdb->deletes, function ($sql) {
+    return stripos($sql, 'meals_sync_conflicts') !== false;
+}));
+assert_equal(1, count($conflict_deletes), 'exactly one sync_conflicts prune pass');
+$conflict_sql = $conflict_deletes[0] ?? '';
+assert_true(stripos($conflict_sql, "status IN ('resolved', 'auto_resolved', 'superseded')") !== false,
+    'sync_conflicts prune targets only closed statuses');
+assert_true(stripos($conflict_sql, "'open'") === false && stripos($conflict_sql, "'dismissed'") === false,
+    'sync_conflicts prune never names open or dismissed rows');
+assert_true(stripos($conflict_sql, 'resolved_at') !== false, 'sync_conflicts prune keys on resolved_at');
+assert_true(preg_match('/LIMIT\s+\d+/i', $conflict_sql) === 1, 'sync_conflicts DELETE is bounded by LIMIT');
+if (preg_match("/< '(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})'/", $conflict_sql, $m)) {
+    $age_days = (time() - strtotime($m[1] . ' UTC')) / 86400;
+    assert_true($age_days > 89.9 && $age_days < 90.1, sprintf('sync_conflicts cutoff is 90 days ago in UTC (got %.2f)', $age_days));
+} else {
+    assert_true(false, 'sync_conflicts cutoff literal present');
+}
 
 // No pass may ever delete a 'running' row (hang detection). The band
 // passes exclude it explicitly; the unresolved pass targets only

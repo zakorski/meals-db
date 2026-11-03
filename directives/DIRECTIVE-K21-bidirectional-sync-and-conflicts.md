@@ -533,7 +533,9 @@ Add the table to `MealsDB_Schema` / `MealsDB_Tables`, bump the schema version, a
 > `phone_primary` name); a change in the linked client set **supersedes** the row (also on the
 > nightly sweep for accounts no longer tracked, and immediately in `on_wp_user_deleted`) rather than
 > hooking every `wp_user_id` writer; detection **fails closed** if the staff list or the conflict
-> store can't be read. Not yet done: closed-row retention/pruning (closed rows accumulate). Test:
+> store can't be read. Retention (operator decision 2026-11-03, applied): closed rows
+> (resolved / auto_resolved / superseded) are deleted 90 days after `resolved_at` by the 04:30
+> `MealsDB_Log_Retention` job; open and dismissed rows are never pruned. Test:
 > `tests/test-sync-conflicts-k21.php`.
 
 ---

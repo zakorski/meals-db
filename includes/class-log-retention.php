@@ -16,6 +16,12 @@
  * meals_audit_log is NOT touched here — it is a compliance artifact with
  * its own (long, legally-mandated) retention. See CLAUDE.md §6.
  *
+ * Also prunes CLOSED meals_sync_conflicts rows (K21) after
+ * SYNC_CONFLICT_DAYS; open and dismissed rows are live and never pruned.
+ * Every resolution's actual data change is in the audit log, which this
+ * job does not touch, so pruning a closed conflict loses no record of what
+ * was written.
+ *
  * Author: Fishhorn Design
  * Author URI: https://fishhorn.ca
  * Licensed under the GNU General Public License v3.0 or later.
@@ -46,6 +52,14 @@ class MealsDB_Log_Retention {
      */
     private const MAX_ROWS_PER_PASS = 5000;
 
+    /**
+     * Closed sync conflicts (resolved / auto_resolved / superseded) are kept
+     * this long after they closed, then deleted (operator decision
+     * 2026-11-03). Its own constant, not SHORT_DAYS: the same number today
+     * for a different reason.
+     */
+    private const SYNC_CONFLICT_DAYS = 90;
+
     public static function register_hooks(): void {
         add_action(self::HOOK, [self::class, 'run']);
         if (!wp_next_scheduled(self::HOOK)) {
@@ -74,10 +88,14 @@ class MealsDB_Log_Retention {
             // (resolved-by-absence) age out.
             $deleted_alloc = self::prune_allocation_errors(self::LONG_DAYS);
 
+            // K21: closed sync conflicts, 90 days after they closed.
+            $deleted_conflicts = self::prune_sync_conflicts(self::SYNC_CONFLICT_DAYS);
+
             MealsDB_Job_Logger::finish($log_id, [
-                'records_processed'        => $deleted + $deleted_alloc,
-                'event_log_deleted'        => $deleted,
+                'records_processed'         => $deleted + $deleted_alloc + $deleted_conflicts,
+                'event_log_deleted'         => $deleted,
                 'allocation_errors_deleted' => $deleted_alloc,
+                'sync_conflicts_deleted'    => $deleted_conflicts,
             ]);
         } catch (\Throwable $e) {
             MealsDB_Job_Logger::fail($log_id, $e->getMessage());
@@ -172,6 +190,36 @@ class MealsDB_Log_Retention {
             "DELETE FROM `{$table}`
              WHERE COALESCE(last_seen_at, created_at, '1970-01-01 00:00:00') < %s
              LIMIT %d",
+            $cutoff,
+            self::MAX_ROWS_PER_PASS
+        );
+        $result = $wpdb->query($sql);
+        return $result === false ? 0 : (int) $result;
+    }
+
+    /**
+     * Prune CLOSED sync conflicts (K21) whose resolved_at is older than
+     * $days. The status list is the whole guard: 'open' and 'dismissed' are
+     * live — a dismissal holds only while its values are unchanged and is
+     * re-checked every night — so they are never listed and never deleted,
+     * however old. close() always stamps resolved_at; the COALESCE to
+     * last_seen_at is only so a row closed without one still ages out
+     * instead of living forever.
+     */
+    private static function prune_sync_conflicts(int $days): int {
+        global $wpdb;
+
+        $table  = MealsDB_DB::get_table_name(MealsDB_Tables::SYNC_CONFLICTS);
+        $cutoff = gmdate('Y-m-d H:i:s', time() - ($days * 86400));
+
+        $sql = $wpdb->prepare(
+            "DELETE FROM `{$table}`
+             WHERE status IN (%s, %s, %s)
+               AND COALESCE(resolved_at, last_seen_at) < %s
+             LIMIT %d",
+            MealsDB_Sync_Conflicts::STATUS_RESOLVED,
+            MealsDB_Sync_Conflicts::STATUS_AUTO_RESOLVED,
+            MealsDB_Sync_Conflicts::STATUS_SUPERSEDED,
             $cutoff,
             self::MAX_ROWS_PER_PASS
         );
