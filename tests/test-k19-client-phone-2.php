@@ -85,18 +85,16 @@ $map = MealsDB_Sync::get_field_to_wp_meta_map();
 chk(($map['client_phone_2'] ?? null) === ['type' => 'meta', 'key' => 'shipping_phone'], 'T1: client_phone_2 maps to meta shipping_phone');
 chk(in_array('client_phone_2', MealsDB_Sync::get_wp_authoritative_fields(), true), 'T1: client_phone_2 stays WP-authoritative');
 
-$rmp = new ReflectionMethod('MealsDB_Sync', 'read_wp_field_value_with_presence');
-$rmp->setAccessible(true);
-$GLOBALS['meta_store']  = ['41|shipping_phone' => '506-858-7777', '41|billing_phone' => '506-858-1234'];
-$GLOBALS['meta_exists'] = ['41|shipping_phone' => true, '41|billing_phone' => true];
-[$val, $present] = $rmp->invoke(null, new WP_User(41), $map['client_phone_2']);
-chk($val === '506-858-7777' && $present === true, 'T1: shipping_phone read as present value');
-chk(MealsDB_Sync::decide_field_action($present, $val, '') === 'write', 'T1: empty column + shipping_phone -> write');
+// K21: the decision is MealsDB_Sync_Reconciler::evaluate_field() (the
+// WP-wins decide_field_action() was removed). A populated shipping_phone fills
+// a blank client_phone_2 verbatim.
+$r = MealsDB_Sync_Reconciler::evaluate_field('client_phone_2', '506-858-7777', [41 => '']);
+chk($r['outcome'] === 'fill' && $r['fill_clients'] === [41], 'T1: empty column + shipping_phone -> fill');
 
-// Stored verbatim even when equal to billing_phone: the column mirrors WP.
-$GLOBALS['meta_store']['41|shipping_phone'] = '506-858-1234';
-[$val_same, $present_same] = $rmp->invoke(null, new WP_User(41), $map['client_phone_2']);
-chk(MealsDB_Sync::decide_field_action($present_same, $val_same, '') === 'write', 'T1: shipping_phone == billing_phone is still written (dedup is display-only)');
+// Filled even when equal to billing_phone: the column mirrors the WP field;
+// hiding the duplicate is a display concern.
+$r = MealsDB_Sync_Reconciler::evaluate_field('client_phone_2', '506-858-1234', [41 => '']);
+chk($r['outcome'] === 'fill', 'T1: shipping_phone == billing_phone is still filled (dedup is display-only)');
 
 // ===== T2: blank client_phone_2 does not overwrite populated shipping_phone ==
 $GLOBALS['wpdb'] = new wpdb();

@@ -75,24 +75,19 @@ foreach (['street_name','delivery_street_name','client_phone_2','alternate_conta
     chk(strpos($map[$f]['key'] ?? '', 'mealsdb_') !== 0, "ITEM1: {$f} no longer mealsdb_ prefixed");
 }
 
-// ===== Task 2: ITEM 2 pure decision helper =====
-// decide_field_action(bool $present, string $wp_value, string $client_value): string
-chk(MealsDB_Sync::decide_field_action(false, '', '123 Main St') === 'skip_absent', 'ITEM2: absent key -> skip_absent (test 1)');
-chk(MealsDB_Sync::decide_field_action(false, '', '') === 'skip_absent', 'ITEM2: absent key wins even when column empty');
-chk(MealsDB_Sync::decide_field_action(true, '5 Elm St', '5 Elm St') === 'noop', 'ITEM2: equal -> noop');
-chk(MealsDB_Sync::decide_field_action(true, '5 Elm St', 'Old Rd') === 'write', 'ITEM2: real diff -> write (test 3)');
-chk(MealsDB_Sync::decide_field_action(true, '', '123 Main St') === 'skip_blank', 'ITEM2/3: present-empty over real -> skip_blank (test 2)');
-chk(MealsDB_Sync::decide_field_action(true, '', '') === 'noop', 'ITEM2: empty over empty -> noop');
-
-// presence-aware read helper
-$rmp = new ReflectionMethod('MealsDB_Sync', 'read_wp_field_value_with_presence');
-$rmp->setAccessible(true);
-$GLOBALS['meta_store']  = ['9|billing_address_1' => '5 Elm St'];
-$GLOBALS['meta_exists'] = ['9|billing_address_1' => true];
-[$val, $present] = $rmp->invoke(null, new WP_User(9), ['type'=>'meta','key'=>'billing_address_1']);
-chk($val === '5 Elm St' && $present === true, 'ITEM2: present meta read (value+present) (test 4)');
-[$val2, $present2] = $rmp->invoke(null, new WP_User(9), ['type'=>'meta','key'=>'mealsdb_street_name']);
-chk($val2 === '' && $present2 === false, 'ITEM2: absent meta read -> present=false');
+// ===== Task 2: ITEM 2/3 decisions, restated for K21 =====
+// decide_field_action() (the WP-wins decision) and the presence-aware reader
+// were removed with the WP-wins nightly and hooks (K21 ITEMS 7 + 13). The K13
+// guarantees are now properties of MealsDB_Sync_Reconciler::evaluate_field(),
+// which every sync path uses. An absent WP key reads as '' (blank).
+$E = 'MealsDB_Sync_Reconciler';
+$r = $E::evaluate_field('street_name', '', [1 => '123 Main St']);
+chk($r['outcome'] === 'fill' && $r['fill_wp'] === true && $r['fill_clients'] === [], 'ITEM2/3: absent or empty WP over a populated column -> fill WP, never blank MealsDB (tests 1, 2)');
+chk($E::evaluate_field('street_name', '', [1 => ''])['outcome'] === 'blank', 'ITEM2: empty over empty -> nothing');
+chk($E::evaluate_field('street_name', '5 Elm St', [1 => '5 elm st'])['outcome'] === 'equal', 'ITEM2: equal (normalised) -> no write');
+chk($E::evaluate_field('street_name', '5 Elm St', [1 => 'Old Rd'])['outcome'] === 'conflict', 'K21: real difference -> conflict, no write (was WP-wins write, test 3)');
+$r = $E::evaluate_field('street_name', '5 Elm St', [1 => '']);
+chk($r['outcome'] === 'fill' && $r['fill_clients'] === [1], 'ITEM2: present WP value fills a blank column (test 4)');
 
 // ===== Task 3: ITEM 3 mutator guards =====
 $GLOBALS['wpdb'] = new wpdb();

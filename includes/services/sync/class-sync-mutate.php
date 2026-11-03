@@ -254,10 +254,11 @@ class MealsDB_Sync_Mutate {
 
         $existing_value = is_scalar($existing_value) ? (string) $existing_value : '';
 
-        // K13 ITEM 3: covers callers that reach this method WITHOUT the nightly
-        // loop's decide_field_action() pre-check - the real-time hooks and the
-        // conflict-resolution AJAX (direction=woocommerce). An empty incoming
-        // value must never blank a populated meals_clients column.
+        // K13 ITEM 3: an empty incoming value must never blank a populated
+        // meals_clients column. (K21: no production path calls this method
+        // any more — its callers, the WP-wins nightly, the old real-time hooks
+        // and the mealsdb_sync_field endpoint, were removed. Kept with its
+        // guard for its tests until it is retired.)
         if (MealsDB_Sync::would_blank_value($new_value, $existing_value)) {
             MealsDB_Event_Log::record([
                 'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',

@@ -664,6 +664,31 @@ must not overwrite a populated MealsDB value any more than the nightly may — a
 `delivery_initials`. The hooks act on **every** active client linked to the account, not one
 arbitrary row, and skip staff accounts.
 
+> **APPLIED (2026-11-03).** All three hooks call `MealsDB_Sync_Reconciler::reconcile_account()` —
+> the nightly's per-account logic for one account: fill blank MealsDB values from WordPress
+> (audited, source `realtime`), leave equal fields alone, record a conflict when both sides are
+> populated and differ, auto-close converged conflicts, fill derived fields only where blank.
+> Every active linked client is reconciled (the old `LIMIT 1` lookup is gone); staff/admin
+> accounts are skipped (fail closed if the staff list is unreadable); a hook fired during a K21
+> write is skipped via the recursion guard. **Implementation decision — review:** the real-time
+> path never writes WordPress. WordPress blanks are counted (`wp_deferred_to_nightly`) and left to
+> the nightly, whose breaker and missing-key guard need the whole population and cannot run on a
+> single save; a save also should not write back into the record being saved.
+>
+> Removed as dead after this change: `decide_field_action()`, `read_wp_field_value_with_presence()`,
+> `read_wp_field_value()`, `normalize_for_comparison()`, `sync_wp_fields_to_meals_db()`,
+> `find_tracked_client_by_wp_user()`, and the public `MealsDB_Sync::push_to_woocommerce()` /
+> `push_to_meals_db()` facades (overwrite paths with no remaining caller). The K13 and K19 tests
+> that asserted the WP-wins decision now assert the same guarantees against `evaluate_field()`.
+> **Still present, unreachable from production:** `MealsDB_Sync_Mutate::push_to_woocommerce()` /
+> `push_to_meals_db()` (exercised only by their own tests) — retire with Test 32.
+>
+> **Bug fixed in passing (introduced by ITEM 8):** `MealsDB_Event_Log` scrubs context by KEY, so
+> per-field counts keyed by sensitive column names (phones, emails, street names, alternate
+> contact — about ten fields) were stored as `[redacted:non-scalar]` in `sync.reconcile_detected`.
+> Every K21 summary now keys per-field maps as `field:<column>`
+> (`MealsDB_Sync_Reconciler::by_field_key()`). Test: `tests/test-sync-realtime-k21.php`.
+
 ---
 
 ## Out of scope

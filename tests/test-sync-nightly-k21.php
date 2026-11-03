@@ -120,6 +120,11 @@ chk(!empty($GLOBALS['syncing_during_meta_write']) && !in_array(false, $GLOBALS['
     'T28: every WordPress meta write ran with the sync hooks suppressed');
 chk(MealsDB_Sync::is_syncing() === false, 'T28: hook flag restored after the run');
 chk(in_array('sync.reconcile_applied', $db->event_names(), true), 'summary event recorded');
+$summary = array_values(array_filter($db->events, static fn ($e) => ($e['event'] ?? '') === 'sync.reconcile_applied'))[0] ?? [];
+$ctx = json_decode((string) ($summary['context'] ?? ''), true) ?: [];
+chk(($ctx['applied']['field:client_phone_2']['wp'] ?? 0) === 1 && ($ctx['fields']['field:street_name']['fill'] ?? 0) === 1,
+    'summary counts for sensitive-named fields survive the event-log scrubber');
+chk(strpos((string) ($summary['context'] ?? ''), 'redacted') === false, 'summary context carries no redactions');
 
 // T16 / T29 across everything written.
 $written_cols = [];

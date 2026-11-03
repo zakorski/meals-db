@@ -431,6 +431,94 @@ final class MealsDB_Sync_Reconciler {
     }
 
     /**
+     * K21 ITEM 13: reconcile ONE account in response to a WordPress save
+     * (profile_update, woocommerce_customer_save_address,
+     * woocommerce_created_customer). Same registry and rules as the nightly:
+     * fill a blank MealsDB value, leave equal fields alone, record a conflict
+     * when both sides are populated and differ, close conflicts that have
+     * converged, and fill derived fields only where blank. A WordPress
+     * profile edit therefore can no longer overwrite a populated MealsDB
+     * value, and never writes delivery_initials.
+     *
+     * Deliberately one-directional: the real-time path NEVER writes
+     * WordPress. Filling WordPress blanks stays with the nightly, whose
+     * breaker and missing-key guard need the whole population and cannot run
+     * on a single save — and a save should not write back into the record
+     * being saved. Never throws.
+     *
+     * @return array{outcome: string, reason?: string, stats?: array<string, mixed>}
+     */
+    public static function reconcile_account(int $wp_user_id): array {
+        if ($wp_user_id <= 0) {
+            return ['outcome' => 'skipped', 'reason' => 'invalid_user'];
+        }
+        try {
+            global $wpdb;
+            $user = get_userdata($wp_user_id);
+            if (!$user instanceof WP_User) {
+                return ['outcome' => 'skipped', 'reason' => 'no_userdata'];
+            }
+            if (in_array('administrator', (array) $user->roles, true)) {
+                return ['outcome' => 'skipped', 'reason' => 'staff'];
+            }
+            $query = new MealsDB_Sync_Query();
+            $staff = $query->get_staff_wordpress_ids();
+            if (!is_array($staff)) {
+                // Fail CLOSED, as the nightly does.
+                return ['outcome' => 'skipped', 'reason' => 'staff_lookup_failed'];
+            }
+            if (isset($staff[$wp_user_id])) {
+                return ['outcome' => 'skipped', 'reason' => 'staff'];
+            }
+
+            $by_account = self::fetch_clients([$wp_user_id]);
+            if ($by_account === null) {
+                return ['outcome' => 'errored', 'reason' => 'client_query_failed'];
+            }
+            $clients = $by_account[$wp_user_id] ?? [];
+            if ($clients === []) {
+                return ['outcome' => 'skipped', 'reason' => 'not_tracked_client'];
+            }
+
+            $store    = new MealsDB_Sync_Conflicts($wpdb);
+            $by_field = $store->live_for_accounts([$wp_user_id]);
+            if ($by_field === null) {
+                return ['outcome' => 'errored', 'reason' => 'conflict_store_unreadable'];
+            }
+            $live = [];
+            foreach ($by_field[$wp_user_id] ?? [] as $row) {
+                $live[MealsDB_Sync_Conflicts::dedup_key($wp_user_id, (string) $row['field'])] = $row;
+            }
+            $legacy_ignored = $query->get_ignored_conflicts();
+            $legacy_ignored = is_array($legacy_ignored) ? $legacy_ignored : [];
+
+            $stats = self::empty_stats();
+            $plan  = ['accounts' => [], 'replacing' => [], 'present' => [], 'meta_fields' => []];
+            self::detect_account($user, $clients, $store, $live, $legacy_ignored, gmdate('Y-m-d H:i:s'), $stats, $plan);
+
+            if (isset($plan['accounts'][$wp_user_id])) {
+                $mutate = new MealsDB_Sync_Mutate();
+                MealsDB_Sync::without_sync_hooks(static function () use ($user, $clients, $mutate, &$stats): void {
+                    self::apply_account($user, $clients, [], false, $mutate, $stats, false, 'realtime');
+                });
+            }
+
+            $stats['applied'] = array_filter($stats['applied']);
+            $failed = $stats['store_errors'] > 0 || $stats['fill_failures'] > 0;
+            return ['outcome' => $failed ? 'errored' : 'processed', 'stats' => [
+                // Recorded as hook context: re-keyed so the scrubber keeps the counts.
+                'applied'       => self::by_field_key($stats['applied']),
+                'conflicts'     => array_filter($stats['conflicts']),
+                'fill_failures' => $stats['fill_failures'],
+                'store_errors'  => $stats['store_errors'],
+            ]];
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Sync Reconcile] account ' . $wp_user_id . ' failed: ' . $e->getMessage());
+            return ['outcome' => 'errored', 'reason' => 'exception: ' . get_class($e)];
+        }
+    }
+
+    /**
      * K13 mass-blank breaker, restated for fill-blank (see class docblock).
      * Returns the refusal message, or null to proceed. Also flags meta keys
      * absent for every evaluated user (K13 ITEM 2) so their WordPress fills
@@ -519,8 +607,11 @@ final class MealsDB_Sync_Reconciler {
      * @param array<int, array<string, mixed>> $clients
      * @param array<string, bool>              $skip_wp
      * @param array<string, mixed>             $stats
+     * @param bool   $fill_wp      false on the real-time path (ITEM 13): WordPress
+     *                             blanks are left for the nightly and counted.
+     * @param string $source_label audit source: nightly | realtime
      */
-    private static function apply_account(WP_User $user, array $clients, array $skip_wp, bool $shadow, MealsDB_Sync_Mutate $mutate, array &$stats): void {
+    private static function apply_account(WP_User $user, array $clients, array $skip_wp, bool $shadow, MealsDB_Sync_Mutate $mutate, array &$stats, bool $fill_wp = true, string $source_label = 'nightly'): void {
         $wp_user_id = (int) $user->ID;
 
         foreach (MealsDB_Sync_Registry::fields() as $column => $field) {
@@ -554,7 +645,9 @@ final class MealsDB_Sync_Reconciler {
             $tally = &$stats['applied'][$column];
 
             if ($eval['fill_wp']) {
-                if (isset($skip_wp[$column])) {
+                if (!$fill_wp) {
+                    $tally['wp_deferred_to_nightly'] = ($tally['wp_deferred_to_nightly'] ?? 0) + 1;
+                } elseif (isset($skip_wp[$column])) {
                     $tally['wp_skipped_missing_key'] = ($tally['wp_skipped_missing_key'] ?? 0) + 1;
                 } elseif ($shadow) {
                     // ITEM 12: counted, reported once per run, never written.
@@ -585,7 +678,7 @@ final class MealsDB_Sync_Reconciler {
                 $value = MealsDB_Sync_Resolver::value_for_meals($cmp, $source);
                 $old   = (string) ($meals[$client_id] ?? '');
                 if ($mutate->update_meals_client($client_id, [$column => $value])) {
-                    MealsDB_Logger::log('sync_fill_client', $client_id, $column, $old, $value, 'nightly');
+                    MealsDB_Logger::log('sync_fill_client', $client_id, $column, $old, $value, $source_label);
                     $tally['meals'] = ($tally['meals'] ?? 0) + 1;
                     $filled[] = $client_id;
                 } else {
@@ -704,6 +797,29 @@ final class MealsDB_Sync_Reconciler {
         return is_scalar($value) ? (string) $value : '';
     }
 
+    /**
+     * Re-key a per-field map for an event-log context as 'field:<column>'.
+     *
+     * MealsDB_Event_Log scrubs context by KEY: any key named like a
+     * sensitive column (client_phone_1, client_email, street_name, the
+     * alternate-contact fields — about ten of the 27 synced fields) has its
+     * value replaced with '[redacted:non-scalar]'. Our per-field values are
+     * plain counts, not PII, but keyed by the bare column they were redacted,
+     * hiding exactly the numbers the operator reviews. The prefix keeps the
+     * scrubber's key match from firing; the scrubber still sanitises every
+     * string value as usual.
+     *
+     * @param array<string, mixed> $per_field
+     * @return array<string, mixed>
+     */
+    public static function by_field_key(array $per_field): array {
+        $out = [];
+        foreach ($per_field as $column => $value) {
+            $out['field:' . $column] = $value;
+        }
+        return $out;
+    }
+
     /** @return array<string, mixed> */
     private static function empty_stats(): array {
         $fields = [];
@@ -758,10 +874,10 @@ final class MealsDB_Sync_Reconciler {
                 'accounts_multi_client'  => $stats['accounts_multi_client'],
                 'accounts_staff_skipped' => $stats['accounts_staff_skipped'],
                 'accounts_missing_user'  => $stats['accounts_missing_user'],
-                'fields'                 => $stats['fields'],
+                'fields'                 => self::by_field_key($stats['fields']),
                 'conflicts'              => $stats['conflicts'],
                 'store_errors'           => $stats['store_errors'],
-                'applied'                => $stats['applied'],
+                'applied'                => self::by_field_key($stats['applied']),
                 'fill_failures'          => $stats['fill_failures'],
             ],
         ]);
@@ -775,7 +891,7 @@ final class MealsDB_Sync_Reconciler {
                 'event'     => 'sync.shadow_suppressed',
                 'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
                 'message'   => sprintf('Shadow mode suppressed %d WordPress fills.', array_sum($stats['shadow_suppressed'])),
-                'context'   => ['fields' => $stats['shadow_suppressed']],
+                'context'   => ['fields' => self::by_field_key($stats['shadow_suppressed'])],
             ]);
         }
 
@@ -800,7 +916,7 @@ final class MealsDB_Sync_Reconciler {
                 'event'     => 'sync.wp_internal_inconsistency',
                 'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
                 'message'   => 'WordPress shipping_address_2 and billing_address_2 disagree; compared on shipping only.',
-                'context'   => ['counts' => $stats['wp_inconsistent'], 'wp_user_ids' => $stats['wp_inconsistent_users']],
+                'context'   => ['counts' => self::by_field_key($stats['wp_inconsistent']), 'wp_user_ids' => $stats['wp_inconsistent_users']],
             ]);
         }
 

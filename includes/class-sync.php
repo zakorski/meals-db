@@ -80,31 +80,6 @@ class MealsDB_Sync {
     }
 
     /**
-     * K13 ITEM 2/3: the single per-field decision shared by both WP->meals_db
-     * loops. Kept pure so it is unit-testable without $wpdb.
-     *
-     * @param bool   $present      Does the mapped WP meta key EXIST for this user?
-     * @param string $wp_value     Value read from WP ('' when absent OR empty).
-     * @param string $client_value Current meals_clients column value.
-     * @return string skip_absent | skip_blank | noop | write
-     */
-    public static function decide_field_action(bool $present, string $wp_value, string $client_value): string {
-        // Absent wins first: get_user_meta() returns '' both for "set to empty"
-        // and "key absent". An absent key is "no opinion" — never touch the DB,
-        // and it is the case that blanked every client nightly (K13).
-        if (!$present) {
-            return 'skip_absent';
-        }
-        if (self::normalize_for_comparison($wp_value) === self::normalize_for_comparison($client_value)) {
-            return 'noop';
-        }
-        if (self::would_blank_value($wp_value, $client_value)) {
-            return 'skip_blank';
-        }
-        return 'write';
-    }
-
-    /**
      * K13 ITEM 4: strictly-greater-than-threshold, integer-safe (no float,
      * no divide-by-zero).
      */
@@ -113,20 +88,6 @@ class MealsDB_Sync {
             return false;
         }
         return ($blank_count * 100) > ($active_count * self::SYNC_MASS_BLANK_THRESHOLD_PCT);
-    }
-
-    /**
-     * Presence-aware read: like read_wp_field_value() but also reports whether
-     * the mapped key EXISTS. For core fields presence is always true.
-     *
-     * @return array{0: string, 1: bool} [value, present]
-     */
-    private static function read_wp_field_value_with_presence(WP_User $user, array $descriptor): array {
-        if ($descriptor['type'] === 'core') {
-            return [self::read_wp_field_value($user, $descriptor), true];
-        }
-        $present = metadata_exists('user', (int) $user->ID, $descriptor['key']);
-        return [self::read_wp_field_value($user, $descriptor), (bool) $present];
     }
 
     /**
@@ -308,192 +269,83 @@ class MealsDB_Sync {
     }
 
     /**
-     * Handle WP user profile updates by pushing WP-authoritative fields to meals_clients.
+     * K21 ITEM 13: the three real-time hooks share ONE path —
+     * MealsDB_Sync_Reconciler::reconcile_account() — so a WordPress save is
+     * held to the same rules as the nightly: fill a blank MealsDB value, no-op
+     * when equal, record a conflict when both sides are populated and differ.
      *
-     * @param int              $user_id       WordPress user ID.
-     * @param WP_User|mixed    $old_user_data Previous user data (WP_User on WP 4.3+).
+     * Previously each hook pushed the 17 k13 fields WP -> MealsDB with
+     * WordPress WINNING on any difference, through a LIMIT-1 client lookup:
+     * a client editing their address in My Account overwrote the operator's
+     * MealsDB value immediately, and on an account linked to several clients
+     * only one arbitrary client was updated.
+     *
+     * The real-time path never writes WordPress (see reconcile_account()).
+     * Recursion: every K21 write runs inside MealsDB_Sync::without_sync_hooks(),
+     * so a hook fired by our own write is skipped here.
+     */
+    private static function handle_realtime_hook(string $hook, int $user_id, array $context = []): void {
+        try {
+            if (self::$syncing) {
+                self::safe_record_hook($hook, 'user', $user_id, MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                    ['reason' => 'recursion_guard'] + $context);
+                return;
+            }
+            $result = MealsDB_Sync_Reconciler::reconcile_account($user_id);
+            $outcome = [
+                'processed' => MealsDB_Hook_Logger::OUTCOME_PROCESSED,
+                'skipped'   => MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+            ][$result['outcome']] ?? MealsDB_Hook_Logger::OUTCOME_ERRORED;
+            $hook_context = $context;
+            if (isset($result['reason'])) {
+                $hook_context['reason'] = $result['reason'];
+            }
+            if (isset($result['stats'])) {
+                $hook_context['stats'] = $result['stats'];
+            }
+            self::safe_record_hook($hook, 'user', $user_id, $outcome, $hook_context,
+                $outcome === MealsDB_Hook_Logger::OUTCOME_ERRORED ? (string) ($result['reason'] ?? 'reconcile failed') : null);
+        } catch (\Throwable $e) {
+            self::safe_record_hook($hook, 'user', $user_id, MealsDB_Hook_Logger::OUTCOME_ERRORED,
+                ['exception' => get_class($e)] + $context, $e->getMessage());
+        }
+    }
+
+    /**
+     * profile_update.
+     *
+     * @param int           $user_id       WordPress user ID.
+     * @param WP_User|mixed $old_user_data Previous user data (unused: the
+     *                                     reconcile compares current values).
      */
     public static function on_wp_user_updated(int $user_id, $old_user_data): void {
-        try {
-            if (self::$syncing) {
-                self::safe_record_hook(
-                    'profile_update', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'recursion_guard']
-                );
-                return;
-            }
-
-            $client = self::find_tracked_client_by_wp_user($user_id);
-            if ($client === null) {
-                self::safe_record_hook(
-                    'profile_update', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'not_tracked_client']
-                );
-                return;
-            }
-
-            $client_id = (int) ($client['client_id'] ?? 0);
-            if ($client_id <= 0) {
-                self::safe_record_hook(
-                    'profile_update', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'invalid_client_id']
-                );
-                return;
-            }
-
-            $user = get_userdata($user_id);
-            if (!$user instanceof WP_User) {
-                self::safe_record_hook(
-                    'profile_update', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'no_userdata']
-                );
-                return;
-            }
-
-            self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wp_to_mealsdb');
-            self::safe_record_hook('profile_update', 'user', $user_id);
-        } catch (\Throwable $e) {
-            self::safe_record_hook(
-                'profile_update', 'user', $user_id,
-                MealsDB_Hook_Logger::OUTCOME_ERRORED,
-                ['exception' => get_class($e)],
-                $e->getMessage()
-            );
-        }
+        self::handle_realtime_hook('profile_update', $user_id);
     }
 
     /**
-     * Handle WooCommerce customer address save events.
+     * woocommerce_customer_save_address.
      *
      * @param int    $user_id      WordPress user ID.
-     * @param string $address_type Address type being saved ("billing" or "shipping").
+     * @param string $address_type "billing" or "shipping".
      */
     public static function on_wc_address_saved(int $user_id, string $address_type): void {
-        try {
-            if (self::$syncing) {
-                self::safe_record_hook(
-                    'woocommerce_customer_save_address', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'recursion_guard', 'address_type' => $address_type]
-                );
-                return;
-            }
-
-            if ($address_type !== 'billing' && $address_type !== 'shipping') {
-                self::safe_record_hook(
-                    'woocommerce_customer_save_address', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'unknown_address_type', 'address_type' => $address_type]
-                );
-                return;
-            }
-
-            $client = self::find_tracked_client_by_wp_user($user_id);
-            if ($client === null) {
-                self::safe_record_hook(
-                    'woocommerce_customer_save_address', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'not_tracked_client', 'address_type' => $address_type]
-                );
-                return;
-            }
-
-            $client_id = (int) ($client['client_id'] ?? 0);
-            if ($client_id <= 0) {
-                self::safe_record_hook(
-                    'woocommerce_customer_save_address', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'invalid_client_id', 'address_type' => $address_type]
-                );
-                return;
-            }
-
-            $user = get_userdata($user_id);
-            if (!$user instanceof WP_User) {
-                self::safe_record_hook(
-                    'woocommerce_customer_save_address', 'user', $user_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'no_userdata', 'address_type' => $address_type]
-                );
-                return;
-            }
-
-            self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wc_address_to_mealsdb');
-            self::safe_record_hook(
-                'woocommerce_customer_save_address', 'user', $user_id,
-                MealsDB_Hook_Logger::OUTCOME_PROCESSED,
-                ['address_type' => $address_type]
-            );
-        } catch (\Throwable $e) {
-            self::safe_record_hook(
-                'woocommerce_customer_save_address', 'user', $user_id,
-                MealsDB_Hook_Logger::OUTCOME_ERRORED,
-                ['exception' => get_class($e), 'address_type' => $address_type],
-                $e->getMessage()
-            );
+        if ($address_type !== 'billing' && $address_type !== 'shipping') {
+            self::safe_record_hook('woocommerce_customer_save_address', 'user', $user_id,
+                MealsDB_Hook_Logger::OUTCOME_SKIPPED,
+                ['reason' => 'unknown_address_type', 'address_type' => $address_type]);
+            return;
         }
+        self::handle_realtime_hook('woocommerce_customer_save_address', $user_id, ['address_type' => $address_type]);
     }
 
     /**
-     * Handle new WooCommerce customer creation.
+     * woocommerce_created_customer. A brand-new customer is rarely linked to
+     * a client yet; when it is, the same reconcile applies.
      *
      * @param int $customer_id WordPress user ID of the new customer.
      */
     public static function on_wc_customer_created(int $customer_id): void {
-        try {
-            if (self::$syncing) {
-                self::safe_record_hook(
-                    'woocommerce_created_customer', 'user', $customer_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'recursion_guard']
-                );
-                return;
-            }
-
-            $client = self::find_tracked_client_by_wp_user($customer_id);
-            if ($client === null) {
-                self::safe_record_hook(
-                    'woocommerce_created_customer', 'user', $customer_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'not_tracked_client']
-                );
-                return;
-            }
-
-            $client_id = (int) ($client['client_id'] ?? 0);
-            if ($client_id <= 0) {
-                self::safe_record_hook(
-                    'woocommerce_created_customer', 'user', $customer_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'invalid_client_id']
-                );
-                return;
-            }
-
-            $user = get_userdata($customer_id);
-            if (!$user instanceof WP_User) {
-                self::safe_record_hook(
-                    'woocommerce_created_customer', 'user', $customer_id,
-                    MealsDB_Hook_Logger::OUTCOME_SKIPPED,
-                    ['reason' => 'no_userdata']
-                );
-                return;
-            }
-
-            self::sync_wp_fields_to_meals_db($user, $client, $client_id, 'sync_wc_customer_created');
-            self::safe_record_hook('woocommerce_created_customer', 'user', $customer_id);
-        } catch (\Throwable $e) {
-            self::safe_record_hook(
-                'woocommerce_created_customer', 'user', $customer_id,
-                MealsDB_Hook_Logger::OUTCOME_ERRORED,
-                ['exception' => get_class($e)],
-                $e->getMessage()
-            );
-        }
+        self::handle_realtime_hook('woocommerce_created_customer', $customer_id);
     }
 
     /**
@@ -612,150 +464,15 @@ class MealsDB_Sync {
         return $compare->find_probable_matches_for_client($client, $query);
     }
 
-    /**
-     * Sync a single field from Meals DB to WooCommerce.
-     *
-     * @param int    $woo_user_id
-     * @param string $field
-     * @param string $new_value
-     *
-     * @return true|WP_Error Whether the field was synced successfully.
-     */
-    public static function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
-        $mutate = new MealsDB_Sync_Mutate();
-
-        return $mutate->push_to_woocommerce($woo_user_id, $field, $new_value);
-    }
-
-    /**
-     * Sync a single field from WooCommerce to Meals DB.
-     *
-     * @param int    $client_id
-     * @param string $field
-     * @param string $new_value
-     *
-     * @return true|WP_Error Whether the field was synced successfully.
-     */
-    public static function push_to_meals_db(int $client_id, string $field, string $new_value) {
-        $mutate = new MealsDB_Sync_Mutate();
-
-        return $mutate->push_to_meals_db($client_id, $field, $new_value);
-    }
+    // K21: the push_to_woocommerce() / push_to_meals_db() facades were
+    // removed once their last callers (the WP-wins nightly, the real-time
+    // hooks and the mealsdb_sync_field endpoint) were. Both overwrote
+    // populated values; under K21 the only path allowed to do that is
+    // MealsDB_Sync_Resolver (operator resolution).
 
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
-
-    /**
-     * Look up a meals_clients record linked to a WordPress user.
-     *
-     * Historically this gated on SDNB/Veteran only; as of Phase S,
-     * Private customers are first-class records too so the sync hooks
-     * push WP-authoritative identity fields to every tracked client.
-     *
-     * @return array<string, mixed>|null Client row, or null if no record exists.
-     */
-    private static function find_tracked_client_by_wp_user(int $wp_user_id): ?array {
-        global $wpdb;
-
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $wp_column     = self::resolve_wp_user_column($wpdb, $clients_table);
-        if ($wp_column === null) {
-            return null;
-        }
-
-        $escaped_table = str_replace('`', '``', $clients_table);
-        $escaped_col   = str_replace('`', '``', $wp_column);
-        $sql = $wpdb->prepare(
-            "SELECT * FROM `{$escaped_table}` WHERE `{$escaped_col}` = %d AND client_type IN ('SDNB', 'Veteran', 'Private') LIMIT 1",
-            $wp_user_id
-        );
-
-        $row = $wpdb->get_row($sql, ARRAY_A);
-        return is_array($row) ? $row : null;
-    }
-
-    /**
-     * Compare all WP-authoritative fields and push any diffs to meals_clients.
-     *
-     * @param WP_User              $user      WordPress user.
-     * @param array<string, mixed> $client    meals_clients row.
-     * @param int                  $client_id Client primary key.
-     * @param string               $action    Audit log action label.
-     */
-    private static function sync_wp_fields_to_meals_db(WP_User $user, array $client, int $client_id, string $action): void {
-        $field_map = self::get_field_to_wp_meta_map();
-        $wp_fields = self::get_wp_authoritative_fields();
-
-        // try/finally so an exception or fatal in push_to_meals_db can't
-        // leave the global $syncing flag stuck on for the rest of the
-        // worker (which would silently suppress every subsequent sync hook).
-        self::$syncing = true;
-        try {
-            foreach ($wp_fields as $field) {
-                if (!isset($field_map[$field])) {
-                    continue;
-                }
-
-                [$wp_value, $present] = self::read_wp_field_value_with_presence($user, $field_map[$field]);
-                $client_value = isset($client[$field]) ? (string) $client[$field] : '';
-
-                $decision = self::decide_field_action($present, $wp_value, $client_value);
-                if ($decision === 'skip_absent' || $decision === 'noop') {
-                    continue;
-                }
-                if ($decision === 'skip_blank') {
-                    MealsDB_Event_Log::record([
-                        'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
-                        'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
-                        'message' => sprintf('%s: refused to blank a populated column for client %d', $field, $client_id),
-                        'context' => ['client_id' => $client_id, 'field' => $field],
-                    ]);
-                    continue;
-                }
-
-                $result = self::push_to_meals_db($client_id, $field, $wp_value);
-
-                if (is_wp_error($result)) {
-                    error_log(sprintf(
-                        '[MealsDB Sync] %s error for client %d, field %s: %s',
-                        $action, $client_id, $field, $result->get_error_message()
-                    ));
-                }
-            }
-        } finally {
-            self::$syncing = false;
-        }
-    }
-
-    /**
-     * Read a WP-side field value for a given user using the meta map descriptor.
-     *
-     * @param WP_User                       $user     WordPress user.
-     * @param array{type: string, key: string} $descriptor Meta map entry.
-     *
-     * @return string
-     */
-    private static function read_wp_field_value(WP_User $user, array $descriptor): string {
-        if ($descriptor['type'] === 'core') {
-            $key = $descriptor['key'];
-            if ($key === 'user_email') {
-                return isset($user->user_email) ? (string) $user->user_email : '';
-            }
-            return isset($user->$key) ? (string) $user->$key : '';
-        }
-
-        // type === 'meta'
-        $value = get_user_meta($user->ID, $descriptor['key'], true);
-        return is_scalar($value) ? (string) $value : '';
-    }
-
-    /**
-     * Normalize a value for case-insensitive, whitespace-trimmed comparison.
-     */
-    private static function normalize_for_comparison(string $value): string {
-        return strtolower(trim($value));
-    }
 
     /**
      * Normalize a value before it is folded into an ignored-conflict key.
