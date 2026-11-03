@@ -97,6 +97,24 @@ $field_labels = [
         </p>
     <?php endif; ?>
 
+    <?php
+    // K21 ITEM 9: the nightly conflict scan's queue. Accounts, not rows — one
+    // card per account on the conflicts view. Silent if the table is not
+    // there yet (schema upgrade pending).
+    $mealsdb_conflict_table    = MealsDB_DB::get_table_name(MealsDB_Tables::SYNC_CONFLICTS);
+    $mealsdb_conflict_accounts = $wpdb->get_var("SELECT COUNT(DISTINCT wp_user_id) FROM `{$mealsdb_conflict_table}` WHERE status = 'open'");
+    if ($mealsdb_conflict_accounts !== null) : ?>
+        <p>
+            <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=mealsdb-clients&tab=sync&view=conflicts')); ?>">
+                <?php echo esc_html(sprintf(
+                    /* translators: %d: number of WordPress accounts with open sync conflicts */
+                    __('Review sync conflicts (%d accounts)', 'meals-db'),
+                    (int) $mealsdb_conflict_accounts
+                )); ?>
+            </a>
+        </p>
+    <?php endif; ?>
+
     <form method="post" class="mealsdb-compare-form">
         <?php wp_nonce_field('mealsdb_compare_databases', 'mealsdb_compare_nonce'); ?>
         <input type="hidden" name="mealsdb_action" value="compare_databases" />

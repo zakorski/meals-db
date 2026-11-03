@@ -199,10 +199,6 @@ final class MealsDB_Sync_Reconciler {
             $legacy_ignored = is_array($legacy_ignored) ? $legacy_ignored : [];
 
             $clients_table = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
-            $columns       = array_keys(MealsDB_Sync_Registry::fields());
-            $select_cols   = implode(', ', array_map(static function (string $c): string {
-                return '`' . str_replace('`', '``', $c) . '`';
-            }, array_merge(['client_id', 'wp_user_id'], $columns)));
 
             $evaluated = [];
             $cursor    = 0;
@@ -224,20 +220,9 @@ final class MealsDB_Sync_Reconciler {
                 $account_ids = array_map('intval', $account_ids);
                 $cursor      = max($account_ids);
 
-                $placeholders = implode(', ', array_fill(0, count($account_ids), '%d'));
-                $rows = $wpdb->get_results($wpdb->prepare(
-                    "SELECT {$select_cols} FROM `{$clients_table}`
-                      WHERE wp_user_id IN ({$placeholders}) AND " . self::TRACKED_TYPES_SQL . " AND active = 1
-                      ORDER BY wp_user_id ASC, client_id ASC",
-                    ...$account_ids
-                ), ARRAY_A);
-                if (!is_array($rows)) {
+                $by_account = self::fetch_clients($account_ids);
+                if ($by_account === null) {
                     return self::fail_run($log_id, $stats, 'Client query failed: ' . (string) $wpdb->last_error);
-                }
-
-                $by_account = [];
-                foreach ($rows as $row) {
-                    $by_account[(int) $row['wp_user_id']][] = $row;
                 }
 
                 if (function_exists('cache_users')) {
@@ -308,15 +293,12 @@ final class MealsDB_Sync_Reconciler {
         }
 
         foreach (MealsDB_Sync_Registry::fields() as $column => $field) {
-            $wp_value = self::read_wp($user, $field['wp']);
+            $wp_value = self::read_wp_value($user, $field['wp']);
 
-            $meals_values = [];
-            foreach ($clients as $client) {
-                $meals_values[(int) $client['client_id']] = isset($client[$column]) ? (string) $client[$column] : '';
-            }
+            $meals_values = self::meals_values_for($clients, $column);
 
             if (isset($field['wp']['consistency'])) {
-                $other = self::read_wp($user, ['type' => 'meta', 'key' => $field['wp']['consistency']]);
+                $other = self::read_wp_value($user, ['type' => 'meta', 'key' => $field['wp']['consistency']]);
                 if (!MealsDB_Sync_Comparator::equals($field['comparator'], $wp_value, $other)) {
                     // ITEM 4: WordPress-internal inconsistency. Compare on the
                     // read key only; log, never a MealsDB conflict.
@@ -403,8 +385,70 @@ final class MealsDB_Sync_Reconciler {
         return false;
     }
 
-    /** @param array{type: string, key: string} $descriptor */
-    private static function read_wp(WP_User $user, array $descriptor): string {
+    /**
+     * Active tracked clients for the given accounts, grouped by wp_user_id
+     * and ordered by client_id. The ONE client read both the nightly
+     * detection and the conflict view use, so the values a page renders
+     * (and hashes for ITEM 10's stale-page guard) are read exactly the way
+     * detection read them. Includes the derived columns for display.
+     * Returns null on a query error.
+     *
+     * @param int[] $account_ids
+     * @return array<int, array<int, array<string, mixed>>>|null
+     */
+    public static function fetch_clients(array $account_ids): ?array {
+        global $wpdb;
+        $account_ids = array_values(array_filter(array_map('intval', $account_ids), static fn (int $id): bool => $id > 0));
+        if ($account_ids === []) {
+            return [];
+        }
+        $table   = str_replace('`', '``', MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS));
+        $columns = array_unique(array_merge(
+            ['client_id', 'wp_user_id'],
+            array_keys(MealsDB_Sync_Registry::fields()),
+            ['delivery_area_zone', 'delivery_day']
+        ));
+        $select = implode(', ', array_map(static function (string $c): string {
+            return '`' . str_replace('`', '``', $c) . '`';
+        }, $columns));
+        $placeholders = implode(', ', array_fill(0, count($account_ids), '%d'));
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT {$select} FROM `{$table}`
+              WHERE wp_user_id IN ({$placeholders}) AND " . self::TRACKED_TYPES_SQL . " AND active = 1
+              ORDER BY wp_user_id ASC, client_id ASC",
+            ...$account_ids
+        ), ARRAY_A);
+        if (!is_array($rows)) {
+            return null;
+        }
+        $by_account = [];
+        foreach ($rows as $row) {
+            $by_account[(int) $row['wp_user_id']][] = $row;
+        }
+        return $by_account;
+    }
+
+    /**
+     * client_id => raw value of one column across an account's clients.
+     *
+     * @param array<int, array<string, mixed>> $clients
+     * @return array<int, string>
+     */
+    public static function meals_values_for(array $clients, string $column): array {
+        $values = [];
+        foreach ($clients as $client) {
+            $values[(int) $client['client_id']] = isset($client[$column]) ? (string) $client[$column] : '';
+        }
+        return $values;
+    }
+
+    /**
+     * Raw WordPress value for a registry descriptor ('' when absent).
+     *
+     * @param array{type: string, key: string} $descriptor
+     */
+    public static function read_wp_value(WP_User $user, array $descriptor): string {
         if ($descriptor['type'] === 'core') {
             $key = $descriptor['key'];
             return isset($user->$key) ? (string) $user->$key : '';

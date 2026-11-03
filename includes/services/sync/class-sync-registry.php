@@ -149,6 +149,46 @@ final class MealsDB_Sync_Registry {
         return self::$fields = $fields;
     }
 
+    /**
+     * Operator-facing label for a registry column or a derived column, for
+     * the conflict view. Kept here so the view never carries its own field
+     * list (ITEM 1). Unknown columns fall back to the column name.
+     */
+    public static function label(string $column): string {
+        $labels = [
+            'first_name'                => __('First Name', 'meals-db'),
+            'last_name'                 => __('Last Name', 'meals-db'),
+            'client_email'              => __('Email', 'meals-db'),
+            'client_phone_1'            => __('Phone', 'meals-db'),
+            'client_phone_2'            => __('Second Phone', 'meals-db'),
+            'street_name'               => __('Billing Address', 'meals-db'),
+            'city'                      => __('Billing City', 'meals-db'),
+            'province'                  => __('Billing Province', 'meals-db'),
+            'postal_code'               => __('Billing Postal Code', 'meals-db'),
+            'delivery_street_name'      => __('Delivery Address', 'meals-db'),
+            'delivery_city'             => __('Delivery City', 'meals-db'),
+            'delivery_province'         => __('Delivery Province', 'meals-db'),
+            'delivery_postal_code'      => __('Delivery Postal Code', 'meals-db'),
+            'alternate_contact_name'    => __('Alternate Contact Name', 'meals-db'),
+            'alternate_contact_phone_1' => __('Alternate Contact Phone #1', 'meals-db'),
+            'alternate_contact_phone_2' => __('Alternate Contact Phone #2', 'meals-db'),
+            'alternate_contact_email'   => __('Alternate Contact Email', 'meals-db'),
+            'client_type'               => __('Client Type', 'meals-db'),
+            'delivery_area_name'        => __('Delivery Area', 'meals-db'),
+            'service_center_charged'    => __('Service Centre Charged', 'meals-db'),
+            'payment_method'            => __('Payment Method', 'meals-db'),
+            'delivery_frequency'        => __('Delivery Frequency', 'meals-db'),
+            'ordering_frequency'        => __('Ordering Frequency', 'meals-db'),
+            'service_id'                => __('Service ID', 'meals-db'),
+            'service_commence_date'     => __('Service Commence Date', 'meals-db'),
+            'expected_termination_date' => __('Expected Termination Date', 'meals-db'),
+            'delivery_initials'         => __('Delivery Initials', 'meals-db'),
+            'delivery_area_zone'        => __('Delivery Area Zone', 'meals-db'),
+            'delivery_day'              => __('Delivery Day', 'meals-db'),
+        ];
+        return $labels[$column] ?? $column;
+    }
+
     /** @return array<string, mixed>|null */
     public static function get(string $column): ?array {
         return self::fields()[$column] ?? null;

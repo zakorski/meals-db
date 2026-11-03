@@ -270,6 +270,7 @@ Don't introduce a new nonce context unless the action is meaningfully distinct f
 - `mealsdb_invoice_nonce` — invoice generation
 - `mealsdb_quick_order_create_order` — QO order creation (stricter)
 - `mealsdb_generate_initials` / `mealsdb_validate_initials` — initials AJAX
+- `mealsdb_sync_conflicts` — K21 conflict choices (per-account batch; will carry value-overwriting resolutions, hence its own context)
 - Plus form-specific ones (`mealsdb_force_rebuild`, delete-users, etc.)
 
 If you're tempted to add a new nonce: ask whether the action category warrants it. Generally, "destructive" gets its own nonce; "read-only with rate limit" doesn't.

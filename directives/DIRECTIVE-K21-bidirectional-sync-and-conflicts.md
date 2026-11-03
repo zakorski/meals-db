@@ -523,6 +523,20 @@ Evolve the dashboard comparison into a record comparison.
 
 WordPress-only and MealsDB-only records keep their existing treatment.
 
+> **APPLIED (2026-11-03) — view + "Leave both" only.** Clients → WooCommerce Sync → *Review sync
+> conflicts* (`view=conflicts`, `views/sync-conflicts.php`, `assets/js/sync-conflicts.js`), backed
+> by `MealsDB_Sync_Conflict_View`. Cards re-read values LIVE through the same readers detection
+> uses, so the hash a card renders equals the stored `values_hash` and a page dismissal survives the
+> next nightly. Paged 20 accounts at a time, oldest first; filter by status (open/dismissed) and
+> field. Choices are batched per account through `wp_ajax_mealsdb_sync_conflicts_apply` (own nonce
+> `mealsdb_sync_conflicts`, capability at handler and service layer, one `sync_operations` token per
+> request, stale-page refusal per choice). Working now: **Leave both** and **Undo dismissal**
+> (event-logged, not audit-logged — they change no client record). **Keep** choices and the
+> **Use all** shortcuts render disabled; the endpoint already accepts `keep` and refuses it as
+> `not_available` until ITEM 10. The old dashboard comparison is unchanged and stays until ITEM 10
+> can resolve; its field-mismatch cards are removed then. Tests: `tests/test-sync-conflict-view-k21.php`
+> (shares `tests/fixtures/k21-sync-fake.php` with the ITEM 8 test).
+
 ---
 
 ## ITEM 10 — Resolution writes

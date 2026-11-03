@@ -212,6 +212,72 @@ final class MealsDB_Sync_Conflicts {
         return (int) $result;
     }
 
+    /**
+     * Live (open/dismissed) rows for the given accounts, grouped by
+     * wp_user_id then field. Null on a DB error.
+     *
+     * @param int[] $wp_user_ids
+     * @return array<int, array<string, array<string, mixed>>>|null
+     */
+    public function live_for_accounts(array $wp_user_ids): ?array {
+        $ids = array_values(array_filter(array_map('intval', $wp_user_ids), static fn (int $id): bool => $id > 0));
+        if ($ids === []) {
+            return [];
+        }
+        $placeholders = implode(', ', array_fill(0, count($ids), '%d'));
+        $rows = $this->db->get_results($this->db->prepare(
+            "SELECT * FROM `{$this->table}` WHERE status IN ('open', 'dismissed') AND wp_user_id IN ({$placeholders})",
+            ...$ids
+        ), ARRAY_A);
+        if (!is_array($rows)) {
+            $this->log_db_error('live_for_accounts');
+            return null;
+        }
+        $out = [];
+        foreach ($rows as $row) {
+            $out[(int) $row['wp_user_id']][(string) $row['field']] = $row;
+        }
+        return $out;
+    }
+
+    /**
+     * Operator dismissal ("Leave both", K21 ITEM 9). Stores the values the
+     * operator saw and holds the dismissal while they stay unchanged. The
+     * caller has already verified $hash against freshly read values.
+     *
+     * @param array<string, mixed>           $live
+     * @param array<int|string, string|null> $meals_values
+     */
+    public function dismiss(array $live, string $wp_value, array $meals_values, string $hash, int $user_id, string $now): bool {
+        return $this->update((int) $live['conflict_id'], [
+            'status'              => self::STATUS_DISMISSED,
+            'wp_value'            => $wp_value,
+            'meals_values'        => self::encode_meals_values($meals_values),
+            'values_hash'         => $hash,
+            'dismissed_pair_hash' => $hash,
+            'resolution'          => 'dismissed',
+            'resolved_by'         => $user_id > 0 ? $user_id : null,
+            'resolved_at'         => $now,
+            'last_seen_at'        => $now,
+        ]);
+    }
+
+    /**
+     * Undo a dismissal: the row is open again and the next run treats it as
+     * an ordinary conflict.
+     *
+     * @param array<string, mixed> $live
+     */
+    public function undismiss(array $live): bool {
+        return $this->update((int) $live['conflict_id'], [
+            'status'              => self::STATUS_OPEN,
+            'dismissed_pair_hash' => null,
+            'resolution'          => null,
+            'resolved_by'         => null,
+            'resolved_at'         => null,
+        ]);
+    }
+
     /** @param array<int|string, string|null> $meals_values */
     private function insert(int $wp_user_id, string $field, string $wp_value, array $meals_values, string $hash, string $now, bool $dismissed): string {
         $data = [
