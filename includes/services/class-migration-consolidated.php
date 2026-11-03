@@ -340,6 +340,14 @@ class MealsDB_Migration_Consolidated {
                 continue;
             }
 
+            // Directive 7 moved the client_type lookup into
+            // customer_group_to_client_type() and dropped the local $group
+            // assignment, but these two checks still read $group — undefined,
+            // so neither ever matched: 'sdnb rural' users lost
+            // service_name_zone='rural' and Extra Mural users lost their note.
+            // Normalised the same way the shared mapper normalises.
+            $group = strtolower(trim((string) ($meta['customer_group'] ?? '')));
+
             $notes = '';
             if ($group === 'extra mural') {
                 $notes = 'Migrated from Extra Mural program.';
@@ -349,9 +357,13 @@ class MealsDB_Migration_Consolidated {
                 $service_name_zone = 'rural';
             }
 
-            $zone_map = ['Moncton' => 'M', 'Sussex' => 'S', 'veterans' => null];
+            // K21 ITEM 6: the zone lookup used to be a local case-SENSITIVE
+            // map (['Moncton' => 'M', ...]), so 'moncton' missed and the zone
+            // silently came out NULL — wrong invoice scope and wrong rate. It
+            // now goes through the one shared, case-insensitive helper the
+            // sync also uses. $sc_raw is still stored verbatim below.
             $sc_raw   = $meta['service_centre_charged'] ?? '';
-            $zone     = $zone_map[$sc_raw] ?? null;
+            $zone     = MealsDB_Operational_Constants::zone_for_service_centre((string) $sc_raw);
 
             $delivery_area_name = $meta['billing_address_2'] ?? null;
 
@@ -379,7 +391,7 @@ class MealsDB_Migration_Consolidated {
             // does, naming the user and the unmatched source value, so a
             // migrated-but-wrong client is visible instead of silently billed
             // at the wrong rate. Veterans intentionally map to a null zone
-            // (zone_map['veterans'] => null), so they are excluded.
+            // (SERVICE_CENTRE_ZONE_MAP['veterans'] => null), so they are excluded.
             //
             // U03-migration-11: emit these BEFORE the dry-run short-circuit so a
             // dry run surfaces mis-derived clients BEFORE anything is committed
@@ -396,7 +408,7 @@ class MealsDB_Migration_Consolidated {
                         'event'       => 'derive_zone.unmatched',
                         'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
                         'message'     => sprintf(
-                            'service_centre_charged "%s" did not match zone_map; delivery_area_zone left NULL (wrong rate/route risk).',
+                            'service_centre_charged "%s" did not resolve to a zone (MealsDB_Operational_Constants::SERVICE_CENTRE_ZONE_MAP); delivery_area_zone left NULL (wrong rate/route risk).',
                             (string) $sc_raw
                         ),
                         'entity_type' => 'user',

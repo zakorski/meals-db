@@ -349,6 +349,13 @@ writes an audit entry and a `sync.derived_zone_changed` event with old and new v
 **This helper and the migration fix ship first, independently of the rest of K21** — the bug recurs
 on the next rebuild regardless of the sync work.
 
+> **APPLIED (2026-11-03):** `MealsDB_Operational_Constants::SERVICE_CENTRE_ZONE_MAP` +
+> `zone_for_service_centre()` / `is_known_service_centre()`; phase 1 of
+> `class-migration-consolidated.php` uses it. Test: `tests/test-service-centre-zone-k21.php`
+> (covers Test 17). Fixed in passing: phase 1 read an undefined `$group` (left behind by
+> Directive 7), so `sdnb rural` users never got `service_name_zone = 'rural'` and Extra Mural
+> users never got their migration note. The sync side of ITEM 6 is still to do.
+
 ### `delivery_day` ← `delivery_area_name`
 
 Compute through `MealsDB_Zone_Day::day_for_zone()`. That lookup is an exact match on the trimmed
