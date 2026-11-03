@@ -483,6 +483,24 @@ or have one delegate to the other, and say which in a comment.
 Add the table to `MealsDB_Schema` / `MealsDB_Tables`, bump the schema version, and drop it in
 `uninstall.php`.
 
+> **APPLIED (2026-11-03) — conflict store + DETECTION ONLY.** `meals_sync_conflicts` (schema +
+> `MealsDB_Tables::SYNC_CONFLICTS`; uninstall drops it via `MealsDB_Tables::all()`; the version
+> bump is done by CI on merge). `MealsDB_Sync_Conflicts` stores rows; `MealsDB_Sync_Reconciler`
+> classifies every registry field per account (`equal` / `blank` / `fill` / `conflict` / `keep` /
+> `skip`) and records conflicts. It runs at the start of `run_nightly_sync()`, **before** the
+> legacy WP-wins loop, and writes nothing to client data in either system — only conflict rows and
+> one `sync.reconcile_detected` event with per-field counts (plus `sync.value_unrecognised` and
+> `sync.wp_internal_inconsistency` when they occur). The legacy loop is unchanged, so a conflict on
+> one of the 17 k13 fields is overwritten by it and closes `auto_resolved` on the next run — which
+> is accurate: the legacy nightly resolved it WordPress-wins. That stops when ITEM 7 lands.
+> Decisions made in implementation: `meals_ignored_conflicts` is **delegated to, read-only** (a
+> matching legacy rule records the conflict as dismissed; client_phone_1 also matches the old
+> `phone_primary` name); a change in the linked client set **supersedes** the row (also on the
+> nightly sweep for accounts no longer tracked, and immediately in `on_wp_user_deleted`) rather than
+> hooking every `wp_user_id` writer; detection **fails closed** if the staff list or the conflict
+> store can't be read. Not yet done: closed-row retention/pruning (closed rows accumulate). Test:
+> `tests/test-sync-conflicts-k21.php`.
+
 ---
 
 ## ITEM 9 — A/B conflict view

@@ -291,6 +291,11 @@ class MealsDB_Sync {
                 MealsDB_Logger::log('wp_user_deleted_unlink', $cid, 'wp_user_id', (string) $user_id, null);
             }
 
+            // K21 ITEM 8: the account no longer exists, so its open/dismissed
+            // conflicts describe nothing. Close them now rather than leaving
+            // them visible until the next nightly sweep.
+            (new MealsDB_Sync_Conflicts($wpdb))->supersede_account($user_id, gmdate('Y-m-d H:i:s'));
+
             self::safe_record_hook('deleted_user', 'user', $user_id,
                 MealsDB_Hook_Logger::OUTCOME_PROCESSED, ['unlinked' => count($client_ids)]);
         } catch (\Throwable $e) {
@@ -514,6 +519,18 @@ class MealsDB_Sync {
      */
     public static function run_nightly_sync(): void {
         global $wpdb;
+
+        // K21 ITEM 8 (detection only): classify every field of every tracked
+        // account and record conflicts BEFORE the legacy WP-wins loop below
+        // overwrites anything — otherwise the 17 k13 fields would always look
+        // equal. Writes only meals_sync_conflicts + one summary event; never
+        // client data. run_detection() never throws, and the extra guard
+        // keeps a bug in it from ever blocking the legacy nightly.
+        try {
+            MealsDB_Sync_Reconciler::run_detection();
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Sync] K21 detection threw: ' . $e->getMessage());
+        }
 
         $log_id = class_exists('MealsDB_Job_Logger')
             ? MealsDB_Job_Logger::start('wp_to_mealsdb_sync')
