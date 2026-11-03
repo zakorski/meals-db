@@ -45,6 +45,7 @@ function update_meta_cache($type, $ids) { return true; }
 function update_user_meta($id, $k, $v) {
     $GLOBALS['wp_writes'][] = ['meta', $id, $k, $v];
     $GLOBALS['meta']["$id|$k"] = $v;
+    $GLOBALS['syncing_during_meta_write'][] = class_exists('MealsDB_Sync', false) ? MealsDB_Sync::is_syncing() : null;
     return true;
 }
 // $GLOBALS['emails_taken']: addresses another user already owns, so a
@@ -71,6 +72,7 @@ function remove_filter($tag, $cb, $prio = 10) {
     return true;
 }
 function has_filter($tag) { return !empty($GLOBALS['filters'][$tag]); }
+function metadata_exists($type, $id, $key) { return array_key_exists("$id|$key", $GLOBALS['meta']); }
 // Options: shadow mode explicitly OFF unless a test flips it; date/time
 // formats for the template; the zone delivery schedule for delivery_day.
 $GLOBALS['options'] = [

@@ -425,6 +425,33 @@ the value back into WordPress, and `push_to_woocommerce()` writes WordPress and 
 - the redundant WP mirror after a WP → MealsDB fill is removed (it is a no-op at best and an
   audit-log failure row at worst).
 
+> **APPLIED (2026-11-03).** `MealsDB_Sync::run_nightly_sync()` now calls
+> `MealsDB_Sync_Reconciler::run_reconcile()`; the pre-K21 WP-wins loop is deleted. Pass 1 is the
+> ITEM 8 detection (classify, record conflicts) plus a plan; pass 2 re-reads each planned account and
+> fills blanks in both directions — WordPress through `MealsDB_Sync_Resolver::write_wp_field()`
+> (ITEM 11 guards), MealsDB through `update_meals_client()`, each write audited (`sync_fill_wp` /
+> `sync_fill_client`, source `nightly`), with the sync hooks suppressed. The nickname push (ITEM 5),
+> derived fill-blank (ITEM 6, `sync.derived_mismatch` when populated and different) and shadow-mode
+> counting (`sync.shadow_suppressed`) are in. Job name `wp_to_mealsdb_sync` kept for the daily
+> report; summary event `sync.reconcile_applied`.
+>
+> **Breaker, restated for fill-blank (implementation decision — review).** The K13 pre-flight
+> counted WP keys present-but-empty over a populated column; under fill-blank that is a fill of
+> WordPress, so it would have aborted every run once a field was commonly blank in WordPress. It was
+> removed with the loop (`tally_blank_candidates()` deleted). Literal blanking is now impossible, so
+> the breaker guards the K13 *failure class* instead: per field, planned fills whose target still
+> holds non-empty raw text (legitimately only placeholders — `shipping_phone '0'`, a long nickname)
+> over 20% of evaluated accounts refuse the whole apply pass (`sync.mass_blank_refused`, job failed,
+> nothing written). Caveat: on a tiny install (staging with a handful of clients) a single
+> placeholder can exceed 20%. The K13 ITEM 2 alarm is kept with teeth: a meta key absent for every
+> evaluated user raises `sync.meta_key_missing` and its WordPress fills are skipped, so a mistyped
+> registry key is never stamped onto every user (side effect: a key Enzebra never set for anyone is
+> not created by the sync either; the event says which).
+>
+> **Not yet changed:** the real-time hooks (`on_wp_user_updated`, `on_wc_address_saved`,
+> `on_wc_customer_created`) still run the pre-K21 WP-wins logic on the 17 k13 fields — ITEM 13.
+> Test: `tests/test-sync-nightly-k21.php`.
+
 ### ITEM 7a — One account, several clients
 
 A WP account may be linked to more than one active client (MAJ-1: rare but legitimate). All of

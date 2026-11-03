@@ -19,11 +19,13 @@ class MealsDB_Sync {
     private static bool $syncing = false;
 
     /**
-     * K13 ITEM 4: if a single nightly run would empty a currently-populated
-     * column on more than this percentage of tracked clients, the run is not a
-     * legitimate sync — it is a broken mapping, a bad usermeta migration, or a
-     * partial restore. Abort the WHOLE run and write nothing. No real nightly
-     * sync blanks the same field on hundreds of clients at once.
+     * K13 ITEM 4, restated for K21 fill-blank: if a single nightly run would
+     * fill over a NON-EMPTY raw value in one field on more than this
+     * percentage of tracked accounts, the run is not a legitimate sync — it
+     * is a comparator or mapping bug making real values read as blank (the
+     * K13 failure class). The apply pass is refused and writes nothing. See
+     * MealsDB_Sync_Reconciler::breaker(). The only legitimate non-empty fill
+     * targets are placeholders (shipping_phone '0': 157 of ~1,031, ~15%).
      */
     public const SYNC_MASS_BLANK_THRESHOLD_PCT = 20;
 
@@ -111,53 +113,6 @@ class MealsDB_Sync {
             return false;
         }
         return ($blank_count * 100) > ($active_count * self::SYNC_MASS_BLANK_THRESHOLD_PCT);
-    }
-
-    /**
-     * K13 ITEM 4: count, per field, how many rows have a currently-populated
-     * column that the WP side would actually SET EMPTY — i.e. the mapped key is
-     * PRESENT but empty. An ABSENT key is deliberately NOT counted: the real
-     * write path skips it (ITEM 2 metadata_exists -> skip_absent) and never
-     * blanks the column, and ITEM 2 already alarms it via sync.meta_key_missing.
-     * Counting absent keys here (the old "blanking pressure" reading) would let a
-     * legitimately-optional field whose WP key is absent for >20% of clients trip
-     * the breaker and abort the whole nightly sync every night, even though those
-     * are safe skips (Codex P1). So the tally mirrors exactly what ITEM 3 refuses.
-     *
-     * Pure over injected data so it is unit-testable without $wpdb:
-     * $read_raw($wp_user_id, $descriptor) returns [value, present] — the same
-     * shape as read_wp_field_value_with_presence().
-     *
-     * @param array<int,array<string,mixed>> $rows       Client rows.
-     * @param string[]                       $wp_fields  WP-authoritative fields.
-     * @param array<string,array>            $field_map  Field -> descriptor.
-     * @param callable                       $read_raw   fn(int,$descriptor):array{0:string,1:bool}
-     * @param string                         $wp_column  wp_user id column name.
-     * @return array<string,int> field => present-but-empty count
-     */
-    public static function tally_blank_candidates(array $rows, array $wp_fields, array $field_map, callable $read_raw, string $wp_column): array {
-        $tally = [];
-        foreach ($rows as $row) {
-            $uid = (int) ($row[$wp_column] ?? 0);
-            if ($uid <= 0) {
-                continue;
-            }
-            foreach ($wp_fields as $field) {
-                if (!isset($field_map[$field])) {
-                    continue;
-                }
-                $client_value = isset($row[$field]) ? (string) $row[$field] : '';
-                if (trim($client_value) === '') {
-                    continue; // nothing to lose
-                }
-                [$wp_value, $present] = $read_raw($uid, $field_map[$field]);
-                // Absent key -> safe skip, never a blanking candidate (Codex P1).
-                if ((bool) $present && trim((string) $wp_value) === '') {
-                    $tally[$field] = ($tally[$field] ?? 0) + 1;
-                }
-            }
-        }
-        return $tally;
     }
 
     /**
@@ -542,318 +497,35 @@ class MealsDB_Sync {
     }
 
     /**
-     * Nightly cron sweep: compare all linked government clients and push WP-authoritative diffs.
+     * Nightly cron sweep (K21 ITEM 7): fill-blank reconcile in both
+     * directions for every tracked account, recording conflicts for the
+     * operator. See MealsDB_Sync_Reconciler for the rules and breakers.
+     *
+     * This replaced the pre-K21 loop, which synced 17 fields WP -> MealsDB
+     * and let WordPress WIN whenever both sides were populated and differed —
+     * overwriting operator edits nightly. Under K21 no automated path
+     * overwrites a populated value; a difference becomes a conflict. That
+     * loop's K13 pre-flight (count WP keys present-but-empty over a populated
+     * column) went with it: in a fill-blank sync that situation is a fill of
+     * WordPress, not a blanking, and counting it would abort every run once a
+     * field is commonly blank in WordPress. The breaker is restated in the
+     * reconciler for fill-blank.
+     *
+     * The job name ('wp_to_mealsdb_sync') is unchanged so the daily report
+     * keeps monitoring it. run_reconcile() never throws; the guard below only
+     * protects the cron event from a bug in it.
      */
     public static function run_nightly_sync(): void {
-        global $wpdb;
-
-        // K21 ITEM 8 (detection only): classify every field of every tracked
-        // account and record conflicts BEFORE the legacy WP-wins loop below
-        // overwrites anything — otherwise the 17 k13 fields would always look
-        // equal. Writes only meals_sync_conflicts + one summary event; never
-        // client data. run_detection() never throws, and the extra guard
-        // keeps a bug in it from ever blocking the legacy nightly.
         try {
-            MealsDB_Sync_Reconciler::run_detection();
+            MealsDB_Sync_Reconciler::run_reconcile();
         } catch (\Throwable $e) {
-            MealsDB_Logger::error('[MealsDB Sync] K21 detection threw: ' . $e->getMessage());
-        }
-
-        $log_id = class_exists('MealsDB_Job_Logger')
-            ? MealsDB_Job_Logger::start('wp_to_mealsdb_sync')
-            : 0;
-
-        $synced_count  = 0;
-        $skipped_count = 0;
-        $error_count   = 0;
-
-        try {
-            $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-            $escaped_table = str_replace('`', '``', $clients_table);
-
-            // Pick the canonical wp_user column once via INFORMATION_SCHEMA so
-            // we don't trial-and-error two SELECTs (which would also issue a
-            // second large SELECT * pointlessly when the first returned zero
-            // rows because no clients had wp_user_id set yet).
-            $wp_column = self::resolve_wp_user_column($wpdb, $clients_table);
-            if ($wp_column === null) {
-                $msg = 'Nightly sync aborted: no wp_user_id column on clients table.';
-                error_log('[MealsDB Sync] ' . $msg);
-                if ($log_id > 0) {
-                    MealsDB_Job_Logger::fail($log_id, $msg);
-                }
-                return;
-            }
-
-            $field_map     = self::get_field_to_wp_meta_map();
-        $wp_fields     = self::get_wp_authoritative_fields();
-        $batch_size    = 500;
-        $offset        = 0;
-
-        $escaped_column = str_replace('`', '``', $wp_column);
-
-        // K13 ITEM 4: whole-run circuit breaker. The nightly sync is a streaming
-        // write loop with no stage-then-commit phase, so "write nothing" on a
-        // mass blanking can only be honoured by a count-only pre-flight BEFORE
-        // any write. If any field is over threshold the whole run is suspect —
-        // a broken mapping casts doubt on every write this run, not just the
-        // offending field — so abort entirely.
-        $mass_blank = self::preflight_mass_blank_scan($wpdb, $escaped_table, $wp_column, $field_map, $wp_fields);
-        if ($mass_blank !== null) {
+            MealsDB_Logger::error('[MealsDB Sync] nightly reconcile threw: ' . $e->getMessage());
             MealsDB_Event_Log::record([
                 'severity' => 'error', 'category' => 'sync', 'subsystem' => 'sync',
-                'event' => 'sync.mass_blank_refused', 'outcome' => 'degraded',
-                'message' => sprintf(
-                    'Nightly sync aborted: %d of %d tracked clients would have %s blanked (> %d%%). Wrote nothing.',
-                    $mass_blank['count'], $mass_blank['active'], $mass_blank['field'], self::SYNC_MASS_BLANK_THRESHOLD_PCT
-                ),
-                'context' => $mass_blank,
+                'event' => 'sync.nightly_threw', 'outcome' => MealsDB_Event_Log::OUTCOME_FAILED,
+                'message' => $e->getMessage(),
             ]);
-            if ($log_id > 0 && class_exists('MealsDB_Job_Logger')) {
-                MealsDB_Job_Logger::fail($log_id, 'Mass-blank pre-flight refused the run: ' . $mass_blank['field']);
-            }
-            return; // write nothing
         }
-
-        // K13 ITEM 2: collect fields whose mapped key is absent for EVERY user
-        // so we log ONE sync.meta_key_missing per field per run, not 992 rows.
-        $missing_fields = []; // field => mapped key
-
-        while (true) {
-            $batch = $wpdb->get_results(
-                $wpdb->prepare(
-                    "SELECT * FROM `{$escaped_table}` WHERE client_type IN ('SDNB', 'Veteran', 'Private') AND `{$escaped_column}` > 0 ORDER BY client_id ASC LIMIT %d OFFSET %d",
-                    $batch_size,
-                    $offset
-                ),
-                ARRAY_A
-            );
-
-            if (!is_array($batch) || empty($batch)) {
-                break;
-            }
-
-            // Pre-warm the user and user-meta caches for every wp_user_id in
-            // this batch. Without this, each get_userdata() below triggers a
-            // users-table query and the first get_user_meta() per user
-            // triggers a usermeta-table query, giving ~1000 queries on a
-            // 500-client batch. Two priming calls here cut it to 2.
-            $batch_user_ids = [];
-            foreach ($batch as $client) {
-                $uid = (int) ($client[$wp_column] ?? 0);
-                if ($uid > 0) {
-                    $batch_user_ids[$uid] = $uid;
-                }
-            }
-            if (!empty($batch_user_ids)) {
-                $ids = array_values($batch_user_ids);
-                if (function_exists('cache_users')) {
-                    cache_users($ids);
-                }
-                update_meta_cache('user', $ids);
-            }
-
-            foreach ($batch as $client) {
-                $wp_user_id = (int) ($client[$wp_column] ?? 0);
-                $client_id  = (int) ($client['client_id'] ?? 0);
-
-                if ($wp_user_id <= 0 || $client_id <= 0) {
-                    $skipped_count++;
-                    continue;
-                }
-
-                $user = get_userdata($wp_user_id);
-                if (!$user instanceof WP_User) {
-                    MealsDB_Logger::log('sync_nightly_missing_user', $client_id, 'wp_user_id', (string) $wp_user_id, null);
-                    $skipped_count++;
-                    continue;
-                }
-
-                $pushed = 0;
-                foreach ($wp_fields as $field) {
-                    if (!isset($field_map[$field])) {
-                        continue;
-                    }
-
-                    [$wp_value, $present] = self::read_wp_field_value_with_presence($user, $field_map[$field]);
-                    $client_value = isset($client[$field]) ? (string) $client[$field] : '';
-
-                    $action = self::decide_field_action($present, $wp_value, $client_value);
-                    if ($action === 'skip_absent') {
-                        $missing_fields[$field] = $field_map[$field]['key'];
-                        continue;
-                    }
-                    if ($action === 'noop') {
-                        continue;
-                    }
-                    if ($action === 'skip_blank') {
-                        // K13 ITEM 3: present-but-empty over a populated column.
-                        // Refuse and surface it (bounded below the ITEM 4 mass
-                        // threshold, so this is a handful of rows, not 992).
-                        MealsDB_Event_Log::record([
-                            'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
-                            'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
-                            'message' => sprintf('%s: refused to blank a populated column for client %d', $field, $client_id),
-                            'context' => ['client_id' => $client_id, 'field' => $field],
-                        ]);
-                        continue;
-                    }
-
-                    // action === 'write'
-                    self::$syncing = true;
-                    try {
-                        $push_result = self::push_to_meals_db($client_id, $field, $wp_value);
-                    } finally {
-                        self::$syncing = false;
-                    }
-
-                    if (is_wp_error($push_result)) {
-                        $error_count++;
-                        error_log(sprintf(
-                            '[MealsDB Sync] Nightly sync error for client %d, field %s: %s',
-                            $client_id, $field, $push_result->get_error_message()
-                        ));
-                    } else {
-                        $pushed++;
-                    }
-                }
-
-                if ($pushed > 0) {
-                    $synced_count++;
-                }
-            }
-
-            if (count($batch) < $batch_size) {
-                break;
-            }
-            $offset += $batch_size;
-        }
-
-            // K13 ITEM 2: one row per absent field per run — the alarm that
-            // would have surfaced the blanking in a day instead of a week.
-            foreach ($missing_fields as $field => $key) {
-                MealsDB_Event_Log::record([
-                    'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
-                    'event' => 'sync.meta_key_missing', 'outcome' => 'degraded',
-                    'message' => sprintf('%s -> %s absent for tracked users; column left unchanged', $field, $key),
-                    'context' => ['field' => $field, 'meta_key' => $key],
-                ]);
-            }
-
-            $summary = wp_json_encode([
-                'synced'  => $synced_count,
-                'skipped' => $skipped_count,
-                'errors'  => $error_count,
-            ]);
-
-            MealsDB_Logger::log('sync_nightly_complete', 0, 'summary', null, $summary !== false ? $summary : null);
-
-            if ($log_id > 0) {
-                $stats = [
-                    'records_processed' => $synced_count + $skipped_count + $error_count,
-                    'records_updated'   => $synced_count,
-                    'records_skipped'   => $skipped_count,
-                    'records_errored'   => $error_count,
-                ];
-
-                // A nightly run that swallowed per-field push failures
-                // ($error_count > 0, incremented above where push_to_meals_db
-                // returned a WP_Error) must NOT log as a clean success:
-                // the Event Log dashboard/digest default to failed|degraded,
-                // so MealsDB_Job_Logger::finish() (which maps to 'succeeded')
-                // would hide a nightly sync that failed to push government-
-                // client identity fields — the records_errored counter alone
-                // never surfaces. Record 'degraded' so the swallowed errors
-                // show up. See CLAUDE.md Pattern 6 and the explicit warning
-                // in MealsDB_Job_Logger::finish()'s docblock.
-                if ($error_count > 0) {
-                    MealsDB_Event_Log::finish_job($log_id, $stats, MealsDB_Event_Log::OUTCOME_DEGRADED);
-                } else {
-                    MealsDB_Job_Logger::finish($log_id, $stats);
-                }
-            }
-        } catch (\Throwable $e) {
-            if ($log_id > 0) {
-                MealsDB_Job_Logger::fail($log_id, $e->getMessage(), [
-                    'records_processed' => $synced_count + $skipped_count + $error_count,
-                    'records_errored'   => $error_count,
-                ]);
-            }
-            // Re-throw so WP-Cron records the failure on its own
-            // event ledger as well — the new logger is additive, not
-            // a replacement for cron's native failure surfacing.
-            throw $e;
-        }
-    }
-
-    /**
-     * K13 ITEM 4: walk the tracked-client population once WITHOUT writing and
-     * tally per-field blank candidates. Returns the first field over threshold,
-     * or null. Uses the SAME client_type filter and wp_user column the real
-     * sync walks, so the percentage measures against the real population.
-     *
-     * @return array{field: string, count: int, active: int}|null
-     */
-    private static function preflight_mass_blank_scan(wpdb $wpdb, string $escaped_table, string $wp_column, array $field_map, array $wp_fields): ?array {
-        $escaped_column = str_replace('`', '``', $wp_column);
-        $batch_size = 500;
-        $offset = 0;
-        $active = 0;
-        $tally = [];
-
-        // Codex P1: return [value, present] so tally_blank_candidates counts only
-        // present-but-empty keys — an absent key is a safe ITEM 2 skip, not a
-        // blanking candidate, and must not be able to abort the whole run.
-        $read_raw = static function (int $uid, array $descriptor): array {
-            $u = get_userdata($uid);
-            if (!$u instanceof WP_User) {
-                return ['', false];
-            }
-            return self::read_wp_field_value_with_presence($u, $descriptor);
-        };
-
-        while (true) {
-            $batch = $wpdb->get_results(
-                $wpdb->prepare(
-                    "SELECT * FROM `{$escaped_table}` WHERE client_type IN ('SDNB', 'Veteran', 'Private') AND `{$escaped_column}` > 0 ORDER BY client_id ASC LIMIT %d OFFSET %d",
-                    $batch_size,
-                    $offset
-                ),
-                ARRAY_A
-            );
-            if (!is_array($batch) || empty($batch)) {
-                break;
-            }
-            $ids = [];
-            foreach ($batch as $row) { $uid = (int) ($row[$wp_column] ?? 0); if ($uid > 0) { $ids[$uid] = $uid; } }
-            if (!empty($ids)) {
-                if (function_exists('cache_users')) { cache_users(array_values($ids)); }
-                update_meta_cache('user', array_values($ids));
-            }
-            // Codex P2: the denominator must be the clients the sync could actually
-            // blank — those with a LOADABLE WP user. A deleted/unloadable account is
-            // skipped wholesale by the real sync (sync_nightly_missing_user),
-            // contributes to no field's tally, and must not dilute the ratio and
-            // suppress the breaker. get_userdata() is cache-primed above, so cheap.
-            foreach ($batch as $row) {
-                $uid = (int) ($row[$wp_column] ?? 0);
-                if ($uid > 0 && get_userdata($uid) instanceof WP_User) {
-                    $active++;
-                }
-            }
-            $batch_tally = self::tally_blank_candidates($batch, $wp_fields, $field_map, $read_raw, $wp_column);
-            foreach ($batch_tally as $field => $count) { $tally[$field] = ($tally[$field] ?? 0) + $count; }
-
-            if (count($batch) < $batch_size) { break; }
-            $offset += $batch_size;
-        }
-
-        foreach ($tally as $field => $count) {
-            if (self::is_over_mass_blank_threshold((int) $count, $active)) {
-                return ['field' => $field, 'count' => (int) $count, 'active' => $active];
-            }
-        }
-        return null;
     }
 
     /**

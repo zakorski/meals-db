@@ -289,7 +289,7 @@ $GLOBALS['users'] = []; $GLOBALS['meta'] = []; $GLOBALS['wp_writes'] = [];
 $db3->clients[] = $client(['client_id' => 12, 'wp_user_id' => 120, 'last_name' => 'Lee']);
 $user(120, ['last_name' => 'Li'], []);
 MealsDB_Sync::run_nightly_sync();
-chk(in_array('sync.reconcile_detected', $db3->event_names(), true), 'run_nightly_sync runs K21 detection');
+chk(in_array('sync.reconcile_applied', $db3->event_names(), true), 'run_nightly_sync runs the K21 reconcile (apply mode)');
 chk(isset($db3->live()['120|last_name']), 'run_nightly_sync: detection recorded the conflict');
 
 MealsDB_Sync::on_wp_user_deleted(120);

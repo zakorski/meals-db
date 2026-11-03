@@ -105,7 +105,7 @@ final class MealsDB_Sync_Resolver {
             $wp_target, $client_targets, $user, $field, $column, $side, $clients, $wp_user_id, &$failures
         ): void {
             if ($wp_target !== null) {
-                $written = self::write_wp($user, $field, $column, $wp_target, $side);
+                $written = self::write_wp_field($user, $field, $column, $wp_target, 'sync_resolve_wp', 'resolution:' . $side);
                 if (is_wp_error($written)) {
                     // Stop here: MealsDB is not touched when WordPress refused.
                     $failures[] = $written->get_error_message();
@@ -124,7 +124,7 @@ final class MealsDB_Sync_Resolver {
             }
 
             if ($field['derived'] !== []) {
-                self::recompute_derived($mutate, $wp_user_id, $column, $field['derived']);
+                self::recompute_derived($mutate, $wp_user_id, $column, $field['derived'], self::DERIVED_OVERWRITE);
             }
         });
 
@@ -173,8 +173,9 @@ final class MealsDB_Sync_Resolver {
     /**
      * Value to store in WordPress. client_type writes the CANONICAL
      * customer_group for the class (ITEM 3); dates are written canonical.
+     * Shared with the nightly fills (MealsDB_Sync_Reconciler).
      */
-    private static function value_for_wp(string $column, string $cmp, string $chosen): string {
+    public static function value_for_wp(string $column, string $cmp, string $chosen): string {
         if ($cmp === MealsDB_Sync_Comparator::CLIENT_TYPE) {
             return (string) MealsDB_Migration_Consolidated::client_type_to_customer_group(
                 MealsDB_Sync_Comparator::client_type_class($chosen)
@@ -183,8 +184,8 @@ final class MealsDB_Sync_Resolver {
         return self::canonical($cmp, $chosen);
     }
 
-    /** Value to store in meals_clients: the class for client_type (ENUM). */
-    private static function value_for_meals(string $cmp, string $chosen): string {
+    /** Value to store in meals_clients: the class for client_type (ENUM). Shared with the nightly fills. */
+    public static function value_for_meals(string $cmp, string $chosen): string {
         if ($cmp === MealsDB_Sync_Comparator::CLIENT_TYPE) {
             return (string) MealsDB_Sync_Comparator::client_type_class($chosen);
         }
@@ -202,16 +203,18 @@ final class MealsDB_Sync_Resolver {
     }
 
     /**
-     * Write one registry field to WordPress. Meta fields also write their
-     * also_write keys (ITEM 4: both address_2 keys). Returns WP_Error on the
-     * first failure.
+     * Write one registry field to WordPress — the ONE WordPress writer for
+     * K21, used by resolution and by the nightly fills, so ITEM 11's email
+     * guards apply to both. Meta fields also write their also_write keys
+     * (ITEM 4: both address_2 keys). Returns WP_Error on the first failure.
      *
      * @param array<string, mixed> $field
+     * @param string $audit_action sync_resolve_wp | sync_fill_wp
+     * @param string $source       audit source, e.g. resolution:client:12 / nightly
      * @return true|WP_Error
      */
-    private static function write_wp(WP_User $user, array $field, string $column, string $value, string $side) {
+    public static function write_wp_field(WP_User $user, array $field, string $column, string $value, string $audit_action, string $source) {
         $wp_user_id = (int) $user->ID;
-        $source     = 'resolution:' . $side;
 
         if ($field['wp']['type'] === 'core') {
             $key = (string) $field['wp']['key'];
@@ -239,7 +242,7 @@ final class MealsDB_Sync_Resolver {
                     $result->get_error_message()
                 ));
             }
-            MealsDB_Logger::log('sync_resolve_wp', $wp_user_id, $column, $old, $value, $source);
+            MealsDB_Logger::log($audit_action, $wp_user_id, $column, $old, $value, $source);
             return true;
         }
 
@@ -257,24 +260,37 @@ final class MealsDB_Sync_Resolver {
                     $meta_key
                 ));
             }
-            MealsDB_Logger::log('sync_resolve_wp', $wp_user_id, $meta_key, $old, $value, $source);
+            MealsDB_Logger::log($audit_action, $wp_user_id, $meta_key, $old, $value, $source);
         }
         return true;
     }
 
+    /** recompute_derived() modes. */
+    public const DERIVED_OVERWRITE = 'overwrite';
+    public const DERIVED_FILL      = 'fill';
+
     /**
-     * ITEM 6: recompute derived columns from each client's (now resolved)
-     * source value. A resolution may overwrite a populated derived value;
-     * a null computed value never writes. Every change is audited and
-     * evented with old and new values (zone moves a client between invoices
-     * and rates; day moves them between slips).
+     * ITEM 6: recompute derived columns from each client's source value.
      *
-     * @param string[] $derived
+     * DERIVED_OVERWRITE (resolution — an operator action): a populated
+     * derived value may be replaced. DERIVED_FILL (nightly, after the sync
+     * filled the source): write only when the derived value is BLANK; a
+     * populated value that differs is logged as sync.derived_mismatch and
+     * left alone — otherwise filling a blank service_center_charged would
+     * silently overwrite a hand-set delivery_area_zone and move the client
+     * to a different invoice and rate. In both modes a null computed value
+     * never writes, and every change is audited and evented with old and new.
+     *
+     * @param string[]   $derived
+     * @param int[]|null $only_client_ids limit to these clients (fill mode: the ones just filled)
      */
-    private static function recompute_derived(MealsDB_Sync_Mutate $mutate, int $wp_user_id, string $source_column, array $derived): void {
+    public static function recompute_derived(MealsDB_Sync_Mutate $mutate, int $wp_user_id, string $source_column, array $derived, string $mode, ?array $only_client_ids = null): void {
         $clients = MealsDB_Sync_Reconciler::fetch_clients([$wp_user_id]);
         foreach ($clients[$wp_user_id] ?? [] as $client) {
             $client_id = (int) $client['client_id'];
+            if ($only_client_ids !== null && !in_array($client_id, $only_client_ids, true)) {
+                continue;
+            }
             $source    = (string) ($client[$source_column] ?? '');
 
             foreach ($derived as $column) {
@@ -298,7 +314,17 @@ final class MealsDB_Sync_Resolver {
                     }
                     continue;
                 }
-                if ($old === $new) {
+                if (strcasecmp(trim($old), $new) === 0) {
+                    continue;
+                }
+                if ($mode === self::DERIVED_FILL && trim($old) !== '') {
+                    MealsDB_Event_Log::record([
+                        'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync_fill',
+                        'event' => 'sync.derived_mismatch', 'outcome' => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message' => sprintf('%s for client %d is %s but %s implies %s; left unchanged (not blank).', $column, $client_id, $old, $source_column, $new),
+                        'entity_type' => 'client', 'entity_id' => $client_id,
+                        'context' => ['client_id' => $client_id, 'column' => $column, 'stored' => $old, 'computed' => $new],
+                    ]);
                     continue;
                 }
                 if (!$mutate->update_meals_client($client_id, [$column => $new])) {

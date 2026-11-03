@@ -55,7 +55,8 @@ class MealsDB_Daily_Report {
      * a human-readable label.
      */
     public const MONITORED_JOBS = [
-        'wp_to_mealsdb_sync'        => 'WP→MealsDB Sync',
+        // K21: two-way fill-blank reconcile; job name kept for continuity.
+        'wp_to_mealsdb_sync'        => 'WP↔MealsDB Sync',
         'nightly_allocation_sync'   => 'Nightly Allocation Sync',
         'task_cron'                 => 'Task Cron',
         'derived_value_audit'       => 'Derived Value Integrity',

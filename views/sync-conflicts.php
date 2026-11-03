@@ -25,7 +25,17 @@ $mealsdb_status = $mealsdb_status === 'dismissed' ? 'dismissed' : 'open';
 $mealsdb_data = MealsDB_Sync_Conflict_View::page($mealsdb_field, $mealsdb_status, $mealsdb_paged);
 
 $mealsdb_base_url = admin_url('admin.php?page=mealsdb-clients&tab=sync&view=conflicts');
-$mealsdb_last_scan = class_exists('MealsDB_Job_Logger') ? MealsDB_Job_Logger::last_success('sync_reconcile_detect') : null;
+// The nightly reconcile (apply) and a detection-only run both refresh the
+// queue; show whichever succeeded last.
+$mealsdb_last_scan = null;
+if (class_exists('MealsDB_Job_Logger')) {
+    foreach ([MealsDB_Sync_Reconciler::JOB_APPLY, MealsDB_Sync_Reconciler::JOB_DETECT] as $mealsdb_job) {
+        $mealsdb_t = MealsDB_Job_Logger::last_success($mealsdb_job);
+        if ($mealsdb_t !== null && ($mealsdb_last_scan === null || $mealsdb_t > $mealsdb_last_scan)) {
+            $mealsdb_last_scan = $mealsdb_t;
+        }
+    }
+}
 
 // Returns ESCAPED HTML: the raw value, or a muted "(blank)" marker so an
 // empty side is never mistaken for a rendering gap.

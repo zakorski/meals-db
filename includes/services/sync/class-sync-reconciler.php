@@ -1,6 +1,6 @@
 <?php
 /**
- * K21 reconcile — DETECTION ONLY (directive K21 ITEMS 7a + 8, first stage).
+ * K21 nightly reconcile (directive K21 ITEMS 7, 7a, 8).
  *
  * For every linked WordPress account and its active tracked MealsDB
  * client(s), evaluate each registry field and classify it:
@@ -16,13 +16,34 @@
  *              3-character nickname is never touched, never a conflict)
  *   skip     — to_wp_only field whose linked clients disagree
  *
- * THIS STAGE WRITES NOTHING TO CLIENT DATA, in either system. Its only writes
- * are to meals_sync_conflicts, plus one summary event per run with per-field
- * counts — the numbers the operator reviews before any K21 write path is
- * switched on. The legacy WP -> MealsDB nightly (WP wins on the 17 k13 fields)
- * still runs after this, unchanged, so a conflict detected on one of those
- * fields is overwritten by it and closes as auto_resolved on the next run.
- * That is accurate: the legacy nightly resolved it in WordPress's favour.
+ * Two entry points:
+ *   run_detection()  — classify and record conflicts only. Writes nothing to
+ *                      client data in either system (a dry run).
+ *   run_reconcile()  — the nightly (MealsDB_Sync::run_nightly_sync): the same
+ *                      pass 1, then pass 2 FILLS BLANKS in both directions.
+ *                      It never overwrites a populated value; conflicts are
+ *                      left for the operator (MealsDB_Sync_Resolver).
+ *
+ * Pass 2 re-reads each account fresh before writing, so a value entered
+ * between the passes is not overwritten. WordPress writes go through
+ * MealsDB_Sync_Resolver::write_wp_field (ITEM 11's email guards); MealsDB
+ * writes through MealsDB_Sync_Mutate::update_meals_client (encrypt, fail
+ * closed); every write is audit-logged; derived fields are filled only when
+ * blank (ITEM 6); shadow mode suppresses and counts the WordPress writes
+ * (ITEM 12). delivery_initials is never written; only nickname is pushed
+ * (ITEM 5).
+ *
+ * Breakers (K13, restated for fill-blank — Rev 2 keeps only this one):
+ * literal blanking is impossible here (a fill writes a non-blank value into
+ * a blank side), so the danger is a comparator or mapping bug that makes
+ * REAL values read as blank and get filled over. Before any write, per
+ * field, count the planned fills whose target still holds non-empty raw text
+ * (legitimately only placeholders such as shipping_phone '0' or a long
+ * nickname). Over 20% of evaluated accounts aborts the whole apply pass and
+ * writes nothing (sync.mass_blank_refused). Separately, a meta key that is
+ * absent for EVERY evaluated user is alarmed (sync.meta_key_missing, K13
+ * ITEM 2) and WordPress fills for that field are skipped, so a mistyped key
+ * in the registry can never be stamped onto every user.
  *
  * Accounts are reconciled as a SET (K21 ITEM 7a): WordPress plus every active
  * linked client. Staff accounts (meals_staff links and administrators) are
@@ -49,6 +70,10 @@ final class MealsDB_Sync_Reconciler {
     private const MAX_LISTED = 50;
 
     private const TRACKED_TYPES_SQL = "client_type IN ('SDNB', 'Veteran', 'Private')";
+
+    /** Job names: the apply run keeps the legacy nightly's name so the daily report's monitoring carries over. */
+    public const JOB_DETECT = 'sync_reconcile_detect';
+    public const JOB_APPLY  = 'wp_to_mealsdb_sync';
 
     // ------------------------------------------------------------------
     // Pure evaluation
@@ -166,14 +191,32 @@ final class MealsDB_Sync_Reconciler {
     // ------------------------------------------------------------------
 
     /**
-     * Walk every tracked account, evaluate every registry field, and record
-     * conflicts. Writes nothing to meals_clients or WordPress. Never throws.
+     * Classify and record conflicts only; writes nothing to client data.
+     * Never throws.
      *
      * @return array<string, mixed> Run stats (also written to the event log).
      */
     public static function run_detection(): array {
-        $log_id = class_exists('MealsDB_Job_Logger') ? MealsDB_Job_Logger::start('sync_reconcile_detect') : 0;
+        return self::run(false);
+    }
+
+    /**
+     * The nightly: classify and record conflicts, then fill blanks in both
+     * directions. Never throws.
+     *
+     * @return array<string, mixed>
+     */
+    public static function run_reconcile(): array {
+        return self::run(true);
+    }
+
+    /** @return array<string, mixed> */
+    private static function run(bool $apply): array {
+        $log_id = class_exists('MealsDB_Job_Logger') ? MealsDB_Job_Logger::start($apply ? self::JOB_APPLY : self::JOB_DETECT) : 0;
         $stats  = self::empty_stats();
+        $stats['mode'] = $apply ? 'apply' : 'detect';
+        // Pass-1 plan: which accounts have fills, and the breaker inputs.
+        $plan = ['accounts' => [], 'replacing' => [], 'present' => [], 'meta_fields' => []];
 
         try {
             global $wpdb;
@@ -246,7 +289,7 @@ final class MealsDB_Sync_Reconciler {
                     }
 
                     $evaluated[$wp_user_id] = true;
-                    self::detect_account($user, $clients, $store, $live, $legacy_ignored, $now, $stats);
+                    self::detect_account($user, $clients, $store, $live, $legacy_ignored, $now, $stats, $plan);
                 }
 
                 if (count($account_ids) < self::ACCOUNT_BATCH) {
@@ -267,6 +310,14 @@ final class MealsDB_Sync_Reconciler {
                 }
             }
 
+            if ($apply) {
+                $refused = self::breaker($plan, $stats);
+                if ($refused !== null) {
+                    return self::fail_run($log_id, $stats, $refused);
+                }
+                self::apply_pass($plan, $staff, $stats);
+            }
+
             self::finish_run($log_id, $stats);
         } catch (\Throwable $e) {
             return self::fail_run($log_id, $stats, $e->getMessage());
@@ -285,7 +336,7 @@ final class MealsDB_Sync_Reconciler {
      * @param array<string, bool>                 $legacy_ignored
      * @param array<string, mixed>                $stats
      */
-    private static function detect_account(WP_User $user, array $clients, MealsDB_Sync_Conflicts $store, array &$live, array $legacy_ignored, string $now, array &$stats): void {
+    private static function detect_account(WP_User $user, array $clients, MealsDB_Sync_Conflicts $store, array &$live, array $legacy_ignored, string $now, array &$stats, array &$plan): void {
         $wp_user_id = (int) $user->ID;
         $stats['accounts_evaluated']++;
         if (count($clients) > 1) {
@@ -310,6 +361,30 @@ final class MealsDB_Sync_Reconciler {
             }
 
             $eval = self::evaluate_field($column, $wp_value, $meals_values);
+
+            // Plan inputs for the apply pass (unused by a detection-only run).
+            if ($field['wp']['type'] === 'meta') {
+                $plan['meta_fields'][$column] = true;
+                if (metadata_exists('user', $wp_user_id, (string) $field['wp']['key'])) {
+                    $plan['present'][$column] = ($plan['present'][$column] ?? 0) + 1;
+                }
+            }
+            if ($eval['outcome'] === self::O_FILL) {
+                $plan['accounts'][$wp_user_id] = true;
+                // Breaker input: a fill whose target still holds raw text.
+                $replacing = 0;
+                if ($eval['fill_wp'] && trim($wp_value) !== '') {
+                    $replacing++;
+                }
+                foreach ($eval['fill_clients'] as $client_id) {
+                    if (trim((string) ($meals_values[$client_id] ?? '')) !== '') {
+                        $replacing++;
+                    }
+                }
+                if ($replacing > 0) {
+                    $plan['replacing'][$column] = ($plan['replacing'][$column] ?? 0) + $replacing;
+                }
+            }
 
             foreach ($eval['unrecognised'] as $value) {
                 $key = $column . ': ' . $value;
@@ -351,6 +426,178 @@ final class MealsDB_Sync_Reconciler {
                 } else {
                     $stats['store_errors']++;
                 }
+            }
+        }
+    }
+
+    /**
+     * K13 mass-blank breaker, restated for fill-blank (see class docblock).
+     * Returns the refusal message, or null to proceed. Also flags meta keys
+     * absent for every evaluated user (K13 ITEM 2) so their WordPress fills
+     * are skipped.
+     *
+     * @param array<string, mixed> $plan
+     * @param array<string, mixed> $stats
+     */
+    private static function breaker(array &$plan, array &$stats): ?string {
+        $active = (int) $stats['accounts_evaluated'];
+
+        foreach ($plan['replacing'] as $column => $count) {
+            if (MealsDB_Sync::is_over_mass_blank_threshold((int) $count, $active)) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'error', 'category' => 'sync', 'subsystem' => 'sync_reconcile',
+                    'event'     => 'sync.mass_blank_refused', 'outcome' => MealsDB_Event_Log::OUTCOME_FAILED,
+                    'message'   => sprintf(
+                        'Nightly fill refused: %d of %d accounts would have a non-empty %s value filled over (> %d%%). This points to a comparator or mapping bug. Wrote nothing.',
+                        $count, $active, $column, MealsDB_Sync::SYNC_MASS_BLANK_THRESHOLD_PCT
+                    ),
+                    'context'   => ['field' => $column, 'count' => (int) $count, 'active' => $active],
+                ]);
+                return sprintf('Mass-blank breaker: %s would fill over %d non-empty values; apply pass refused.', $column, $count);
+            }
+        }
+
+        $plan['skip_wp'] = [];
+        if ($active > 0) {
+            foreach (array_keys($plan['meta_fields']) as $column) {
+                if (($plan['present'][$column] ?? 0) === 0) {
+                    $plan['skip_wp'][$column] = true;
+                    $field = MealsDB_Sync_Registry::get($column);
+                    MealsDB_Event_Log::record([
+                        'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync_reconcile',
+                        'event' => 'sync.meta_key_missing', 'outcome' => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                        'message' => sprintf('%s -> %s is absent for every tracked user; WordPress fills for it skipped.', $column, (string) ($field['wp']['key'] ?? '')),
+                        'context' => ['field' => $column, 'meta_key' => (string) ($field['wp']['key'] ?? '')],
+                    ]);
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Pass 2: fill blanks for every account the plan marked. Each account is
+     * re-read and re-evaluated first, so the write acts on current values.
+     *
+     * @param array<string, mixed> $plan
+     * @param array<int, bool>     $staff
+     * @param array<string, mixed> $stats
+     */
+    private static function apply_pass(array $plan, array $staff, array &$stats): void {
+        $ids    = array_keys($plan['accounts']);
+        $shadow = MealsDB_Shadow_Mode::is_enabled();
+        $mutate = new MealsDB_Sync_Mutate();
+
+        foreach (array_chunk($ids, self::ACCOUNT_BATCH) as $batch) {
+            $by_account = self::fetch_clients($batch);
+            if ($by_account === null) {
+                $stats['fill_failures']++;
+                continue;
+            }
+            if (function_exists('cache_users')) {
+                cache_users($batch);
+            }
+            update_meta_cache('user', $batch);
+
+            foreach ($by_account as $wp_user_id => $clients) {
+                $user = get_userdata($wp_user_id);
+                if (isset($staff[$wp_user_id]) || !$user instanceof WP_User
+                    || in_array('administrator', (array) $user->roles, true)) {
+                    continue;
+                }
+                MealsDB_Sync::without_sync_hooks(static function () use ($user, $clients, $plan, $shadow, $mutate, &$stats): void {
+                    self::apply_account($user, $clients, $plan['skip_wp'] ?? [], $shadow, $mutate, $stats);
+                });
+            }
+        }
+    }
+
+    /**
+     * Fill every blank side of one account. Writes only where the fresh
+     * evaluation says "fill"; a conflict or anything else is left alone.
+     *
+     * @param array<int, array<string, mixed>> $clients
+     * @param array<string, bool>              $skip_wp
+     * @param array<string, mixed>             $stats
+     */
+    private static function apply_account(WP_User $user, array $clients, array $skip_wp, bool $shadow, MealsDB_Sync_Mutate $mutate, array &$stats): void {
+        $wp_user_id = (int) $user->ID;
+
+        foreach (MealsDB_Sync_Registry::fields() as $column => $field) {
+            $wp    = self::read_wp_value($user, $field['wp']);
+            $meals = self::meals_values_for($clients, $column);
+            $eval  = self::evaluate_field($column, $wp, $meals);
+            if ($eval['outcome'] !== self::O_FILL) {
+                continue;
+            }
+            $cmp = $field['comparator'];
+
+            // Source: a MealsDB value when one exists (keeps MealsDB's own
+            // formatting for sibling fills), else WordPress. evaluate_field
+            // only says "fill" when every non-blank value agrees and parses.
+            $source = null;
+            foreach ($meals as $value) {
+                if (!MealsDB_Sync_Registry::is_blank($column, 'meals', (string) $value)) {
+                    $source = (string) $value;
+                    break;
+                }
+            }
+            if ($source === null) {
+                $source = $wp;
+            }
+            if (trim($source) === '') {
+                // Unreachable by construction; refuse rather than blank.
+                $stats['fill_failures']++;
+                continue;
+            }
+
+            $tally = &$stats['applied'][$column];
+
+            if ($eval['fill_wp']) {
+                if (isset($skip_wp[$column])) {
+                    $tally['wp_skipped_missing_key'] = ($tally['wp_skipped_missing_key'] ?? 0) + 1;
+                } elseif ($shadow) {
+                    // ITEM 12: counted, reported once per run, never written.
+                    $stats['shadow_suppressed'][$column] = ($stats['shadow_suppressed'][$column] ?? 0) + 1;
+                } else {
+                    $value = $field['direction'] === MealsDB_Sync_Registry::TO_WP_ONLY
+                        ? trim($source)
+                        : MealsDB_Sync_Resolver::value_for_wp($column, $cmp, $source);
+                    $written = MealsDB_Sync_Resolver::write_wp_field($user, $field, $column, $value, 'sync_fill_wp', 'nightly');
+                    if (is_wp_error($written)) {
+                        // e.g. a user_email collision: report, move on.
+                        $stats['fill_failures']++;
+                        MealsDB_Event_Log::record([
+                            'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync_fill',
+                            'event' => 'sync.fill_failed', 'outcome' => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                            'message' => sprintf('WordPress fill of %s for user %d failed: %s', $column, $wp_user_id, $written->get_error_message()),
+                            'entity_type' => 'user', 'entity_id' => $wp_user_id,
+                            'context' => ['field' => $column],
+                        ]);
+                    } else {
+                        $tally['wp'] = ($tally['wp'] ?? 0) + 1;
+                    }
+                }
+            }
+
+            $filled = [];
+            foreach ($eval['fill_clients'] as $client_id) {
+                $value = MealsDB_Sync_Resolver::value_for_meals($cmp, $source);
+                $old   = (string) ($meals[$client_id] ?? '');
+                if ($mutate->update_meals_client($client_id, [$column => $value])) {
+                    MealsDB_Logger::log('sync_fill_client', $client_id, $column, $old, $value, 'nightly');
+                    $tally['meals'] = ($tally['meals'] ?? 0) + 1;
+                    $filled[] = $client_id;
+                } else {
+                    $stats['fill_failures']++;
+                }
+            }
+            unset($tally);
+
+            if ($filled !== [] && $field['derived'] !== []) {
+                // ITEM 6: the source changed on these clients; derived values
+                // are filled only where blank.
+                MealsDB_Sync_Resolver::recompute_derived($mutate, $wp_user_id, $column, $field['derived'], MealsDB_Sync_Resolver::DERIVED_FILL, $filled);
             }
         }
     }
@@ -474,25 +721,38 @@ final class MealsDB_Sync_Reconciler {
             'unrecognised'           => [],
             'wp_inconsistent'        => [],
             'wp_inconsistent_users'  => [],
+            // Apply pass only.
+            'applied'                => [],
+            'fill_failures'          => 0,
+            'shadow_suppressed'      => [],
         ];
     }
 
     /** @param array<string, mixed> $stats */
     private static function finish_run(int $log_id, array $stats): void {
-        $degraded = $stats['store_errors'] > 0;
+        $stats['applied'] = array_filter($stats['applied']);
+        $apply    = ($stats['mode'] ?? 'detect') === 'apply';
+        $degraded = $stats['store_errors'] > 0 || $stats['fill_failures'] > 0;
+        $writes   = 0;
+        foreach ($stats['applied'] as $per_field) {
+            $writes += (int) ($per_field['wp'] ?? 0) + (int) ($per_field['meals'] ?? 0);
+        }
 
         MealsDB_Event_Log::record([
             'severity'  => $degraded ? 'warning' : 'info',
             'category'  => 'sync',
             'subsystem' => 'sync_reconcile',
-            'event'     => 'sync.reconcile_detected',
+            'event'     => $apply ? 'sync.reconcile_applied' : 'sync.reconcile_detected',
             'outcome'   => $degraded ? MealsDB_Event_Log::OUTCOME_DEGRADED : MealsDB_Event_Log::OUTCOME_SUCCEEDED,
-            'message'   => sprintf(
-                'K21 detection: %d accounts, %d conflict rows touched, %d store errors. No client data written.',
-                $stats['accounts_evaluated'],
-                array_sum($stats['conflicts']),
-                $stats['store_errors']
-            ),
+            'message'   => $apply
+                ? sprintf(
+                    'K21 nightly: %d accounts, %d blank values filled, %d fill failures, %d conflict rows touched, %d store errors.',
+                    $stats['accounts_evaluated'], $writes, $stats['fill_failures'], array_sum($stats['conflicts']), $stats['store_errors']
+                )
+                : sprintf(
+                    'K21 detection: %d accounts, %d conflict rows touched, %d store errors. No client data written.',
+                    $stats['accounts_evaluated'], array_sum($stats['conflicts']), $stats['store_errors']
+                ),
             'context'   => [
                 'accounts_evaluated'     => $stats['accounts_evaluated'],
                 'accounts_multi_client'  => $stats['accounts_multi_client'],
@@ -501,8 +761,23 @@ final class MealsDB_Sync_Reconciler {
                 'fields'                 => $stats['fields'],
                 'conflicts'              => $stats['conflicts'],
                 'store_errors'           => $stats['store_errors'],
+                'applied'                => $stats['applied'],
+                'fill_failures'          => $stats['fill_failures'],
             ],
         ]);
+
+        if ($stats['shadow_suppressed'] !== []) {
+            // ITEM 12: shadow mode is reported, never silently obeyed.
+            MealsDB_Event_Log::record([
+                'severity'  => 'warning',
+                'category'  => 'sync',
+                'subsystem' => 'sync_reconcile',
+                'event'     => 'sync.shadow_suppressed',
+                'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                'message'   => sprintf('Shadow mode suppressed %d WordPress fills.', array_sum($stats['shadow_suppressed'])),
+                'context'   => ['fields' => $stats['shadow_suppressed']],
+            ]);
+        }
 
         if ($stats['unrecognised'] !== []) {
             // ITEM 3: a new Enzebra group must surface, not silently default.
@@ -532,9 +807,9 @@ final class MealsDB_Sync_Reconciler {
         if ($log_id > 0) {
             $job_stats = [
                 'records_processed' => $stats['accounts_evaluated'],
-                'records_updated'   => array_sum($stats['conflicts']),
+                'records_updated'   => $apply ? $writes : array_sum($stats['conflicts']),
                 'records_skipped'   => $stats['accounts_staff_skipped'] + $stats['accounts_missing_user'],
-                'records_errored'   => $stats['store_errors'],
+                'records_errored'   => $stats['store_errors'] + $stats['fill_failures'],
             ];
             if ($degraded) {
                 MealsDB_Event_Log::finish_job($log_id, $job_stats, MealsDB_Event_Log::OUTCOME_DEGRADED);
@@ -549,7 +824,7 @@ final class MealsDB_Sync_Reconciler {
      * @return array<string, mixed>
      */
     private static function fail_run(int $log_id, array $stats, string $message): array {
-        MealsDB_Logger::error('[MealsDB Sync Reconcile] detection failed: ' . $message);
+        MealsDB_Logger::error('[MealsDB Sync Reconcile] run failed: ' . $message);
         MealsDB_Event_Log::record([
             'severity'  => 'error',
             'category'  => 'sync',
