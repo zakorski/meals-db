@@ -224,7 +224,7 @@ For data backfills (one-time data corrections, not schema changes), put them in 
 ### 10. Cron jobs
 
 Plugin-scheduled cron hooks and their **actual** scheduled times (verified against the code):
-- `mealsdb_nightly_sync` — **02:00** — sync engine (`class-sync.php`). Since K21 ITEM 7 this is a two-way **fill-blank** reconcile (`MealsDB_Sync_Reconciler::run_reconcile`): it never overwrites a populated value; differences become conflicts resolved under Clients → WooCommerce Sync → Review sync conflicts.
+- `mealsdb_nightly_sync` — **02:00** — sync engine (`class-sync.php`). Since K21 ITEM 7 this is a two-way **fill-blank** reconcile (`MealsDB_Sync_Reconciler::run_reconcile`): it never overwrites a populated value; differences become conflicts resolved under Clients → WooCommerce Sync → Review sync conflicts. **Release gate:** `tests/test-sync-invariant-k21.php` (K21 Test 32, the no-overwrite invariant) must pass before any change to the sync ships — it replaced the runtime mass-write/mass-conflict breakers.
 - `mealsdb_nightly_allocation_sync` — **03:00** — allocation engine (`class-allocation-hooks.php`). **NOT 02:00.**
 - `mealsdb_nightly_task_sync` — **02:00** (design) — task engine (`class-task-cron.php`).
 - `mealsdb_daily_report` — **04:00** — Phase W health report.

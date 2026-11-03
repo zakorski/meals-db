@@ -656,7 +656,7 @@ final class MealsDB_Sync_Reconciler {
                     $value = $field['direction'] === MealsDB_Sync_Registry::TO_WP_ONLY
                         ? trim($source)
                         : MealsDB_Sync_Resolver::value_for_wp($column, $cmp, $source);
-                    $written = MealsDB_Sync_Resolver::write_wp_field($user, $field, $column, $value, 'sync_fill_wp', 'nightly');
+                    $written = MealsDB_Sync_Resolver::write_wp_field($user, $field, $column, $value, 'sync_fill_wp', 'nightly', true);
                     if (is_wp_error($written)) {
                         // e.g. a user_email collision: report, move on.
                         $stats['fill_failures']++;

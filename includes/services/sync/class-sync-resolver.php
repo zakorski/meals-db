@@ -209,16 +209,30 @@ final class MealsDB_Sync_Resolver {
      * (ITEM 4: both address_2 keys). Returns WP_Error on the first failure.
      *
      * @param array<string, mixed> $field
-     * @param string $audit_action sync_resolve_wp | sync_fill_wp
-     * @param string $source       audit source, e.g. resolution:client:12 / nightly
+     * @param string $audit_action    sync_resolve_wp | sync_fill_wp
+     * @param string $source          audit source, e.g. resolution:client:12 / nightly
+     * @param bool   $fill_blank_only true for the automated fills: a key whose
+     *                                current value is NOT blank is skipped,
+     *                                never overwritten. Needed for also_write
+     *                                keys: a delivery_area_name fill used to
+     *                                overwrite a populated billing_address_2
+     *                                whenever shipping_address_2 was blank
+     *                                (caught by Test 32). Resolution passes
+     *                                false: an operator choice may overwrite.
      * @return true|WP_Error
      */
-    public static function write_wp_field(WP_User $user, array $field, string $column, string $value, string $audit_action, string $source) {
+    public static function write_wp_field(WP_User $user, array $field, string $column, string $value, string $audit_action, string $source, bool $fill_blank_only = false) {
         $wp_user_id = (int) $user->ID;
 
         if ($field['wp']['type'] === 'core') {
             $key = (string) $field['wp']['key'];
             $old = isset($user->$key) ? (string) $user->$key : '';
+            if (MealsDB_Sync::would_blank_value($value, $old)) {
+                return self::refuse_blank($wp_user_id, $column, $key);
+            }
+            if ($fill_blank_only && $old !== $value && !MealsDB_Sync_Registry::is_blank($column, 'wp', $old)) {
+                return true; // populated: a fill never replaces it
+            }
 
             // ITEM 11: WordPress mails the OLD address when user_email
             // changes. Suppress it for this write only.
@@ -251,7 +265,16 @@ final class MealsDB_Sync_Resolver {
             $old = get_user_meta($wp_user_id, $meta_key, true);
             $old = is_scalar($old) ? (string) $old : '';
             if ($old === $value) {
+                // Already holds the value: success without a write
+                // (update_user_meta() returns false on a no-op, which would
+                // otherwise read as a failure — audit-2026-08 B07 / H11).
                 continue;
+            }
+            if (MealsDB_Sync::would_blank_value($value, $old)) {
+                return self::refuse_blank($wp_user_id, $column, $meta_key);
+            }
+            if ($fill_blank_only && !MealsDB_Sync_Registry::is_blank($column, 'wp', $old)) {
+                continue; // populated: a fill never replaces it
             }
             if (update_user_meta($wp_user_id, $meta_key, $value) === false) {
                 return new WP_Error('mealsdb_resolve_wp_failed', sprintf(
@@ -268,6 +291,24 @@ final class MealsDB_Sync_Resolver {
     /** recompute_derived() modes. */
     public const DERIVED_OVERWRITE = 'overwrite';
     public const DERIVED_FILL      = 'fill';
+
+    /**
+     * K13 ITEM 3, kept on the ONE live WordPress writer: an empty value never
+     * replaces a populated one. Every caller already guarantees a non-blank
+     * value (resolution refuses a blank choice; a fill's source is
+     * non-blank), so this is defence in depth — it is what the K13 guard on
+     * the retired MealsDB_Sync_Mutate::apply_wp_user_update() protected, and
+     * it must not disappear with that method.
+     */
+    private static function refuse_blank(int $wp_user_id, string $column, string $key): WP_Error {
+        MealsDB_Event_Log::record([
+            'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
+            'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
+            'message' => sprintf('DB->WP: refused to blank populated %s for user %d', $key, $wp_user_id),
+            'context' => ['user_id' => $wp_user_id, 'field' => 'field:' . $column, 'key' => $key],
+        ]);
+        return new WP_Error('mealsdb_sync_empty_overwrite_refused', __('Refused to overwrite a populated field with an empty value.', 'meals-db'));
+    }
 
     /**
      * ITEM 6: recompute derived columns from each client's source value.

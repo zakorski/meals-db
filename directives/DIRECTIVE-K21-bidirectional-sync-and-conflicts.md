@@ -287,7 +287,8 @@ the one disagreement (Gloria Cudahy), MealsDB matches `shipping_address_2`.
 
 - **Read from WordPress:** `shipping_address_2` is the comparison source and wins.
 - **Write to WordPress:** fill **both** `shipping_address_2` and `billing_address_2` when filling a
-  blank, so they stay in step.
+  blank, so they stay in step — **each only if it is itself blank** (Rev 2, found by Test 32): an
+  automated fill never overwrites a populated `billing_address_2`. A resolution writes both.
 - A user whose two `address_2` keys disagree is a WordPress-internal inconsistency: compare MealsDB
   against `shipping_address_2` only, and log the disagreement once per run. Do not raise it as a
   MealsDB conflict.
@@ -747,6 +748,25 @@ Added in Rev 2:
     Assert that no value which was non-blank before is different after, on either side — the sole
     permitted exception being `nickname` per ITEM 5. **This test is the release gate that replaces
     the runtime breakers.**
+    > **APPLIED (2026-11-03):** `tests/test-sync-invariant-k21.php`. 300 generated accounts (fixed
+    > seed; any seed can be passed on the command line — 41 seeds pass) through: nightly, a round of
+    > simulated user/operator edits, every real-time hook on every account, detection, a second
+    > nightly, and a third (idempotent) nightly. Checked per stage against the state the stage
+    > started from, with "blank" defined in the test from this directive's text — deliberately NOT
+    > via the sync's own comparators, so a comparator bug cannot hide itself. Also asserted: each
+    > stage actually filled values (not vacuous), hooks wrote no WordPress value, detection wrote
+    > nothing, staff/admin accounts and non-registry columns/meta never move. Mutation-checked: six
+    > planted overwrite bugs (conflict treated as fill, also_write overwrite, sibling overwrite, a
+    > comparator misreading real phones as blank, hooks writing WordPress, initials made two-way)
+    > each fail the gate. **Bug it found:** a `delivery_area_name` fill overwrote a populated
+    > `billing_address_2` whenever `shipping_address_2` was blank (ITEM 4's "write both" applied
+    > without the fill-blank rule). Fixed: `write_wp_field(..., $fill_blank_only = true)` on every
+    > automated fill skips any key that is not blank; resolution still writes both keys.
+    > Retired with this gate: `MealsDB_Sync_Mutate`'s WordPress-writing half (`push_to_woocommerce`,
+    > `push_to_meals_db`, `update_wp_user`, `apply_wp_user_update` and helpers — unreachable since
+    > ITEM 13). The K13 empty-overwrite guard moved onto the live writer
+    > (`MealsDB_Sync_Resolver::write_wp_field`); its tests were retargeted there and
+    > `test-sync-mutate-meta-noop.php` (dead-code only) was deleted.
 33. Account with two active clients, all non-blank values agree, one client blank → that client
     and WP (if blank) filled.
 34. Account with two active clients whose non-blank values differ → exactly one open conflict for

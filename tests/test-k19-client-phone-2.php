@@ -97,23 +97,22 @@ $r = MealsDB_Sync_Reconciler::evaluate_field('client_phone_2', '506-858-1234', [
 chk($r['outcome'] === 'fill', 'T1: shipping_phone == billing_phone is still filled (dedup is display-only)');
 
 // ===== T2: blank client_phone_2 does not overwrite populated shipping_phone ==
-$GLOBALS['wpdb'] = new wpdb();
-$mut = new MealsDB_Sync_Mutate();
-$rm = new ReflectionMethod('MealsDB_Sync_Mutate', 'apply_wp_user_update');
-$rm->setAccessible(true);
-
+// K21: retargeted from the retired MealsDB_Sync_Mutate::apply_wp_user_update()
+// to the live writer, MealsDB_Sync_Resolver::write_wp_field().
+$W = static function (int $uid, string $value) {
+    return MealsDB_Sync_Resolver::write_wp_field(new WP_User($uid), MealsDB_Sync_Registry::get('client_phone_2'), 'client_phone_2', $value, 'sync_resolve_wp', 'test');
+};
 $GLOBALS['meta_store']  = ['42|shipping_phone' => '506-858-7777'];
 $GLOBALS['meta_exists'] = ['42|shipping_phone' => true];
 MealsDB_Event_Log::$events = [];
-$res = $rm->invoke($mut, new WP_User(42), 'client_phone_2', '');
+$res = $W(42, '');
 chk(is_wp_error($res) && $res->get_error_code() === 'mealsdb_sync_empty_overwrite_refused', 'T2: empty client_phone_2 push refused');
 chk(($GLOBALS['meta_store']['42|shipping_phone'] ?? '') === '506-858-7777', 'T2: shipping_phone unchanged');
 $refused = array_filter(MealsDB_Event_Log::$events, fn($e) => ($e['event'] ?? '') === 'sync.empty_overwrite_refused'
-    && ($e['context']['meta_key'] ?? '') === 'shipping_phone');
+    && ($e['context']['key'] ?? '') === 'shipping_phone');
 chk(count($refused) === 1, 'T2: refusal recorded against shipping_phone');
 
-// A real value still pushes (the allowlist accepts the new key).
-$res = $rm->invoke($mut, new WP_User(42), 'client_phone_2', '506-858-8888');
+$res = $W(42, '506-858-8888');
 chk($res === true, 'T2: real client_phone_2 push succeeds');
 chk(($GLOBALS['meta_store']['42|shipping_phone'] ?? '') === '506-858-8888', 'T2: shipping_phone updated by real push');
 chk(!array_key_exists('42|billing_phone_2', $GLOBALS['meta_store']), 'T2: nothing written to billing_phone_2');

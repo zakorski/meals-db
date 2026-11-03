@@ -23,318 +23,21 @@ class MealsDB_Sync_Mutate {
      */
     private array $column_cache = [];
 
+    // K21: the WordPress-writing half of this class (push_to_woocommerce,
+    // push_to_meals_db, update_wp_user, apply_wp_user_update and their
+    // helpers) was removed once nothing in production called it — every
+    // path that used it (the WP-wins nightly, the old real-time hooks, the
+    // mealsdb_sync_field endpoint) overwrote populated values, which K21
+    // forbids outside operator resolution. WordPress writes now go through
+    // MealsDB_Sync_Resolver::write_wp_field(), which carries the K13
+    // empty-overwrite guard and the ITEM 11 email guards.
+
     public function __construct() {
         global $wpdb;
         $this->connection = $wpdb instanceof wpdb ? $wpdb : null;
         $this->clients_primary_key = MealsDB_Schema::get_primary_key_column(MealsDB_Tables::CLIENTS);
     }
 
-    /**
-     * Whether a wp_usermeta key is allowed to be written from a sync
-     * override. Derived from the canonical field-to-meta map at request
-     * time; cached per-process.
-     */
-    private static function is_allowed_user_meta_key(string $meta_key): bool {
-        static $allowed = null;
-        if ($allowed === null) {
-            $allowed = [];
-            foreach (MealsDB_Sync::get_field_to_wp_meta_map() as $entry) {
-                if (is_array($entry) && ($entry['type'] ?? '') === 'meta' && !empty($entry['key'])) {
-                    $allowed[(string) $entry['key']] = true;
-                }
-            }
-        }
-        return isset($allowed[$meta_key]);
-    }
-
-    /**
-     * Update a WordPress user with the provided field values.
-     *
-     * @param int                  $user_id Identifier of the WordPress user to update.
-     * @param array<string, mixed> $fields  Associative array of field names and values to persist.
-     *
-     * @return true|WP_Error True on success, WP_Error on failure.
-     */
-    public function update_wp_user(int $user_id, array $fields) {
-        // Shadow mode: the WP user record is legacy-visible. Suppress ALL
-        // write-back here — this is the single chokepoint every
-        // wp_update_user / update_user_meta call flows through, so guarding
-        // it covers every caller (push_to_woocommerce, the address/customer
-        // sync hooks, and the nightly sync alike).
-        if (MealsDB_Shadow_Mode::is_enabled()) {
-            return new WP_Error(
-                'mealsdb_shadow_mode',
-                __('Shadow mode is active; write-back to WordPress users is suppressed.', 'meals-db')
-            );
-        }
-
-        $user = get_userdata($user_id);
-
-        if (!$user instanceof WP_User) {
-            return new WP_Error(
-                'mealsdb_sync_user_missing',
-                __('Unable to locate the WooCommerce customer for this override.', 'meals-db')
-            );
-        }
-
-        foreach ($fields as $field => $value) {
-            $error = $this->apply_wp_user_update($user, $field, $value);
-
-            if (is_wp_error($error)) {
-                return $error;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Sync a single field from Meals DB to WooCommerce.
-     * Also updates the Meals DB client to ensure both storage locations are in sync.
-     *
-     * @return true|WP_Error
-     */
-    public function push_to_woocommerce(int $woo_user_id, string $field, string $new_value) {
-        // (Shadow mode is enforced at the update_wp_user chokepoint below,
-        // which every WP-user write flows through.)
-        // Only WP-authoritative fields may be pushed to WooCommerce.
-        if (!in_array($field, MealsDB_Sync::get_wp_authoritative_fields(), true)) {
-            return new WP_Error(
-                'mealsdb_sync_readonly_field',
-                __('This field is not authoritative in WooCommerce and cannot be pushed there.', 'meals-db')
-            );
-        }
-
-        // First update the WordPress user
-        $wp_result = $this->update_wp_user($woo_user_id, [
-            $field => $new_value,
-        ]);
-
-        if (is_wp_error($wp_result)) {
-            return $wp_result;
-        }
-
-        // Now update the corresponding Meals DB client to keep both in sync.
-        // The primary WP write already committed — a secondary failure here
-        // leaves the two systems diverged. Capture the outcome so callers
-        // (and a future reconciliation job) can see which writes landed
-        // incompletely, instead of silently discarding the return value.
-        // A WP user can legitimately map to MORE THAN ONE client row
-        // (dual-program: an SDNB recipient who is also a Veteran — see the
-        // duplicate-wp_user_id soft guard in link_meals_client_to_wc_user
-        // and directive MAJ-1). A WP-authoritative identity change applies
-        // to EVERY client linked to this account, so reconcile all of them.
-        // The previous LIMIT-1 lookup reconciled one arbitrary row and left
-        // the sibling diverged until the nightly per-row sync healed it;
-        // this makes the real-time path consistent with what nightly does.
-        $client_ids = $this->get_client_ids_from_wp_user($woo_user_id);
-
-        if (!empty($client_ids)) {
-            $connection = $this->require_connection();
-
-            if (!is_wp_error($connection)) {
-                $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-                $available_columns = $this->get_table_columns($connection, $clients_table);
-                $column_map = $this->build_identity_column_map($available_columns);
-
-                // Only update if the field exists in the client table
-                if (isset($column_map[$field])) {
-                    $column = $column_map[$field];
-                    foreach ($client_ids as $client_id) {
-                        $reconciled = $this->update_meals_client($client_id, [
-                            $column => $new_value,
-                        ]);
-                        if ($reconciled === false) {
-                            self::record_partial_sync_failure(
-                                $woo_user_id,
-                                $client_id,
-                                $field,
-                                $new_value,
-                                'wp_to_meals_db',
-                                'WP user update succeeded but Meals DB client reconciliation failed'
-                            );
-                        }
-                    }
-                }
-            } else {
-                self::record_partial_sync_failure(
-                    $woo_user_id,
-                    (int) reset($client_ids),
-                    $field,
-                    $new_value,
-                    'wp_to_meals_db',
-                    'WP user update succeeded but Meals DB connection unavailable for reconciliation'
-                );
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Sync a single field from WooCommerce to Meals DB.
-     * Also updates the WordPress user to ensure both storage locations are in sync.
-     *
-     * @return true|WP_Error
-     */
-    public function push_to_meals_db(int $client_id, string $field, string $new_value) {
-        if ($client_id <= 0) {
-            return new WP_Error(
-                'mealsdb_sync_invalid_client',
-                __('A valid Meals DB client is required to sync this field.', 'meals-db')
-            );
-        }
-
-        // Only WP-authoritative fields may be written from WP to meals_clients.
-        if (!in_array($field, MealsDB_Sync::get_wp_authoritative_fields(), true)) {
-            return new WP_Error(
-                'mealsdb_sync_readonly_field',
-                __('This field is authoritative in Meals DB and cannot be overwritten from WooCommerce.', 'meals-db')
-            );
-        }
-
-        $connection = $this->require_connection();
-
-        if (is_wp_error($connection)) {
-            return $connection;
-        }
-
-        // NO client-type gate here. Private clients used to be rejected because
-        // they had no record in the old external encrypted DB. Since Phase S
-        // Private customers are first-class rows in meals_clients (created by
-        // MealsDB_Private_Intake) and the sync SELECTs include them (see
-        // class-sync.php nightly + real-time WHERE client_type IN
-        // ('SDNB','Veteran','Private')). The old gate made this method a silent
-        // no-op that still reported "synced", leaving the Private row stale
-        // forever. Government and Private clients are written identically here.
-
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $available_columns = $this->get_table_columns($connection, $clients_table);
-        $column_map = $this->build_identity_column_map($available_columns);
-
-        if (!isset($column_map[$field])) {
-            return new WP_Error(
-                'mealsdb_sync_unsupported_field',
-                __('This field cannot be overridden from WooCommerce.', 'meals-db')
-            );
-        }
-
-        $column = $column_map[$field];
-        $primary_key = $this->resolve_primary_key_column($available_columns);
-
-        if ($primary_key === null) {
-            return new WP_Error(
-                'mealsdb_sync_failed',
-                __('Unable to determine the Meals DB client primary key.', 'meals-db')
-            );
-        }
-
-        $escaped_table = str_replace('`', '``', $clients_table);
-        $escaped_column = str_replace('`', '``', $column);
-        $escaped_pk = str_replace('`', '``', $primary_key);
-        $select_sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_column, $escaped_table, $escaped_pk);
-
-        $existing_value = $connection->get_var($connection->prepare($select_sql, $client_id));
-
-        if ($existing_value === null && $connection->last_error !== '') {
-            error_log('[MealsDB Sync] Failed to execute Meals DB client lookup: ' . self::redact_sql_error($connection->last_error));
-
-            return new WP_Error(
-                'mealsdb_sync_failed',
-                __('Unable to read the current Meals DB value for this client.', 'meals-db')
-            );
-        }
-
-        if ($existing_value === null) {
-            return new WP_Error(
-                'mealsdb_sync_client_missing',
-                __('The Meals DB client could not be found.', 'meals-db')
-            );
-        }
-
-        $existing_value = is_scalar($existing_value) ? (string) $existing_value : '';
-
-        // K13 ITEM 3: an empty incoming value must never blank a populated
-        // meals_clients column. (K21: no production path calls this method
-        // any more — its callers, the WP-wins nightly, the old real-time hooks
-        // and the mealsdb_sync_field endpoint, were removed. Kept with its
-        // guard for its tests until it is retired.)
-        if (MealsDB_Sync::would_blank_value($new_value, $existing_value)) {
-            MealsDB_Event_Log::record([
-                'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
-                'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
-                'message' => sprintf('WP->DB: refused to blank populated %s for client %d', $field, $client_id),
-                'context' => ['client_id' => $client_id, 'field' => $field],
-            ]);
-            return new WP_Error(
-                'mealsdb_sync_empty_overwrite_refused',
-                __('Refused to overwrite a populated field with an empty value.', 'meals-db')
-            );
-        }
-
-        $update_success = $this->update_meals_client($client_id, [
-            $column => $new_value,
-        ]);
-
-        if (!$update_success) {
-            return new WP_Error(
-                'mealsdb_sync_failed',
-                __('Unable to update the Meals DB client record.', 'meals-db')
-            );
-        }
-
-        MealsDB_Logger::log(
-            'sync_override',
-            $client_id,
-            $field,
-            $existing_value,
-            $new_value,
-            'woocommerce'
-        );
-
-        // Now update the corresponding WordPress user to keep both in
-        // sync. Primary Meals-DB write already committed; capture the
-        // secondary WP update's outcome so a failure here is logged
-        // and audited instead of silently dropped.
-        $wp_user_id = $this->get_wp_user_id_from_client($client_id);
-
-        if ($wp_user_id > 0) {
-            $secondary = $this->update_wp_user($wp_user_id, [
-                $field => $new_value,
-            ]);
-            if (is_wp_error($secondary)) {
-                self::record_partial_sync_failure(
-                    $wp_user_id,
-                    $client_id,
-                    $field,
-                    $new_value,
-                    'meals_db_to_wp',
-                    'Meals DB update succeeded but WP user reconciliation failed: ' . $secondary->get_error_message()
-                );
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Record a partial-sync divergence between WP users and meals_clients.
-     *
-     * A "partial" sync is one where the primary (authoritative) write
-     * committed but the secondary reconciliation write to the other
-     * system failed. The two systems are now out of step. This helper:
-     *
-     *   1. Emits a loud error_log entry so admin tooling / log scrapers
-     *      notice.
-     *   2. Writes an audit row via MealsDB_Logger so a reconciliation
-     *      job (future) can pick the drift up and retry.
-     *
-     * We intentionally do NOT bubble a WP_Error back to the caller
-     * here: returning an error for a partial failure would render as
-     * "sync failed" in the admin UI when in fact the primary write
-     * did land, and operators would be tempted to retry — doubling
-     * the reconciliation load.
-     */
     /**
      * Redact row-level values from a MySQL error string before
      * error_log. MySQL surfaces data values inside single quotes in
@@ -356,35 +59,6 @@ class MealsDB_Sync_Mutate {
         return $redacted ?? $error;
     }
 
-    private static function record_partial_sync_failure(
-        int $wp_user_id,
-        int $client_id,
-        string $field,
-        string $new_value,
-        string $direction,
-        string $reason
-    ): void {
-        error_log(sprintf(
-            '[MealsDB Sync] Partial sync: %s direction=%s wp_user_id=%d client_id=%d field=%s',
-            $reason,
-            $direction,
-            $wp_user_id,
-            $client_id,
-            $field
-        ));
-
-        if (class_exists('MealsDB_Logger')) {
-            MealsDB_Logger::log(
-                'sync_partial_failure',
-                $client_id,
-                $field,
-                null,
-                $new_value,
-                $direction
-            );
-        }
-    }
-
     /**
      * Update a Meals DB client with the provided field values.
      *
@@ -401,7 +75,7 @@ class MealsDB_Sync_Mutate {
         }
 
         // No client-type gate: Private clients are first-class meals_clients
-        // rows since Phase S and must be updatable here (see push_to_meals_db).
+        // rows since Phase S and must be updatable here.
 
         try {
             $fields = MealsDB_Encryption::encrypt_columns($fields);
@@ -498,7 +172,7 @@ class MealsDB_Sync_Mutate {
         }
 
         // No client-type gate: Private clients are first-class meals_clients
-        // rows since Phase S (see push_to_meals_db). Government and Private
+        // rows since Phase S. Government and Private
         // clients are inserted identically.
 
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
@@ -626,8 +300,8 @@ class MealsDB_Sync_Mutate {
         }
 
         // No client-type gate: Private clients are first-class meals_clients
-        // rows since Phase S and the admin link UI must work for them (see
-        // push_to_meals_db). The duplicate-wp_user_id soft guard below still
+        // rows since Phase S and the admin link UI must work for them. The
+        // duplicate-wp_user_id soft guard below still
         // applies to every client type.
 
         $wp_user = get_userdata($user_id);
@@ -776,84 +450,6 @@ class MealsDB_Sync_Mutate {
     }
 
     /**
-     * Get every Meals DB client ID linked to a WordPress user.
-     *
-     * Returns an array because a single WP user can legitimately map to
-     * more than one client row (dual-program — see directive MAJ-1 and the
-     * duplicate-wp_user_id soft guard in link_meals_client_to_wc_user). A
-     * LIMIT-1 lookup here would silently reconcile only one arbitrary row.
-     *
-     * @param int $wp_user_id WordPress user ID
-     * @return array<int, int> Client IDs (empty when none / on failure)
-     */
-    private function get_client_ids_from_wp_user(int $wp_user_id): array {
-        $connection = $this->require_connection();
-
-        if (is_wp_error($connection)) {
-            return [];
-        }
-
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $available_columns = $this->get_table_columns($connection, $clients_table);
-        $primary_key = $this->resolve_primary_key_column($available_columns);
-        $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
-
-        if ($primary_key === null || $wp_column === null) {
-            return [];
-        }
-
-        $escaped_table = str_replace('`', '``', $clients_table);
-        $escaped_pk = str_replace('`', '``', $primary_key);
-        $escaped_wp_col = str_replace('`', '``', $wp_column);
-        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d ORDER BY `%s` ASC', $escaped_pk, $escaped_table, $escaped_wp_col, $escaped_pk);
-
-        $rows = $connection->get_col($connection->prepare($sql, $wp_user_id));
-
-        $client_ids = [];
-        if (is_array($rows)) {
-            foreach ($rows as $value) {
-                if (is_numeric($value) && (int) $value > 0) {
-                    $client_ids[] = (int) $value;
-                }
-            }
-        }
-
-        return $client_ids;
-    }
-
-    /**
-     * Get the WordPress user ID associated with a Meals DB client.
-     *
-     * @param int $client_id Meals DB client ID
-     * @return int WordPress user ID, or 0 if not found
-     */
-    private function get_wp_user_id_from_client(int $client_id): int {
-        $connection = $this->require_connection();
-
-        if (is_wp_error($connection)) {
-            return 0;
-        }
-
-        $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
-        $available_columns = $this->get_table_columns($connection, $clients_table);
-        $primary_key = $this->resolve_primary_key_column($available_columns);
-        $wp_column = $this->choose_column(['wordpress_user_id', 'wp_user_id'], $available_columns);
-
-        if ($primary_key === null || $wp_column === null) {
-            return 0;
-        }
-
-        $escaped_table = str_replace('`', '``', $clients_table);
-        $escaped_pk = str_replace('`', '``', $primary_key);
-        $escaped_wp_col = str_replace('`', '``', $wp_column);
-        $sql = sprintf('SELECT `%s` FROM `%s` WHERE `%s` = %%d LIMIT 1', $escaped_wp_col, $escaped_table, $escaped_pk);
-
-        $wp_user_id = $connection->get_var($connection->prepare($sql, $client_id));
-
-        return is_numeric($wp_user_id) ? (int) $wp_user_id : 0;
-    }
-
-    /**
      * Ensure a wpdb connection is available for mutations.
      *
      * @return wpdb|WP_Error
@@ -977,145 +573,4 @@ class MealsDB_Sync_Mutate {
         return $columns;
     }
 
-    /**
-     * Apply an individual update operation to a WordPress user field.
-     *
-     * @param WP_User $user
-     * @param string  $field
-     * @param mixed   $value
-     *
-     * @return true|WP_Error
-     */
-    private function apply_wp_user_update(WP_User $user, string $field, $value) {
-        $woo_user_id = (int) $user->ID;
-        $new_value   = is_scalar($value) ? (string) $value : '';
-        $old_value   = null;
-        $update_success = false;
-        $error_code = 'mealsdb_sync_failed';
-        $error_message = '';
-
-        // Resolve the WP meta map entry for this field, if available.
-        $meta_map = MealsDB_Sync::get_field_to_wp_meta_map();
-        $descriptor = $meta_map[$field] ?? null;
-
-        // K21 ITEM 1: route on the registry descriptor, not a hardcoded field
-        // switch. Core user fields go through wp_update_user(); usermeta
-        // through persist_user_meta(). The old switch also accepted the alias
-        // 'phone_primary', but every caller gates on
-        // get_wp_authoritative_fields() first, so it was unreachable.
-        if ($descriptor === null) {
-            $error_code = 'mealsdb_sync_unsupported_field';
-            $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
-        } elseif ($descriptor['type'] === 'core') {
-            $core_key  = $descriptor['key'];
-            $old_value = isset($user->$core_key) ? (string) $user->$core_key : '';
-            // K13 ITEM 3, now applied to core fields too: never blank a
-            // populated first_name / last_name / user_email from a sync push.
-            // Previously only the usermeta branch had this guard.
-            if (MealsDB_Sync::would_blank_value($new_value, $old_value)) {
-                MealsDB_Event_Log::record([
-                    'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
-                    'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
-                    'message' => sprintf('DB->WP: refused to blank populated %s for user %d', $core_key, $woo_user_id),
-                    'context' => ['user_id' => $woo_user_id, 'field' => $field, 'core_key' => $core_key],
-                ]);
-                $error_code    = 'mealsdb_sync_empty_overwrite_refused';
-                $error_message = __('Refused to overwrite a populated field with an empty value. Clear it via the client form if that is intended.', 'meals-db');
-            } else {
-                $result = wp_update_user([
-                    'ID'      => $woo_user_id,
-                    $core_key => $new_value,
-                ]);
-                if (!is_wp_error($result)) {
-                    $update_success = true;
-                } else {
-                    $error_message = $result->get_error_message();
-                    error_log('[MealsDB Sync] Failed to sync ' . $core_key . ' for user ' . $woo_user_id . ': ' . $error_message);
-                }
-            }
-        } elseif ($descriptor['type'] === 'meta') {
-            $meta_key = $descriptor['key'];
-
-            // Defence-in-depth meta_key allowlist. The descriptor map is
-            // hardcoded in MealsDB_Sync_Registry, but a future expansion that
-            // drew from filterable input would let a caller rewrite arbitrary
-            // user meta. Restrict to the keys referenced by the canonical map.
-            if (!self::is_allowed_user_meta_key($meta_key)) {
-                $error_code    = 'mealsdb_sync_unsupported_field';
-                $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
-            } else {
-                $old_value = get_user_meta($woo_user_id, $meta_key, true);
-                // K13 ITEM 3: never blank a populated WP meta value from a
-                // sync push. street_name/delivery_street_name resolve here to
-                // billing_address_1/shipping_address_1 (K13 ITEM 1) - the only
-                // surviving copy of the client's address. An empty incoming
-                // value means "no data", not "delete it". Deliberate operator
-                // clears go through the client form, which does NOT route
-                // through this mutator, so they are unaffected. (billing_phone
-                // used to bypass this guard via its own switch case.)
-                if (MealsDB_Sync::would_blank_value($new_value, is_scalar($old_value) ? (string) $old_value : '')) {
-                    MealsDB_Event_Log::record([
-                        'severity' => 'warning', 'category' => 'sync', 'subsystem' => 'sync',
-                        'event' => 'sync.empty_overwrite_refused', 'outcome' => 'degraded',
-                        'message' => sprintf('DB->WP: refused to blank populated %s for user %d', $meta_key, $woo_user_id),
-                        'context' => ['user_id' => $woo_user_id, 'field' => $field, 'meta_key' => $meta_key],
-                    ]);
-                    $error_code    = 'mealsdb_sync_empty_overwrite_refused';
-                    $error_message = __('Refused to overwrite a populated field with an empty value. Clear it via the client form if that is intended.', 'meals-db');
-                } else {
-                    $update_success = self::persist_user_meta($woo_user_id, $meta_key, is_scalar($old_value) ? (string) $old_value : '', $new_value);
-                    if (!$update_success) {
-                        $error_message = sprintf(
-                            __('Unable to update user meta "%s".', 'meals-db'),
-                            $meta_key
-                        );
-                        error_log('[MealsDB Sync] Failed to sync meta ' . $meta_key . ' for user ' . $woo_user_id . '.');
-                    }
-                }
-            }
-        } else {
-            $error_code = 'mealsdb_sync_unsupported_field';
-            $error_message = __('This field cannot be overridden from Meals DB.', 'meals-db');
-        }
-
-        if (!$update_success) {
-            if ($error_message === '') {
-                $error_message = __('An unexpected error prevented the override from completing.', 'meals-db');
-            }
-
-            return new WP_Error($error_code, $error_message);
-        }
-
-        MealsDB_Logger::log(
-            'sync_override',
-            $woo_user_id,
-            $field,
-            is_scalar($old_value) ? (string) $old_value : null,
-            $new_value,
-            'mealsdb'
-        );
-
-        return true;
-    }
-
-    /**
-     * Idempotent user-meta write for the sync-override path.
-     *
-     * update_user_meta() returns false BOTH on a real failure AND when the new
-     * value already equals the stored value, so a bare `!== false` check flags
-     * an already-correct field as a sync FAILURE — surfacing a bogus WP_Error in
-     * the admin UI and a spurious sync_partial_failure audit row (audit-2026-08
-     * B07 / H11). Comparing first makes "already equals target" an explicit
-     * success; only a genuine change that update_user_meta then refuses is a
-     * failure. (The name/email branches don't need this — wp_update_user returns
-     * the user ID on a no-op.)
-     *
-     * @return bool True if the meta now holds $new_value (including a no-op).
-     */
-    private static function persist_user_meta(int $user_id, string $meta_key, string $current_value, string $new_value): bool {
-        if ($current_value === $new_value) {
-            return true;
-        }
-        return update_user_meta($user_id, $meta_key, $new_value) !== false;
-    }
 }

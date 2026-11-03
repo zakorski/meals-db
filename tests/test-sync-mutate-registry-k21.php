@@ -1,9 +1,11 @@
 <?php
 /**
- * Tests for directive K21 ITEM 1 in MealsDB_Sync_Mutate: WordPress writes are
- * routed by the registry descriptor (no hardcoded field switch), the column
- * map comes from the registry, and the K13 empty-overwrite guard now covers
- * core user fields and billing_phone (both previously bypassed it).
+ * Tests for the K21 write layer: the one live WordPress writer
+ * (MealsDB_Sync_Resolver::write_wp_field — routes by registry descriptor,
+ * K13 empty-overwrite guard on core and meta fields, no-op idempotency, both
+ * address_2 keys) and MealsDB_Sync_Mutate's registry-driven column map.
+ * (The writer's tests moved here from the retired
+ * MealsDB_Sync_Mutate::apply_wp_user_update.)
  *
  * Run: php tests/test-sync-mutate-registry-k21.php
  */
@@ -59,6 +61,14 @@ if (!function_exists('update_user_meta')) {
         return true;
     }
 }
+$GLOBALS['filters'] = [];
+if (!function_exists('add_filter')) { function add_filter($t, $cb, $p = 10, $a = 1) { $GLOBALS['filters'][$t][] = $cb; return true; } }
+if (!function_exists('remove_filter')) {
+    function remove_filter($t, $cb, $p = 10) {
+        $GLOBALS['filters'][$t] = array_values(array_filter($GLOBALS['filters'][$t] ?? [], static fn ($x) => $x !== $cb));
+        return true;
+    }
+}
 if (!function_exists('wp_update_user')) {
     function wp_update_user($data) { $GLOBALS['wuu_calls'][] = $data; return (int) $data['ID']; }
 }
@@ -71,11 +81,14 @@ function chk($cond, string $l): void {
 }
 
 $GLOBALS['wpdb'] = new wpdb();
-$mut   = new MealsDB_Sync_Mutate();
-$apply = new ReflectionMethod('MealsDB_Sync_Mutate', 'apply_wp_user_update');
-$apply->setAccessible(true);
+$mut = new MealsDB_Sync_Mutate();
 $reset = static function (): void {
     $GLOBALS['uum_calls'] = []; $GLOBALS['wuu_calls'] = []; $GLOBALS['wpdb']->events = [];
+};
+// The one live WordPress writer (K21): the retired
+// MealsDB_Sync_Mutate::apply_wp_user_update() guarantees, re-asserted here.
+$W = static function (WP_User $u, string $column, string $value) {
+    return MealsDB_Sync_Resolver::write_wp_field($u, MealsDB_Sync_Registry::get($column), $column, $value, 'sync_resolve_wp', 'test');
 };
 
 $user = new WP_User(7);
@@ -85,47 +98,46 @@ $user->user_email = 'ann@example.com';
 
 // --- core fields: routed to wp_update_user with the registry key ----------
 $reset();
-$r = $apply->invoke($mut, $user, 'first_name', 'Anne');
-chk($r === true, 'core: first_name change succeeds');
+chk($W($user, 'first_name', 'Anne') === true, 'core: first_name change succeeds');
 chk($GLOBALS['wuu_calls'] === [['ID' => 7, 'first_name' => 'Anne']], 'core: first_name -> wp_update_user(first_name)');
 
 $reset();
-$r = $apply->invoke($mut, $user, 'client_email', 'ann.s@example.com');
-chk($r === true, 'core: client_email change succeeds');
+chk($W($user, 'client_email', 'ann.s@example.com') === true, 'core: client_email change succeeds');
 chk($GLOBALS['wuu_calls'] === [['ID' => 7, 'user_email' => 'ann.s@example.com']], 'core: client_email -> wp_update_user(user_email)');
+chk(($GLOBALS['filters']['send_email_change_email'] ?? []) === [], 'core: email-change filter removed after the write');
 
-// --- core fields: empty-overwrite refused (new guard) ---------------------
+// --- core fields: empty-overwrite refused ----------------------------------
 foreach (['first_name', 'last_name', 'client_email'] as $f) {
     $reset();
-    $r = $apply->invoke($mut, $user, $f, '   ');
+    $r = $W($user, $f, '   ');
     chk(is_wp_error($r) && $r->get_error_code() === 'mealsdb_sync_empty_overwrite_refused', "core guard: blank $f refused");
     chk($GLOBALS['wuu_calls'] === [], "core guard: wp_update_user not called for blank $f");
     chk(in_array('sync.empty_overwrite_refused', $GLOBALS['wpdb']->events, true), "core guard: refusal logged for $f");
 }
-
-// Blank over blank is not a blanking (nothing to lose) — allowed through.
 $reset();
-$empty = new WP_User(8);
-chk($apply->invoke($mut, $empty, 'first_name', '') === true, 'core guard: blank over blank is not refused');
+chk($W(new WP_User(8), 'first_name', '') === true, 'core guard: blank over blank is not refused');
 
-// --- billing_phone: previously its own switch case WITHOUT the guard ------
+// --- meta: guard, routing, idempotency, address pair -----------------------
 $reset();
 $GLOBALS['meta_store'] = ['7|billing_phone' => '506-555-0100'];
-$r = $apply->invoke($mut, $user, 'client_phone_1', '');
+$r = $W($user, 'client_phone_1', '');
 chk(is_wp_error($r) && $r->get_error_code() === 'mealsdb_sync_empty_overwrite_refused', 'meta guard: blank billing_phone refused');
 chk($GLOBALS['uum_calls'] === [], 'meta guard: billing_phone left untouched');
 
 $reset();
-$r = $apply->invoke($mut, $user, 'client_phone_1', '506-555-0199');
-chk($r === true && $GLOBALS['uum_calls'] === [[7, 'billing_phone', '506-555-0199']], 'meta: client_phone_1 -> billing_phone');
+chk($W($user, 'client_phone_1', '506-555-0199') === true && $GLOBALS['uum_calls'] === [[7, 'billing_phone', '506-555-0199']],
+    'meta: client_phone_1 -> billing_phone');
 
-// --- fields outside the synced set are refused ----------------------------
-foreach (['phone_primary', 'delivery_initials', 'individual_id', 'client_type'] as $f) {
-    $reset();
-    $r = $apply->invoke($mut, $user, $f, 'x');
-    chk(is_wp_error($r) && $r->get_error_code() === 'mealsdb_sync_unsupported_field', "unsupported: $f refused");
-    chk($GLOBALS['wuu_calls'] === [] && $GLOBALS['uum_calls'] === [], "unsupported: nothing written for $f");
-}
+// update_user_meta() returns false on a no-op; the writer must treat an
+// already-equal value as success without calling it (audit-2026-08 B07/H11).
+$reset();
+chk($W($user, 'client_phone_1', '506-555-0199') === true && $GLOBALS['uum_calls'] === [], 'meta: already-equal value is a success, no write');
+
+$reset();
+$GLOBALS['meta_store'] = ['7|shipping_address_2' => 'Zone 1', '7|billing_address_2' => 'Zone 1'];
+chk($W($user, 'delivery_area_name', 'Zone 3') === true
+    && $GLOBALS['uum_calls'] === [[7, 'shipping_address_2', 'Zone 3'], [7, 'billing_address_2', 'Zone 3']],
+    'ITEM 4: delivery_area_name writes both address_2 keys');
 
 // --- column map comes from the registry ------------------------------------
 $cmap = new ReflectionMethod('MealsDB_Sync_Mutate', 'build_identity_column_map');

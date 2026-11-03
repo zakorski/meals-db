@@ -144,6 +144,21 @@ $db = world([110 => ['clients' => [11 => ['delivery_initials' => 'RKU']], 'meta'
 MealsDB_Sync::run_nightly_sync();
 chk($GLOBALS['meta']['110|nickname'] === 'MTR' && !isset($db->live()['110|delivery_initials']), 'T15: MTR kept, no conflict');
 
+// Regression (caught by Test 32): a delivery_area_name fill writes BOTH
+// address_2 keys, but must not overwrite a populated billing_address_2 when
+// only shipping_address_2 is blank.
+$db = world([130 => ['clients' => [14 => ['delivery_area_name' => 'Zone 3']],
+    'meta' => ['shipping_address_2' => '', 'billing_address_2' => 'Zone 1']]]);
+MealsDB_Sync::run_nightly_sync();
+chk($GLOBALS['meta']['130|shipping_address_2'] === 'Zone 3', 'ITEM 4: blank shipping_address_2 filled');
+chk($GLOBALS['meta']['130|billing_address_2'] === 'Zone 1', 'ITEM 4: populated billing_address_2 NOT overwritten by a fill');
+
+$db = world([131 => ['clients' => [15 => ['delivery_area_name' => 'Zone 3']],
+    'meta' => ['shipping_address_2' => '', 'billing_address_2' => '']]]);
+MealsDB_Sync::run_nightly_sync();
+chk($GLOBALS['meta']['131|shipping_address_2'] === 'Zone 3' && $GLOBALS['meta']['131|billing_address_2'] === 'Zone 3',
+    'ITEM 4: both blank -> both filled');
+
 // ---------------------------------------------------------------------------
 // Derived fill-blank (ITEM 6 / Test 40, nightly half)
 // ---------------------------------------------------------------------------
