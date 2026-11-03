@@ -163,6 +163,37 @@ class MealsDB_Migration_Consolidated {
     }
 
     /**
+     * K21 ITEM 4: the delivery area (zone) from a user's usermeta.
+     *
+     * The zone lives in WooCommerce address_2. shipping_address_2 is the
+     * source of truth — it is what the K21 sync compares against (and, in
+     * the one production disagreement, what MealsDB already matched) — with
+     * billing_address_2 as a fallback ONLY when shipping is blank. This used
+     * to read billing_address_2 alone, so every rebuild contradicted the
+     * sync for any user whose two keys differ, and the nightly then raised a
+     * conflict for a value the migration had just written.
+     *
+     * Key names come from the sync registry entry for delivery_area_name
+     * (its read key and its consistency key), so the migration and the sync
+     * cannot drift apart again.
+     *
+     * @param array<string, mixed> $meta usermeta key => value for one user
+     * @return string|null the raw value, or null when both are blank
+     */
+    public static function delivery_area_from_meta(array $meta): ?string {
+        $field     = MealsDB_Sync_Registry::get('delivery_area_name');
+        $primary   = (string) ($field['wp']['key'] ?? 'shipping_address_2');
+        $secondary = (string) ($field['wp']['consistency'] ?? 'billing_address_2');
+        foreach ([$primary, $secondary] as $key) {
+            $value = isset($meta[$key]) && is_scalar($meta[$key]) ? (string) $meta[$key] : '';
+            if (trim($value) !== '') {
+                return $value;
+            }
+        }
+        return null;
+    }
+
+    /**
      * K21 ITEM 3: canonical customer_group for a class, or null for an
      * unknown class. See CLASS_TO_CANONICAL_GROUP.
      */
@@ -408,7 +439,8 @@ class MealsDB_Migration_Consolidated {
             $sc_raw   = $meta['service_centre_charged'] ?? '';
             $zone     = MealsDB_Operational_Constants::zone_for_service_centre((string) $sc_raw);
 
-            $delivery_area_name = $meta['billing_address_2'] ?? null;
+            // K21 ITEM 4: shipping_address_2 first (was billing_address_2 only).
+            $delivery_area_name = self::delivery_area_from_meta($meta);
 
             $open_date = null;
             if (!empty($meta['commence_date']) && $meta['commence_date'] !== '0') {
@@ -466,7 +498,7 @@ class MealsDB_Migration_Consolidated {
                         'subsystem'   => 'migration_consolidated',
                         'event'       => 'derive_area.missing',
                         'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
-                        'message'     => 'billing_address_2 (delivery_area_name) was empty; no delivery area -> no derivable delivery day.',
+                        'message'     => 'shipping_address_2 and billing_address_2 (delivery_area_name) were both empty; no delivery area -> no derivable delivery day.',
                         'entity_type' => 'user',
                         'entity_id'   => (int) $uid,
                         'context'     => ['dry_run' => $dry_run],
@@ -1060,7 +1092,7 @@ class MealsDB_Migration_Consolidated {
         $meta_lookup = [];
         if (!empty($wp_user_ids)) {
             $placeholders  = implode(',', array_fill(0, count($wp_user_ids), '%d'));
-            $meta_keys     = ['billing_address_1', 'billing_address_2', 'shipping_address_1'];
+            $meta_keys     = ['billing_address_1', 'billing_address_2', 'shipping_address_1', 'shipping_address_2'];
             $meta_keys_sql = implode(',', array_map(function ($k) use ($wpdb) {
                 return $wpdb->prepare('%s', $k);
             }, $meta_keys));
@@ -1085,10 +1117,13 @@ class MealsDB_Migration_Consolidated {
             $bind_values = [];
             $changes     = [];
 
-            $billing_address_2 = $meta['billing_address_2'] ?? '';
-            if (empty($client['delivery_area_name']) && $billing_address_2 !== '') {
+            // K21 ITEM 4: same source as phase 1 and the sync —
+            // shipping_address_2, billing_address_2 only as a fallback.
+            // Fill-only, as before.
+            $delivery_area = self::delivery_area_from_meta($meta);
+            if (empty($client['delivery_area_name']) && $delivery_area !== null) {
                 $set_clauses[] = 'delivery_area_name = %s';
-                $bind_values[] = $billing_address_2;
+                $bind_values[] = $delivery_area;
                 $changes[]     = 'delivery_area_name';
             }
 

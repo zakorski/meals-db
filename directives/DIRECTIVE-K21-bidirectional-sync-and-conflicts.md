@@ -297,6 +297,13 @@ the one disagreement (Gloria Cudahy), MealsDB matches `shipping_address_2`.
   `shipping_address_2` (falling back to `billing_address_2` only when shipping is blank), or the
   next rebuild contradicts the sync.
 
+  > **APPLIED (2026-11-03):** `MealsDB_Migration_Consolidated::delivery_area_from_meta()` —
+  > `shipping_address_2`, else `billing_address_2`, else null; key names read from the registry
+  > entry so the migration and sync cannot drift. Used by phase 1 (create clients) and the
+  > addresses phase (which now also loads `shipping_address_2`; still fill-only for this column).
+  > Test: `tests/test-migration-delivery-area-k21.php` (the shipping-first checks fail against the
+  > old read sites).
+
 ---
 
 ## ITEM 5 — `delivery_initials` → `nickname` (one-way)
