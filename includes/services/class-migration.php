@@ -42,8 +42,9 @@ class MealsDB_Migration {
 
     /**
      * For each meals_clients record, create a default rate row. Delegated to
-     * the consolidated engine (single implementation, includes the
-     * OFFSET-drift pagination fix).
+     * the consolidated engine, which in turn calls the shared K22 helper
+     * (MealsDB_Client_Rates::ensure_default_for_client). $offset is a
+     * client_id cursor, not a row offset.
      */
     public static function create_rates( int $offset = 0, bool $dry_run = false ): array {
         return MealsDB_Migration_Consolidated::run_phase_create_rates( $offset, $dry_run );

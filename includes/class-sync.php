@@ -358,6 +358,25 @@ class MealsDB_Sync {
                 'message' => $e->getMessage(),
             ]);
         }
+
+        // K22: give every active SDNB / Veteran client that has no default
+        // rate row one from basic_cost. Deliberately its OWN try/catch after
+        // the reconcile: a reconcile failure must not leave new clients
+        // billing at the program fallback for another night, and a rate
+        // failure must not mask the reconcile's result. Fill-blank only (a
+        // rated client is never touched), so K21's no-overwrite invariant
+        // holds here too. run_nightly_pass() never throws; the guard is for
+        // a bug in it.
+        try {
+            MealsDB_Client_Rates::run_nightly_pass();
+        } catch (\Throwable $e) {
+            MealsDB_Logger::error('[MealsDB Sync] nightly rate pass threw: ' . $e->getMessage());
+            MealsDB_Event_Log::record([
+                'severity' => 'error', 'category' => 'billing', 'subsystem' => 'client_rates',
+                'event' => 'rates.nightly_failed', 'outcome' => MealsDB_Event_Log::OUTCOME_FAILED,
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

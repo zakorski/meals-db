@@ -350,7 +350,7 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
 
     function showNotice(msg, type) {
         $('#mealsdb-sync-status').show()
-            .removeClass('notice-info notice-success notice-error')
+            .removeClass('notice-info notice-success notice-warning notice-error')
             .addClass('notice-' + type)
             .empty()
             .append($('<p></p>').text(msg));
@@ -441,10 +441,17 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
                     offset = 0;
                     runPhase();
                 } else {
+                    // K22: the rates phase no longer writes a $0.00 placeholder,
+                    // so "all rates created" is only true when nobody was left
+                    // unrated. Say so instead of claiming it.
+                    var rateStats = stats[1] || {};
+                    var unrated   = (rateStats.no_basic_cost || 0) + (rateStats.invalid_basic_cost || 0) + (rateStats.errors || 0);
                     var msg = dryRun
                         ? 'Dry run complete. No data was written. Uncheck "Dry run" and run again to sync.'
-                        : 'Sync complete. All government clients and rates have been created.';
-                    showNotice(msg, 'success');
+                        : (unrated > 0
+                            ? 'Sync complete. ' + unrated + ' client(s) were left WITHOUT a rate (missing, zero or implausible basic_cost, or a write error). Billed ones are listed on the Sync Dashboard.'
+                            : 'Sync complete. All government clients and rates have been created.');
+                    showNotice(msg, unrated > 0 && !dryRun ? 'warning' : 'success');
                     finish();
                 }
             } else {
