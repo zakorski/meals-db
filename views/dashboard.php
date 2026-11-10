@@ -74,6 +74,8 @@ $field_labels = [
 
     <?php include MealsDB_Plugin::path('views/partials/dashboard-tasks-widget.php'); ?>
 
+    <?php include MealsDB_Plugin::path('views/partials/dashboard-unrated-clients.php'); ?>
+
     <p class="description">
         <?php esc_html_e('Click "Compare Databases" to scan for differences between Meals DB and WordPress users.', 'meals-db'); ?>
     </p>

@@ -720,18 +720,33 @@ class MealsDB_Migration_Consolidated {
      * Create a default 'Standard' rate row per client from the legacy
      * basic_cost usermeta value, and link meals_clients.default_rate_id.
      *
-     * PAGINATION FIX (was a low-severity bug in the original):
-     * The original walked LIMIT/OFFSET over "clients WITHOUT a rate", but
-     * each batch INSERTs rates and so SHRINKS that set — advancing the
-     * OFFSET against a shrinking result could step over clients. Because
-     * the predicate (no rate yet) is self-clearing, the correct cursor is
-     * a FIXED OFFSET 0: rows we just gave a rate fall out of the next
-     * query on their own. We therefore ignore the incoming $offset for row
-     * selection and drive 'complete' off "no remaining unrated clients".
-     * The $offset is still echoed back (incremented) so the JS progress
-     * math and the generic driver keep working unchanged.
+     * K22: the per-client work is MealsDB_Client_Rates::
+     * ensure_default_for_client() — the same helper the nightly sync runs —
+     * so this phase carries no rate logic of its own.
      *
-     * @param array<string,mixed> $args Unused.
+     * CURSOR (K22 ITEM 3). $offset is the LAST client_id processed, not a
+     * row offset. History, because both earlier designs were wrong:
+     *   - A moving LIMIT/OFFSET over "clients without a rate" stepped over
+     *     clients, because each batch shrinks that set.
+     *   - A fixed OFFSET 0 fixed that, but a client with no usable basic_cost
+     *     never left the set, so the phase wrote it a $0.00 'Standard' rate
+     *     purely to make the cursor advance. That turned "no rate" into
+     *     "bills at zero" — production holds nine such rows.
+     * Iterating on client_id needs neither trick: a client that stays unrated
+     * is simply behind the cursor on the next chunk. Dry and live runs walk
+     * identically.
+     *
+     * The phase NEVER writes a $0.00 or out-of-range rate. Clients with a
+     * missing/zero/implausible basic_cost are left unrated, counted
+     * (no_basic_cost / invalid_basic_cost), logged by the helper, and listed
+     * on the Sync Dashboard.
+     *
+     * PROGRESS BAR: the JS drivers compute offset/total. With a client_id
+     * cursor, 'total' is therefore the HIGHEST unrated client_id (the value
+     * the cursor is walking toward), not a row count.
+     *
+     * @param int                 $offset Last client_id processed (0 = start).
+     * @param array<string,mixed> $args   Unused.
      */
     public static function run_phase_create_rates(int $offset = 0, bool $dry_run = true, array $args = []): array {
         if (($blocked = self::guard_phase()) !== null) { return $blocked; }
@@ -740,151 +755,62 @@ class MealsDB_Migration_Consolidated {
         $clients_table = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENTS);
         $rates_table   = MealsDB_DB::get_table_name(MealsDB_Tables::CLIENT_RATES);
 
-        // Total unrated clients up front (for the progress bar). This is the
-        // count BEFORE this chunk runs; it shrinks as the phase progresses,
-        // which is exactly what makes a moving OFFSET unsafe — hence the
-        // fixed-offset cursor below.
-        $total = (int) $wpdb->get_var(
-            "SELECT COUNT(*) FROM `{$clients_table}` c
-             LEFT JOIN `{$rates_table}` r ON r.client_id = c.client_id
-             WHERE r.rate_id IS NULL"
-        );
+        $cursor = max(0, $offset);
 
-        // Fixed OFFSET 0 — see the method docblock. Always pull the next
-        // BATCH_SIZE clients that STILL have no rate.
-        $rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT c.client_id, c.wp_user_id
-             FROM `{$clients_table}` c
-             LEFT JOIN `{$rates_table}` r ON r.client_id = c.client_id
-             WHERE r.rate_id IS NULL
+        // "Unrated" = no is_default = 1 row, the same predicate the helper
+        // and billing (resolve_rate_for_order) use.
+        $unrated_from = "FROM `{$clients_table}` c
+             LEFT JOIN `{$rates_table}` r ON r.client_id = c.client_id AND r.is_default = 1
+             WHERE r.rate_id IS NULL";
+
+        $max_id = (int) $wpdb->get_var("SELECT MAX(c.client_id) {$unrated_from}");
+
+        $client_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT c.client_id {$unrated_from} AND c.client_id > %d
              ORDER BY c.client_id ASC
              LIMIT %d",
+            $cursor,
             self::BATCH_SIZE
-        ), ARRAY_A);
-
-        if (!is_array($rows)) {
-            $rows = [];
+        ));
+        if (!is_array($client_ids)) {
+            $client_ids = [];
         }
 
-        $stats = ['created' => 0, 'skipped' => 0, 'errors' => 0];
+        $stats = [
+            'created' => 0, 'no_basic_cost' => 0, 'invalid_basic_cost' => 0,
+            'already_rated' => 0, 'skipped' => 0, 'errors' => 0,
+        ];
 
-        // On a DRY RUN nothing is inserted, so the unrated set never shrinks
-        // and a fixed-offset cursor would loop forever. Dry runs therefore
-        // page with the incoming $offset and report the full projected count
-        // in one logical pass.
-        if ($dry_run) {
-            $rows = $wpdb->get_results($wpdb->prepare(
-                "SELECT c.client_id, c.wp_user_id
-                 FROM `{$clients_table}` c
-                 LEFT JOIN `{$rates_table}` r ON r.client_id = c.client_id
-                 WHERE r.rate_id IS NULL
-                 ORDER BY c.client_id ASC
-                 LIMIT %d OFFSET %d",
-                self::BATCH_SIZE,
-                $offset
-            ), ARRAY_A);
-            if (!is_array($rows)) {
-                $rows = [];
-            }
-            foreach ($rows as $row) {
-                $basic_cost = $wpdb->get_var($wpdb->prepare(
-                    "SELECT meta_value FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key = 'basic_cost' LIMIT 1",
-                    (int) $row['wp_user_id']
+        foreach ($client_ids as $client_id) {
+            $client_id = (int) $client_id;
+            $cursor    = max($cursor, $client_id);
+
+            $outcome = MealsDB_Client_Rates::ensure_default_for_client($client_id, $dry_run);
+            $status  = (string) ($outcome['status'] ?? '');
+
+            if ($status === MealsDB_Client_Rates::STATUS_ERROR) {
+                // Already logged to the event trunk by the helper; mirror it
+                // into the migration log the operator reads on this screen.
+                // No halt needed any more: the cursor has moved past this
+                // client, so the phase cannot spin on it.
+                $stats['errors']++;
+                self::log(sprintf(
+                    'create_rates failed for client_id=%d: %s',
+                    $client_id,
+                    (string) ($outcome['reason'] ?? 'unknown')
                 ));
-                $rate = !empty($basic_cost) ? (float) $basic_cost : 0.00;
-                if ($rate <= 0) {
-                    $stats['skipped']++;
-                } else {
-                    $stats['created']++;
-                }
-            }
-            return [
-                'stats'    => $stats,
-                'offset'   => $offset + self::BATCH_SIZE,
-                'total'    => $total,
-                'complete' => count($rows) < self::BATCH_SIZE,
-            ];
-        }
-
-        foreach ($rows as $row) {
-            $client_id  = (int) $row['client_id'];
-            $wp_user_id = (int) $row['wp_user_id'];
-
-            $basic_cost = $wpdb->get_var($wpdb->prepare(
-                "SELECT meta_value FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key = 'basic_cost' LIMIT 1",
-                $wp_user_id
-            ));
-
-            $rate = !empty($basic_cost) ? (float) $basic_cost : 0.00;
-
-            // A client with no usable basic_cost would never get a rate, so
-            // it would stay in the unrated set forever and the fixed-offset
-            // cursor would never make progress. Write a $0.00 'Standard' rate
-            // so the row clears the predicate; the operator can correct the
-            // amount later. Skipped-count still records that we defaulted it.
-            if ($rate <= 0) {
+            } elseif (isset($stats[$status])) {
+                $stats[$status]++;
+            } else {
                 $stats['skipped']++;
             }
-
-            $insert_result = $wpdb->insert(
-                $rates_table,
-                [
-                    'client_id'      => $client_id,
-                    'label'          => 'Standard',
-                    'rate'           => $rate,
-                    'is_default'     => 1,
-                    // Business "effective today" date — deliberately the site-local
-                    // calendar day (current_time), NOT gmdate, so a late-evening
-                    // migration doesn't stamp a rate as effective tomorrow (UTC).
-                    'effective_date' => current_time('Y-m-d'),
-                ],
-                ['%d', '%s', '%f', '%d', '%s']
-            );
-
-            if ($insert_result !== false) {
-                $rate_id = (int) $wpdb->insert_id;
-                $wpdb->update(
-                    $clients_table,
-                    ['default_rate_id' => $rate_id],
-                    ['client_id' => $client_id],
-                    ['%d'],
-                    ['%d']
-                );
-                if ($rate > 0) {
-                    $stats['created']++;
-                }
-            } else {
-                $stats['errors']++;
-                // Insert failed: the row is still unrated. Bail out of the
-                // phase rather than spin forever on the same client.
-                self::log(sprintf(
-                    'create_rates INSERT failed for client_id=%d: %s',
-                    $client_id,
-                    $wpdb->last_error ?: 'unknown'
-                ));
-                return [
-                    'stats'    => $stats,
-                    'offset'   => $offset + self::BATCH_SIZE,
-                    'total'    => $total,
-                    'complete' => true,
-                    'error'    => 'create_rates INSERT failed for client_id=' . $client_id . '; phase halted.',
-                ];
-            }
         }
-
-        // Complete when no unrated clients remain. On a live run the set
-        // shrinks every chunk, so this terminates.
-        $remaining = (int) $wpdb->get_var(
-            "SELECT COUNT(*) FROM `{$clients_table}` c
-             LEFT JOIN `{$rates_table}` r ON r.client_id = c.client_id
-             WHERE r.rate_id IS NULL"
-        );
 
         return [
             'stats'    => $stats,
-            'offset'   => $offset + self::BATCH_SIZE,
-            'total'    => $total,
-            'complete' => ($remaining === 0) || empty($rows),
+            'offset'   => $cursor,
+            'total'    => max($max_id, $cursor),
+            'complete' => count($client_ids) < self::BATCH_SIZE,
         ];
     }
 
@@ -1410,8 +1336,8 @@ class MealsDB_Migration_Consolidated {
      * MealsDB_Private_Intake (the same code path the live order hook uses).
      *
      * Chunking model: private_preview() is a self-clearing set on LIVE runs
-     * (promoting a user removes them from the next call's result), so — like
-     * run_phase_create_rates — the cursor advances only past users we could
+     * (promoting a user removes them from the next call's result), so the
+     * cursor advances only past users we could
      * NOT promote, not by a flat BATCH_SIZE, otherwise a shrinking list under
      * a moving offset silently skips users. Dry runs promote nobody, so they
      * page with the incoming $offset. enrich_existing runs in the SAME phase
