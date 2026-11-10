@@ -111,6 +111,15 @@ class PoWpdb extends wpdb {
         return 1;
     }
 
+    // mark_accepted() re-reads the stored status after the transition (the
+    // v558 ENUM-coercion guard) before it commits stock.
+    public function get_var($q) {
+        if (stripos($q, 'meals_purchase_orders') !== false && preg_match('/po_id = (\d+)/', $q, $m)) {
+            return $this->pos[(int) $m[1]]['status'] ?? null;
+        }
+        return null;
+    }
+
     public function get_row($q, $o = null) {
         if (stripos($q, 'meals_tasks') !== false && preg_match('/task_id = (\d+)/', $q, $m)) {
             return $this->tasks[(int) $m[1]] ?? null;
@@ -296,14 +305,33 @@ chk((int) $open[0]['related_entity_id'], $id, 'B-1: linked to the PO');
 chk($open[0]['assignee_role'], 'warehouse', 'B-1: warehouse role');
 
 // ===========================================================================
-// B-2: approve with NO date → due +7 days; dedup on double-fire.
+// B-2: approve with NO date → due on the order-cadence default; dedup on
+// double-fire.
+//
+// Since the Accepted-status directive (v1.0.553) approve() derives a blank
+// expected arrival from the order cadence (po_schedule_from_order_date) and
+// hands THAT to the bridge, so the bridge's own +7 fallback is no longer
+// reached through approve(). B-2b below covers the fallback directly.
 // ===========================================================================
 $w = fresh();
 $svc = new MealsDB_Purchase_Orders();
 $id = $svc->create_draft(forecast_rows());
 $svc->approve($id);
 $open = open_of($w, 'po_confirm_arrival');
-chk($open[0]['next_run_date'], gmdate('Y-m-d', strtotime('+7 days')), 'B-2: +7 fallback due date');
+$cadence = MealsDB_Purchase_Orders::po_schedule_from_order_date(gmdate('Y-m-d'));
+chk($open[0]['next_run_date'], $cadence['expected_arrival'], 'B-2: due on the cadence-default expected arrival');
+chk($svc->get_with_payload($id)['expected_arrival'], $cadence['expected_arrival'], 'B-2: task due date matches the date stored on the PO');
+
+// B-2b: the bridge's +7 fallback, for a caller that fires the hook with no
+// (or a malformed) date.
+$w2   = fresh();
+$svc2 = new MealsDB_Purchase_Orders();
+$id2  = $svc2->create_draft(forecast_rows());
+do_action('mealsdb_po_approved', $id2, null);
+$open2 = open_of($w2, 'po_confirm_arrival');
+chk(count($open2), 1, 'B-2b: hook with no date still spawns the task');
+chk($open2[0]['next_run_date'] ?? null, gmdate('Y-m-d', strtotime('+7 days')), 'B-2b: +7 fallback due date');
+$GLOBALS['wpdb'] = $w;
 // Re-fire the hook directly (simulates a duplicate event): no second task.
 do_action('mealsdb_po_approved', $id, null);
 chk(count(open_of($w, 'po_confirm_arrival')), 1, 'B-2: dedup — still one open task');
@@ -322,9 +350,14 @@ chk($open[0]['next_run_date'], '2026-07-30', 'B-3: fresh task uses the new date'
 
 // ===========================================================================
 // B-4: receive on the PO page → confirm task auto-closed, reconcile spawned +7.
+// A PO must be Accepted before it can be received (lifecycle since v1.0.553:
+// planned → placed → accepted → arrived → reconciled).
 // ===========================================================================
 $GLOBALS['wc_stock'] = [101 => 50, 102 => 20];
-$svc->mark_received($id);
+chk(is_wp_error($svc->mark_received($id)), true, 'B-4: receive refused while the PO is only approved');
+chk(count(open_of($w, 'po_confirm_arrival')), 1, 'B-4: refused receive leaves the confirm task open');
+chk($svc->mark_accepted($id), true, 'B-4: accept succeeds');
+chk($svc->mark_received($id), true, 'B-4: receive succeeds once accepted');
 chk(count(open_of($w, 'po_confirm_arrival')), 0, 'B-4: confirm task auto-closed');
 $rec = open_of($w, 'po_reconcile');
 chk(count($rec), 1, 'B-4: reconcile task spawned');

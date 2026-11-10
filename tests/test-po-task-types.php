@@ -109,6 +109,15 @@ class PoWpdb extends wpdb {
         return 1;
     }
 
+    // mark_accepted() re-reads the stored status after the transition (the
+    // v558 ENUM-coercion guard) before it commits stock.
+    public function get_var($q) {
+        if (stripos($q, 'meals_purchase_orders') !== false && preg_match('/po_id = (\d+)/', $q, $m)) {
+            return $this->pos[(int) $m[1]]['status'] ?? null;
+        }
+        return null;
+    }
+
     public function get_row($q, $o = null) {
         if (stripos($q, 'meals_tasks') !== false && preg_match('/task_id = (\d+)/', $q, $m)) {
             return $this->tasks[(int) $m[1]] ?? null;
@@ -280,6 +289,18 @@ function placed_po(PoWpdb $w): array {
     return [$svc, $engine, $id];
 }
 
+/**
+ * Drive a fresh draft to 'accepted'. Since the Accepted-status directive
+ * (v1.0.553) the lifecycle is planned → placed → accepted → arrived →
+ * reconciled: a PO can only be received from 'accepted', and Accept — not
+ * Receive — is what commits stock (50 → 110, 20 → 44 for forecast_rows()).
+ */
+function accepted_po(PoWpdb $w): array {
+    [$svc, $engine, $id] = placed_po($w);
+    $svc->mark_accepted($id);
+    return [$svc, $engine, $id];
+}
+
 /** Manually create a confirm-arrival task linked to a PO (bridge is Task 6). */
 function confirm_task(MealsDB_Task_Engine $engine, int $po_id): int {
     return $engine->create_task([
@@ -293,26 +314,45 @@ function confirm_task(MealsDB_Task_Engine $engine, int $po_id): int {
 }
 
 // ===========================================================================
-// C-1: arrived=yes on a placed PO → mark_received via the service, once.
+// C-1: arrived=yes on an ACCEPTED PO → mark_received via the service, once.
 // ===========================================================================
 $w = fresh();
-[$svc, $engine, $po_id] = placed_po($w);
+[$svc, $engine, $po_id] = accepted_po($w);
+chk($GLOBALS['wc_stock'][101], 110, 'C-1: stock committed at Accept');
 $tid = confirm_task($engine, $po_id);
 chk_true($tid > 0, 'C-1: task created');
 chk($engine->complete_task($tid, ['arrived' => 'yes', 'arrival_date' => '2026-07-22'], 7), true, 'C-1: completes');
 $po = $svc->get_with_payload($po_id);
 chk($po['status'], 'arrived', 'C-1: PO received via task');
 chk($po['arrival_date'], '2026-07-22', 'C-1: form arrival date honored');
-chk($GLOBALS['wc_stock'][101], 110, 'C-1: stock bumped');
+chk($GLOBALS['wc_stock'][101], 110, 'C-1: receive adds NO stock (already committed at Accept)');
 chk($w->tasks[$tid]['status'], 'completed', 'C-1: task completed');
+
+// ===========================================================================
+// C-1b: arrived=yes on a PO that is only APPROVED (placed, not yet accepted)
+// → mark_received is refused, so the task must reopen rather than sit
+// 'completed', and nothing is received or stocked.
+//
+// This pins CURRENT behaviour, which is a known workflow gap: the confirm-
+// arrival task is spawned at Approve but cannot be completed until someone
+// clicks Accept on the PO page. If the spawn point moves to Accept, this
+// case stops being reachable through the bridge.
+// ===========================================================================
+$w = fresh();
+[$svc, $engine, $po_id] = placed_po($w);
+$tid = confirm_task($engine, $po_id);
+$engine->complete_task($tid, ['arrived' => 'yes', 'arrival_date' => '2026-07-22'], 7);
+chk($svc->get_with_payload($po_id)['status'], 'placed', 'C-1b: un-accepted PO is not received');
+chk($GLOBALS['wc_stock'][101], 50, 'C-1b: no stock effect');
+chk($w->tasks[$tid]['status'], 'deferred', 'C-1b: refused receive reopens the task');
 
 // ===========================================================================
 // C-2: arrived=yes on an ALREADY-received PO → graceful no-op, no double bump.
 // ===========================================================================
 $w = fresh();
-[$svc, $engine, $po_id] = placed_po($w);
+[$svc, $engine, $po_id] = accepted_po($w);
 $svc->mark_received($po_id); // PO page acted first
-chk($GLOBALS['wc_stock'][101], 110, 'C-2: first bump applied');
+chk($GLOBALS['wc_stock'][101], 110, 'C-2: stock as committed at Accept');
 $tid = confirm_task($engine, $po_id);
 chk($engine->complete_task($tid, ['arrived' => 'yes'], 7), true, 'C-2: stale task still completes');
 chk($GLOBALS['wc_stock'][101], 110, 'C-2: NO double bump');
@@ -332,8 +372,8 @@ chk($GLOBALS['wc_stock'][101], 50, 'C-3: no stock effect');
 
 /** Drive a PO to 'arrived' and create a reconcile task; return [svc, engine, po_id, tid]. */
 function reconcile_setup(PoWpdb $w): array {
-    [$svc, $engine, $po_id] = placed_po($w);
-    $svc->mark_received($po_id); // stock now 110 / 44
+    [$svc, $engine, $po_id] = accepted_po($w); // stock now 110 / 44 (committed at Accept)
+    $svc->mark_received($po_id);
     $tid = $engine->create_task([
         'task_type'           => MealsDB_Task_Type_PO_Reconcile::TYPE_ID,
         'payload'             => ['po_number' => 'PO-X', 'rows' => [
