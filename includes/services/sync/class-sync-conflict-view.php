@@ -199,6 +199,9 @@ final class MealsDB_Sync_Conflict_View {
                     // Converged (or a client relinked) since the last scan.
                     'stale'         => $eval['outcome'] !== MealsDB_Sync_Reconciler::O_CONFLICT,
                     'keep'          => self::keep_options($column, $wp, $meals),
+                    // K23: Extra Mural — read-only, with this note. '' otherwise.
+                    'note'          => MealsDB_Sync_Resolver::is_extra_mural_conflict($column, $wp, $meals)
+                        ? MealsDB_Sync_Resolver::extra_mural_message() : '',
                 ];
                 $card['conflicts'][] = $row;
             } else {
@@ -233,11 +236,16 @@ final class MealsDB_Sync_Conflict_View {
             $sides['client:' . $client_id] = (string) $value;
         }
         $shadow = MealsDB_Shadow_Mode::is_enabled();
+        // K23: every side is refused, including the populated, valid MealsDB
+        // one — keeping it would overwrite 'Extra Mural' in WordPress.
+        $extra_mural = MealsDB_Sync_Resolver::is_extra_mural_conflict($column, $wp, $meals);
 
         $out = [];
         foreach ($sides as $side => $value) {
             $reason = '';
-            if (MealsDB_Sync_Registry::is_blank($column, $side === 'wp' ? 'wp' : 'meals', $value)) {
+            if ($extra_mural) {
+                $reason = MealsDB_Sync_Resolver::extra_mural_message();
+            } elseif (MealsDB_Sync_Registry::is_blank($column, $side === 'wp' ? 'wp' : 'meals', $value)) {
                 $reason = __('This side is blank.', 'meals-db');
             } elseif ($field === null || !MealsDB_Sync_Comparator::parses($field['comparator'], $value)) {
                 $reason = __('This value is not valid for this field.', 'meals-db');

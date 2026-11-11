@@ -12,6 +12,9 @@
  * the side is blank, its value is not valid for the field, or shadow mode
  * blocks the WordPress write it would need. The Use-all shortcuts skip
  * client_type (it decides billing; choose it explicitly).
+ *
+ * K23: a client_type conflict where a side is Extra Mural is read-only — every
+ * Keep option is disabled and the row carries a note; Leave both still works.
  */
 defined('ABSPATH') || exit;
 
@@ -235,6 +238,9 @@ $mealsdb_island = [
                             <?php if ($mealsdb_c['stale']) : ?>
                                 <em><?php esc_html_e('Changed since the last scan. It will update on the next nightly run.', 'meals-db'); ?></em>
                             <?php else : ?>
+                                <?php if (($mealsdb_c['note'] ?? '') !== '') : // K23: Extra Mural — Keep is refused on every side; say why. ?>
+                                    <p class="mealsdb-conflict-note"><strong><?php echo esc_html($mealsdb_c['note']); ?></strong></p>
+                                <?php endif; ?>
                                 <label><input type="radio" name="<?php echo esc_attr($mealsdb_name); ?>" value="" checked="checked" /> <?php esc_html_e('Decide later', 'meals-db'); ?></label><br />
                                 <?php
                                 $mealsdb_keep_sides = ['wp' => __('Keep WordPress', 'meals-db')];

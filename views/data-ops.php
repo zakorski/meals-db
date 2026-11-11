@@ -69,7 +69,7 @@ $repo_path = dirname(MEALS_DB_PLUGIN_FILE);
     <div class="mealsdb-db-sync">
         <h2><?php echo esc_html__('Complete DB Sync', 'meals-db'); ?></h2>
         <p class="description">
-            <?php echo esc_html__('Scans existing WordPress users tagged as SDNB, Veterans, or Extra Mural (via the customer_group usermeta) and creates corresponding records in the external Meals DB — including encrypted client data, delivery initials, and default billing rates. Skips users that already have a meals_clients record.', 'meals-db'); ?>
+            <?php echo esc_html__('Scans existing WordPress users tagged as SDNB or Veterans (via the customer_group usermeta) and creates corresponding records in the external Meals DB — including encrypted client data, delivery initials, and default billing rates. Skips users that already have a meals_clients record. Extra Mural users are not imported: Meals DB has no client type for them.', 'meals-db'); ?>
         </p>
         <div class="mealsdb-db-sync-actions" style="margin-top:12px;">
             <label style="margin-right:12px;">

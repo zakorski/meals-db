@@ -322,7 +322,7 @@ foreach ($cases as $case) {
 $type_cases = [
     ['group' => 'sdnb',        'expected' => 'SDNB',    'label' => 'customer_group sdnb → SDNB'],
     ['group' => 'SDNB Rural',  'expected' => 'SDNB',    'label' => 'customer_group "SDNB Rural" → SDNB (normalised)'],
-    ['group' => 'extra mural', 'expected' => 'SDNB',    'label' => 'customer_group extra mural → SDNB'],
+    // K23: 'extra mural' no longer promotes at all — see tests/test-extra-mural-k23.php.
     ['group' => 'veterans',    'expected' => 'Veteran', 'label' => 'customer_group veterans → Veteran'],
     ['group' => 'private',     'expected' => 'Private', 'label' => 'customer_group private → Private'],
     ['group' => '',            'expected' => 'Private', 'label' => 'blank customer_group → Private (fallback)'],
