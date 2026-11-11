@@ -93,21 +93,41 @@ class MealsDB_Migration_Consolidated {
     ];
 
     /**
-     * customer_group (lowercased) -> meals_clients.client_type. Ported
-     * verbatim from class-migration.php so create_clients keeps mapping the
-     * legacy Enzebra groups identically.
+     * K23: the class of an Extra Mural customer_group. NOT a MealsDB
+     * client_type — meals_clients.client_type is ENUM('SDNB','Veteran',
+     * 'Private') and has no value for it.
+     *
+     * History: K21 classed Extra Mural as SDNB provisionally (operator
+     * decision 2026-11-02, pending confirmation). Confirmed 2026-11-03:
+     * Extra Mural is billed separately, under Extra Mural — NOT to SDNB. A
+     * client classed SDNB lands on SDNB invoices and posts a program charge
+     * to SDNB (K17). Private is not a substitute either: a Private client is
+     * charged the full order total, but Extra Mural clients are paid for by
+     * the Extra Mural program. MealsDB has no billing stream for the program,
+     * so the only correct automatic behaviour is NO classification:
+     *   - customer_group_to_client_type() returns null (no migration import,
+     *     no promotion — and promotion must not fall back to Private);
+     *   - the sync treats it as a conflict against every MealsDB class and
+     *     refuses to write either side (it is never a fill source, never a
+     *     resolvable choice).
+     * This constant is the one place the class name lives.
+     */
+    public const CLASS_EXTRA_MURAL = 'ExtraMural';
+
+    /**
+     * customer_group (lowercased, whitespace collapsed) -> client-type CLASS.
+     * 'SDNB' / 'Veteran' / 'Private' are meals_clients.client_type values;
+     * CLASS_EXTRA_MURAL is a class with no client_type (see the constant).
      *
      * @var array<string,string>
      */
     private static $type_map = [
         'sdnb'        => 'SDNB',
         'sdnb rural'  => 'SDNB',
-        // Extra Mural is PROVISIONALLY SDNB (operator decision 2026-11-02,
-        // pending confirmation). This map is the one place that decision
-        // lives — K21 ITEM 3. Production also carries the unspaced spelling
-        // (1 user, 2026-11-02).
-        'extra mural' => 'SDNB',
-        'extramural'  => 'SDNB',
+        // K23: its own class, both production spellings ('Extra Mural' x3,
+        // 'extramural' x1, 2026-11-02).
+        'extra mural' => self::CLASS_EXTRA_MURAL,
+        'extramural'  => self::CLASS_EXTRA_MURAL,
         'veterans'    => 'Veteran',
         // K21 ITEM 3 compares client_type by CLASS, so Private is a class
         // like the others. customer_group_to_client_type() still returns
@@ -137,11 +157,18 @@ class MealsDB_Migration_Consolidated {
      * drift (promotion hard-coding 'Private') is exactly the defect this fixes.
      *
      * Returns the mapped government type ('SDNB' / 'Veteran') for a recognised
-     * group, or null for anything else (blank, 'private', or an unknown value).
+     * group, or null for anything else (blank, 'private', Extra Mural, or an
+     * unknown value).
      * Comparison is strtolower(trim()), matching the historical phase-1 read.
      * Callers decide what a null means: phase 1 SKIPS (a gov migration only
      * creates gov clients); promotion DEFAULTS to Private (the client is placing
      * an order and needs a record).
+     *
+     * K23: Extra Mural returns null because NO client_type fits it (see
+     * CLASS_EXTRA_MURAL). A null here is therefore ambiguous for that one
+     * group — a caller that defaults a null to Private (promotion) MUST check
+     * is_extra_mural_group() first, or it bills an Extra Mural client as
+     * Private.
      *
      * @param string|null $customer_group Raw usermeta value.
      * @return string|null 'SDNB' | 'Veteran', or null when not a gov mapping.
@@ -152,14 +179,54 @@ class MealsDB_Migration_Consolidated {
     }
 
     /**
-     * K21 ITEM 3: the client-type CLASS ('SDNB' | 'Veteran' | 'Private') of a
-     * customer_group, or null when blank or unrecognised. Same map and the
-     * same normalisation as customer_group_to_client_type(), plus internal
-     * whitespace collapsed ('sdnb  rural'); unlike it, 'private' is a class.
+     * K21 ITEM 3: the client-type CLASS ('SDNB' | 'Veteran' | 'Private', or
+     * K23's CLASS_EXTRA_MURAL) of a customer_group, or null when blank or
+     * unrecognised. Same map and the same normalisation as
+     * customer_group_to_client_type(), plus internal whitespace collapsed
+     * ('sdnb  rural', 'Extra  Mural'); unlike it, 'private' and Extra Mural
+     * are classes.
      */
     public static function customer_group_class(?string $customer_group): ?string {
         $group = (string) preg_replace('/\s+/', ' ', strtolower(trim((string) $customer_group)));
         return self::$type_map[$group] ?? null;
+    }
+
+    /**
+     * K23: is this customer_group Extra Mural (either spelling, any case,
+     * internal whitespace collapsed)? The one test every path uses to keep
+     * Extra Mural users out of automatic classification.
+     */
+    public static function is_extra_mural_group(?string $customer_group): bool {
+        return self::customer_group_class($customer_group) === self::CLASS_EXTRA_MURAL;
+    }
+
+    /**
+     * K23: WordPress user IDs whose customer_group is Extra Mural, ascending.
+     * SQL narrows on 'mural' (cheap, collation-insensitive); the shared
+     * mapper decides, so spelling rules live in one place. Null on a query
+     * failure.
+     *
+     * @return int[]|null
+     */
+    public static function extra_mural_user_ids(): ?array {
+        global $wpdb;
+        $rows = $wpdb->get_results(
+            "SELECT user_id, meta_value FROM {$wpdb->usermeta}
+              WHERE meta_key = 'customer_group' AND meta_value LIKE '%mural%'
+              ORDER BY user_id ASC",
+            ARRAY_A
+        );
+        if (!is_array($rows)) {
+            return null;
+        }
+        $ids = [];
+        foreach ($rows as $row) {
+            $user_id = (int) ($row['user_id'] ?? 0);
+            if ($user_id > 0 && self::is_extra_mural_group((string) ($row['meta_value'] ?? ''))) {
+                $ids[$user_id] = true;
+            }
+        }
+        return array_keys($ids);
     }
 
     /**
@@ -281,8 +348,12 @@ class MealsDB_Migration_Consolidated {
     // =====================================================================
 
     /**
-     * Create meals_clients rows from legacy WP usermeta for government /
-     * Extra Mural users. Idempotent: skips users that already have a row.
+     * Create meals_clients rows from legacy WP usermeta for government
+     * (SDNB / Veteran) users. Idempotent: skips users that already have a row.
+     *
+     * K23: Extra Mural users are NOT imported, under any type — they are not
+     * selected, and the mapper returns null for them. One
+     * migration.extra_mural_skipped event per run lists them.
      *
      * Logic ported verbatim from MealsDB_Migration::create_clients — the
      * 60-column INSERT and its 60-element format array were audit-verified
@@ -307,7 +378,14 @@ class MealsDB_Migration_Consolidated {
             }
         }
 
-        $gov_groups   = ['sdnb', 'SDNB', 'sdnb rural', 'veterans', 'Extra Mural', 'extra mural'];
+        // K23: Extra Mural is no longer a candidate group (it used to be
+        // imported as SDNB). Logged on the first chunk only, so a chunked
+        // walk reports the skipped users once per run, not once per batch.
+        if ($offset === 0) {
+            self::log_extra_mural_skipped($dry_run);
+        }
+
+        $gov_groups   = ['sdnb', 'SDNB', 'sdnb rural', 'veterans'];
         $placeholders = implode(',', array_fill(0, count($gov_groups), '%s'));
 
         $total = (int) $wpdb->get_var($wpdb->prepare(
@@ -417,15 +495,14 @@ class MealsDB_Migration_Consolidated {
             // Directive 7 moved the client_type lookup into
             // customer_group_to_client_type() and dropped the local $group
             // assignment, but these two checks still read $group — undefined,
-            // so neither ever matched: 'sdnb rural' users lost
-            // service_name_zone='rural' and Extra Mural users lost their note.
+            // so the check never matched: 'sdnb rural' users lost
+            // service_name_zone='rural'.
             // Normalised the same way the shared mapper normalises.
             $group = strtolower(trim((string) ($meta['customer_group'] ?? '')));
 
+            // K23: the Extra Mural migration note that was set here is gone
+            // with the import it described — such a user never reaches here.
             $notes = '';
-            if ($group === 'extra mural') {
-                $notes = 'Migrated from Extra Mural program.';
-            }
             $service_name_zone = null;
             if ($group === 'sdnb rural') {
                 $service_name_zone = 'rural';
@@ -2328,6 +2405,46 @@ class MealsDB_Migration_Consolidated {
      */
     private static function is_ym(string $value): bool {
         return (bool) preg_match('/^\d{4}-\d{2}$/', $value);
+    }
+
+    /**
+     * K23 ITEM 2: one migration.extra_mural_skipped event per phase-1 run,
+     * with the count and the WordPress user IDs, so users the migration
+     * deliberately does not import are visible rather than silently absent.
+     * Degraded on purpose: nothing failed, but these users have no MealsDB
+     * client and need an operator decision — it must show on the Event Log's
+     * default failed/degraded view. Nothing is logged when there are none.
+     */
+    private static function log_extra_mural_skipped(bool $dry_run): void {
+        try {
+            $ids = self::extra_mural_user_ids();
+            if ($ids === null) {
+                self::log('Extra Mural lookup failed; skipped users not reported for this run.');
+                return;
+            }
+            if ($ids === []) {
+                return;
+            }
+            self::log(sprintf('Not importing %d Extra Mural user(s) (K23): %s', count($ids), implode(', ', $ids)));
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'  => 'warning',
+                    'category'  => 'migration',
+                    'subsystem' => 'migration_consolidated',
+                    'event'     => 'migration.extra_mural_skipped',
+                    'outcome'   => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'   => sprintf(
+                        '%d Extra Mural user(s) not imported: MealsDB has no client type for Extra Mural (billed separately, not SDNB).',
+                        count($ids)
+                    ),
+                    'context'   => ['count' => count($ids), 'wp_user_ids' => $ids, 'dry_run' => $dry_run],
+                ]);
+            }
+        } catch (\Throwable $e) {
+            // Reporting must never stop the migration phase. error_log, not
+            // self::log(): the migration log itself may be what threw.
+            error_log('[MealsDB Consolidated] Extra Mural skip report failed: ' . $e->getMessage());
+        }
     }
 
     /**

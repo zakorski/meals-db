@@ -24,6 +24,9 @@ require_once __DIR__ . '/../includes/class-autoloader.php';
 MealsDB_Autoloader::register(dirname(__DIR__) . '/');
 if (!function_exists('__')) { function __(string $t, string $d = 'default') { return $t; } }
 if (!function_exists('current_user_can')) { function current_user_can($cap) { return true; } }
+// K23: phase 1 now writes the Extra Mural skip line to the migration log (an option).
+if (!function_exists('get_option')) { function get_option($k, $d = false) { return $GLOBALS['options'][$k] ?? $d; } }
+if (!function_exists('update_option')) { function update_option($k, $v, $a = null) { $GLOBALS['options'][$k] = $v; return true; } }
 if (!function_exists('wp_json_encode')) { function wp_json_encode($v, $f = 0, $d = 512) { return json_encode($v, $f, $d); } }
 
 // Any PHP warning/notice raised inside the migration file is a failure: an
@@ -157,7 +160,8 @@ $ev = $run('veterans', 'veterans');
 chk(count($ev) === 0, "migration: Veteran with 'veterans' service centre emits no derive_zone.unmatched");
 
 // No PHP warnings from the migration (regression: undefined $group, which
-// silently dropped service_name_zone='rural' and the Extra Mural note).
+// silently dropped service_name_zone='rural'). 'Extra Mural' is skipped
+// since K23 but must still raise no warning on the way out.
 $run('Moncton', 'sdnb rural');
 $run('Moncton', 'Extra Mural');
 chk($GLOBALS['migration_warnings'] === [], 'migration phase 1 raises no PHP warnings: '

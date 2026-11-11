@@ -19,6 +19,8 @@
  *     collision) then stops the resolution before MealsDB changes at all.
  *   - delivery_initials is never written: only two-way registry columns are
  *     resolvable.
+ *   - An Extra Mural client_type conflict is refused outright (K23): neither
+ *     side may be written.
  *   - Writes run with the sync hooks suppressed (MealsDB_Sync::
  *     without_sync_hooks) so profile_update cannot re-enter the sync.
  *   - Changing a user_email suppresses WordPress's "your email changed"
@@ -59,6 +61,16 @@ final class MealsDB_Sync_Resolver {
         $cmp   = $field['comparator'];
         $wp    = MealsDB_Sync_Reconciler::read_wp_value($user, $field['wp']);
         $meals = MealsDB_Sync_Reconciler::meals_values_for($clients, $column);
+
+        // K23 ITEM 4: an Extra Mural client_type conflict cannot be resolved
+        // to EITHER side, so it is refused before a side is even considered.
+        // Keep MealsDB would write 'sdnb' / 'veterans' / 'private' over
+        // 'Extra Mural', destroying the only record that the client belongs
+        // to Extra Mural; Keep WordPress cannot write 'ExtraMural' into the
+        // client_type ENUM. "Leave both" (dismiss) does not come through here.
+        if (self::is_extra_mural_conflict($column, $wp, $meals)) {
+            return self::result(false, 'extra_mural', self::extra_mural_message());
+        }
 
         // The chosen value, read server-side from the chosen side.
         if ($side === 'wp') {
@@ -151,6 +163,34 @@ final class MealsDB_Sync_Resolver {
             return self::result(false, 'error', __('Values were written, but the conflict could not be closed. The next nightly scan will close it.', 'meals-db'));
         }
         return self::result(true, 'resolved', __('Resolved.', 'meals-db'));
+    }
+
+    /**
+     * K23: is this a client_type conflict in which some side is Extra Mural?
+     * Shared with the conflict view so the page never offers a Keep choice
+     * the server refuses.
+     *
+     * @param array<int, string|null> $meals
+     */
+    public static function is_extra_mural_conflict(string $column, string $wp, array $meals): bool {
+        $field = MealsDB_Sync_Registry::get($column);
+        if ($field === null || $field['comparator'] !== MealsDB_Sync_Comparator::CLIENT_TYPE) {
+            return false;
+        }
+        if (MealsDB_Sync_Comparator::is_extra_mural($wp)) {
+            return true;
+        }
+        foreach ($meals as $value) {
+            if (MealsDB_Sync_Comparator::is_extra_mural((string) $value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** K23: the operator-facing explanation, shown by the view and returned on refusal. */
+    public static function extra_mural_message(): string {
+        return __('This client is Extra Mural, which Meals DB does not bill. Neither value can be kept here: the classification needs an operator decision outside the sync. "Leave both" is still available.', 'meals-db');
     }
 
     /**

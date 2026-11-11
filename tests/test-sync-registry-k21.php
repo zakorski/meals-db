@@ -201,7 +201,7 @@ chk($threw, 'unknown comparator name throws');
 // Part 4 — client_type by class (ITEM 3)
 // ---------------------------------------------------------------------------
 // K21 Test 8.
-foreach (['sdnb', 'SDNB', 'sdnb rural', 'Extra Mural', 'extramural', ' sdnb  rural '] as $g) {
+foreach (['sdnb', 'SDNB', 'sdnb rural', ' sdnb  rural '] as $g) {
     chk($C::equals('client_type', $g, 'SDNB'), "T8: customer_group '$g' == SDNB");
 }
 chk($C::equals('client_type', 'veterans', 'Veteran'), 'veterans == Veteran');
@@ -223,7 +223,9 @@ chk($M::client_type_to_customer_group('Private') === 'private', 'canonical: Priv
 chk($M::client_type_to_customer_group('Other') === null, 'canonical: unknown class -> null');
 // Directive 7 contract unchanged: private -> null for the gov-only mapper.
 chk($M::customer_group_to_client_type('private') === null, 'Directive 7: customer_group_to_client_type(private) still null');
-chk($M::customer_group_to_client_type('extramural') === 'SDNB', 'extramural now maps to SDNB (provisional)');
+// K23: the provisional Extra Mural -> SDNB mapping is withdrawn.
+chk($M::customer_group_to_client_type('extramural') === null, 'K23: extramural maps to no client_type');
+chk(!$C::equals('client_type', 'Extra Mural', 'SDNB'), 'K23: Extra Mural vs SDNB is a conflict');
 
 // ---------------------------------------------------------------------------
 // Part 5 — nickname blank rule (ITEM 5, registry level)

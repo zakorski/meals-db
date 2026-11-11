@@ -53,6 +53,21 @@ final class MealsDB_Sync_Comparator {
     public const CLIENT_TYPE_CLASSES = ['SDNB', 'Veteran', 'Private'];
 
     /**
+     * K23: is this client_type / customer_group value Extra Mural?
+     *
+     * Extra Mural is a recognised class with NO MealsDB client_type (see
+     * MealsDB_Migration_Consolidated::CLASS_EXTRA_MURAL). It differs from
+     * every MealsDB class, so it is always a conflict, and it is never
+     * writable: it cannot go into the client_type ENUM, and overwriting it in
+     * WordPress would destroy the only record that the client is Extra Mural.
+     * The reconciler, the resolver and the conflict view all ask this one
+     * question.
+     */
+    public static function is_extra_mural(?string $value): bool {
+        return self::client_type_class($value) === MealsDB_Migration_Consolidated::CLASS_EXTRA_MURAL;
+    }
+
+    /**
      * Blank: nothing here. A blank side may be filled from the other.
      *
      * Placeholders count as blank where the source systems use them:
@@ -94,7 +109,13 @@ final class MealsDB_Sync_Comparator {
             case self::DATE:
                 return self::parse_date($trimmed) !== null;
             case self::CLIENT_TYPE:
-                return self::client_type_class($trimmed) !== null;
+                // K23: Extra Mural is recognised but is NOT a value the sync
+                // may write anywhere, so it does not "parse" in the sense
+                // that matters here — it is never a fill source (a fill would
+                // put 'ExtraMural' into the client_type ENUM) and never a
+                // resolvable choice.
+                $class = self::client_type_class($trimmed);
+                return $class !== null && $class !== MealsDB_Migration_Consolidated::CLASS_EXTRA_MURAL;
             default:
                 return true;
         }
@@ -106,6 +127,11 @@ final class MealsDB_Sync_Comparator {
      * surfaces; the caller uses this to find them.
      */
     public static function is_unrecognised(string $comparator, ?string $value): bool {
+        if ($comparator === self::CLIENT_TYPE && self::is_extra_mural($value)) {
+            // K23: a KNOWN group (it just has no MealsDB type). Reporting it
+            // nightly as a "new Enzebra group" would bury a real one.
+            return false;
+        }
         return !self::is_blank($comparator, $value) && !self::parses($comparator, $value);
     }
 
@@ -157,7 +183,8 @@ final class MealsDB_Sync_Comparator {
     }
 
     /**
-     * ITEM 3: the class ('SDNB' | 'Veteran' | 'Private') of a client_type or
+     * ITEM 3: the class ('SDNB' | 'Veteran' | 'Private', or K23's
+     * 'ExtraMural' — a class with no MealsDB client_type) of a client_type or
      * customer_group value, or null when blank or unrecognised.
      *
      * Accepts both vocabularies so the per-account reconcile (ITEM 7a) can

@@ -11,7 +11,8 @@
  *              the sync WILL fill it once ITEM 7 lands
  *   conflict — two non-blank values differ, or the only non-blank value is
  *              unparseable and something is blank (an unparseable value is
- *              never a fill source)
+ *              never a fill source); or client_type holds Extra Mural on any
+ *              side (K23: no MealsDB type — always a conflict, never a write)
  *   keep     — to_wp_only field whose WordPress value is populated (a
  *              3-character nickname is never touched, never a conflict)
  *   skip     — to_wp_only field whose linked clients disagree
@@ -122,6 +123,21 @@ final class MealsDB_Sync_Reconciler {
         if ($nonblank === []) {
             $result['outcome'] = self::O_BLANK;
             return $result;
+        }
+
+        // K23 ITEM 4: Extra Mural is ALWAYS a conflict, never a write. It
+        // matches no MealsDB client_type, so it can never be 'equal'; and it
+        // is never a fill in either direction — filling MealsDB would put
+        // 'ExtraMural' into the client_type ENUM, and nothing may fill over
+        // it. Decided here, before the generic rules, so the guarantee does
+        // not rest on how the comparator happens to treat the value.
+        if ($cmp === MealsDB_Sync_Comparator::CLIENT_TYPE) {
+            foreach ($nonblank as $value) {
+                if (MealsDB_Sync_Comparator::is_extra_mural($value)) {
+                    $result['outcome'] = self::O_CONFLICT;
+                    return $result;
+                }
+            }
         }
 
         $reference = $nonblank[0];

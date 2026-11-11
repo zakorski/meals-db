@@ -221,6 +221,36 @@ class MealsDB_Private_Intake {
         $group_raw = function_exists('get_user_meta')
             ? (string) get_user_meta($wp_user_id, 'customer_group', true)
             : '';
+
+        // K23 ITEM 3: Extra Mural is a RECOGNISED group with no MealsDB
+        // client_type (confirmed 2026-11-03: billed separately, not to SDNB).
+        // The shared mapper returns null for it, which below would mean
+        // "default to Private" — and a Private client is charged the full
+        // order total, though the Extra Mural program pays for these clients.
+        // So this is not the blank/unrecognised fallback case: no record is
+        // created at all, and the skip is surfaced for an operator decision.
+        if (class_exists('MealsDB_Migration_Consolidated')
+            && MealsDB_Migration_Consolidated::is_extra_mural_group($group_raw)
+        ) {
+            if (class_exists('MealsDB_Event_Log')) {
+                MealsDB_Event_Log::record([
+                    'severity'    => 'warning',
+                    'category'    => 'sync',
+                    'subsystem'   => 'private_intake',
+                    'event'       => 'promote.extra_mural_skipped',
+                    'outcome'     => MealsDB_Event_Log::OUTCOME_DEGRADED,
+                    'message'     => sprintf(
+                        'Promotion skipped for user %d — customer_group is Extra Mural, which MealsDB does not bill. No client record created.',
+                        $wp_user_id
+                    ),
+                    'entity_type' => 'user',
+                    'entity_id'   => $wp_user_id,
+                    'context'     => ['wp_user_id' => $wp_user_id],
+                ]);
+            }
+            return null;
+        }
+
         $mapped_type = class_exists('MealsDB_Migration_Consolidated')
             ? MealsDB_Migration_Consolidated::customer_group_to_client_type($group_raw)
             : null;

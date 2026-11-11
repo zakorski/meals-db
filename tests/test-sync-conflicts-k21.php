@@ -53,7 +53,8 @@ $r = $o('client_phone_2', '0', [10 => '506-555-0200']);
 chk($r['outcome'] === 'fill' && $r['fill_wp'], "T7: shipping_phone '0' filled from client_phone_2, no conflict");
 // T8 / T10.
 chk($o('client_type', 'sdnb rural', [10 => 'SDNB'])['outcome'] === 'equal', 'T8: sdnb rural == SDNB');
-chk($o('client_type', 'extramural', [10 => 'SDNB'])['outcome'] === 'equal', 'T8: extramural == SDNB');
+// K23: Extra Mural is no longer SDNB (was 'equal' under K21's provisional mapping).
+chk($o('client_type', 'extramural', [10 => 'SDNB'])['outcome'] === 'conflict', 'K23: extramural vs SDNB -> conflict');
 chk($o('client_type', 'private', [10 => 'SDNB'])['outcome'] === 'conflict', 'T10: private vs SDNB -> conflict');
 $r = $o('client_type', '', [10 => 'Veteran']);
 chk($r['outcome'] === 'fill' && $r['fill_wp'], 'T9 (classification): blank customer_group, Veteran -> fill WP');
